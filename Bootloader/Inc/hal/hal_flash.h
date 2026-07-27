@@ -1,0 +1,3 @@
+#ifndef H743_MCUBOOT_HAL_FLASH_H
+#define H743_MCUBOOT_HAL_FLASH_H
+#endif

@@ -1,0 +1,82 @@
+# Build directories and generated build-system state
+build/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# C/C++ and embedded-firmware artifacts
+*.o
+*.obj
+*.d
+*.dep
+*.su
+*.cyclo
+*.lst
+*.elf
+*.axf
+*.out
+*.map
+*.hex
+*.bin
+*.srec
+*.s19
+*.uf2
+*.gcno
+*.gcda
+*.gcov
+*.profraw
+*.profdata
+
+# This MCUboot fixture is source test data, not a generated firmware image.
+!Middlewares/Third_Party/MCUboot/ext/tinycrypt/tests/pseudo-random-data.bin
+
+# Python caches and local environments used by build/test tools
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+
+# Local editor and IDE state
+.vscode/
+.vs/
+.idea/
+*.code-workspace
+*.user
+*.user.*
+*.uvguix.*
+*.uvoptx
+.mxproject
+
+# Local signing material and environment overrides
+.keys/
+.env
+.env.*
+!.env.example
+
+# Logs, temporary files, and local caches
+*.log
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+.cache/
+NUL
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
