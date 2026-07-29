@@ -96,7 +96,10 @@ PROJECT_CXX_SOURCES ?= \
 	App/runtime/time/platform_time.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uorb/uORB.cpp \
-	Dima/messages/app_heartbeat.cpp
+	Dima/messages/app_heartbeat.cpp \
+	Dima/middleware/events/events.cpp \
+	Dima/middleware/perf/perf_counter.cpp \
+	Dima/middleware/logging/logging.cpp
 
 PROJECT_C_OBJECTS := $(addprefix $(BUILD_DIR)/,$(PROJECT_C_SOURCES:.c=.o))
 PROJECT_CXX_OBJECTS := $(addprefix $(BUILD_DIR)/,$(PROJECT_CXX_SOURCES:.cpp=.o))

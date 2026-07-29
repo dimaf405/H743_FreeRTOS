@@ -1,5 +1,6 @@
 #include "Dima/platform/freertos/dima_platform.hpp"
 #include "Dima/platform/freertos/hrt.hpp"
+#include "Dima/middleware/events/events.hpp"
 
 #include <atomic>
 #include <new>
@@ -86,6 +87,25 @@ bool register_realtime_task(TaskHandle_t task) noexcept
     return true;
 }
 
+bool unregister_realtime_task(TaskHandle_t task) noexcept
+{
+    if (task == nullptr) {
+        return false;
+    }
+    taskENTER_CRITICAL();
+    for (size_t i = 0U; i < g_realtime_task_count; ++i) {
+        if (g_realtime_tasks[i] == task) {
+            g_realtime_tasks[i] = g_realtime_tasks[g_realtime_task_count - 1U];
+            g_realtime_tasks[g_realtime_task_count - 1U] = nullptr;
+            --g_realtime_task_count;
+            taskEXIT_CRITICAL();
+            return true;
+        }
+    }
+    taskEXIT_CRITICAL();
+    return false;
+}
+
 void *allocate(size_t size, AllocationDomain domain) noexcept
 {
     if (!g_heap_initialized || size == 0U ||
@@ -109,19 +129,25 @@ void deallocate(void *ptr) noexcept
 
 HeapStats heap_stats() noexcept
 {
-    const size_t free_bytes = g_heap_initialized ? xPortGetFreeHeapSize() : 0U;
+    HeapStats_t native{};
+    if (g_heap_initialized) {
+        vPortGetHeapStats(&native);
+    }
     return HeapStats{
         kHeapBytes,
-        free_bytes,
-        g_heap_initialized ? xPortGetMinimumEverFreeHeapSize() : 0U,
-        free_bytes, // 当前 FreeRTOS 版本未公开最大空闲块，先给出安全上界。
+        native.xAvailableHeapSpaceInBytes,
+        native.xMinimumEverFreeBytesRemaining,
+        native.xSizeOfLargestFreeBlockInBytes,
         g_allocation_failures.load(std::memory_order_relaxed),
     };
 }
 
 void record_allocation_failure() noexcept
 {
+    constexpr uint32_t kAllocationFailureEvent = 0xD1000001U;
     g_allocation_failures.fetch_add(1U, std::memory_order_relaxed);
+    (void)dima::events::report(kAllocationFailureEvent,
+                               dima::events::Severity::Error);
 }
 
 } // namespace dima::platform

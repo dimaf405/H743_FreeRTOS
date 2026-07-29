@@ -1,6 +1,7 @@
 #include "Dima/middleware/work_queue/WorkQueue.hpp"
 
 #include "App/runtime/time/platform_time.hpp"
+#include "Dima/platform/freertos/dima_platform.hpp"
 
 extern "C" {
 #include "FreeRTOS.h"
@@ -285,6 +286,11 @@ bool work_queue_init() noexcept
             return false;
         }
         queue.started = true;
+        if (queue.config->realtime &&
+            !dima::platform::register_realtime_task(queue.task)) {
+            work_queue_shutdown();
+            return false;
+        }
     }
     g_initialized = true;
     return true;
@@ -297,6 +303,9 @@ void work_queue_shutdown() noexcept
     }
     for (auto &queue : g_queues) {
         if (queue.started && queue.task != nullptr) {
+            if (queue.config != nullptr && queue.config->realtime) {
+                (void)dima::platform::unregister_realtime_task(queue.task);
+            }
             vTaskDelete(queue.task);
         }
         queue.task = nullptr;

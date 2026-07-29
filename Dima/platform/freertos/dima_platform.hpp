@@ -30,6 +30,7 @@ void deallocate(void *ptr) noexcept;
 HeapStats heap_stats() noexcept;
 bool in_realtime_context() noexcept;
 bool register_realtime_task(TaskHandle_t task) noexcept;
+bool unregister_realtime_task(TaskHandle_t task) noexcept;
 void record_allocation_failure() noexcept;
 
 } // namespace dima::platform
