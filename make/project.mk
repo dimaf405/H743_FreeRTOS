@@ -136,8 +136,9 @@ IMAGE_VERSION ?= 0.1.0+0
 DEVELOPMENT_KEY = .keys/development-ecdsa-p256.pem
 KEY_FILE ?= $(DEVELOPMENT_KEY)
 MCUBOOT_ROOT = Middlewares/Third_Party/MCUboot
-HOST_PYTHON_DIR = $(BUILD_DIR)/host-python
-HOST_TOOLS_STAMP = $(BUILD_DIR)/.host-tools-installed
+HOST_TOOLS_CACHE_ROOT ?= $(HOME)/.cache/dima-rover/host-tools
+HOST_PYTHON_DIR = $(HOST_TOOLS_CACHE_ROOT)/host-python
+HOST_TOOLS_STAMP = $(HOST_TOOLS_CACHE_ROOT)/.host-tools-installed
 IMGTOOL = $(MCUBOOT_ROOT)/scripts/imgtool.py
 MCUBOOT_BUILD_DIR = $(BUILD_DIR)/mcuboot
 SIGNED_BIN = $(BUILD_DIR)/$(TARGET)_signed.bin
@@ -158,9 +159,9 @@ firmware: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
           $(BUILD_DIR)/$(TARGET).bin $(SIGNED_BIN) \
           $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(FACTORY_HEX)
 
-$(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt \
-                     GNUmakefile make/project.mk | $(BUILD_DIR)
+$(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt
 	@set -eu; \
+		mkdir -p "$(HOST_TOOLS_CACHE_ROOT)"; \
 		tmp="$(HOST_PYTHON_DIR).tmp.$$$$"; \
 		old="$(HOST_PYTHON_DIR).old.$$$$"; \
 		rm -rf "$$tmp" "$$old"; \
