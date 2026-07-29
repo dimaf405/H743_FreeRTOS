@@ -176,6 +176,16 @@ SECTIONS
     . = ALIGN(8);
   } >DTCMRAM
 
+  /* Dima general heap lives in D1 AXI SRAM; DTCM and DMA-oriented D2 stay isolated. */
+  .dima_heap (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_heap_start__ = .;
+    . = . + 256K;
+    __dima_heap_end__ = .;
+    . = ALIGN(32);
+  } >RAM_D1
+
   /* Remove information from the standard libraries */
   /DISCARD/ :
   {

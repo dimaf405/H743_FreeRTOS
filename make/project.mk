@@ -77,9 +77,11 @@ PROJECT_C_SOURCES ?= \
 	Boards/H743/Src/motor_pwm.c \
 	App/adapters/usb_console/usb_console.c \
 	App/runtime/libc/cpp_runtime.c \
-	App/runtime/libc/no_heap.c
+	App/runtime/libc/no_heap.c \
+	Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_5.c
 PROJECT_CXX_SOURCES ?= \
 	App/application/app_bootstrap.cpp \
+	Dima/platform/freertos/dima_heap.cpp \
 	App/application/app_main.cpp \
 	App/domain/motor/speed_to_pwm.cpp \
 	App/domain/rover_control/rover_control.cpp \

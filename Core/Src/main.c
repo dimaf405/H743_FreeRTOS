@@ -24,6 +24,8 @@
 /* USER CODE BEGIN Includes */
 #include "App/application/app_main.h"
 #include "Boards/H743/Inc/board_init.h"
+
+extern bool dima_platform_early_init(void);
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,6 +88,10 @@ int main(void)
 
   /* USER CODE BEGIN SysInit */
   board_init();
+  if (!dima_platform_early_init())
+  {
+    Error_Handler();
+  }
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
