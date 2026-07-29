@@ -12,7 +12,10 @@ namespace uORB {
 constexpr uint8_t kMaximumInstances = 4U;
 constexpr uint8_t kMaximumCallbacksPerInstance = 8U;
 
-using Allocator = void *(*)(size_t size, size_t alignment) noexcept;
+struct Allocator {
+    void *(*allocate)(size_t size, size_t alignment) noexcept;
+    void (*deallocate)(void *ptr) noexcept;
+};
 
 struct orb_metadata;
 
@@ -33,7 +36,7 @@ struct orb_metadata {
 };
 
 void register_metadata(orb_metadata *metadata) noexcept;
-bool initialize(Allocator allocator) noexcept;
+bool initialize(const Allocator &allocator) noexcept;
 void shutdown() noexcept;
 bool initialized() noexcept;
 
@@ -43,6 +46,8 @@ bool orb_copy(const orb_metadata *metadata, uint8_t instance,
               uint64_t &generation, void *destination) noexcept;
 bool orb_updated(const orb_metadata *metadata, uint8_t instance,
                  uint64_t generation) noexcept;
+bool orb_advertise(const orb_metadata *metadata, uint8_t instance) noexcept;
+void orb_unadvertise(const orb_metadata *metadata, uint8_t instance) noexcept;
 int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept;
 
 class MetadataRegistrar {
@@ -84,15 +89,18 @@ public:
                       "uORB 消息必须可按字节复制");
     }
 
+    ~Publication() { orb_unadvertise(metadata_, instance_); }
+    Publication(const Publication &) = delete;
+    Publication &operator=(const Publication &) = delete;
+
     bool publish(const T &data) noexcept
     {
-        return orb_publish(metadata_, instance_, &data);
+        return advertise() && orb_publish(metadata_, instance_, &data);
     }
 
     bool advertise() noexcept
     {
-        // 单实例 Publication 的实例号由构造参数确定，首次发布即完成 advertise。
-        return metadata_ != nullptr && instance_ < metadata_->max_instances;
+        return orb_advertise(metadata_, instance_);
     }
 
 private:
@@ -110,10 +118,19 @@ public:
                       "uORB 消息必须可按字节复制");
     }
 
+    ~PublicationMulti()
+    {
+        if (instance_ >= 0) {
+            orb_unadvertise(metadata_, static_cast<uint8_t>(instance_));
+        }
+    }
+    PublicationMulti(const PublicationMulti &) = delete;
+    PublicationMulti &operator=(const PublicationMulti &) = delete;
+
     bool advertise() noexcept
     {
         if (instance_ >= 0) {
-            return true;
+            return orb_advertise(metadata_, static_cast<uint8_t>(instance_));
         }
         instance_ = orb_advertise_multi(metadata_);
         return instance_ >= 0;

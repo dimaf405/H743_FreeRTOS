@@ -33,6 +33,14 @@ ModuleState ModuleManager::status(const ModuleBase &module) const
     return registered(module) ? module.state() : ModuleState::Error;
 }
 
+void ModuleManager::reset()
+{
+    for (auto &module : modules_) {
+        module = nullptr;
+    }
+    module_count_ = 0U;
+}
+
 bool ModuleManager::registered(const ModuleBase &module) const
 {
     for (uint8_t index = 0U; index < module_count_; ++index) {

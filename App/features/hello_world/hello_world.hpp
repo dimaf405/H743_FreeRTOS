@@ -2,13 +2,14 @@
 
 #include "App/messages/app_heartbeat.hpp"
 #include "App/runtime/lifecycle/module_base.hpp"
-#include "App/runtime/scheduling/scheduled_work_item.hpp"
 
 #if defined(APP_HOST_TEST)
 #include "App/runtime/messaging/topic.hpp"
+#include "App/runtime/scheduling/scheduled_work_item.hpp"
 #else
 #include "Dima/messages/app_heartbeat.hpp"
 #include "Dima/middleware/uorb/Publication.hpp"
+#include "Dima/middleware/work_queue/ScheduledWorkItem.hpp"
 #endif
 
 #include <stdint.h>
@@ -25,14 +26,18 @@ struct HostDependencies {
 #endif
 
 class HelloWorld final : public runtime::lifecycle::ModuleBase,
+#if defined(APP_HOST_TEST)
                          public runtime::scheduling::ScheduledWorkItem {
+#else
+                         public px4::ScheduledWorkItem {
+#endif
 public:
 #if defined(APP_HOST_TEST)
     HelloWorld(runtime::scheduling::WorkQueue &queue,
                runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic,
                HostDependencies dependencies);
 #else
-    explicit HelloWorld(runtime::scheduling::WorkQueue &queue);
+    HelloWorld() noexcept;
 #endif
     ~HelloWorld() = default;
 

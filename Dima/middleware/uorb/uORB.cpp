@@ -11,7 +11,7 @@ namespace uORB {
 namespace {
 
 orb_metadata *g_metadata_head{nullptr};
-Allocator g_allocator{nullptr};
+Allocator g_allocator{nullptr, nullptr};
 bool g_initialized{false};
 
 bool in_isr() noexcept
@@ -41,12 +41,12 @@ void register_metadata(orb_metadata *metadata) noexcept
     g_metadata_head = metadata;
 }
 
-bool initialize(Allocator allocator) noexcept
+bool initialize(const Allocator &allocator) noexcept
 {
     if (g_initialized) {
         return true;
     }
-    if (allocator == nullptr || in_isr()) {
+    if (allocator.allocate == nullptr || allocator.deallocate == nullptr || in_isr()) {
         return false;
     }
 
@@ -63,7 +63,7 @@ bool initialize(Allocator allocator) noexcept
                              metadata->queue_size;
         for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
             auto &instance = metadata->instances[index];
-            instance.buffer = static_cast<uint8_t *>(allocator(bytes, 8U));
+            instance.buffer = static_cast<uint8_t *>(allocator.allocate(bytes, 8U));
             if (instance.buffer == nullptr) {
                 shutdown();
                 return false;
@@ -82,10 +82,23 @@ bool initialize(Allocator allocator) noexcept
 
 void shutdown() noexcept
 {
-    // Phase 1 的 Topic Buffer 归 ApplicationContext/Heap 生命周期管理；
-    // 当前接口只解除可用状态，不在实时路径释放内存。
+    for (orb_metadata *metadata = g_metadata_head; metadata != nullptr;
+         metadata = metadata->next) {
+        for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
+            auto &instance = metadata->instances[index];
+            if (instance.buffer != nullptr && g_allocator.deallocate != nullptr) {
+                g_allocator.deallocate(instance.buffer);
+            }
+            instance.buffer = nullptr;
+            instance.generation = 0U;
+            instance.advertised = false;
+            for (auto &callback : instance.callbacks) {
+                callback = nullptr;
+            }
+        }
+    }
     g_initialized = false;
-    g_allocator = nullptr;
+    g_allocator = Allocator{nullptr, nullptr};
 }
 
 bool initialized() noexcept
@@ -101,7 +114,8 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
         return false;
     }
     orb_runtime_instance *const instance = runtime_for(metadata, instance_index);
-    if (instance == nullptr || instance->buffer == nullptr) {
+    if (instance == nullptr || instance->buffer == nullptr ||
+        !instance->advertised) {
         return false;
     }
 
@@ -113,7 +127,6 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
     memcpy(instance->buffer + slot * metadata->object_size, data,
            metadata->object_size);
     instance->generation = next_generation;
-    instance->advertised = true;
     for (uint8_t index = 0U; index < kMaximumCallbacksPerInstance; ++index) {
         callbacks[index] = instance->callbacks[index];
     }
@@ -178,6 +191,39 @@ bool orb_updated(const orb_metadata *metadata, uint8_t instance_index,
     const bool result = instance->generation != generation;
     taskEXIT_CRITICAL();
     return result;
+}
+
+bool orb_advertise(const orb_metadata *metadata, uint8_t instance_index) noexcept
+{
+    if (!g_initialized || in_isr()) {
+        return false;
+    }
+    orb_runtime_instance *const instance = runtime_for(metadata, instance_index);
+    if (instance == nullptr || instance->buffer == nullptr) {
+        return false;
+    }
+    bool accepted = false;
+    taskENTER_CRITICAL();
+    if (!instance->advertised) {
+        instance->advertised = true;
+        accepted = true;
+    }
+    taskEXIT_CRITICAL();
+    return accepted;
+}
+
+void orb_unadvertise(const orb_metadata *metadata, uint8_t instance_index) noexcept
+{
+    if (!g_initialized || in_isr()) {
+        return;
+    }
+    orb_runtime_instance *const instance = runtime_for(metadata, instance_index);
+    if (instance == nullptr) {
+        return;
+    }
+    taskENTER_CRITICAL();
+    instance->advertised = false;
+    taskEXIT_CRITICAL();
 }
 
 int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept

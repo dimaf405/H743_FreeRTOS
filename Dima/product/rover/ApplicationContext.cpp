@@ -1,6 +1,5 @@
 #include "Dima/product/rover/ApplicationContext.hpp"
 
-#include "App/runtime/scheduling/freertos_work_queue.hpp"
 #include "Dima/middleware/uorb/uORB.hpp"
 #include "Dima/middleware/work_queue/WorkQueue.hpp"
 #include "Dima/platform/freertos/dima_platform.hpp"
@@ -22,13 +21,7 @@ ApplicationContext g_application_context;
 
 } // namespace
 
-ApplicationContext::ApplicationContext() noexcept
-    : boot_health_(app::runtime::scheduling::hp_default_work_queue())
-#if APP_HELLO_WORLD_ENABLED
-    , hello_world_(app::runtime::scheduling::lp_default_work_queue())
-#endif
-{
-}
+ApplicationContext::ApplicationContext() noexcept = default;
 
 bool ApplicationContext::init() noexcept
 {
@@ -37,23 +30,23 @@ bool ApplicationContext::init() noexcept
     }
 
     MX_USB_DEVICE_Init();
-    if (!app::runtime::scheduling::init_default_work_queues()) {
-        return false;
-    }
     if (!px4::work_queue_init()) {
         return false;
     }
-    if (!uORB::initialize(&uorb_allocate)) {
+    const uORB::Allocator allocator{&uorb_allocate, &dima::platform::deallocate};
+    if (!uORB::initialize(allocator)) {
         px4::work_queue_shutdown();
         return false;
     }
     if (!module_manager_.register_module(boot_health_)) {
+        module_manager_.reset();
         uORB::shutdown();
         px4::work_queue_shutdown();
         return false;
     }
 #if APP_HELLO_WORLD_ENABLED
     if (!module_manager_.register_module(hello_world_)) {
+        module_manager_.reset();
         uORB::shutdown();
         px4::work_queue_shutdown();
         return false;
@@ -114,6 +107,7 @@ void ApplicationContext::stop() noexcept
         boot_started_ = false;
     }
     if (initialized_) {
+        module_manager_.reset();
         uORB::shutdown();
         px4::work_queue_shutdown();
         initialized_ = false;

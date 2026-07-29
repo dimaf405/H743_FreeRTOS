@@ -32,8 +32,9 @@ BootHealthService::BootHealthService(
 {
 }
 #else
-BootHealthService::BootHealthService(runtime::scheduling::WorkQueue &queue)
-    : ScheduledWorkItem(queue), heartbeat_subscription_(ORB_ID(app_heartbeat)),
+BootHealthService::BootHealthService() noexcept
+    : px4::ScheduledWorkItem("boot_health", px4::wq_configurations::hp_default),
+      heartbeat_subscription_(ORB_ID(app_heartbeat)),
       time_ms_(&production_time_ms),
       confirm_running_image_(&production_confirm_running_image)
 {
@@ -61,7 +62,12 @@ bool BootHealthService::start()
 #else
     (void)heartbeat_subscription_.update();
 #endif
-    if (!ScheduleOnInterval(kCheckIntervalMs)) {
+#if defined(APP_HOST_TEST)
+    const bool scheduled = ScheduleOnInterval(kCheckIntervalMs);
+#else
+    const bool scheduled = ScheduleOnInterval(kCheckIntervalMs * 1000U);
+#endif
+    if (!scheduled) {
         state_ = runtime::lifecycle::ModuleState::Error;
         return false;
     }

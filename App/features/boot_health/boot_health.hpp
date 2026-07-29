@@ -2,13 +2,14 @@
 
 #include "App/messages/app_heartbeat.hpp"
 #include "App/runtime/lifecycle/module_base.hpp"
-#include "App/runtime/scheduling/scheduled_work_item.hpp"
 
 #if defined(APP_HOST_TEST)
 #include "App/runtime/messaging/topic.hpp"
+#include "App/runtime/scheduling/scheduled_work_item.hpp"
 #else
 #include "Dima/messages/app_heartbeat.hpp"
 #include "Dima/middleware/uorb/SubscriptionData.hpp"
+#include "Dima/middleware/work_queue/ScheduledWorkItem.hpp"
 #endif
 
 #include <stdint.h>
@@ -24,7 +25,11 @@ struct HostDependencies {
 #endif
 
 class BootHealthService final : public runtime::lifecycle::ModuleBase,
+#if defined(APP_HOST_TEST)
                                 public runtime::scheduling::ScheduledWorkItem {
+#else
+                                public px4::ScheduledWorkItem {
+#endif
 public:
 #if defined(APP_HOST_TEST)
     BootHealthService(
@@ -32,7 +37,7 @@ public:
         runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic,
         HostDependencies dependencies);
 #else
-    explicit BootHealthService(runtime::scheduling::WorkQueue &queue);
+    BootHealthService() noexcept;
 #endif
     ~BootHealthService() = default;
 

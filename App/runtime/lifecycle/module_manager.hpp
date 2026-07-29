@@ -14,6 +14,7 @@ public:
     bool start(ModuleBase &module);
     bool stop(ModuleBase &module);
     ModuleState status(const ModuleBase &module) const;
+    void reset();
 
 private:
     bool registered(const ModuleBase &module) const;

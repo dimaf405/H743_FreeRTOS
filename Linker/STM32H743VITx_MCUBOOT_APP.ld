@@ -146,6 +146,11 @@ SECTIONS
     *(.data*)          /* .data* sections */
 
     . = ALIGN(4);
+    __dima_orb_meta_start__ = .;
+    KEEP(*(.dima_orb_meta))
+    __dima_orb_meta_end__ = .;
+
+    . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */
   } >DTCMRAM AT> FLASH
 

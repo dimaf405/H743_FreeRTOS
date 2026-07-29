@@ -24,8 +24,9 @@ HelloWorld::HelloWorld(
 {
 }
 #else
-HelloWorld::HelloWorld(runtime::scheduling::WorkQueue &queue)
-    : ScheduledWorkItem(queue), heartbeat_publication_(ORB_ID(app_heartbeat))
+HelloWorld::HelloWorld() noexcept
+    : px4::ScheduledWorkItem("hello_world", px4::wq_configurations::lp_default),
+      heartbeat_publication_(ORB_ID(app_heartbeat))
 {
 }
 #endif
@@ -36,7 +37,13 @@ bool HelloWorld::start()
         return true;
     }
 
-    if (!ScheduleOnInterval(APP_HELLO_WORLD_INTERVAL_MS)) {
+#if defined(APP_HOST_TEST)
+    const bool scheduled = ScheduleOnInterval(APP_HELLO_WORLD_INTERVAL_MS);
+#else
+    const bool scheduled = ScheduleOnInterval(
+        static_cast<uint32_t>(APP_HELLO_WORLD_INTERVAL_MS) * 1000U);
+#endif
+    if (!scheduled) {
         state_ = runtime::lifecycle::ModuleState::Error;
         return false;
     }
