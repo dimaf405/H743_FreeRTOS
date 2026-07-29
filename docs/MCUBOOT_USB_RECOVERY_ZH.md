@@ -17,12 +17,14 @@ ROM DFU 不依赖 MCUboot、FreeRTOS、应用固件或外部 HSE。要保证“�
 | Scratch | `0x081C0000`–`0x081DFFFF` | 128 KiB | scratch swap 交换区 |
 | 保留区 | `0x081E0000`–`0x081FFFFF` | 128 KiB | 保留，不用于本次升级 |
 
-在工程根目录构建并校验：
+在工程根目录一条命令完成构建、签名与校验：
 
 ```bash
-make -j4 GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin firmware
-make GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin verify
+make dima_rover
 ```
+
+如果交叉编译器不在 PATH，可追加
+`GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin`，目标行为不变。
 
 与烧写相关的产物为：
 
@@ -87,9 +89,47 @@ mcumgr --conntype serial `
 
 `baud=115200` 是 CDC line-coding 参数，实际链路仍是 USB FS。若端口只在复位后短暂出现，先准备好命令，复位后立即执行 `image list`；首次有效响应会锁定 recovery 会话。
 
-### 3.2 完整升级流程
+### 3.2 一条命令完成构建与上传
 
-以下命令以 Linux 端口为例。上传时的 **`-n 2` 不能省略**：本工程的 direct-image 编号 `2` 明确映射到 Secondary slot；Bootloader 也会拒绝 `-n 1`，从实现层禁止 USB 擦写正在运行的 Primary slot。
+一次性安装固定版本的 Apache `mcumgr`，并确保生成目录位于 PATH：
+
+```bash
+go install github.com/apache/mynewt-mcumgr-cli/mcumgr@v0.0.0-20221004073047-5c56bd24066c
+```
+
+Linux 默认生成到 `$(go env GOPATH)/bin/mcumgr`；Windows 默认生成到
+`%USERPROFILE%\go\bin\mcumgr.exe`，本工程在 WSL 中也会自动寻找后者。编译环境还需要 GNU
+Make、Python 3 + pip，以及 PATH 中的 `arm-none-eabi-gcc` 工具链；也可继续通过 `GCC_PATH`
+显式指定工具链目录。依赖准备好后，在工程根目录只需执行：
+
+```bash
+make dima_rover upload
+```
+
+该命令会依次完成应用与 MCUboot 编译、签名和布局校验，默认选择当前构建目录中的
+`build/H743_FreeRTOS_signed.bin`，等待 `H743 MCUboot Recovery` USB CDC 端口出现，随后自动执行
+Secondary 上传、读取本地签名镜像 SHA-256、设置测试启动和复位。命令提示等待设备时保持 BOOT0
+为低并按下 RESET；首次有效请求会使 Bootloader 保持在 recovery。
+
+Linux 只会自动选择 USB 标识为 VID `0483`、PID `5740`、产品名
+`H743 MCUboot Recovery` 的 CDC 端口，并优先显示稳定的 `/dev/serial/by-id/` 路径。在 WSL
+中，如果 Windows PATH 或 `%USERPROFILE%\go\bin` 中存在 `mcumgr.exe`，命令会查找相同
+VID/PID 的 `COMx` 并通过短超时 `image list` 确认 Recovery；VID/PID 本身不能区分应用 CDC
+和 Bootloader。检测到多个候选设备时命令会拒绝猜测目标，此时必须覆盖端口：
+
+```bash
+make dima_rover upload MCUMGR_PORT=/dev/ttyACM1
+make dima_rover upload MCUMGR=/absolute/path/to/mcumgr
+```
+
+`UPLOAD_IMAGE` 可覆盖默认上传包，`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间。无论使用
+哪个入口，上传包都必须由板上 MCUboot 已内置公钥对应的私钥签名。
+
+### 3.3 手工升级流程
+
+以下命令以 Linux 端口为例。本工程统一显式使用 **`-n 2`**，将 direct-image 编号 `2`
+映射到 Secondary slot。为兼容旧客户端，省略该字段时发送的默认编号 `0` 也会安全回退到
+Secondary；Bootloader 会拒绝 `-n 1`，从实现层禁止 USB 擦写正在运行的 Primary slot。
 
 1. 进入 recovery，并查看当前镜像：
 
@@ -141,7 +181,7 @@ mcumgr --conntype serial `
 
 8. 如需验收确认状态，复位并在 3 秒窗口内再次执行 `image list`，确认运行镜像已经是新版本且为 confirmed/permanent 状态。
 
-### 3.3 回滚行为
+### 3.4 回滚行为
 
 - 新镜像在 5 秒健康窗口内崩溃、看门狗复位或被人工硬复位，或者稳定窗口结束前始终没有产生 `app_heartbeat` 时，`image_ok` 尚未写入；下一次 MCUboot 启动会回滚到旧镜像。
 - 如果新镜像只是无限卡死且没有看门狗触发，需人工复位/重新上电，之后 MCUboot 才能执行回滚。

@@ -74,6 +74,7 @@ override OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(CUBEMX_OBJECT
 PROJECT_C_SOURCES ?= \
 	App/adapters/mcuboot/mcuboot_app.c \
 	Boards/H743/Src/board_init.c \
+	Boards/H743/Src/motor_pwm.c \
 	App/adapters/usb_console/usb_console.c \
 	App/runtime/libc/cpp_runtime.c \
 	App/runtime/libc/no_heap.c
@@ -81,6 +82,7 @@ PROJECT_CXX_SOURCES ?= \
 	App/application/app_bootstrap.cpp \
 	App/application/app_main.cpp \
 	App/domain/motor/speed_to_pwm.cpp \
+	App/domain/rover_control/rover_control.cpp \
 	App/features/hello_world/hello_world.cpp \
 	App/features/boot_health/boot_health.cpp \
 	App/runtime/lifecycle/module_manager.cpp \
@@ -144,8 +146,13 @@ FACTORY_HEX = $(BUILD_DIR)/$(TARGET)_factory.hex
 IMAGE_VERSION_STAMP = $(BUILD_DIR)/.image-version-$(subst /,_,$(IMAGE_VERSION))
 KEY_ID_STAMP ?= $(BUILD_DIR)/.key-identity
 KEY_ID_TOOL = tools/update_key_identity.py
+MCUMGR ?= mcumgr
+MCUMGR_PORT ?=
+UPLOAD_WAIT_SECONDS ?= 60
+UPLOAD_IMAGE ?= $(SIGNED_BIN)
+UPLOAD_TOOL = tools/mcumgr_upload.py
 
-.PHONY: firmware mcuboot host-tools host-test verify \
+.PHONY: firmware mcuboot host-tools host-test verify dima_rover upload \
         FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
 firmware: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
           $(BUILD_DIR)/$(TARGET).bin $(SIGNED_BIN) \
@@ -245,5 +252,17 @@ verify: firmware
 		--boot-elf $(MCUBOOT_BUILD_DIR)/mcuboot.elf \
 		--signed $(SIGNED_BIN) --factory $(FACTORY_HEX) \
 		--nm $(if $(GCC_PATH),$(GCC_PATH)/$(PREFIX)nm,$(PREFIX)nm)
+
+# Product-facing entry points.  `upload` depends on `dima_rover`, so both
+# `make upload` and the requested `make dima_rover upload` build and verify the
+# exact signed image before touching the board.
+dima_rover: verify
+
+upload: dima_rover $(UPLOAD_TOOL)
+	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
+		--image "$(UPLOAD_IMAGE)" --imgtool "$(IMGTOOL)" \
+		--mcumgr "$(MCUMGR)" \
+		$(if $(strip $(MCUMGR_PORT)),--port "$(MCUMGR_PORT)",) \
+		--wait-seconds "$(UPLOAD_WAIT_SECONDS)"
 
 -include $(PROJECT_OBJECTS:.o=.d)
