@@ -2,8 +2,14 @@
 
 #include "App/messages/app_heartbeat.hpp"
 #include "App/runtime/lifecycle/module_base.hpp"
-#include "App/runtime/messaging/topic.hpp"
 #include "App/runtime/scheduling/scheduled_work_item.hpp"
+
+#if defined(APP_HOST_TEST)
+#include "App/runtime/messaging/topic.hpp"
+#else
+#include "Dima/messages/app_heartbeat.hpp"
+#include "Dima/middleware/uorb/Publication.hpp"
+#endif
 
 #include <stdint.h>
 
@@ -26,8 +32,7 @@ public:
                runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic,
                HostDependencies dependencies);
 #else
-    HelloWorld(runtime::scheduling::WorkQueue &queue,
-               runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic);
+    explicit HelloWorld(runtime::scheduling::WorkQueue &queue);
 #endif
     ~HelloWorld() = default;
 
@@ -43,7 +48,11 @@ protected:
     void Run() override;
 
 private:
+#if defined(APP_HOST_TEST)
     runtime::messaging::Publication<app_heartbeat_s> heartbeat_publication_;
+#else
+    uORB::Publication<app_heartbeat_s> heartbeat_publication_;
+#endif
     runtime::lifecycle::ModuleState state_{
         runtime::lifecycle::ModuleState::Stopped};
     uint32_t sequence_{0U};

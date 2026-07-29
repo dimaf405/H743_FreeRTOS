@@ -24,10 +24,8 @@ HelloWorld::HelloWorld(
 {
 }
 #else
-HelloWorld::HelloWorld(
-    runtime::scheduling::WorkQueue &queue,
-    runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic)
-    : ScheduledWorkItem(queue), heartbeat_publication_(heartbeat_topic)
+HelloWorld::HelloWorld(runtime::scheduling::WorkQueue &queue)
+    : ScheduledWorkItem(queue), heartbeat_publication_(ORB_ID(app_heartbeat))
 {
 }
 #endif

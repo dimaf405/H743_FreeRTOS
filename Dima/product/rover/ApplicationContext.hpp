@@ -1,9 +1,7 @@
 #pragma once
 
 #include "App/features/boot_health/boot_health.hpp"
-#include "App/messages/app_heartbeat.hpp"
 #include "App/runtime/lifecycle/module_manager.hpp"
-#include "App/runtime/messaging/topic.hpp"
 
 #if APP_HELLO_WORLD_ENABLED
 #include "App/features/hello_world/hello_world.hpp"
@@ -20,7 +18,6 @@ public:
     void stop() noexcept;
 
 private:
-    app::runtime::messaging::Topic<app_heartbeat_s> heartbeat_topic_{};
     app::runtime::lifecycle::ModuleManager module_manager_{};
     app::features::boot_health::BootHealthService boot_health_;
 #if APP_HELLO_WORLD_ENABLED

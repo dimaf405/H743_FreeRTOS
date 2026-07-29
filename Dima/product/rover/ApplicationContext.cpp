@@ -23,11 +23,9 @@ ApplicationContext g_application_context;
 } // namespace
 
 ApplicationContext::ApplicationContext() noexcept
-    : boot_health_(app::runtime::scheduling::hp_default_work_queue(),
-                   heartbeat_topic_)
+    : boot_health_(app::runtime::scheduling::hp_default_work_queue())
 #if APP_HELLO_WORLD_ENABLED
-    , hello_world_(app::runtime::scheduling::lp_default_work_queue(),
-                   heartbeat_topic_)
+    , hello_world_(app::runtime::scheduling::lp_default_work_queue())
 #endif
 {
 }

@@ -32,10 +32,8 @@ BootHealthService::BootHealthService(
 {
 }
 #else
-BootHealthService::BootHealthService(
-    runtime::scheduling::WorkQueue &queue,
-    runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic)
-    : ScheduledWorkItem(queue), heartbeat_subscription_(heartbeat_topic),
+BootHealthService::BootHealthService(runtime::scheduling::WorkQueue &queue)
+    : ScheduledWorkItem(queue), heartbeat_subscription_(ORB_ID(app_heartbeat)),
       time_ms_(&production_time_ms),
       confirm_running_image_(&production_confirm_running_image)
 {
@@ -57,8 +55,12 @@ bool BootHealthService::start()
 
     stable_window_start_ms_ = time_ms_(dependency_context_);
     heartbeat_observed_ = false;
+#if defined(APP_HOST_TEST)
     app_heartbeat_s baseline_heartbeat{};
     (void)heartbeat_subscription_.copy(baseline_heartbeat);
+#else
+    (void)heartbeat_subscription_.update();
+#endif
     if (!ScheduleOnInterval(kCheckIntervalMs)) {
         state_ = runtime::lifecycle::ModuleState::Error;
         return false;
@@ -88,10 +90,16 @@ void BootHealthService::Run()
         return;
     }
 
+#if defined(APP_HOST_TEST)
     app_heartbeat_s heartbeat{};
     if (heartbeat_subscription_.copy(heartbeat)) {
         heartbeat_observed_ = true;
     }
+#else
+    if (heartbeat_subscription_.update()) {
+        heartbeat_observed_ = true;
+    }
+#endif
 
     const uint64_t elapsed_ms =
         time_ms_(dependency_context_) - stable_window_start_ms_;

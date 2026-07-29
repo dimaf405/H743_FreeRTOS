@@ -2,8 +2,14 @@
 
 #include "App/messages/app_heartbeat.hpp"
 #include "App/runtime/lifecycle/module_base.hpp"
-#include "App/runtime/messaging/topic.hpp"
 #include "App/runtime/scheduling/scheduled_work_item.hpp"
+
+#if defined(APP_HOST_TEST)
+#include "App/runtime/messaging/topic.hpp"
+#else
+#include "Dima/messages/app_heartbeat.hpp"
+#include "Dima/middleware/uorb/SubscriptionData.hpp"
+#endif
 
 #include <stdint.h>
 
@@ -26,9 +32,7 @@ public:
         runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic,
         HostDependencies dependencies);
 #else
-    BootHealthService(
-        runtime::scheduling::WorkQueue &queue,
-        runtime::messaging::Topic<app_heartbeat_s> &heartbeat_topic);
+    explicit BootHealthService(runtime::scheduling::WorkQueue &queue);
 #endif
     ~BootHealthService() = default;
 
@@ -50,7 +54,11 @@ private:
     static constexpr uint32_t kCheckIntervalMs = 100U;
     static constexpr uint64_t kStableWindowMs = 5000ULL;
 
+#if defined(APP_HOST_TEST)
     runtime::messaging::Subscription<app_heartbeat_s> heartbeat_subscription_;
+#else
+    uORB::SubscriptionData<app_heartbeat_s> heartbeat_subscription_;
+#endif
     void *dependency_context_{nullptr};
     TimeMsFunction time_ms_{nullptr};
     ConfirmFunction confirm_running_image_{nullptr};
