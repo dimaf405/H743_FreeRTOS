@@ -89,23 +89,36 @@ public:
                       "uORB 消息必须可按字节复制");
     }
 
-    ~Publication() { orb_unadvertise(metadata_, instance_); }
+    ~Publication()
+    {
+        if (advertised_) {
+            orb_unadvertise(metadata_, instance_);
+        }
+    }
     Publication(const Publication &) = delete;
     Publication &operator=(const Publication &) = delete;
 
     bool publish(const T &data) noexcept
     {
+        if (advertise() && orb_publish(metadata_, instance_, &data)) {
+            return true;
+        }
+        advertised_ = false;
         return advertise() && orb_publish(metadata_, instance_, &data);
     }
 
     bool advertise() noexcept
     {
-        return orb_advertise(metadata_, instance_);
+        if (!advertised_) {
+            advertised_ = orb_advertise(metadata_, instance_);
+        }
+        return advertised_;
     }
 
 private:
     const orb_metadata *metadata_;
     uint8_t instance_;
+    bool advertised_{false};
 };
 
 template<typename T>
@@ -129,16 +142,20 @@ public:
 
     bool advertise() noexcept
     {
-        if (instance_ >= 0) {
-            return orb_advertise(metadata_, static_cast<uint8_t>(instance_));
+        if (instance_ < 0) {
+            instance_ = orb_advertise_multi(metadata_);
         }
-        instance_ = orb_advertise_multi(metadata_);
         return instance_ >= 0;
     }
 
     bool publish(const T &data) noexcept
     {
-        return advertise() &&
+        if (advertise() &&
+            orb_publish(metadata_, static_cast<uint8_t>(instance_), &data)) {
+            return true;
+        }
+        instance_ = orb_advertise_multi(metadata_);
+        return instance_ >= 0 &&
                orb_publish(metadata_, static_cast<uint8_t>(instance_), &data);
     }
 
