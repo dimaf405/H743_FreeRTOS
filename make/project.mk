@@ -84,6 +84,7 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/platform/freertos/dima_heap.cpp \
 	Dima/platform/freertos/hrt.cpp \
 	Dima/product/rover/ApplicationContext.cpp \
+	Dima/product/rover/LogService.cpp \
 	App/application/app_main.cpp \
 	App/domain/motor/speed_to_pwm.cpp \
 	App/domain/rover_control/rover_control.cpp \

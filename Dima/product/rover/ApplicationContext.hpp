@@ -2,6 +2,7 @@
 
 #include "App/features/boot_health/boot_health.hpp"
 #include "App/runtime/lifecycle/module_manager.hpp"
+#include "Dima/product/rover/LogService.hpp"
 
 #if APP_HELLO_WORLD_ENABLED
 #include "App/features/hello_world/hello_world.hpp"
@@ -20,11 +21,13 @@ public:
 private:
     app::runtime::lifecycle::ModuleManager module_manager_{};
     app::features::boot_health::BootHealthService boot_health_;
+    LogService log_service_{};
 #if APP_HELLO_WORLD_ENABLED
     app::features::hello_world::HelloWorld hello_world_;
 #endif
     bool initialized_{false};
     bool boot_started_{false};
+    bool log_started_{false};
 #if APP_HELLO_WORLD_ENABLED
     bool hello_started_{false};
 #endif

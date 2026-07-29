@@ -82,11 +82,27 @@ bool ApplicationContext::start() noexcept
         return false;
     }
 #endif
+    log_started_ = log_service_.start();
+    if (!log_started_) {
+#if APP_HELLO_WORLD_ENABLED
+        if (hello_started_) {
+            (void)module_manager_.stop(hello_world_);
+            hello_started_ = false;
+        }
+#endif
+        (void)module_manager_.stop(boot_health_);
+        boot_started_ = false;
+        return false;
+    }
     return true;
 }
 
 void ApplicationContext::stop() noexcept
 {
+    if (log_started_) {
+        log_service_.stop();
+        log_started_ = false;
+    }
 #if APP_HELLO_WORLD_ENABLED
     if (hello_started_) {
         (void)module_manager_.stop(hello_world_);
