@@ -9,8 +9,7 @@ extern "C" {
 #include "task.h"
 }
 
-using hrt_abstime = std::uint64_t;
-hrt_abstime hrt_absolute_time() noexcept;
+#include "Dima/platform/freertos/hrt.hpp"
 
 namespace dima::events {
 namespace {

@@ -1,4 +1,5 @@
 #include "Dima/platform/freertos/dima_platform.hpp"
+#include "Dima/platform/freertos/hrt.hpp"
 
 #include <atomic>
 #include <new>
@@ -127,7 +128,7 @@ void record_allocation_failure() noexcept
 
 extern "C" bool dima_platform_early_init(void)
 {
-    return dima::platform::heap_init();
+    return dima::platform::heap_init() && hrt_init();
 }
 
 extern "C" void vApplicationMallocFailedHook(void)
