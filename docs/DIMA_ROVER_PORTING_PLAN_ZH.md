@@ -1,6 +1,6 @@
 # Dima FreeRTOS Rover 总体移植计划
 
-- 状态：阶段 0 已批准执行
+- 状态：阶段 0、阶段 1 已完成；阶段 2 待执行
 - 日期：2026-07-29
 - 目标平台：STM32H743 + FreeRTOS
 - 产品类型：支持前进、后退和原地旋转的差速 Rover
@@ -125,7 +125,7 @@ Storage       128 KiB
 
 ### 4.4 受控动态内存策略
 
-阶段 1 计划采用受监控的 FreeRTOS `heap_5`：
+阶段 1 已采用受监控的 FreeRTOS `heap_5`：
 
 - 通用 Heap 首版位于 D1 AXI SRAM。
 - D2 SRAM 保留给静态、对齐的 DMA Buffer。
@@ -137,9 +137,9 @@ Storage       128 KiB
 
 ## 5. 后续阶段
 
-### 阶段 1：Dima FreeRTOS 平台兼容层
+### 阶段 1：Dima FreeRTOS 平台兼容层（已完成）
 
-建立受控 Heap、`hrt_absolute_time()`、WorkQueue、uORB、events、perf 和 logging。现有 FreeRTOS WorkQueue、Topic 和时间实现可作为 backend，对外暴露上游兼容接口。
+已建立受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。生产 heartbeat 已迁移到 uORB；BootHealth、HelloWorld 和日志服务已迁移到 Dima WorkQueue。目标固件、签名镜像和 Factory HEX 已通过验证，板上 HRT Overflow、栈高水位和运行期 Heap 余量仍需人工验收。
 
 ### 阶段 2：Parameter 与 ModuleParams
 

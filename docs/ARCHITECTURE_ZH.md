@@ -72,19 +72,19 @@ USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 
 本项目不再要求全系统完全静态，但动态内存必须受控：
 
-- 启动期和非实时服务允许使用受监控 FreeRTOS Heap。
+- 启动期和非实时服务允许使用位于 D1 AXI SRAM 的受监控 FreeRTOS `heap_5`。
 - ISR、控制循环、EKF2 更新、Arming/Failsafe、Mixer 和 PWM 输出禁止分配。
-- 通用 Heap 首版规划在 D1 AXI SRAM。
+- 通用 Heap 已固定为 D1 AXI SRAM 中 256 KiB 的 `.dima_heap`。
 - D2 SRAM 保留给显式 DMA Buffer；DMA Buffer 不从通用 Heap 获取。
 - DTCM 默认用于快速非 DMA 状态和任务栈，不加入通用 Heap。
-- 后续启用 malloc failed hook、最低余量、任务栈高水位和内存故障 Event。
+- 已启用 malloc failed hook、Heap 统计和内存故障 Event；任务栈高水位待目标板采集。
 - C++ exceptions 和 RTTI 继续关闭。
 
-现有无堆实现保留到阶段 1 的受控 Heap 正式接管，不在阶段 0 改变运行时内存行为。
+`_sbrk()` 继续 fail-closed；C++ `new/delete` 和启动期 Topic Buffer 只通过 Dima allocator 使用受控 Heap。
 
 ## 6. 消息、参数和状态估计边界
 
-- 消息接口采用 uORB 兼容 Publication/Subscription；当前 Topic 可作为初期 backend。
+- 生产消息接口采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 已完成首条生产迁移，旧 Topic 仅保留为迁移期/Host seam。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
 - 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。
 - Estimator 采用 EKF2，首版即保留多实例与 Estimator Selector，至少支持两个 EKF 实例；实际激活数量由可用 IMU/Mag 组合和参数决定。控制器只消费 `vehicle_attitude`、`vehicle_local_position`、`vehicle_global_position` 和健康状态，不直接访问 EKF 内部对象。
