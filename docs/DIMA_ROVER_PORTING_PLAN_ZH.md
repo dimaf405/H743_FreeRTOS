@@ -1,7 +1,7 @@
 # Dima FreeRTOS Rover 总体移植计划
 
-- 状态：阶段 0、阶段 1 已完成；阶段 2 代码与目标构建已完成，实车验收待完成
-- 日期：2026-07-29
+- 状态：顶层 App 已归并到 Dima；目录迁移后的结构检查已通过；构建、签名和目标运行验证待工具链恢复后执行
+- 日期：2026-07-30
 - 目标平台：STM32H743 + FreeRTOS
 - 产品类型：支持前进、后退和原地旋转的差速 Rover
 
@@ -18,7 +18,8 @@ Estimator 最终选择 PX4 EKF2。本计划取代此前所有采用 ArduPilot EK
 - 操作系统固定为 FreeRTOS，不转为 NuttX 板级移植。
 - 保留当前 MCUboot 双镜像、USB 恢复、CubeMX/HAL、板级驱动和构建入口。
 - 优先复用成熟上游模块；确实无法移植时才实现 Dima 适配或替代层，并记录原因。
-- Dima 目录只负责产品组织和平台适配，不通过全文替换改变上游源码身份。
+- `Dima/` 是唯一自研应用根，负责启动壳、产品模块、适配、兼容运行时、平台层和算法库；不通过全文替换改变上游源码身份。
+- `Core/`、`Boards/`、`Drivers/`、`Middlewares/`、`USB_DEVICE/` 和 `Bootloader/` 保持独立边界。
 - 项目内不新建名称包含大小写不敏感 `px4` 的目录；来源说明、许可证文字和上游源码符号不受此限制。
 - 不要求全系统完全静态确定。允许启动期和非实时服务受控动态分配。
 - ISR、控制循环、EKF2 更新、Arming/Failsafe、Mixer 和 PWM 输出路径禁止动态分配。
@@ -49,34 +50,23 @@ FreeRTOS + STM32 HAL
 MCUboot
 ```
 
-规划目录：
+当前目录边界：
 
 ```text
 Dima/
-├── platform/freertos/
-├── middleware/
-│   ├── parameters/
-│   ├── uorb/
-│   ├── work_queue/
-│   ├── events/
-│   ├── perf/
-│   └── logging/
-├── modules/
-│   ├── rc/
-│   ├── safety/
-│   ├── rover/
-│   └── estimator/ekf2/
-├── lib/
-│   ├── estimator/
-│   ├── math/
-│   ├── pid/
-│   ├── slew_rate/
-│   └── rover_control/
+├── application/                    启动壳、C ABI 入口和 appMainTask
+├── adapters/                       USB Console、MCUboot 适配
+├── platform/freertos/              libc、platform_time 与 FreeRTOS 平台适配
+├── middleware/                     lifecycle、messaging、scheduling、parameters、uORB、WorkQueue
+├── modules/                        boot_health、hello_world、RC、安全、Rover、EKF2
+├── lib/                            motor、rover_control 与公共算法库
 ├── messages/
 └── product/rover/
+
+Boards/H743/  Core/  Drivers/  Middlewares/  USB_DEVICE/  Bootloader/
 ```
 
-当前 `App/domain/rover_control` 作为迁移期实现保留并冻结，不继续加入 Parameter、SBUS、Arming、Estimator 或 Position 功能。新模块链达到对应实车里程碑后，再逐项替换旧链。
+已退役的顶层 `App/` 已完成目录归并：原启动入口进入 `Dima/application`，BootHealth/HelloWorld 进入 `Dima/modules/{boot_health,hello_world}`，Adapter 进入 `Dima/adapters`，生命周期、Topic 和兼容调度进入 `Dima/middleware/{lifecycle,messaging,scheduling}`，C/C++ Runtime 与时间接口进入 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor/Rover Control 进入 `Dima/lib/{motor,rover_control}`。`Core/Boards/Drivers/Middlewares/USB_DEVICE/Bootloader` 保持独立；结构检查已通过；目标构建、签名镜像和目标板行为待工具链恢复后验证。
 
 ## 4. 阶段 0：保存计划并建立重构基线
 
@@ -119,7 +109,7 @@ Storage       128 KiB
 - 当前任务栈及高水位能力现状。
 - Application Slot 剩余空间。
 
-阶段 0 的实测结果记录在 [Dima Rover 资源基线](DIMA_RESOURCE_BASELINE_ZH.md)。应用 ELF/BIN 已重新生成；完整签名链当前受 `build/host-python` 的 WSL/Windows 目录重命名权限阻塞，必须作为独立构建问题处理。
+阶段 0 的历史资源数据记录在 [Dima Rover 资源基线](DIMA_RESOURCE_BASELINE_ZH.md)。目录归并后的 ELF、BIN、签名链和 Factory HEX 待工具链恢复后重新生成并验证，历史结果不得作为当前结构的通过结论。
 
 固件发布目标控制在 Application Slot 的 85% 以下。阶段 0 不缩小 Primary/Secondary Slot；参数掉电安全需要第二个擦除区域时，优先评估外部 NVM 或后续分区 ADR。
 
@@ -137,11 +127,11 @@ Storage       128 KiB
 
 ## 5. 后续阶段
 
-### 阶段 1：Dima FreeRTOS 平台兼容层（已完成）
+### 阶段 1：Dima FreeRTOS 平台兼容层（实现已归入 Dima，待工具链恢复后复验）
 
-已建立受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。生产 heartbeat 已迁移到 uORB；BootHealth、HelloWorld 和日志服务已迁移到 Dima WorkQueue。目标固件、签名镜像和 Factory HEX 已通过验证，板上 HRT Overflow、栈高水位和运行期 Heap 余量仍需人工验收。
+已建立受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。生产 heartbeat 已迁移到 uORB；BootHealth、HelloWorld 和日志服务已迁移到 Dima WorkQueue。目录迁移后的目标固件、签名镜像、Factory HEX、板上 HRT Overflow、栈高水位和运行期 Heap 余量均待工具链恢复后验证。
 
-### 阶段 2：Parameter 与 ModuleParams（代码与构建验证已完成）
+### 阶段 2：Parameter 与 ModuleParams（实现已存在，目录迁移后待工具链恢复复验）
 
 阶段 2 以 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 为唯一参数来源，已建立：
 
@@ -153,9 +143,9 @@ Storage       128 KiB
 - `0x081E0000～0x08200000` 单个 128 KiB Storage 扇区的追加 Journal，包含 Sequence、长度、CRC32 和最终 Commit Marker；扫描使用 ECC 安全读与受限 BusFault 恢复，空间满返回 ENOSPC，不自动擦除。
 - 24 项 PX4 差速 Rover 参数：20 项 `RO_*` 与 4 项 `RD_*`；参数数量由官方生成目录确定，无固定 64 项上限。
 
-当前构建资源为 `.text=111020`、`.data=2828`、`.bss=325776` bytes，Signed BIN 为 `115064` bytes，`make verify` 已通过。
+最近记录的迁移前资源为 `.text=111020`、`.data=2828`、`.bss=325776` bytes，Signed BIN 为 `115064` bytes；目录迁移后的 `make verify` 待工具链恢复后执行。
 
-阶段 2 当前状态是“代码与目标构建验证完成，实车验收待完成”。未新增或运行测试框架、测试文件、SITL 或仿真；尚未进行 USB 在线调参、自动保存、掉电恢复、损坏尾部回退、扇区满和人工擦除的目标板验收。阶段 2 工作区改动已按功能拆分提交。许可证保持 `PENDING`，最终处理 `DEFERRED`，不阻塞后续阶段。
+阶段 2 的实现已存在，但当前目录结构下的编译、链接、签名和目标板行为待工具链恢复后验证。未新增或运行测试框架、测试文件、SITL 或仿真；尚未进行 USB 在线调参、自动保存、掉电恢复、损坏尾部回退、扇区满和人工擦除的目标板验收。阶段 2 工作区改动已按功能拆分提交。许可证保持 `PENDING`，最终处理 `DEFERRED`，不阻塞后续阶段。
 
 ### 阶段 3：SBUS、RCUpdate 与 ManualControl
 
@@ -215,7 +205,7 @@ Wheel Encoder 不直接侵入 EKF Core；先通过独立 Dima Odometry Adapter �
 
 加入在线参数、状态、任务、Estimator、控制器、Fault/Event 和升级状态的现场可观测能力，完成长时间运行、失联、传感器异常、看门狗、升级与回滚等实车验收。
 
-## 6. 阶段 0 验收条件
+## 6. 当前目录迁移验收条件
 
 - 计划、Source Manifest 和 ADR 内容一致。
 - EKF2 被明确记录为最终 Estimator 选择，旧 EKF3 计划失效。
@@ -223,6 +213,7 @@ Wheel Encoder 不直接侵入 EKF Core；先通过独立 Dima Odometry Adapter �
 - ArduPilot 参考 commit 被记录。
 - 许可证状态为 `PENDING`，来源保留和发布限制明确。
 - 阶段 0 不导入 EKF2、SBUS 或控制模块生产源码。
-- 不修改当前 Flash 地址、启动流程或迁移期控制代码。
+- Flash 地址和 MCUboot/Application 启动接口不因目录整理而改变。
+- 结构检查、目标编译、链接、签名镜像、Factory HEX 和目标板行为待工具链恢复后验证；完成前不得标记为通过。
 - 不创建测试、SITL 或仿真代码。
 - 不覆盖或回退工作区中已有的其他修改。

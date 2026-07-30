@@ -11,31 +11,37 @@ Estimator 固定采用 PX4 EKF2。此前涉及 ArduPilot EKF3 的阶段计划均
 ## 2. 项目代码结构
 
 ```text
-Dima/                         Dima Rover 模块、兼容层和产品装配
-├── platform/freertos/        FreeRTOS 平台适配
+Dima/                         唯一自研应用根、兼容层和产品装配
+├── application/              启动壳、C ABI 入口和 appMainTask
+├── adapters/                 USB Console、MCUboot 等外部适配
+├── platform/freertos/        FreeRTOS 平台适配（libc、platform_time）
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
-├── modules/                  RC、安全、Rover 和 EKF2 模块
-├── lib/                      Math、PID、SlewRate 和 RoverControl
+│   ├── lifecycle/            Module 生命周期
+│   ├── messaging/            Topic 兼容接口
+│   └── scheduling/           兼容调度实现
+├── modules/                  boot_health、hello_world、RC、安全、Rover、EKF2
+├── lib/                      motor、rover_control 与公共算法库
 ├── messages/                 共享消息契约
 └── product/rover/            产品配置、模式和装配
 
-App/                          当前运行时和迁移期应用实现
 Boards/H743/                  板级初始化、Flash 布局和外设适配
-Bootloader/                   独立 MCUboot 镜像
-Core/、USB_DEVICE/            CubeMX/HAL 生成层
-Drivers/、Middlewares/        厂商及第三方代码
+Core/                         CubeMX/HAL 应用生成层
+Drivers/                      CMSIS 与 STM32 HAL 厂商代码
+Middlewares/                  FreeRTOS、MCUboot、ST USB 等第三方代码
+USB_DEVICE/                   CubeMX USB Device 集成层
+Bootloader/                   独立 MCUboot 固件镜像
 Linker/、make/、tools/        链接、构建、签名和升级工具
 docs/                         计划、架构、ADR、来源和维护文档
 ```
 
-阶段 0 不移动或删除现有 `App/` 代码。当前 `App/domain/rover_control` 是迁移期实现，冻结其功能边界；新的 Parameter、SBUS、Arming、Estimator 和 Position 功能进入 Dima 模块链。
+已退役的顶层 `App/` 已迁入 `Dima/`：启动壳位于 `Dima/application`，功能模块位于 `Dima/modules/{boot_health,hello_world}`，外部适配位于 `Dima/adapters`，兼容运行时位于 `Dima/middleware/{lifecycle,messaging,scheduling}`，C/C++ Runtime 与平台时间位于 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor 与 Rover Control 位于 `Dima/lib/{motor,rover_control}`。已退役的顶层 `App/` 不再是当前架构根；目录迁移后的结构检查已通过；构建和运行验证待工具链恢复后执行。
 
 ## 3. 依赖规则
 
 - `Dima/product/rover` 是最终产品装配层，只装配所需的 Dima 和上游兼容模块。
 - `Dima/modules` 可依赖 Dima middleware、messages、lib 和明确的平台适配接口，不直接包含 STM32 HAL 全局句柄。
 - `Dima/lib` 保持算法属性，不依赖 HAL、USB、MCUboot 或具体板卡。
-- `Dima/middleware` 对外提供上游兼容 API，对内复用或替换当前 `App/runtime` 实现。
+- `Dima/middleware` 直接拥有 `lifecycle`、`messaging`、`scheduling` 兼容运行时及 Parameter、uORB、WorkQueue、Event、Perf、Logging，不再依赖顶层 `App`。
 - `Dima/platform/freertos` 连接 FreeRTOS、时间、内存和同步原语，不承载 Rover 业务逻辑。
 - `Boards/H743` 负责 MCU、引脚、DMA、PWM、Flash 和总线接线，不依赖上层控制模块。
 - `Core/` 与 `USB_DEVICE/` 的生成区只保留必要接线，禁止写入业务逻辑。
@@ -50,8 +56,8 @@ docs/                         计划、架构、ADR、来源和维护文档
 2. `HAL_Init()`；
 3. 系统和外设时钟初始化；
 4. `board_init()`；
-5. `osKernelInitialize()` → `app_bootstrap_create()` → `osKernelStart()`；
-6. 应用装配根初始化 USB、运行时服务和产品模块。
+5. `osKernelInitialize()` → `Dima/application/app_bootstrap.cpp` 中的 `app_bootstrap_create()` → `osKernelStart()`；
+6. `Dima/application/app_main.cpp` 进入 `Dima/product/rover/ApplicationContext`，由产品装配根初始化 USB、运行时服务和产品模块。
 
 后续将形成独立执行域：
 
@@ -84,7 +90,7 @@ USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 
 ## 6. 消息、参数和状态估计边界
 
-- 生产消息接口采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 已完成首条生产迁移，旧 Topic 仅保留为迁移期/Host seam。
+- 生产消息接口采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 使用生产 uORB 链，`Dima/middleware/messaging/topic.hpp` 仅作为兼容接口或 Host seam 保留。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
 - 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。
 - Estimator 采用 EKF2，首版即保留多实例与 Estimator Selector，至少支持两个 EKF 实例；实际激活数量由可用 IMU/Mag 组合和参数决定。控制器只消费 `vehicle_attitude`、`vehicle_local_position`、`vehicle_global_position` 和健康状态，不直接访问 EKF 内部对象。
@@ -110,7 +116,7 @@ Storage       128 KiB
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。
 
-阶段 0 的目标验证命令只执行固件构建，不新增或调用新测试、SITL 和仿真入口：
+目录迁移后的结构检查已通过；目标编译、链接、签名和镜像一致性待工具链恢复后验证。正式验证必须使用项目构建入口，不新增测试、SITL 或仿真入口：
 
 ```bash
 make firmware GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin

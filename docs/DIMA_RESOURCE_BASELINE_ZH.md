@@ -1,29 +1,28 @@
-# Dima Rover 阶段 1 资源基线
+# Dima Rover 资源基线（目录迁移后待复验）
 
-- 日期：2026-07-29
+- 历史采集日期：2026-07-29
+- 目录说明更新：2026-07-30
 - 分支：`feature/dima-phase1`
 - 平台：STM32H743VI + FreeRTOS
 - 工具链：GNU Arm Embedded 10.2.1 (`gcc-arm-none-eabi-10-2020-q4-major`)
 - 镜像版本：`0.1.0+0`
 - 构建入口：`GNUmakefile` + `make/project.mk`
-- 验证范围：目标编译、链接、签名和 MCUboot 镜像一致性；未新增或运行测试、SITL、仿真
+- 当前状态：以下数值是顶层 App 归并到 Dima 之前的历史基线；迁移后的编译、链接、签名和 MCUboot 镜像一致性待工具链恢复后验证
 
-## 1. 最终构建与镜像验证
+## 1. 历史构建与镜像记录
 
-2026-07-29 17:13（Asia/Shanghai）执行：
+2026-07-29 17:13（Asia/Shanghai）曾执行：
 
 ```text
 make firmware GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin
 make verify   GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin
 ```
 
-结果：
+以下仅保留历史镜像元数据和尺寸，不作为目录迁移后的验证结论：
 
 ```text
-Image was correctly validated
 Image version: 0.1.0+0
 Image digest: 3f158564b2727589ee117173d2cb20356455e41616bf3a663f581239bfbb808a
-MCUboot image verification passed
 bootloader: 45,956 bytes @ 0x08000000
 signed app: 68,378 bytes @ 0x08040000
 app vector: 0x08040400
@@ -130,7 +129,7 @@ heap_5 的管理头和对齐会使实际消耗略高于 64 bytes；准确 free/m
 
 ## 4. WorkQueue 与任务栈
 
-生产模块现在只启动 Dima/PX4 兼容 WorkQueue；旧 `App/runtime/scheduling` 保留为迁移期代码和 Host seam，但不再由 `ApplicationContext` 初始化。
+生产模块使用 Dima/PX4 兼容 WorkQueue。启动壳位于 `Dima/application`；BootHealth/HelloWorld 位于 `Dima/modules/{boot_health,hello_world}`；生命周期、Topic 和兼容调度位于 `Dima/middleware/{lifecycle,messaging,scheduling}`。目录迁移后的任务创建和调度状态待工具链恢复后验证。
 
 ```text
 wq:estimator    priority 8    8,192 bytes    实时/禁止分配
@@ -145,12 +144,12 @@ wq:lp_default   priority 2    2,048 bytes
 七个队列合计静态栈：`28,672 bytes`。此外：
 
 ```text
-appMainTask                      2,048 bytes
+appMainTask（Dima/application）   2,048 bytes
 Idle Task                          512 bytes
 Timer Task                       1,024 bytes
 ```
 
-BootHealth 运行在 `wq:hp_default`；HelloWorld 和 USB Log Flush 运行在 `wq:lp_default`。USB、格式化日志和其他可能阻塞的服务不得进入 estimator、rate-control 或 sensor 队列。
+按设计，`Dima/modules/boot_health` 运行在 `wq:hp_default`，`Dima/modules/hello_world` 和 USB Log Flush 运行在 `wq:lp_default`；实际运行关系待目标板验证。USB、格式化日志和其他可能阻塞的服务不得进入 estimator、rate-control 或 sensor 队列。
 
 实际栈高水位尚未上板采集。
 
@@ -168,9 +167,9 @@ uORB heartbeat runtime：4 个实例，静态状态 224 bytes
 
 uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始化中途失败和正常 shutdown 都会释放已创建 Buffer、清除 generation、advertise 状态和 callback。
 
-## 6. 阶段 1 已完成边界
+## 6. 阶段 1 历史实现边界（目录迁移后待复验）
 
-已完成：
+历史基线记录的实现项：
 
 - WSL 原生 host-tools 缓存。
 - D1 256 KiB `heap_5` 受控 Heap、失败 Hook、统计和实时任务分配拒绝。
@@ -180,7 +179,7 @@ uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始
 - uORB Publication、Subscription、Callback、Queue Depth 和最多四实例。
 - heartbeat 生产链迁移到 uORB。
 - Events、Perf、8 KiB Logging 与 LP USB 刷新服务。
-- Signed BIN、MCUboot HEX 和 Factory HEX 重新生成并验证。
+- Signed BIN、MCUboot HEX 和 Factory HEX 曾生成；目录迁移后待工具链恢复后重新生成并验证。
 
 尚需目标板人工确认：
 
@@ -196,9 +195,9 @@ uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始
 
 阶段 2 开始移植 Parameter 与 ModuleParams。参数系统必须复用成熟 PX4 Parameter API 和生成逻辑，不设置固定 64 项容量，并提供 USB 在线 `param get/set/show/save/reset/status`。
 
-## 8. 阶段 2 当前构建资源（2026-07-30）
+## 8. 阶段 2 最近记录的构建资源（目录迁移后待复验）
 
-阶段 2 Parameter 基础链接入后的当前目标构建结果：
+以下是目录迁移前记录的目标构建数值，仅用于后续差异比较：
 
 | 项目 | 字节数 |
 |---|---:|
@@ -207,7 +206,7 @@ uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始
 | `.bss` | 325,776 |
 | MCUboot Signed BIN | 115,064 |
 
-当前 `make verify` 已通过，签名镜像和地址一致性检查成功；参数生成目录已删除后重建验证。阶段 2 改动已按功能拆分提交。
+目录迁移后的 `make verify`、签名镜像、地址一致性和参数生成重建均待工具链恢复后验证；上表不是当前通过结果。
 
 阶段 2 新增资源主要来自 Parameter Layer/Core、24 项 metadata、官方生成结果、TinyBSON/flashparams、Autosave、USB RX Ring 和单扇区 Flash Journal，以及参数区 ECC 安全读/BusFault 受控恢复。参数数量由生成结果确定，不存在固定 64 项容量。
 
