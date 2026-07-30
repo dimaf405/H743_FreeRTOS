@@ -119,6 +119,7 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/platform/freertos/dima_heap.cpp \
 	Dima/platform/freertos/hrt.cpp \
 	Dima/platform/freertos/parameter_flash.cpp \
+	Dima/platform/freertos/sbus_uart_backend.cpp \
 	Dima/product/rover/ApplicationContext.cpp \
 	Dima/product/rover/LogService.cpp \
 	Dima/product/rover/ParameterService.cpp \

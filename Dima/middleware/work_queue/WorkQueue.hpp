@@ -37,6 +37,7 @@ public:
     virtual ~WorkItem() = default;
 
     bool ScheduleNow() noexcept;
+    bool ScheduleNowFromISR() noexcept;
     void ScheduleClear() noexcept;
     const char *Name() const noexcept { return name_; }
     const WorkQueueStats &statistics() const noexcept { return statistics_; }

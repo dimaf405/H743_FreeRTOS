@@ -181,6 +181,17 @@ SECTIONS
     . = ALIGN(8);
   } >DTCMRAM
 
+  /* DMA buffers are isolated in D2 SRAM and aligned to cache lines. */
+  .dima_dma (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_dma_start__ = .;
+    KEEP(*(.dima_dma))
+    KEEP(*(.dima_dma*))
+    __dima_dma_end__ = .;
+    . = ALIGN(32);
+  } >RAM_D2
+
   /* Dima general heap lives in D1 AXI SRAM; DTCM and DMA-oriented D2 stay isolated. */
   .dima_heap (NOLOAD) :
   {

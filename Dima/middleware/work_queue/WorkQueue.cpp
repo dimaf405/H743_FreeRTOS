@@ -16,6 +16,7 @@ class WorkQueueManager {
 public:
     static bool schedule(WorkItem &item, hrt_abstime deadline,
                          hrt_abstime interval) noexcept;
+    static bool schedule_from_isr(WorkItem &item) noexcept;
     static void worker(void *argument);
 };
 
@@ -122,6 +123,32 @@ bool WorkQueueManager::schedule(WorkItem &item, hrt_abstime deadline,
 
     if (accepted && queue->task != nullptr) {
         xTaskNotifyGive(queue->task);
+    }
+    return accepted;
+}
+
+bool WorkQueueManager::schedule_from_isr(WorkItem &item) noexcept
+{
+    if (!g_initialized || !in_isr()) {
+        return false;
+    }
+    QueueRuntime *const queue = find_queue(*item.config_);
+    if (queue == nullptr || queue->task == nullptr) {
+        return false;
+    }
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    const UBaseType_t saved = taskENTER_CRITICAL_FROM_ISR();
+    const bool accepted = attach_item(*queue, item);
+    if (accepted) {
+        ++item.schedule_revision_;
+        item.deadline_ = work_queue_time_us();
+        item.interval_ = 0U;
+        item.scheduled_ = true;
+    }
+    taskEXIT_CRITICAL_FROM_ISR(saved);
+    if (accepted) {
+        vTaskNotifyGiveFromISR(queue->task, &higher_priority_task_woken);
+        portYIELD_FROM_ISR(higher_priority_task_woken);
     }
     return accepted;
 }
@@ -234,6 +261,11 @@ WorkItem::WorkItem(const char *name, const wq_config_t &config) noexcept
 bool WorkItem::ScheduleNow() noexcept
 {
     return WorkQueueManager::schedule(*this, work_queue_time_us(), 0U);
+}
+
+bool WorkItem::ScheduleNowFromISR() noexcept
+{
+    return WorkQueueManager::schedule_from_isr(*this);
 }
 
 void WorkItem::ScheduleClear() noexcept
