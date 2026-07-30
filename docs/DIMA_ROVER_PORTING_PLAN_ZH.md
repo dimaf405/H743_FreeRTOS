@@ -1,6 +1,6 @@
 # Dima FreeRTOS Rover 总体移植计划
 
-- 状态：阶段 0、阶段 1 已完成；阶段 2 待执行
+- 状态：阶段 0、阶段 1 已完成；阶段 2 代码与目标构建已完成，实车验收待完成
 - 日期：2026-07-29
 - 目标平台：STM32H743 + FreeRTOS
 - 产品类型：支持前进、后退和原地旋转的差速 Rover
@@ -141,18 +141,21 @@ Storage       128 KiB
 
 已建立受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。生产 heartbeat 已迁移到 uORB；BootHealth、HelloWorld 和日志服务已迁移到 Dima WorkQueue。目标固件、签名镜像和 Factory HEX 已通过验证，板上 HRT Overflow、栈高水位和运行期 Heap 余量仍需人工验收。
 
-### 阶段 2：Parameter 与 ModuleParams
+### 阶段 2：Parameter 与 ModuleParams（代码与构建验证已完成）
 
-以 PX4 Parameter 为唯一参数系统，移植 `PARAM_DEFINE_*`、`param_find/get/set/reset`、`px4::Param<T>`、`ModuleParams`、`DEFINE_PARAMETERS` 和 `parameter_update`。参数数量由生成结果决定，不设置 64 项上限。接入内部 Flash 和 USB 在线命令：
+阶段 2 以 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 为唯一参数来源，已建立：
 
-```text
-param show
-param get
-param set
-param save
-param reset
-param status
-```
+- Parameter Layer/Core、AtomicTransaction、稀疏参数层、`param_*`、`px4::Param<T>` 和 `ModuleParams` 兼容接口。
+- 官方 source parser、XML/JSON 输出和 `px4_parameters.hpp` 模板语义；标准库 renderer 消除系统 Python 缺少 Jinja2 的阻塞，不回退到正则参数解析。
+- TinyBSON 纯 Buffer 子集与 flashparams enumerator/visitor 适配，编码和解码热路径不动态分配。
+- 300 ms debounce、至少 2 s 保存限频、最多 3 次失败重试的 Autosave 策略。
+- USB CDC 固定 1024-byte SPSC RX Ring；ISR 只复制字节并立即恢复接收，命令处理位于任务/LP service 路径。
+- `0x081E0000～0x08200000` 单个 128 KiB Storage 扇区的追加 Journal，包含 Sequence、长度、CRC32 和最终 Commit Marker；扫描使用 ECC 安全读与受限 BusFault 恢复，空间满返回 ENOSPC，不自动擦除。
+- 24 项 PX4 差速 Rover 参数：20 项 `RO_*` 与 4 项 `RD_*`；参数数量由官方生成目录确定，无固定 64 项上限。
+
+当前构建资源为 `.text=111020`、`.data=2828`、`.bss=325776` bytes，Signed BIN 为 `115064` bytes，`make verify` 已通过。
+
+阶段 2 当前状态是“代码与目标构建验证完成，实车验收待完成”。未新增或运行测试框架、测试文件、SITL 或仿真；尚未进行 USB 在线调参、自动保存、掉电恢复、损坏尾部回退、扇区满和人工擦除的目标板验收。阶段 2 工作区改动已按功能拆分提交。许可证保持 `PENDING`，最终处理 `DEFERRED`，不阻塞后续阶段。
 
 ### 阶段 3：SBUS、RCUpdate 与 ManualControl
 

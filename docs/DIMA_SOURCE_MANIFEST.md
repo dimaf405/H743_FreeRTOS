@@ -1,22 +1,19 @@
 # Dima 上游源码与许可证清单
 
 - 日期：2026-07-29
-- 文档状态：阶段 0 基线
+- 文档状态：阶段 2 构建基线（2026-07-30）
 - 许可证决策：`PENDING`
 
 ## 1. 管理规则
 
-本清单用于记录 Dima Rover 所复用、移植或参考的外部飞控源码。目录改为 Dima 命名不代表来源发生变化，也不得用于隐藏或改变原始许可证义务。
+本清单只记录上游版本、原始路径、本地映射和修改摘要。上游文件保留原始版权头与来源文字。
 
-从第一次导入开始必须遵守：
+许可证状态只使用：
 
-1. 保留上游文件原始版权头和许可证声明。
-2. 记录上游仓库、tag/branch、完整 commit、原始路径和本地对应路径。
-3. 记录本地修改摘要，不把移植代码描述为完全自研。
-4. 不对上游 namespace、宏、参数名和 Topic 名进行品牌式全文替换。
-5. 许可证状态为 `PENDING` 时，代码可用于内部技术评估和适配，但不得默认认定适合闭源二进制对外分发。
-6. 对外发布前必须完成许可证审查，并确认源码提供、Notice、许可证全文和分发流程满足实际义务。
-7. 本清单只记录来源，不替代正式法律意见。
+- `PENDING`：当前尚未收敛。
+- `DEFERRED`：延后到产品发布阶段处理。
+
+许可证事项不在阶段 2 展开，也不阻塞内部移植、构建和实车调试。
 
 ## 2. PX4 正式移植基线
 
@@ -25,7 +22,7 @@
 | 用途 | Parameter、ModuleParams、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl、Commander Rover 子集、RoverDifferential、执行器链和 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
 | 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
-| 当前状态 | 阶段 1 平台兼容接口已开始按 v1.17.0 适配；后续模块继续逐文件登记 |
+| 当前状态 | 阶段 2 Parameter 基础链已按 v1.17.0 适配并通过当前目标构建验证 |
 | 许可证状态 | `PENDING`；逐文件保留原始许可证 |
 | 本地目录规则 | 产品目录使用 Dima；上游符号和许可证文字保持原样 |
 
@@ -49,18 +46,18 @@
 |---|---|
 | 参考 commit | `3f2e4763accb` |
 | 用途 | Arming、Failsafe、RC 行为、轮速、差速车导航、倒车和 PivotTurn 行为参考 |
-| 直接代码来源 | 默认否；未经许可证决策不得直接复制 GPL 实现到可对外发布产品 |
+| 直接代码来源 | 当前仅作行为参考；直接代码处理状态为 `DEFERRED` |
 | EKF3 状态 | 不采用；此前 EKF3 计划已由 EKF2 最终选择取代 |
 | 许可证状态 | `PENDING` |
 
-ArduPilot 参考结论可以用于确定功能需求、状态机和验收行为；若未来直接移植文件，必须单独登记原始路径、版权头和 GPL 义务。
+ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他处理状态为 `DEFERRED`。
 
 ## 5. 计划中的上游模块映射
 
 | 子系统 | 上游来源 | 计划本地位置 | 阶段 | 当前状态 |
 |---|---|---|---:|---|
 | 时间、WorkQueue、uORB、Logging 兼容接口 | PX4 v1.17.0 | `Dima/platform/freertos/`、`Dima/middleware/` | 1 | ADAPTED |
-| Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | PLANNED |
+| Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / TARGET VERIFY PASS |
 | SBUS、SbusRc、RCUpdate、ManualControl | PX4 v1.17.0 | `Dima/modules/rc/` | 3 | PLANNED |
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | PLANNED |
 | RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/rover/` | 5 | PLANNED |
@@ -69,22 +66,25 @@ ArduPilot 参考结论可以用于确定功能需求、状态机和验收行为�
 
 ## 6. 文件级映射
 
-阶段 1 已开始适配上游接口；后续每次导入必须按以下格式追加，不得覆盖历史记录：
+阶段 2 的唯一 PX4 Parameter 来源基线为 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`。
 
-| 上游路径 | 上游版本 | 本地路径 | 方式 | 修改摘要 |
-|---|---|---|---|---|
-| `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp` | v1.17.0 / `d6f12ad1c4f7` | `Dima/middleware/logging/` | API/格式适配 | 保留 PX4 默认与 Release 宏语义和模块输出格式；backend 改为固定 Ring + LP USB flush；Debug/Trace 格式未完成时 fail-closed |
+| 上游原始路径/功能 | 本地映射 | 适配方式 | 状态 |
+|---|---|---|---|
+| `src/lib/parameters/parameters.cpp`、Parameter Layer/Core、AtomicTransaction | `Dima/middleware/parameters/` | 保留 `param_*`、稀疏 Layer、事务及参数更新语义；FreeRTOS 锁与存储回调适配 | ADAPTED |
+| `platforms/common/include/px4_platform_common/param.h`、`param_macros.h`、`module_params.h` | `Dima/middleware/parameters/` | 保留 `px4::Param<T>`、`ModuleParams` 和参数宏兼容接口 | ADAPTED |
+| `Tools/px4params/process_params.py` 相关 parser、scanner、XML/JSON 输出逻辑 | `tools/parameters/` | 直接复用官方 parser 数据模型；标准库 renderer 等价生成 `px4_parameters.hpp`，不依赖 Jinja2 | ADAPTED |
+| `src/lib/tinybson/tinybson.h/.cpp` | `Dima/lib/tinybson/` | 保留上游 BSD 头；删除 fd、POSIX 和动态扩容路径，仅保留固定 Buffer 编解码 | ADAPTED |
+| `src/lib/parameters/flashparams/` | `Dima/middleware/parameters/flashparams/` | 改为 Parameter enumerator/visitor 与 TinyBSON Buffer 之间的适配，不直接访问文件系统 | ADAPTED |
+| PX4 Parameter Autosave | `Dima/middleware/parameters/` | 300 ms 合并、保存间隔至少 2 s、失败最多重试 3 次；保存工作进入 LP/service 路径 | ADAPTED |
+| PX4 参数命令行为与 USB 接入需求 | `App/adapters/usb_console/`、Parameter Service | CDC ISR 仅写固定 1024-byte SPSC Ring并立即恢复接收；瞬时重挂接失败由 LP 服务重试；任务侧解析和执行 | ADAPTED |
+| PX4 flashparams/flashfs 思路 | `Dima/platform/freertos/parameter_flash.cpp` | Bank 2 最后一个 128 KiB 扇区的单扇区追加 Journal；CRC、Sequence、最终 Commit Marker、ECC 安全读和参数区受限 BusFault 恢复；与 MCUboot 共用全局 Flash 递归互斥；空间满返回 ENOSPC且不自动擦除 | ADAPTED |
+| Rover Parameter 定义 | `Dima/middleware/parameters/definitions/` | 导入 24 项 `RO_*`/`RD_*` 参数，名称、默认值、单位和元数据保持 PX4 来源 | ADAPTED |
+| `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp` | `Dima/middleware/logging/` | 保留 PX4 日志宏和默认输出格式，固定 Ring + LP USB flush | ADAPTED |
 
-| 上游仓库 | tag/commit | 原始路径 | 本地路径 | 许可证 | 本地修改摘要 | 导入日期 |
-|---|---|---|---|---|---|---|
-| 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | 待填写 | YYYY-MM-DD |
+许可证状态仅记录为 `PENDING`；延后处理项记录为 `DEFERRED`。该状态不阻塞当前内部移植、编译和板级调试工作。
 
-## 7. 发布限制
+## 7. 许可证状态
 
-在许可证状态从 `PENDING` 变更为已审查之前：
-
-- 不得把包含许可证未决上游代码的固件标记为可公开发布版本。
-- 不得删除、缩短或改写上游版权头和许可证声明。
-- 不得因为目录、namespace 包装或接口适配而宣称代码来源已经改变。
-- 内部构建产物必须标记为研发或评估用途。
-- 发布评审必须核对本清单、实际编译文件、Notice、许可证全文和源码提供方式。
+- PX4 v1.17.0 来源文件：`PENDING`。
+- 最终产品分发与 Notice 收敛：`DEFERRED`。
+- 当前阶段仅保持来源、commit、本地映射和原始版权头可追踪；许可证事项不在阶段 2 展开，也不阻塞技术实现。

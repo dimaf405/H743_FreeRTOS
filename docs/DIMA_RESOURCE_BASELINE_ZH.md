@@ -195,3 +195,20 @@ uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始
 ## 7. 后续阶段
 
 阶段 2 开始移植 Parameter 与 ModuleParams。参数系统必须复用成熟 PX4 Parameter API 和生成逻辑，不设置固定 64 项容量，并提供 USB 在线 `param get/set/show/save/reset/status`。
+
+## 8. 阶段 2 当前构建资源（2026-07-30）
+
+阶段 2 Parameter 基础链接入后的当前目标构建结果：
+
+| 项目 | 字节数 |
+|---|---:|
+| `.text` | 111,020 |
+| `.data` | 2,828 |
+| `.bss` | 325,776 |
+| MCUboot Signed BIN | 115,064 |
+
+当前 `make verify` 已通过，签名镜像和地址一致性检查成功；参数生成目录已删除后重建验证。阶段 2 改动已按功能拆分提交。
+
+阶段 2 新增资源主要来自 Parameter Layer/Core、24 项 metadata、官方生成结果、TinyBSON/flashparams、Autosave、USB RX Ring 和单扇区 Flash Journal，以及参数区 ECC 安全读/BusFault 受控恢复。参数数量由生成结果确定，不存在固定 64 项容量。
+
+当前未新增或运行测试框架、测试文件、SITL 或仿真。阶段 2 尚未完成目标板实车验收，包括 USB 在线调参、自动保存时序、掉电恢复、CRC 尾部损坏回退、ENOSPC 和人工擦除流程。
