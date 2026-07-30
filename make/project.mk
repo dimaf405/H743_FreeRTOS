@@ -53,7 +53,8 @@ PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
 PARAMETER_GENERATOR_DEPS := $(wildcard tools/parameters/*.py tools/parameters/dima_params/*.py)
 PARAMETER_DEFINITIONS := \
 	Dima/middleware/parameters/definitions/rover_control_params.c \
-	Dima/middleware/parameters/definitions/rover_differential_params.c
+	Dima/middleware/parameters/definitions/rover_differential_params.c \
+	Dima/middleware/parameters/definitions/rc_params.c
 PARAMETER_GENERATED_DIR := $(BUILD_DIR)/generated/parameters
 PARAMETER_INCLUDE_DIR := $(BUILD_DIR)/generated_include
 PARAMETER_GENERATED_STAMP := $(PARAMETER_GENERATED_DIR)/.generated
@@ -69,8 +70,7 @@ PARAMETER_GENERATED_OUTPUTS := \
 
 $(PARAMETER_GENERATED_STAMP): $(PARAMETER_GENERATOR_DEPS) $(PARAMETER_DEFINITIONS)
 	$(PYTHON) $(PARAMETER_GENERATOR) \
-		--source $(word 1,$(PARAMETER_DEFINITIONS)) \
-		--source $(word 2,$(PARAMETER_DEFINITIONS)) \
+		$(foreach source,$(PARAMETER_DEFINITIONS),--source $(source)) \
 		--output $(PARAMETER_GENERATED_DIR) \
 		--include-output $(PARAMETER_INCLUDE_DIR)
 	@touch $@
@@ -137,6 +137,11 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/middleware/parameters/flashparams/flashparams.cpp \
 	Dima/messages/app_heartbeat.cpp \
 	Dima/messages/parameter_update.cpp \
+	Dima/messages/input_rc.cpp \
+	Dima/messages/rc_channels.cpp \
+	Dima/messages/manual_control_setpoint.cpp \
+	Dima/messages/manual_control_switches.cpp \
+	Dima/messages/action_request.cpp \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
