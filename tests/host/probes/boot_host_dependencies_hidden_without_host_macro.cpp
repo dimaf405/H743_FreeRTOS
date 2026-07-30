@@ -1,6 +1,6 @@
-#include "App/features/boot_health/boot_health.hpp"
+#include "Dima/modules/boot_health/boot_health.hpp"
 
 int main()
 {
-    return sizeof(app::features::boot_health::HostDependencies);
+    return sizeof(dima::modules::boot_health::HostDependencies);
 }

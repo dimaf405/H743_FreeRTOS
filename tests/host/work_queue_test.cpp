@@ -1,7 +1,7 @@
 #include "test_framework.hpp"
 
-#include "App/runtime/scheduling/scheduled_work_item.hpp"
-#include "App/runtime/scheduling/work_queue.hpp"
+#include "Dima/middleware/scheduling/scheduled_work_item.hpp"
+#include "Dima/middleware/scheduling/work_queue.hpp"
 
 #include <array>
 #include <cstdint>
@@ -11,12 +11,12 @@
 
 namespace {
 
-using app::runtime::scheduling::IClock;
-using app::runtime::scheduling::IWorkQueueBackend;
-using app::runtime::scheduling::QueueClass;
-using app::runtime::scheduling::ScheduledWorkItem;
-using app::runtime::scheduling::WorkQueue;
-using app::runtime::scheduling::deadline_reached;
+using dima::middleware::scheduling::IClock;
+using dima::middleware::scheduling::IWorkQueueBackend;
+using dima::middleware::scheduling::QueueClass;
+using dima::middleware::scheduling::ScheduledWorkItem;
+using dima::middleware::scheduling::WorkQueue;
+using dima::middleware::scheduling::deadline_reached;
 
 template <typename T, typename = void>
 struct has_public_Run : std::false_type {};

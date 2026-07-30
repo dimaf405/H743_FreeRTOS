@@ -1,16 +1,16 @@
 #include "test_framework.hpp"
 
-#include "App/runtime/lifecycle/module_base.hpp"
-#include "App/runtime/lifecycle/module_manager.hpp"
+#include "Dima/middleware/lifecycle/module_base.hpp"
+#include "Dima/middleware/lifecycle/module_manager.hpp"
 
 #include <array>
 #include <cstdint>
 
 namespace {
 
-using app::runtime::lifecycle::ModuleBase;
-using app::runtime::lifecycle::ModuleManager;
-using app::runtime::lifecycle::ModuleState;
+using dima::middleware::lifecycle::ModuleBase;
+using dima::middleware::lifecycle::ModuleManager;
+using dima::middleware::lifecycle::ModuleState;
 
 class FakeModule final : public ModuleBase {
 public:

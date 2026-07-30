@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 import sys
 
 
@@ -115,7 +116,7 @@ def cpp_method_body(source: str, class_name: str, method_name: str) -> str | Non
     match = re.search(
         rf"\b(?:void|bool|u?int(?:8|16|32|64)_t)\s+"
         rf"{re.escape(class_name)}::{re.escape(method_name)}\s*"
-        rf"\([^;{{}}]*\)(?:\s+const)?\s*\{{",
+        rf"\([^;{{}}]*\)(?:\s+const)?(?:\s+noexcept)?\s*\{{",
         source,
     )
     if match is None:
@@ -133,8 +134,8 @@ def cpp_method_body(source: str, class_name: str, method_name: str) -> str | Non
 
 
 def check_hello_world(failures: list[str]) -> None:
-    header_path = ROOT / "App/features/hello_world/hello_world.hpp"
-    source_path = ROOT / "App/features/hello_world/hello_world.cpp"
+    header_path = ROOT / "Dima/modules/hello_world/hello_world.hpp"
+    source_path = ROOT / "Dima/modules/hello_world/hello_world.cpp"
     project_path = ROOT / "make/project.mk"
     validator_path = ROOT / "tools/validate_hello_world_interval.py"
     host_makefile_path = ROOT / "tests/host/Makefile"
@@ -151,12 +152,12 @@ def check_hello_world(failures: list[str]) -> None:
     header = strip_comments(header_raw)
     check(re.search(
               r"class\s+HelloWorld\s+final\s*:\s*public\s+"
-              r"runtime::lifecycle::ModuleBase\s*,\s*public\s+"
-              r"runtime::scheduling::ScheduledWorkItem",
+              r"dima::middleware::lifecycle::ModuleBase",
               header,
-          ) is not None,
-          "HelloWorld must be final and inherit ModuleBase plus ScheduledWorkItem",
-          failures)
+          ) is not None
+          and "public dima::middleware::scheduling::ScheduledWorkItem" in header
+          and "public px4::ScheduledWorkItem" in header,
+          "HelloWorld must use the Dima lifecycle and schedulers", failures)
     protected_section = re.search(r"protected\s*:(.*?)(?:private\s*:|$)",
                                   header, flags=re.DOTALL)
     check(protected_section is not None and
@@ -180,7 +181,7 @@ def check_hello_world(failures: list[str]) -> None:
         ordered_tokens = (
             '(void)printf("Hello World\\r\\n")',
             "(void)fflush(stdout)",
-            "runtime::time::platform_time_us()",
+            "dima::platform::platform_time_us()",
             "heartbeat_publication_.publish",
         )
         positions = tuple(run_body.find(token) for token in ordered_tokens)
@@ -203,7 +204,7 @@ def check_hello_world(failures: list[str]) -> None:
               f"HelloWorld contains forbidden dynamic token {forbidden}", failures)
 
     project = strip_comments(project_path.read_text(encoding="utf-8"))
-    check(project.count("App/features/hello_world/hello_world.cpp") == 1,
+    check(project.count("Dima/modules/hello_world/hello_world.cpp") == 1,
           "make/project.mk must own hello_world.cpp exactly once", failures)
     for variable, default in (("APP_HELLO_WORLD_ENABLED", "1"),
                               ("APP_HELLO_WORLD_INTERVAL_MS", "1000")):
@@ -259,10 +260,10 @@ def check_hello_world(failures: list[str]) -> None:
 
 
 def check_boot_health(failures: list[str]) -> None:
-    header_path = ROOT / "App/features/boot_health/boot_health.hpp"
-    source_path = ROOT / "App/features/boot_health/boot_health.cpp"
-    mcuboot_header_path = ROOT / "App/adapters/mcuboot/mcuboot_app.h"
-    mcuboot_source_path = ROOT / "App/adapters/mcuboot/mcuboot_app.c"
+    header_path = ROOT / "Dima/modules/boot_health/boot_health.hpp"
+    source_path = ROOT / "Dima/modules/boot_health/boot_health.cpp"
+    mcuboot_header_path = ROOT / "Dima/adapters/mcuboot/mcuboot_app.h"
+    mcuboot_source_path = ROOT / "Dima/adapters/mcuboot/mcuboot_app.c"
     old_header_path = ROOT / "Core/Inc/mcuboot_app.h"
     old_source_path = ROOT / "Core/Src/mcuboot_app.c"
     project_path = ROOT / "make/project.mk"
@@ -286,12 +287,12 @@ def check_boot_health(failures: list[str]) -> None:
     ))
     check(re.search(
               r"class\s+BootHealthService\s+final\s*:\s*public\s+"
-              r"runtime::lifecycle::ModuleBase\s*,\s*public\s+"
-              r"runtime::scheduling::ScheduledWorkItem",
+              r"dima::middleware::lifecycle::ModuleBase",
               header,
-          ) is not None,
-          "BootHealthService must be final and inherit ModuleBase plus ScheduledWorkItem",
-          failures)
+          ) is not None
+          and "public dima::middleware::scheduling::ScheduledWorkItem" in header
+          and "public px4::ScheduledWorkItem" in header,
+          "BootHealthService must use the Dima lifecycle and schedulers", failures)
     protected_section = re.search(r"protected\s*:(.*?)(?:private\s*:|$)",
                                   header, flags=re.DOTALL)
     check(protected_section is not None and
@@ -368,8 +369,8 @@ def check_boot_health(failures: list[str]) -> None:
 
     project = strip_comments(project_path.read_text(encoding="utf-8"))
     for source_name in (
-        "App/adapters/mcuboot/mcuboot_app.c",
-        "App/features/boot_health/boot_health.cpp",
+        "Dima/adapters/mcuboot/mcuboot_app.c",
+        "Dima/modules/boot_health/boot_health.cpp",
     ):
         check(project.count(source_name) == 1,
               f"make/project.mk must own {source_name} exactly once", failures)
@@ -384,7 +385,7 @@ def check_boot_health(failures: list[str]) -> None:
     check("boot-health-test" in host_runner,
           "canonical host runner must execute boot-health-test", failures)
     docs = docs_path.read_text(encoding="utf-8", errors="replace")
-    check("App/adapters/mcuboot/mcuboot_app.c" in docs
+    check("Dima/adapters/mcuboot/mcuboot_app.c" in docs
           and "Core/Src/mcuboot_app.c" not in docs,
           "MCUboot recovery docs must reference only the migrated source path",
           failures)
@@ -396,17 +397,17 @@ def check_boot_health(failures: list[str]) -> None:
 
 def check_usb_console(failures: list[str]) -> None:
     """Check the static USB CDC console and its CubeMX-preserved wiring."""
-    header_path = ROOT / "App/adapters/usb_console/usb_console.h"
-    source_path = ROOT / "App/adapters/usb_console/usb_console.c"
-    internal_path = ROOT / "App/adapters/usb_console/usb_console_internal.h"
+    header_path = ROOT / "Dima/adapters/usb_console/usb_console.h"
+    source_path = ROOT / "Dima/adapters/usb_console/usb_console.c"
+    internal_path = ROOT / "Dima/adapters/usb_console/usb_console_internal.h"
     usb_device_path = ROOT / "USB_DEVICE/App/usb_device.c"
     cdc_path = ROOT / "USB_DEVICE/App/usbd_cdc_if.c"
     cdc_class_path = ROOT / \
         "Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src/usbd_cdc.c"
     usb_target_path = ROOT / "USB_DEVICE/Target/usbd_conf.c"
     config_path = ROOT / "Core/Inc/FreeRTOSConfig.h"
-    no_heap_path = ROOT / "App/runtime/libc/no_heap.c"
-    cpp_runtime_path = ROOT / "App/runtime/libc/cpp_runtime.c"
+    no_heap_path = ROOT / "Dima/platform/freertos/libc/no_heap.c"
+    cpp_runtime_path = ROOT / "Dima/platform/freertos/libc/cpp_runtime.c"
     project_path = ROOT / "make/project.mk"
     host_makefile_path = ROOT / "tests/host/Makefile"
     host_runner_path = ROOT / "tests/run_host_tests.sh"
@@ -588,11 +589,11 @@ def check_usb_console(failures: list[str]) -> None:
           "OTG_FS IRQ priority must be numerically >= max syscall priority", failures)
 
     project = strip_comments(project_path.read_text(encoding="utf-8"))
-    check(project.count("App/adapters/usb_console/usb_console.c") == 1,
+    check(project.count("Dima/adapters/usb_console/usb_console.c") == 1,
           "make/project.mk must own usb_console.c exactly once", failures)
-    check(project.count("App/runtime/libc/no_heap.c") == 1,
+    check(project.count("Dima/platform/freertos/libc/no_heap.c") == 1,
           "make/project.mk must own no_heap.c exactly once", failures)
-    check(project.count("App/runtime/libc/cpp_runtime.c") == 1,
+    check(project.count("Dima/platform/freertos/libc/cpp_runtime.c") == 1,
           "make/project.mk must own cpp_runtime.c exactly once", failures)
     check(re.search(
               r"override\s+LDFLAGS\s*:=\s*"
@@ -858,10 +859,12 @@ def check_board_architecture(failures: list[str]) -> None:
 
 def check_static_runtime(failures: list[str]) -> None:
     """Check that startup and the FreeRTOS kernel need no runtime heap."""
-    header_path = ROOT / "App/application/app_main.h"
-    bootstrap_path = ROOT / "App/application/app_bootstrap.cpp"
-    app_main_path = ROOT / "App/application/app_main.cpp"
-    mcuboot_header_path = ROOT / "App/adapters/mcuboot/mcuboot_app.h"
+    header_path = ROOT / "Dima/application/app_main.h"
+    bootstrap_path = ROOT / "Dima/application/app_bootstrap.cpp"
+    app_main_path = ROOT / "Dima/application/app_main.cpp"
+    application_context_header_path = ROOT / "Dima/product/rover/ApplicationContext.hpp"
+    application_context_source_path = ROOT / "Dima/product/rover/ApplicationContext.cpp"
+    mcuboot_header_path = ROOT / "Dima/adapters/mcuboot/mcuboot_app.h"
     config_path = ROOT / "Core/Inc/FreeRTOSConfig.h"
     freertos_path = ROOT / "Core/Src/freertos.c"
     root_makefile_path = ROOT / "Makefile"
@@ -874,8 +877,9 @@ def check_static_runtime(failures: list[str]) -> None:
     )
 
     required_paths = (
-        header_path, bootstrap_path, app_main_path, mcuboot_header_path,
-        config_path, freertos_path,
+        header_path, bootstrap_path, app_main_path,
+        application_context_header_path, application_context_source_path,
+        mcuboot_header_path, config_path, freertos_path,
         root_makefile_path, project_makefile_path, linker_path, ioc_path,
         mxproject_path, regenerated_main_fixture_path,
     )
@@ -952,51 +956,59 @@ def check_static_runtime(failures: list[str]) -> None:
     app_main_source = strip_comments(app_main_path.read_text(encoding="utf-8")) \
         if app_main_path.is_file() else ""
     app_main_body = function_body(app_main_source, "app_main_task")
-    check(app_main_body is not None,
-          "app_main.cpp must define app_main_task", failures)
+    check(app_main_body is not None, "app_main.cpp must define app_main_task", failures)
     if app_main_body is not None:
-        ordered_tokens = (
-            "MX_USB_DEVICE_Init", "init_default_work_queues",
-            "Topic<app_heartbeat_s>", "ModuleManager", "BootHealthService",
-            "HelloWorld", "register_module(boot_health)",
-            "start(boot_health)", "register_module(hello_world)",
-            "start(hello_world)", "vTaskSuspend",
-        )
-        positions = tuple(app_main_body.find(token) for token in ordered_tokens)
+        tokens = ("dima::product::rover::application_context", ".init()",
+                  ".start()", ".stop()", "vTaskSuspend")
+        positions = tuple(app_main_body.find(token) for token in tokens)
         check(all(position >= 0 for position in positions)
               and list(positions) == sorted(positions),
-              "app_main_task must initialize USB/queues, assemble automatic services, "
-              "start BootHealth before HelloWorld, then suspend",
+              "app_main_task must delegate init/start/stop to ApplicationContext, then suspend",
               failures)
-        check("vTaskDelay" not in app_main_body
-              and "mcuboot_confirm_running_image" not in app_main_body,
-              "app_main_task must not delay or confirm MCUboot directly", failures)
-        check("APP_HELLO_WORLD_ENABLED" in app_main_source,
-              "HelloWorld construction and registration must be build-time conditional",
-              failures)
-        check("boot_started" in app_main_body and "hello_started" in app_main_body
-              and "stop(boot_health)" in app_main_body
-              and "stop(hello_world)" in app_main_body,
-              "app_main_task failure unwind must stop every previously queued module",
-              failures)
-        prefix = app_main_source[:app_main_source.find("app_main_task")]
-        for automatic_type in (
-            "Topic<app_heartbeat_s>", "ModuleManager", "BootHealthService",
-            "HelloWorld",
-        ):
-            check(automatic_type not in prefix,
-                  f"{automatic_type} object must not have namespace/global storage",
-                  failures)
-        check("static Topic<" not in app_main_body
-              and "static ModuleManager" not in app_main_body
-              and "static BootHealthService" not in app_main_body
-              and "static HelloWorld" not in app_main_body,
-              "app_main service objects must be automatic, not function-static",
-              failures)
-        check("vTaskDelete" not in app_main_body,
-              "app_main_task must never dynamically delete itself", failures)
+        for forbidden in ("MX_USB_DEVICE_Init", "work_queue_init", "uORB::initialize",
+                          "ModuleManager", "BootHealthService", "HelloWorld"):
+            check(forbidden not in app_main_body,
+                  f"app_main_task must not directly own {forbidden}", failures)
+        check("vTaskDelay" not in app_main_body and "vTaskDelete" not in app_main_body,
+              "app_main_task must suspend without delay or self-deletion", failures)
 
-    app_main_directory = ROOT / "App/application"
+    context_header = strip_comments(application_context_header_path.read_text(
+        encoding="utf-8", errors="replace")) if application_context_header_path.is_file() else ""
+    for token in ("namespace dima::product::rover", "class ApplicationContext",
+                  "dima::middleware::lifecycle::ModuleManager",
+                  "dima::modules::boot_health::BootHealthService",
+                  "dima::modules::hello_world::HelloWorld", "ParameterService", "LogService"):
+        check(token in context_header, f"ApplicationContext.hpp must own {token}", failures)
+
+    context_source = strip_comments(application_context_source_path.read_text(
+        encoding="utf-8", errors="replace")) if application_context_source_path.is_file() else ""
+    init_body = cpp_method_body(context_source, "ApplicationContext", "init")
+    start_body = cpp_method_body(context_source, "ApplicationContext", "start")
+    stop_body = cpp_method_body(context_source, "ApplicationContext", "stop")
+    check(init_body is not None and start_body is not None and stop_body is not None,
+          "ApplicationContext must define init/start/stop", failures)
+    if init_body is not None:
+        tokens = ("MX_USB_DEVICE_Init", "px4::work_queue_init", "uORB::initialize",
+                  "parameter_service_.init", "register_module(boot_health_)",
+                  "register_module(hello_world_)")
+        positions = tuple(init_body.find(token) for token in tokens)
+        check(all(position >= 0 for position in positions) and list(positions) == sorted(positions),
+              "ApplicationContext::init must initialize infrastructure before modules", failures)
+    if start_body is not None:
+        tokens = ("start(boot_health_)", "start(hello_world_)",
+                  "parameter_service_.start", "log_service_.start")
+        positions = tuple(start_body.find(token) for token in tokens)
+        check(all(position >= 0 for position in positions) and list(positions) == sorted(positions),
+              "ApplicationContext::start must start boot, hello, parameter, then log", failures)
+    if stop_body is not None:
+        tokens = ("log_service_.stop", "parameter_service_.stop", "stop(hello_world_)",
+                  "stop(boot_health_)", "module_manager_.reset", "uORB::shutdown",
+                  "px4::work_queue_shutdown")
+        positions = tuple(stop_body.find(token) for token in tokens)
+        check(all(position >= 0 for position in positions) and list(positions) == sorted(positions),
+              "ApplicationContext::stop must unwind services in reverse order", failures)
+
+    app_main_directory = ROOT / "Dima/application"
     forbidden_runtime_tokens = {
         r"\bxTaskCreate\s*\(": "xTaskCreate",
         r"\bosThreadNew\s*\(": "osThreadNew",
@@ -1018,7 +1030,7 @@ def check_static_runtime(failures: list[str]) -> None:
     main_body = function_body(main_source, "main")
     check(main_body is not None, "Core/Src/main.c must define main", failures)
     check(re.search(
-        r"#\s*include\s*[<\"]App/application/app_main\.h[>\"]",
+        r"#\s*include\s*[<\"]Dima/application/app_main\.h[>\"]",
         main_source,
     )
           is not None,
@@ -1053,7 +1065,7 @@ def check_static_runtime(failures: list[str]) -> None:
         if config_path.is_file() else ""
     required_config_values = {
         "configSUPPORT_STATIC_ALLOCATION": "1",
-        "configSUPPORT_DYNAMIC_ALLOCATION": "0",
+        "configSUPPORT_DYNAMIC_ALLOCATION": "1",
         "configUSE_TIMERS": "1",
         "configUSE_OS2_THREAD_ENUMERATE": "0",
         "configUSE_OS2_TIMER": "0",
@@ -1131,7 +1143,8 @@ def check_static_runtime(failures: list[str]) -> None:
           "make/project.mk must defensively filter regenerated heap_4 sources and objects",
           failures)
     for source_path in (
-        "App/application/app_bootstrap.cpp", "App/application/app_main.cpp",
+        "Dima/application/app_bootstrap.cpp", "Dima/application/app_main.cpp",
+        "Dima/product/rover/ApplicationContext.cpp",
     ):
         check(project_makefile.count(source_path) == 1,
               f"make/project.mk must own exactly one {source_path}", failures)
@@ -1203,9 +1216,20 @@ def check_static_runtime(failures: list[str]) -> None:
         r"(?ms)^HOST_PRODUCTION_SOURCES\s*\?=\s*(.*?)^\s*$", host_makefile
     )
     check(ordinary_sources is not None and
-          "App/application/app_main.cpp" not in ordinary_sources.group(1),
+          "Dima/application/app_main.cpp" not in ordinary_sources.group(1),
           "legacy app_main task body must stay out of the ordinary host binary", failures)
 
+
+
+def check_no_tracked_app(failures: list[str]) -> None:
+    result = subprocess.run(["git", "ls-files", "--", "App"], cwd=ROOT,
+                            capture_output=True, text=True, check=False)
+    check(result.returncode == 0,
+          "git ls-files failed while checking the retired App root", failures)
+    if result.returncode == 0:
+        tracked = [line for line in result.stdout.splitlines() if line]
+        check(not tracked, "tracked App/ paths are forbidden: " + ", ".join(tracked),
+              failures)
 
 def main() -> int:
     if sys.argv[1:] not in (
@@ -1222,6 +1246,7 @@ def main() -> int:
     static_runtime_only = sys.argv[1:] == ["--static-runtime-only"]
     usb_console_only = sys.argv[1:] == ["--usb-console-only"]
     failures: list[str] = []
+    check_no_tracked_app(failures)
     if usb_console_only:
         check_usb_console(failures)
         if failures:
@@ -1231,28 +1256,33 @@ def main() -> int:
         print("STRUCTURE PASS: static USB CDC console boundary is satisfied")
         return 0
     runtime_required_paths = (
-        "App/runtime/lifecycle/module_base.hpp",
-        "App/runtime/lifecycle/module_manager.hpp",
-        "App/runtime/lifecycle/module_manager.cpp",
-        "App/runtime/messaging/topic.hpp",
-        "App/runtime/scheduling/scheduled_work_item.hpp",
-        "App/runtime/scheduling/scheduled_work_item.cpp",
-        "App/runtime/scheduling/work_queue.hpp",
-        "App/runtime/scheduling/work_queue.cpp",
-        "App/runtime/scheduling/freertos_work_queue.hpp",
-        "App/runtime/scheduling/freertos_work_queue.cpp",
-        "App/runtime/time/platform_time.hpp",
-        "App/runtime/time/platform_time.cpp",
-        "App/messages/app_heartbeat.hpp",
+        "Dima/middleware/lifecycle/module_base.hpp",
+        "Dima/middleware/lifecycle/module_manager.hpp",
+        "Dima/middleware/lifecycle/module_manager.cpp",
+        "Dima/middleware/messaging/topic.hpp",
+        "Dima/middleware/scheduling/scheduled_work_item.hpp",
+        "Dima/middleware/scheduling/scheduled_work_item.cpp",
+        "Dima/middleware/scheduling/work_queue.hpp",
+        "Dima/middleware/scheduling/work_queue.cpp",
+        "Dima/middleware/scheduling/freertos_work_queue.hpp",
+        "Dima/middleware/scheduling/freertos_work_queue.cpp",
+        "Dima/platform/freertos/platform_time.hpp",
+        "Dima/platform/freertos/platform_time.cpp",
+        "Dima/messages/app_heartbeat.hpp",
     )
     application_required_paths = (
-        "App/adapters/usb_console/usb_console.h",
-        "App/features/hello_world/hello_world.hpp",
-        "App/features/hello_world/hello_world.cpp",
-        "App/features/boot_health/boot_health.hpp",
-        "App/features/boot_health/boot_health.cpp",
-        "App/adapters/mcuboot/mcuboot_app.h",
-        "App/adapters/mcuboot/mcuboot_app.c",
+        "Dima/application/app_main.h",
+        "Dima/application/app_bootstrap.cpp",
+        "Dima/application/app_main.cpp",
+        "Dima/product/rover/ApplicationContext.hpp",
+        "Dima/product/rover/ApplicationContext.cpp",
+        "Dima/adapters/usb_console/usb_console.h",
+        "Dima/modules/hello_world/hello_world.hpp",
+        "Dima/modules/hello_world/hello_world.cpp",
+        "Dima/modules/boot_health/boot_health.hpp",
+        "Dima/modules/boot_health/boot_health.cpp",
+        "Dima/adapters/mcuboot/mcuboot_app.h",
+        "Dima/adapters/mcuboot/mcuboot_app.c",
     )
     board_required_paths = (
         "Boards/H743/Inc/board_init.h",
@@ -1290,11 +1320,11 @@ def main() -> int:
         return 0
 
     if runtime_only:
-        source_directories = (ROOT / "App/runtime",)
+        source_directories = (ROOT / "Dima",)
     elif board_only:
         source_directories = (ROOT / "Boards/H743",)
     else:
-        source_directories = (ROOT / "App", ROOT / "Boards/H743")
+        source_directories = (ROOT / "Dima", ROOT / "Boards/H743")
     for directory in source_directories:
         if not directory.exists():
             continue
@@ -1303,7 +1333,7 @@ def main() -> int:
                 continue
             contents = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
             check(not re.search(r"#\s*include\s*[<\"](?:[A-Za-z0-9_.-]+/)*main\.h[>\"]", contents),
-                  f"{path.relative_to(ROOT)} includes main.h; App/Boards must not depend on CubeMX main.h",
+                  f"{path.relative_to(ROOT)} includes main.h; Dima/Boards must not depend on CubeMX main.h",
                   failures)
 
     if board_only:
@@ -1314,7 +1344,11 @@ def main() -> int:
         print("STRUCTURE PASS: H743 CubeMX/board boundary is satisfied")
         return 0
 
-    runtime_directory = ROOT / "App/runtime"
+    no_heap_runtime_directories = (
+        ROOT / "Dima/middleware/lifecycle",
+        ROOT / "Dima/middleware/messaging",
+        ROOT / "Dima/middleware/scheduling",
+    )
     forbidden_platform_tokens = {
         r"\bxTaskCreate\s*\(": "xTaskCreate",
         r"\bosThreadNew\s*\(": "osThreadNew",
@@ -1327,7 +1361,9 @@ def main() -> int:
         r"mutex|new|optional|queue|set|string|string_view|thread|tuple|type_traits|unordered_map|"
         r"unordered_set|utility|vector)>"
     )
-    if runtime_directory.is_dir():
+    for runtime_directory in no_heap_runtime_directories:
+        if not runtime_directory.is_dir():
+            continue
         for path in runtime_directory.rglob("*"):
             if path.suffix not in {".cc", ".cpp", ".cxx", ".h", ".hpp"}:
                 continue
@@ -1338,7 +1374,7 @@ def main() -> int:
             check(not forbidden_stl_headers.search(contents),
                   f"{path.relative_to(ROOT)} includes a forbidden STL header", failures)
 
-    freertos_queue = ROOT / "App/runtime/scheduling/freertos_work_queue.cpp"
+    freertos_queue = ROOT / "Dima/middleware/scheduling/freertos_work_queue.cpp"
     if freertos_queue.is_file():
         queue_source = strip_comments(
             freertos_queue.read_text(encoding="utf-8", errors="replace")
@@ -1358,18 +1394,18 @@ def main() -> int:
               is not None,
               "FreeRTOS work queue must block on a task notification", failures)
 
-    platform_time = ROOT / "App/runtime/time/platform_time.cpp"
+    platform_time = ROOT / "Dima/platform/freertos/platform_time.cpp"
     if platform_time.is_file():
         time_source = strip_comments(
             platform_time.read_text(encoding="utf-8", errors="replace")
         )
-        check(re.search(r"\bxTaskGetTickCount\s*\(|\bvTaskSetTimeOutState\s*\(",
-                        time_source) is not None,
-              "platform time must read the FreeRTOS tick counter", failures)
-        check("xOverflowCount" in time_source,
-              "platform time must extend the 32-bit FreeRTOS wrap counter", failures)
+        check("Dima/platform/freertos/hrt.hpp" in time_source,
+              "platform time must use the Dima high-resolution timer", failures)
+        check("return hrt_absolute_time();" in time_source
+              and "return hrt_absolute_time_ms();" in time_source,
+              "platform time must delegate microsecond and millisecond reads to HRT", failures)
 
-    generic_work_queue = ROOT / "App/runtime/scheduling/work_queue.cpp"
+    generic_work_queue = ROOT / "Dima/middleware/scheduling/work_queue.cpp"
     if generic_work_queue.is_file():
         generic_queue_source = strip_comments(
             generic_work_queue.read_text(encoding="utf-8", errors="replace")
@@ -1386,7 +1422,7 @@ def main() -> int:
               "generic Schedule APIs must reject ISR context in production builds",
               failures)
 
-    scheduled_header = ROOT / "App/runtime/scheduling/scheduled_work_item.hpp"
+    scheduled_header = ROOT / "Dima/middleware/scheduling/scheduled_work_item.hpp"
     if scheduled_header.is_file():
         scheduled_source = scheduled_header.read_text(
             encoding="utf-8", errors="replace"
@@ -1401,7 +1437,7 @@ def main() -> int:
               "ScheduledWorkItem must distinguish Claimed and Running states",
               failures)
 
-    freertos_header = ROOT / "App/runtime/scheduling/freertos_work_queue.hpp"
+    freertos_header = ROOT / "Dima/middleware/scheduling/freertos_work_queue.hpp"
     if freertos_header.is_file():
         freertos_header_source = freertos_header.read_text(
             encoding="utf-8", errors="replace"
@@ -1419,11 +1455,11 @@ def main() -> int:
             project_makefile.read_text(encoding="utf-8", errors="replace")
         )
         for source_path in (
-            "App/runtime/lifecycle/module_manager.cpp",
-            "App/runtime/scheduling/work_queue.cpp",
-            "App/runtime/scheduling/scheduled_work_item.cpp",
-            "App/runtime/scheduling/freertos_work_queue.cpp",
-            "App/runtime/time/platform_time.cpp",
+            "Dima/middleware/lifecycle/module_manager.cpp",
+            "Dima/middleware/scheduling/work_queue.cpp",
+            "Dima/middleware/scheduling/scheduled_work_item.cpp",
+            "Dima/middleware/scheduling/freertos_work_queue.cpp",
+            "Dima/platform/freertos/platform_time.cpp",
         ):
             check(source_path in project_source,
                   f"make/project.mk must explicitly list {source_path}", failures)

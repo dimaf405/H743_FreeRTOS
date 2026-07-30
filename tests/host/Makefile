@@ -43,12 +43,12 @@ TEST_CPP_SOURCES := \
 # If an implementation is intentionally merged into another listed file,
 # update this list in the same change so the dependency graph stays explicit.
 HOST_PRODUCTION_SOURCES ?= \
-	App/runtime/lifecycle/module_manager.cpp \
-	App/runtime/scheduling/work_queue.cpp \
-	App/runtime/scheduling/scheduled_work_item.cpp \
-	App/adapters/usb_console/usb_console.c \
-	App/features/hello_world/hello_world.cpp \
-	App/features/boot_health/boot_health.cpp
+	Dima/middleware/lifecycle/module_manager.cpp \
+	Dima/middleware/scheduling/work_queue.cpp \
+	Dima/middleware/scheduling/scheduled_work_item.cpp \
+	Dima/adapters/usb_console/usb_console.c \
+	Dima/modules/hello_world/hello_world.cpp \
+	Dima/modules/boot_health/boot_health.cpp
 
 HOST_CPP_SOURCES := $(filter %.cpp,$(HOST_PRODUCTION_SOURCES))
 HOST_C_SOURCES := $(filter %.c,$(HOST_PRODUCTION_SOURCES))
@@ -99,7 +99,7 @@ freertos-backend-test:
 		BUILD_DIR=$(FREERTOS_BACKEND_BUILD_DIR) \
 		CPPFLAGS='-I. -DAPP_FREERTOS_WORK_QUEUE_TEST_SEAM=1 -Itests/host -Itests/host/freertos_shim' \
 		TEST_CPP_SOURCES='tests/host/freertos_work_queue_backend_test.cpp tests/host/test_main.cpp' \
-		HOST_PRODUCTION_SOURCES='App/runtime/scheduling/work_queue.cpp App/runtime/scheduling/scheduled_work_item.cpp App/runtime/scheduling/freertos_work_queue.cpp' \
+		HOST_PRODUCTION_SOURCES='Dima/middleware/scheduling/work_queue.cpp Dima/middleware/scheduling/scheduled_work_item.cpp Dima/middleware/scheduling/freertos_work_queue.cpp' \
 		all
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 		UBSAN_OPTIONS=halt_on_error=1 $(FREERTOS_BACKEND_TEST_BIN)
@@ -111,7 +111,7 @@ usb-console-test:
 	$(MAKE) -f tests/host/Makefile \
 		BUILD_DIR=$(USB_CONSOLE_TEST_BUILD_DIR) \
 		TEST_CPP_SOURCES='tests/host/usb_console_test.cpp tests/host/test_main.cpp' \
-		HOST_PRODUCTION_SOURCES='App/adapters/usb_console/usb_console.c' \
+		HOST_PRODUCTION_SOURCES='Dima/adapters/usb_console/usb_console.c' \
 		all
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1 $(USB_CONSOLE_TEST_BIN)
@@ -124,7 +124,7 @@ usb-console-freertos-backend-test:
 		BUILD_DIR=$(USB_CONSOLE_FREERTOS_BUILD_DIR) \
 		CPPFLAGS='-Itests/host/usb_console_freertos_shim -I. -DAPP_USB_CONSOLE_FREERTOS_TEST_SEAM=1' \
 		TEST_CPP_SOURCES='tests/host/usb_console_freertos_backend_test.cpp tests/host/test_main.cpp' \
-		HOST_PRODUCTION_SOURCES='App/adapters/usb_console/usb_console.c' \
+		HOST_PRODUCTION_SOURCES='Dima/adapters/usb_console/usb_console.c' \
 		all
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1 $(USB_CONSOLE_FREERTOS_TEST_BIN)
@@ -133,7 +133,7 @@ no-heap-test:
 	rm -rf $(NO_HEAP_TEST_BUILD_DIR)
 	mkdir -p $(NO_HEAP_TEST_BUILD_DIR)
 	$(CC) -std=c17 -Wall -Wextra -Werror -pedantic $(SANITIZER_FLAGS) \
-		tests/host/no_heap_test.c App/runtime/libc/no_heap.c \
+		tests/host/no_heap_test.c Dima/platform/freertos/libc/no_heap.c \
 		-o $(NO_HEAP_TEST_BIN)
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
 		$(NO_HEAP_TEST_BIN)
@@ -144,7 +144,7 @@ speed-to-pwm-test:
 		BUILD_DIR=$(SPEED_TO_PWM_TEST_BUILD_DIR) \
 		CPPFLAGS='-I.' \
 		TEST_CPP_SOURCES='tests/host/speed_to_pwm_test.cpp tests/host/test_main.cpp' \
-		HOST_PRODUCTION_SOURCES='App/domain/motor/speed_to_pwm.cpp' \
+		HOST_PRODUCTION_SOURCES='Dima/lib/motor/speed_to_pwm.cpp' \
 		all
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1 $(SPEED_TO_PWM_TEST_BIN)
@@ -166,7 +166,7 @@ app-bootstrap-test:
 	mkdir -p $(APP_BOOTSTRAP_TEST_BUILD_DIR)
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -pedantic $(SANITIZER_FLAGS) \
 		-I. -Itests/host/freertos_shim \
-		tests/host/app_bootstrap_test.cpp App/application/app_bootstrap.cpp \
+		tests/host/app_bootstrap_test.cpp Dima/application/app_bootstrap.cpp \
 		-o $(APP_BOOTSTRAP_TEST_BIN)
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
 		$(APP_BOOTSTRAP_TEST_BIN) existing-task
@@ -183,7 +183,7 @@ hello-world-test:
 		BUILD_DIR=$(HELLO_WORLD_TEST_BUILD_DIR) \
 		CPPFLAGS='-I. -DAPP_HOST_TEST=1 -DAPP_HELLO_WORLD_INTERVAL_MS=1000' \
 		TEST_CPP_SOURCES='tests/host/hello_world_test.cpp tests/host/test_main.cpp' \
-		HOST_PRODUCTION_SOURCES='App/runtime/scheduling/work_queue.cpp App/runtime/scheduling/scheduled_work_item.cpp App/features/hello_world/hello_world.cpp' \
+		HOST_PRODUCTION_SOURCES='Dima/middleware/scheduling/work_queue.cpp Dima/middleware/scheduling/scheduled_work_item.cpp Dima/modules/hello_world/hello_world.cpp' \
 		all
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1 $(HELLO_WORLD_TEST_BIN)
@@ -194,9 +194,9 @@ boot-health-test:
 		BUILD_DIR=$(BOOT_HEALTH_TEST_BUILD_DIR) \
 		CPPFLAGS='-I. -DAPP_HOST_TEST=1' \
 		TEST_CPP_SOURCES='tests/host/boot_health_test.cpp tests/host/test_main.cpp' \
-		HOST_PRODUCTION_SOURCES='App/runtime/scheduling/work_queue.cpp App/runtime/scheduling/scheduled_work_item.cpp App/features/boot_health/boot_health.cpp' \
+		HOST_PRODUCTION_SOURCES='Dima/middleware/scheduling/work_queue.cpp Dima/middleware/scheduling/scheduled_work_item.cpp Dima/modules/boot_health/boot_health.cpp' \
 		all
-	@if nm -u $(BOOT_HEALTH_TEST_BUILD_DIR)/obj/App/features/boot_health/boot_health.o | \
+	@if nm -u $(BOOT_HEALTH_TEST_BUILD_DIR)/obj/Dima/modules/boot_health/boot_health.o | \
 		grep -Eq '(^|[[:space:]])(printf|puts|fflush|fwrite|_write)$$'; then \
 		echo 'BOOT HEALTH OUTPUT DEPENDENCY ERROR' >&2; exit 1; \
 	fi

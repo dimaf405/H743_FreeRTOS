@@ -1,8 +1,8 @@
 #include "test_framework.hpp"
 
 extern "C" {
-#include "App/adapters/usb_console/usb_console.h"
-#include "App/adapters/usb_console/usb_console_internal.h"
+#include "Dima/adapters/usb_console/usb_console.h"
+#include "Dima/adapters/usb_console/usb_console_internal.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
@@ -176,6 +176,11 @@ extern "C" void freertos_usb_test_yield_from_isr(
 {
     CHECK_EQ(higher_priority_task_woken, pdTRUE);
     ++g_yield_from_isr_calls;
+}
+
+extern "C" uint8_t CDC_RearmRx_FS(void)
+{
+    return USBD_OK;
 }
 
 extern "C" uint8_t CDC_Transmit_FS(uint8_t *buffer, uint16_t length)

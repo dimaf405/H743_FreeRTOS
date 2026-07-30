@@ -1,6 +1,6 @@
 #include "test_framework.hpp"
 
-#include "App/runtime/messaging/topic.hpp"
+#include "Dima/middleware/messaging/topic.hpp"
 
 #include <cstdint>
 #include <string>
@@ -18,18 +18,18 @@ struct NonTrivialSample {
 };
 
 static_assert(std::is_trivially_copyable<Sample>::value, "test sample must be POD-like");
-static_assert(app::runtime::messaging::is_topic_type_v<Sample>,
+static_assert(dima::middleware::messaging::is_topic_type_v<Sample>,
               "messaging must accept trivially-copyable messages");
-static_assert(!app::runtime::messaging::is_topic_type_v<NonTrivialSample>,
+static_assert(!dima::middleware::messaging::is_topic_type_v<NonTrivialSample>,
               "messaging must reject non-trivially-copyable messages");
 
 } // namespace
 
 HOST_TEST(messaging_publish_increments_generation_and_subscription_copies_latest_value)
 {
-    app::runtime::messaging::Topic<Sample> topic;
-    app::runtime::messaging::Publication<Sample> publisher{topic};
-    app::runtime::messaging::Subscription<Sample> subscriber{topic};
+    dima::middleware::messaging::Topic<Sample> topic;
+    dima::middleware::messaging::Publication<Sample> publisher{topic};
+    dima::middleware::messaging::Subscription<Sample> subscriber{topic};
     Sample copied{};
 
     CHECK_EQ(topic.generation(), 0U);
@@ -54,7 +54,7 @@ HOST_TEST(messaging_publish_increments_generation_and_subscription_copies_latest
 
 HOST_TEST(messaging_generation_update_check_remains_true_across_uint32_wraparound)
 {
-    using app::runtime::messaging::generation_updated;
+    using dima::middleware::messaging::generation_updated;
 
     CHECK(generation_updated(0U, UINT32_MAX));
     CHECK(generation_updated(1U, UINT32_MAX));

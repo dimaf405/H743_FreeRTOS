@@ -123,6 +123,12 @@ uint8_t USBD_CDC_TransmitPacket(USBD_HandleTypeDef *device)
     return g_transmit_result;
 }
 
+void usb_console_receive_from_isr(const uint8_t *data, size_t length)
+{
+    (void)data;
+    (void)length;
+}
+
 void usb_console_transport_connected(void)
 {
     ++g_connected_calls;

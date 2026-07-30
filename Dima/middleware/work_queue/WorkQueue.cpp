@@ -1,6 +1,6 @@
 #include "Dima/middleware/work_queue/WorkQueue.hpp"
 
-#include "App/runtime/time/platform_time.hpp"
+#include "Dima/platform/freertos/platform_time.hpp"
 #include "Dima/platform/freertos/dima_platform.hpp"
 
 extern "C" {
@@ -223,7 +223,7 @@ const wq_config_t lp_default{"wq:lp_default", 2U, 2048U, false};
 // HRT 阶段可提供同名强符号覆盖该弱实现，调用方无需修改。
 __attribute__((weak)) hrt_abstime work_queue_time_us() noexcept
 {
-    return app::runtime::time::platform_time_us();
+    return dima::platform::platform_time_us();
 }
 
 WorkItem::WorkItem(const char *name, const wq_config_t &config) noexcept

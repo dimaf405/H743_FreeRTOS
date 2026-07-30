@@ -1,7 +1,7 @@
 #define MODULE_NAME "param"
 #include "Dima/product/rover/ParameterService.hpp"
 
-#include "App/adapters/usb_console/usb_console.h"
+#include "Dima/adapters/usb_console/usb_console.h"
 #include "Dima/middleware/logging/logging.hpp"
 #include "Dima/middleware/parameters/param.h"
 #include "Dima/middleware/parameters/flashparams/flashparams.h"

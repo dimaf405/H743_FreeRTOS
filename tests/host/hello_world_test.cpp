@@ -1,10 +1,10 @@
 #include "test_framework.hpp"
 
-#include "App/features/hello_world/hello_world.hpp"
-#include "App/runtime/lifecycle/module_base.hpp"
-#include "App/runtime/messaging/topic.hpp"
-#include "App/runtime/scheduling/scheduled_work_item.hpp"
-#include "App/runtime/scheduling/work_queue.hpp"
+#include "Dima/modules/hello_world/hello_world.hpp"
+#include "Dima/middleware/lifecycle/module_base.hpp"
+#include "Dima/middleware/messaging/topic.hpp"
+#include "Dima/middleware/scheduling/scheduled_work_item.hpp"
+#include "Dima/middleware/scheduling/work_queue.hpp"
 
 #include <array>
 #include <cstring>
@@ -15,17 +15,17 @@
 
 namespace {
 
-using app::features::hello_world::HelloWorld;
-using app::features::hello_world::HostDependencies;
-using app::runtime::lifecycle::ModuleBase;
-using app::runtime::lifecycle::ModuleState;
-using app::runtime::messaging::Subscription;
-using app::runtime::messaging::Topic;
-using app::runtime::scheduling::IClock;
-using app::runtime::scheduling::IWorkQueueBackend;
-using app::runtime::scheduling::QueueClass;
-using app::runtime::scheduling::ScheduledWorkItem;
-using app::runtime::scheduling::WorkQueue;
+using dima::modules::hello_world::HelloWorld;
+using dima::modules::hello_world::HostDependencies;
+using dima::middleware::lifecycle::ModuleBase;
+using dima::middleware::lifecycle::ModuleState;
+using dima::middleware::messaging::Subscription;
+using dima::middleware::messaging::Topic;
+using dima::middleware::scheduling::IClock;
+using dima::middleware::scheduling::IWorkQueueBackend;
+using dima::middleware::scheduling::QueueClass;
+using dima::middleware::scheduling::ScheduledWorkItem;
+using dima::middleware::scheduling::WorkQueue;
 
 template <typename T, typename = void>
 struct has_public_Run : std::false_type {};

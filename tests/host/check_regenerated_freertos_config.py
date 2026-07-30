@@ -71,7 +71,7 @@ def main() -> int:
             f"-I{BUILD_DIR}",
             f"-I{ROOT}",
             f"-I{ROOT / 'tests/host/regenerated_config_shim'}",
-            str(ROOT / "App/application/app_bootstrap.cpp"),
+            str(ROOT / "Dima/application/app_bootstrap.cpp"),
             str(ROOT / "tests/host/regenerated_config_support.cpp"),
             "-o",
             str(TEST_BIN),

@@ -27,7 +27,7 @@
 #include "usbd_cdc_if.h"
 
 /* USER CODE BEGIN Includes */
-#include "App/adapters/usb_console/usb_console.h"
+#include "Dima/adapters/usb_console/usb_console.h"
 
 /* USER CODE END Includes */
 

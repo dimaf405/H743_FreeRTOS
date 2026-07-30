@@ -1,4 +1,4 @@
-#include "App/application/app_main.h"
+#include "Dima/application/app_main.h"
 
 #include "FreeRTOS.h"
 #include "task.h"

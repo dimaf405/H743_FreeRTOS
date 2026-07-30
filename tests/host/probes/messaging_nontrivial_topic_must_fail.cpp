@@ -1,4 +1,4 @@
-#include "App/runtime/messaging/topic.hpp"
+#include "Dima/middleware/messaging/topic.hpp"
 
 #include <string>
 
@@ -8,4 +8,4 @@ struct NonTriviallyCopyableMessage {
 
 // This translation unit must never compile: Topic itself, rather than merely a
 // convenience trait, must reject a non-trivially-copyable payload.
-app::runtime::messaging::Topic<NonTriviallyCopyableMessage> rejected_topic;
+dima::middleware::messaging::Topic<NonTriviallyCopyableMessage> rejected_topic;

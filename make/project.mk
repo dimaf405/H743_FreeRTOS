@@ -102,36 +102,36 @@ $(FREERTOS_DYNAMIC_HEAP_OBJECT):
 	@touch $@
 
 # Project-owned sources are explicit.  Object names retain their source path,
-# so App/x/foo.cpp and App/y/foo.cpp cannot overwrite one another.
+# so sources with identical basenames in different Dima modules cannot collide.
 CUBEMX_OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(OBJECTS))
 override OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(CUBEMX_OBJECTS))
 PROJECT_C_SOURCES ?= \
 	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c \
-	App/adapters/mcuboot/mcuboot_app.c \
+	Dima/adapters/mcuboot/mcuboot_app.c \
 	Boards/H743/Src/board_init.c \
 	Boards/H743/Src/motor_pwm.c \
-	App/adapters/usb_console/usb_console.c \
-	App/runtime/libc/cpp_runtime.c \
-	App/runtime/libc/no_heap.c \
+	Dima/adapters/usb_console/usb_console.c \
+	Dima/platform/freertos/libc/cpp_runtime.c \
+	Dima/platform/freertos/libc/no_heap.c \
 	Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_5.c
 PROJECT_CXX_SOURCES ?= \
-	App/application/app_bootstrap.cpp \
+	Dima/application/app_bootstrap.cpp \
 	Dima/platform/freertos/dima_heap.cpp \
 	Dima/platform/freertos/hrt.cpp \
 	Dima/platform/freertos/parameter_flash.cpp \
 	Dima/product/rover/ApplicationContext.cpp \
 	Dima/product/rover/LogService.cpp \
 	Dima/product/rover/ParameterService.cpp \
-	App/application/app_main.cpp \
-	App/domain/motor/speed_to_pwm.cpp \
-	App/domain/rover_control/rover_control.cpp \
-	App/features/hello_world/hello_world.cpp \
-	App/features/boot_health/boot_health.cpp \
-	App/runtime/lifecycle/module_manager.cpp \
-	App/runtime/scheduling/work_queue.cpp \
-	App/runtime/scheduling/scheduled_work_item.cpp \
-	App/runtime/scheduling/freertos_work_queue.cpp \
-	App/runtime/time/platform_time.cpp \
+	Dima/application/app_main.cpp \
+	Dima/lib/motor/speed_to_pwm.cpp \
+	Dima/lib/rover_control/rover_control.cpp \
+	Dima/modules/hello_world/hello_world.cpp \
+	Dima/modules/boot_health/boot_health.cpp \
+	Dima/middleware/lifecycle/module_manager.cpp \
+	Dima/middleware/scheduling/work_queue.cpp \
+	Dima/middleware/scheduling/scheduled_work_item.cpp \
+	Dima/middleware/scheduling/freertos_work_queue.cpp \
+	Dima/platform/freertos/platform_time.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uorb/uORB.cpp \
 	Dima/middleware/parameters/param.cpp \

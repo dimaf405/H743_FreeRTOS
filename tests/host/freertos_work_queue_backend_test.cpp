@@ -1,8 +1,8 @@
 #include "test_framework.hpp"
 
-#include "App/runtime/time/platform_time.hpp"
-#include "App/runtime/scheduling/freertos_work_queue.hpp"
-#include "App/runtime/scheduling/scheduled_work_item.hpp"
+#include "Dima/platform/freertos/platform_time.hpp"
+#include "Dima/middleware/scheduling/freertos_work_queue.hpp"
+#include "Dima/middleware/scheduling/scheduled_work_item.hpp"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -12,16 +12,16 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace app::runtime::scheduling {
+namespace dima::middleware::scheduling {
 bool freertos_work_queue_test_run_one_step(QueueClass queue);
 void freertos_work_queue_test_reset();
 }
 
 namespace {
 
-using app::runtime::scheduling::QueueClass;
-using app::runtime::scheduling::ScheduledWorkItem;
-using app::runtime::scheduling::WorkQueue;
+using dima::middleware::scheduling::QueueClass;
+using dima::middleware::scheduling::ScheduledWorkItem;
+using dima::middleware::scheduling::WorkQueue;
 
 struct TaskRecord {
     TaskFunction_t function{nullptr};
@@ -88,14 +88,14 @@ bool run_one_step(QueueClass queue)
 {
     g_current_task = &record_for(queue);
     const bool ran =
-        app::runtime::scheduling::freertos_work_queue_test_run_one_step(queue);
+        dima::middleware::scheduling::freertos_work_queue_test_run_one_step(queue);
     g_current_task = nullptr;
     return ran;
 }
 
 void reset_backend_test_state()
 {
-    app::runtime::scheduling::freertos_work_queue_test_reset();
+    dima::middleware::scheduling::freertos_work_queue_test_reset();
     g_tasks = {};
     g_create_attempts = 0U;
     g_successful_creates = 0U;
@@ -116,7 +116,7 @@ void reset_backend_test_state()
 void reenter_default_queue_init()
 {
     g_reentrant_init_result =
-        app::runtime::scheduling::init_default_work_queues();
+        dima::middleware::scheduling::init_default_work_queues();
 }
 
 } // namespace
@@ -222,7 +222,7 @@ extern "C" BaseType_t xPortIsInsideInterrupt(void)
     return g_inside_interrupt ? pdTRUE : pdFALSE;
 }
 
-namespace app::runtime::time {
+namespace dima::platform {
 
 uint64_t platform_time_us()
 {
@@ -234,18 +234,18 @@ uint64_t platform_time_ms()
     return g_now_ms;
 }
 
-} // namespace app::runtime::time
+} // namespace dima::platform
 
 HOST_TEST(freertos_backend_partial_static_worker_creation_can_retry_safely)
 {
     reset_backend_test_state();
     g_fail_create_attempt = 2U;
 
-    CHECK(!app::runtime::scheduling::init_default_work_queues());
+    CHECK(!dima::middleware::scheduling::init_default_work_queues());
     CHECK_EQ(g_create_attempts, 2U);
     CHECK_EQ(g_successful_creates, 1U);
 
-    CHECK(app::runtime::scheduling::init_default_work_queues());
+    CHECK(dima::middleware::scheduling::init_default_work_queues());
     CHECK_EQ(g_create_attempts, 3U);
     CHECK_EQ(g_successful_creates, 2U);
     CHECK(std::strcmp(g_tasks[0].name, "wq:hp_default") == 0);
@@ -258,11 +258,11 @@ HOST_TEST(freertos_backend_concurrent_init_publishes_each_static_worker_once)
     reset_backend_test_state();
     g_create_hook = &reenter_default_queue_init;
 
-    CHECK(app::runtime::scheduling::init_default_work_queues());
+    CHECK(dima::middleware::scheduling::init_default_work_queues());
     CHECK(!g_reentrant_init_result);
     CHECK_EQ(g_create_attempts, 2U);
     CHECK_EQ(g_successful_creates, 2U);
-    CHECK(app::runtime::scheduling::init_default_work_queues());
+    CHECK(dima::middleware::scheduling::init_default_work_queues());
     CHECK_EQ(g_create_attempts, 2U);
 
     CHECK(std::strcmp(g_tasks[0].name, "wq:hp_default") == 0);
@@ -278,7 +278,7 @@ HOST_TEST(freertos_backend_concurrent_init_publishes_each_static_worker_once)
     g_inside_interrupt = true;
     bool rejected_isr_call = false;
     try {
-        (void)app::runtime::scheduling::init_default_work_queues();
+        (void)dima::middleware::scheduling::init_default_work_queues();
     } catch (const std::runtime_error &) {
         rejected_isr_call = true;
     }
@@ -289,7 +289,7 @@ HOST_TEST(freertos_backend_concurrent_init_publishes_each_static_worker_once)
 
 HOST_TEST(freertos_backend_uses_production_nested_critical_and_rejects_schedule_from_isr)
 {
-    WorkQueue &queue = app::runtime::scheduling::hp_default_work_queue();
+    WorkQueue &queue = dima::middleware::scheduling::hp_default_work_queue();
     BackendItem item{queue};
     g_max_critical_depth = 0U;
 
@@ -328,8 +328,8 @@ HOST_TEST(freertos_backend_uses_production_nested_critical_and_rejects_schedule_
 
 HOST_TEST(freertos_backend_keeps_queue_storage_and_notifications_independent)
 {
-    WorkQueue &high = app::runtime::scheduling::hp_default_work_queue();
-    WorkQueue &low = app::runtime::scheduling::lp_default_work_queue();
+    WorkQueue &high = dima::middleware::scheduling::hp_default_work_queue();
+    WorkQueue &low = dima::middleware::scheduling::lp_default_work_queue();
     BackendItem high_item{high};
     BackendItem low_item{low};
     const uint32_t high_notifications = g_tasks[0].notifications;
@@ -350,7 +350,7 @@ HOST_TEST(freertos_backend_keeps_queue_storage_and_notifications_independent)
 
 HOST_TEST(freertos_backend_rotates_ready_scan_to_prevent_slot_starvation)
 {
-    WorkQueue &queue = app::runtime::scheduling::hp_default_work_queue();
+    WorkQueue &queue = dima::middleware::scheduling::hp_default_work_queue();
     BackendItem continuously_due{queue, true};
     BackendItem peer{queue};
 
@@ -366,7 +366,7 @@ HOST_TEST(freertos_backend_rotates_ready_scan_to_prevent_slot_starvation)
 
 HOST_TEST(freertos_backend_notification_between_scan_and_wait_is_not_lost)
 {
-    WorkQueue &queue = app::runtime::scheduling::hp_default_work_queue();
+    WorkQueue &queue = dima::middleware::scheduling::hp_default_work_queue();
     BackendItem item{queue};
     g_tasks[0].notifications = 0U;
     g_wait_hook_item = &item;
@@ -384,7 +384,7 @@ HOST_TEST(freertos_backend_notification_between_scan_and_wait_is_not_lost)
 
 HOST_TEST(freertos_backend_selects_earliest_deadline_across_tick_wrap)
 {
-    WorkQueue &queue = app::runtime::scheduling::lp_default_work_queue();
+    WorkQueue &queue = dima::middleware::scheduling::lp_default_work_queue();
     BackendItem later{queue};
     BackendItem earlier{queue};
     g_tasks[1].notifications = 0U;

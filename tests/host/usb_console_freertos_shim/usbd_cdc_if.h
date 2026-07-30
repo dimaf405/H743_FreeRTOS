@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 uint8_t CDC_Transmit_FS(uint8_t *buffer, uint16_t length);
+uint8_t CDC_RearmRx_FS(void);
 
 #ifdef __cplusplus
 }

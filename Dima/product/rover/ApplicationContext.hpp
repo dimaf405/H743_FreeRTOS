@@ -1,12 +1,12 @@
 #pragma once
 
-#include "App/features/boot_health/boot_health.hpp"
-#include "App/runtime/lifecycle/module_manager.hpp"
+#include "Dima/modules/boot_health/boot_health.hpp"
+#include "Dima/middleware/lifecycle/module_manager.hpp"
 #include "Dima/product/rover/LogService.hpp"
 #include "Dima/product/rover/ParameterService.hpp"
 
 #if APP_HELLO_WORLD_ENABLED
-#include "App/features/hello_world/hello_world.hpp"
+#include "Dima/modules/hello_world/hello_world.hpp"
 #endif
 
 namespace dima::product::rover {
@@ -20,12 +20,12 @@ public:
     void stop() noexcept;
 
 private:
-    app::runtime::lifecycle::ModuleManager module_manager_{};
-    app::features::boot_health::BootHealthService boot_health_;
+    dima::middleware::lifecycle::ModuleManager module_manager_{};
+    dima::modules::boot_health::BootHealthService boot_health_;
     LogService log_service_{};
     ParameterService parameter_service_{};
 #if APP_HELLO_WORLD_ENABLED
-    app::features::hello_world::HelloWorld hello_world_;
+    dima::modules::hello_world::HelloWorld hello_world_;
 #endif
     bool initialized_{false};
     bool boot_started_{false};

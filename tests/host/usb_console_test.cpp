@@ -1,8 +1,8 @@
 #include "test_framework.hpp"
 
 extern "C" {
-#include "App/adapters/usb_console/usb_console.h"
-#include "App/adapters/usb_console/usb_console_internal.h"
+#include "Dima/adapters/usb_console/usb_console.h"
+#include "Dima/adapters/usb_console/usb_console_internal.h"
 }
 
 #include <array>

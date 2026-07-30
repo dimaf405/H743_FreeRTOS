@@ -1,20 +1,20 @@
 #include "test_framework.hpp"
 
-#include "App/domain/motor/speed_to_pwm.hpp"
+#include "Dima/lib/motor/speed_to_pwm.hpp"
 
 #include <limits>
 #include <type_traits>
 
 namespace {
 
-using app::domain::motor::ConvertStatus;
-using app::domain::motor::MotorPwmFrame;
-using app::domain::motor::MotorSpeedFrame;
-using app::domain::motor::SpeedPwmCalibration;
-using app::domain::motor::kDefaultSpeedPwmCalibration;
-using app::domain::motor::kMotorCount;
-using app::domain::motor::speed_frame_to_pwm;
-using app::domain::motor::speed_to_pwm;
+using dima::lib::motor::ConvertStatus;
+using dima::lib::motor::MotorPwmFrame;
+using dima::lib::motor::MotorSpeedFrame;
+using dima::lib::motor::SpeedPwmCalibration;
+using dima::lib::motor::kDefaultSpeedPwmCalibration;
+using dima::lib::motor::kMotorCount;
+using dima::lib::motor::speed_frame_to_pwm;
+using dima::lib::motor::speed_to_pwm;
 
 static_assert(std::is_trivially_copyable<MotorSpeedFrame>::value,
               "motor speed frames must remain trivially copyable");

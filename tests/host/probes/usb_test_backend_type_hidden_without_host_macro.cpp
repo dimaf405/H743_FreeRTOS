@@ -1,4 +1,4 @@
-#include "App/adapters/usb_console/usb_console.h"
+#include "Dima/adapters/usb_console/usb_console.h"
 
 int main()
 {
