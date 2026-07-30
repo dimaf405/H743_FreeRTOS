@@ -17,8 +17,6 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── platform/freertos/        FreeRTOS 平台适配（libc、platform_time）
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
-│   ├── messaging/            Topic 兼容接口
-│   └── scheduling/           兼容调度实现
 ├── modules/                  boot_health、hello_world、RC、安全、Rover、EKF2
 ├── lib/                      motor、rover_control 与公共算法库
 ├── messages/                 共享消息契约
@@ -34,14 +32,14 @@ Linker/、make/、tools/        链接、构建、签名和升级工具
 docs/                         计划、架构、ADR、来源和维护文档
 ```
 
-已退役的顶层 `App/` 已迁入 `Dima/`：启动壳位于 `Dima/application`，功能模块位于 `Dima/modules/{boot_health,hello_world}`，外部适配位于 `Dima/adapters`，兼容运行时位于 `Dima/middleware/{lifecycle,messaging,scheduling}`，C/C++ Runtime 与平台时间位于 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor 与 Rover Control 位于 `Dima/lib/{motor,rover_control}`。已退役的顶层 `App/` 不再是当前架构根；目录迁移后的结构检查已通过；构建和运行验证待工具链恢复后执行。
+已退役的顶层 `App/` 已迁入 `Dima/`：启动壳位于 `Dima/application`，功能模块位于 `Dima/modules/{boot_health,hello_world}`，外部适配位于 `Dima/adapters`，生命周期位于 `Dima/middleware/lifecycle`，C/C++ Runtime 与平台时间位于 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor 与 Rover Control 位于 `Dima/lib/{motor,rover_control}`。已退役的顶层 `App/` 不再是当前架构根；目录迁移已完成；Windows ARM 工具链已配置，构建和运行结果以本次目标编译为准。
 
 ## 3. 依赖规则
 
 - `Dima/product/rover` 是最终产品装配层，只装配所需的 Dima 和上游兼容模块。
 - `Dima/modules` 可依赖 Dima middleware、messages、lib 和明确的平台适配接口，不直接包含 STM32 HAL 全局句柄。
 - `Dima/lib` 保持算法属性，不依赖 HAL、USB、MCUboot 或具体板卡。
-- `Dima/middleware` 直接拥有 `lifecycle`、`messaging`、`scheduling` 兼容运行时及 Parameter、uORB、WorkQueue、Event、Perf、Logging，不再依赖顶层 `App`。
+- `Dima/middleware` 直接拥有 lifecycle、Parameter、uORB、WorkQueue、Event、Perf 和 Logging，不再依赖顶层 `App`。
 - `Dima/platform/freertos` 连接 FreeRTOS、时间、内存和同步原语，不承载 Rover 业务逻辑。
 - `Boards/H743` 负责 MCU、引脚、DMA、PWM、Flash 和总线接线，不依赖上层控制模块。
 - `Core/` 与 `USB_DEVICE/` 的生成区只保留必要接线，禁止写入业务逻辑。
@@ -90,7 +88,7 @@ USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 
 ## 6. 消息、参数和状态估计边界
 
-- 生产消息接口采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 使用生产 uORB 链，`Dima/middleware/messaging/topic.hpp` 仅作为兼容接口或 Host seam 保留。
+- 生产消息接口统一采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 使用生产 uORB 链。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
 - 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。
 - Estimator 采用 EKF2，首版即保留多实例与 Estimator Selector，至少支持两个 EKF 实例；实际激活数量由可用 IMU/Mag 组合和参数决定。控制器只消费 `vehicle_attitude`、`vehicle_local_position`、`vehicle_global_position` 和健康状态，不直接访问 EKF 内部对象。
@@ -116,10 +114,10 @@ Storage       128 KiB
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。
 
-目录迁移后的结构检查已通过；目标编译、链接、签名和镜像一致性待工具链恢复后验证。正式验证必须使用项目构建入口，不新增测试、SITL 或仿真入口：
+目录迁移已完成。2026-07-30 已在 Windows 本地使用 GNU Make 4.4.1、Arm GNU Toolchain 16.1.0 和 binutils 2.47 执行正式项目入口，目标编译、链接、签名、MCUboot 地址一致性和 Factory HEX 验证通过；目标板运行行为仍需板测。项目不新增 Host Test、SITL 或仿真入口：
 
-```bash
-make firmware GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin
+```powershell
+make verify
 ```
 
 操作和恢复要求见 [MCUboot USB 升级与恢复手册](MCUBOOT_USB_RECOVERY_ZH.md)。完整迁移路线见 [Dima Rover 移植计划](DIMA_ROVER_PORTING_PLAN_ZH.md)，阶段 0 实测资源见 [Dima Rover 资源基线](DIMA_RESOURCE_BASELINE_ZH.md)。

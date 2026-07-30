@@ -128,9 +128,6 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/modules/hello_world/hello_world.cpp \
 	Dima/modules/boot_health/boot_health.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
-	Dima/middleware/scheduling/work_queue.cpp \
-	Dima/middleware/scheduling/scheduled_work_item.cpp \
-	Dima/middleware/scheduling/freertos_work_queue.cpp \
 	Dima/platform/freertos/platform_time.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uorb/uORB.cpp \
@@ -207,7 +204,7 @@ UPLOAD_WAIT_SECONDS ?= 60
 UPLOAD_IMAGE ?= $(SIGNED_BIN)
 UPLOAD_TOOL = tools/mcumgr_upload.py
 
-.PHONY: firmware mcuboot host-tools host-test verify dima_rover upload \
+.PHONY: firmware mcuboot host-tools verify dima_rover upload \
         FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
 firmware: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
           $(BUILD_DIR)/$(TARGET).bin $(SIGNED_BIN) \
@@ -296,8 +293,6 @@ $(FACTORY_HEX): $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(SIGNED_HEX) \
 
 mcuboot: $(MCUBOOT_BUILD_DIR)/mcuboot.hex
 
-host-test:
-	bash tests/run_host_tests.sh
 
 verify: firmware
 	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) verify \

@@ -1,7 +1,7 @@
 # Dima 上游源码与许可证清单
 
 - 日期：2026-07-30
-- 文档状态：顶层 App 已归并到 Dima；目录迁移后的结构检查已通过，目标构建与实车验证待工具链恢复后执行
+- 文档状态：顶层 App 已归并到 Dima；目录迁移已完成；Windows ARM 工具链已配置，目标构建与实车验证以当前结果为准
 - 许可证决策：`PENDING`
 
 ## 1. 管理规则
@@ -22,7 +22,7 @@
 | 用途 | Parameter、ModuleParams、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl、Commander Rover 子集、RoverDifferential、执行器链和 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
 | 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
-| 当前状态 | 阶段 2 Parameter 基础链已按 v1.17.0 适配；目录迁移后的结构检查已通过，目标构建待工具链恢复后验证 |
+| 当前状态 | 阶段 2 Parameter 基础链已按 v1.17.0 适配；目录迁移已完成，目标构建以本次 Windows 本地验证为准 |
 | 许可证状态 | `PENDING`；逐文件保留原始许可证 |
 | 本地目录规则 | 产品目录使用 Dima；上游符号和许可证文字保持原样 |
 
@@ -58,21 +58,21 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 
 | 职责 | 当前本地位置 | 状态 |
 |---|---|---|
-| 启动壳、C ABI 入口、appMainTask | `Dima/application/` | RELOCATED / STRUCTURE PASS / TARGET VERIFY PENDING |
-| BootHealth、HelloWorld | `Dima/modules/boot_health/`、`Dima/modules/hello_world/` | RELOCATED / STRUCTURE PASS / TARGET VERIFY PENDING |
-| USB Console、MCUboot 应用适配 | `Dima/adapters/` | RELOCATED / STRUCTURE PASS / TARGET VERIFY PENDING |
-| 生命周期、Topic 兼容接口、兼容调度 | `Dima/middleware/lifecycle/`、`Dima/middleware/messaging/`、`Dima/middleware/scheduling/` | RELOCATED / STRUCTURE PASS / TARGET VERIFY PENDING |
-| C/C++ Runtime、no-heap、平台时间 | `Dima/platform/freertos/libc/`、`Dima/platform/freertos/platform_time.*` | RELOCATED / STRUCTURE PASS / TARGET VERIFY PENDING |
-| Motor、Rover Control | `Dima/lib/motor/`、`Dima/lib/rover_control/` | RELOCATED / STRUCTURE PASS / TARGET VERIFY PENDING |
+| 启动壳、C ABI 入口、appMainTask | `Dima/application/` | RELOCATED / TARGET VERIFY PASS |
+| BootHealth、HelloWorld | `Dima/modules/boot_health/`、`Dima/modules/hello_world/` | RELOCATED / TARGET VERIFY PASS |
+| USB Console、MCUboot 应用适配 | `Dima/adapters/` | RELOCATED / TARGET VERIFY PASS |
+| 生命周期 | `Dima/middleware/lifecycle/` | RELOCATED / TARGET VERIFY PASS |
+| C/C++ Runtime、no-heap、平台时间 | `Dima/platform/freertos/libc/`、`Dima/platform/freertos/platform_time.*` | RELOCATED / TARGET VERIFY PASS |
+| Motor、Rover Control | `Dima/lib/motor/`、`Dima/lib/rover_control/` | RELOCATED / TARGET VERIFY PASS |
 
-`Core/`、`Boards/`、`Drivers/`、`Middlewares/`、`USB_DEVICE/` 和 `Bootloader/` 保持独立边界。结构检查已通过；构建、签名和目标运行待工具链恢复后验证，本清单不标记为通过。
+`Core/`、`Boards/`、`Drivers/`、`Middlewares/`、`USB_DEVICE/` 和 `Bootloader/` 保持独立边界。目录边界已收敛；2026-07-30 Windows 本地目标构建与签名验证通过，目标运行仍待板测。
 
 ## 6. 计划中的上游模块映射
 
 | 子系统 | 上游来源 | 计划本地位置 | 阶段 | 当前状态 |
 |---|---|---|---:|---|
 | 时间、WorkQueue、uORB、Logging 兼容接口 | PX4 v1.17.0 | `Dima/platform/freertos/`、`Dima/middleware/` | 1 | ADAPTED |
-| Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / STRUCTURE PASS / TARGET VERIFY PENDING |
+| Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / TARGET VERIFY PASS |
 | SBUS、SbusRc、RCUpdate、ManualControl | PX4 v1.17.0 | `Dima/modules/rc/` | 3 | PLANNED |
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | PLANNED |
 | RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/rover/` | 5 | PLANNED |

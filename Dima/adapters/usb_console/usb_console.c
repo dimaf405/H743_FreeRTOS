@@ -5,15 +5,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef APP_HOST_TEST
-
-static usb_console_test_backend_t usb_console_backend;
-static void *usb_console_class_data;
-static bool usb_console_host_mutex_available;
-static bool usb_console_host_completion;
-
-#else
-
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "task.h"
@@ -36,8 +27,6 @@ static TickType_t usb_console_ms_to_ticks(uint32_t milliseconds)
     const uint64_t max_finite_ticks = (uint64_t)portMAX_DELAY - 1U;
     return (TickType_t)(ticks > max_finite_ticks ? max_finite_ticks : ticks);
 }
-
-#endif
 
 typedef enum {
     USB_CONSOLE_LOW_ACCEPTED = 0,
@@ -84,14 +73,7 @@ static void usb_console_transport_set_online(bool online)
 
 static uint32_t usb_console_now_ms(void)
 {
-#ifdef APP_HOST_TEST
-    if (usb_console_backend.now_ms == NULL) {
-        return 0U;
-    }
-    return usb_console_backend.now_ms(usb_console_backend.context);
-#else
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-#endif
 }
 
 static uint32_t usb_console_remaining_ms(uint32_t start_ms, uint32_t timeout_ms)
@@ -100,59 +82,21 @@ static uint32_t usb_console_remaining_ms(uint32_t start_ms, uint32_t timeout_ms)
     return elapsed_ms >= timeout_ms ? 0U : timeout_ms - elapsed_ms;
 }
 
-#ifdef APP_HOST_TEST
-static bool usb_console_host_take(bool *available, uint32_t wait_ms)
-{
-    if (*available) {
-        *available = false;
-        return true;
-    }
-    if (usb_console_backend.poll == NULL) {
-        return false;
-    }
-
-    const uint32_t start_ms = usb_console_now_ms();
-    for (uint32_t polls = 0U; polls < wait_ms; ++polls) {
-        usb_console_backend.poll(usb_console_backend.context);
-        if (*available) {
-            *available = false;
-            return true;
-        }
-        if ((usb_console_now_ms() - start_ms) >= wait_ms) {
-            break;
-        }
-    }
-    return false;
-}
-#endif
-
 static bool usb_console_take_mutex(uint32_t wait_ms)
 {
-#ifdef APP_HOST_TEST
-    return usb_console_host_take(&usb_console_host_mutex_available, wait_ms);
-#else
     return xSemaphoreTake(usb_console_mutex,
                           usb_console_ms_to_ticks(wait_ms)) == pdTRUE;
-#endif
 }
 
 static void usb_console_give_mutex(void)
 {
-#ifdef APP_HOST_TEST
-    usb_console_host_mutex_available = true;
-#else
     (void)xSemaphoreGive(usb_console_mutex);
-#endif
 }
 
 static bool usb_console_take_completion(uint32_t wait_ms)
 {
-#ifdef APP_HOST_TEST
-    return usb_console_host_take(&usb_console_host_completion, wait_ms);
-#else
     return xSemaphoreTake(usb_console_completion,
                           usb_console_ms_to_ticks(wait_ms)) == pdTRUE;
-#endif
 }
 
 static void usb_console_drain_completion(void)
@@ -166,9 +110,6 @@ static void usb_console_signal_completion(void)
     if (!usb_console_initialized) {
         return;
     }
-#ifdef APP_HOST_TEST
-    usb_console_host_completion = true;
-#else
     if (xPortIsInsideInterrupt() != pdFALSE) {
         BaseType_t higher_priority_task_woken = pdFALSE;
         (void)xSemaphoreGiveFromISR(usb_console_completion,
@@ -177,46 +118,21 @@ static void usb_console_signal_completion(void)
     } else {
         (void)xSemaphoreGive(usb_console_completion);
     }
-#endif
 }
 
 static bool usb_console_is_in_isr(void)
 {
-#ifdef APP_HOST_TEST
-    return usb_console_backend.is_in_isr != NULL
-           && usb_console_backend.is_in_isr(usb_console_backend.context);
-#else
     return xPortIsInsideInterrupt() != pdFALSE;
-#endif
 }
 
 static bool usb_console_scheduler_is_running(void)
 {
-#ifdef APP_HOST_TEST
-    return usb_console_backend.is_scheduler_running != NULL
-           && usb_console_backend.is_scheduler_running(usb_console_backend.context);
-#else
     return xTaskGetSchedulerState() == taskSCHEDULER_RUNNING;
-#endif
 }
 
 static usb_console_low_result_t usb_console_transmit(const uint8_t *data,
                                                      size_t length)
 {
-#ifdef APP_HOST_TEST
-    if (usb_console_backend.transmit == NULL) {
-        return USB_CONSOLE_LOW_FAILED;
-    }
-    switch (usb_console_backend.transmit(usb_console_backend.context, data, length)) {
-    case USB_CONSOLE_TX_ACCEPTED:
-        return USB_CONSOLE_LOW_ACCEPTED;
-    case USB_CONSOLE_TX_BUSY:
-        return USB_CONSOLE_LOW_BUSY;
-    case USB_CONSOLE_TX_FAILED:
-    default:
-        return USB_CONSOLE_LOW_FAILED;
-    }
-#else
     const uint8_t status = CDC_Transmit_FS((uint8_t *)data, (uint16_t)length);
     if (status == USBD_OK) {
         return USB_CONSOLE_LOW_ACCEPTED;
@@ -225,7 +141,6 @@ static usb_console_low_result_t usb_console_transmit(const uint8_t *data,
         return USB_CONSOLE_LOW_BUSY;
     }
     return USB_CONSOLE_LOW_FAILED;
-#endif
 }
 
 static bool usb_console_yield_one_tick(uint32_t remaining_ms)
@@ -233,14 +148,7 @@ static bool usb_console_yield_one_tick(uint32_t remaining_ms)
     if (remaining_ms == 0U) {
         return false;
     }
-#ifdef APP_HOST_TEST
-    if (usb_console_backend.poll == NULL) {
-        return false;
-    }
-    usb_console_backend.poll(usb_console_backend.context);
-#else
     vTaskDelay(usb_console_ms_to_ticks(1U));
-#endif
     return true;
 }
 
@@ -252,12 +160,6 @@ static int usb_console_fail(int error_number)
 
 static int usb_console_set_stdout_unbuffered(void)
 {
-#ifdef APP_HOST_TEST
-    if (usb_console_backend.set_stdout_unbuffered != NULL) {
-        return usb_console_backend.set_stdout_unbuffered(
-            usb_console_backend.context);
-    }
-#endif
     return setvbuf(stdout, NULL, _IONBF, 0);
 }
 
@@ -267,17 +169,11 @@ void usb_console_init(void)
         __atomic_store_n(&usb_console_rx_head, 0U, __ATOMIC_RELEASE);
         __atomic_store_n(&usb_console_rx_tail, 0U, __ATOMIC_RELEASE);
         __atomic_store_n(&usb_console_rx_overflows, 0U, __ATOMIC_RELEASE);
-#ifdef APP_HOST_TEST
-        usb_console_host_mutex_available = true;
-        usb_console_host_completion = false;
-        usb_console_initialized = true;
-#else
         usb_console_mutex = xSemaphoreCreateMutexStatic(&usb_console_mutex_storage);
         usb_console_completion =
             xSemaphoreCreateBinaryStatic(&usb_console_completion_storage);
         usb_console_initialized = usb_console_mutex != NULL
                                   && usb_console_completion != NULL;
-#endif
     }
 
     if (usb_console_initialized && !usb_console_stdout_unbuffered
@@ -353,14 +249,11 @@ uint32_t usb_console_rx_overflow_count(void)
     return __atomic_load_n(&usb_console_rx_overflows, __ATOMIC_ACQUIRE);
 }
 
-
 void usb_console_service(void)
 {
-#ifndef APP_HOST_TEST
     if (usb_console_initialized) {
         (void)CDC_RearmRx_FS();
     }
-#endif
 }
 
 bool usb_console_ready(void)
@@ -368,14 +261,8 @@ bool usb_console_ready(void)
     if (!usb_console_initialized || !usb_console_transport_is_online()) {
         return false;
     }
-#ifdef APP_HOST_TEST
-    return usb_console_class_data != NULL
-           && usb_console_backend.is_configured != NULL
-           && usb_console_backend.is_configured(usb_console_backend.context);
-#else
     return hUsbDeviceFS.dev_state == USBD_STATE_CONFIGURED
            && hUsbDeviceFS.pClassData != NULL;
-#endif
 }
 
 int usb_console_write(const uint8_t *data, size_t length, uint32_t timeout_ms)
@@ -543,40 +430,6 @@ int _write(int fd, char *data, int length)
     }
     return usb_console_write((const uint8_t *)data, (size_t)length, 100U);
 }
-
-#ifdef APP_HOST_TEST
-void usb_console_test_set_backend(const usb_console_test_backend_t *backend)
-{
-    memset(&usb_console_backend, 0, sizeof(usb_console_backend));
-    if (backend != NULL) {
-        usb_console_backend = *backend;
-        usb_console_class_data = backend->class_data;
-    } else {
-        usb_console_class_data = NULL;
-    }
-    usb_console_initialized = false;
-    usb_console_host_mutex_available = false;
-    usb_console_host_completion = false;
-    usb_console_stdout_unbuffered = false;
-    usb_console_in_flight = false;
-    usb_console_in_flight_epoch = 0U;
-    __atomic_store_n(&usb_console_transport_epoch, 0U, __ATOMIC_RELEASE);
-    usb_console_transport_set_online(false);
-    memset(usb_console_tx_staging, 0, sizeof(usb_console_tx_staging));
-}
-
-void usb_console_test_transport_connected(void *class_data)
-{
-    usb_console_class_data = class_data;
-    usb_console_transport_connected();
-}
-
-void usb_console_test_transport_disconnected(void)
-{
-    usb_console_class_data = NULL;
-    usb_console_transport_disconnected();
-}
-#endif
 
 #ifdef APP_USB_CONSOLE_FREERTOS_TEST_SEAM
 void usb_console_freertos_test_reset(void)

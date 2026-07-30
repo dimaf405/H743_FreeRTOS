@@ -14,22 +14,11 @@
 
 namespace dima::modules::hello_world {
 
-#if defined(APP_HOST_TEST)
-HelloWorld::HelloWorld(
-    dima::middleware::scheduling::WorkQueue &queue,
-    dima::middleware::messaging::Topic<app_heartbeat_s> &heartbeat_topic,
-    HostDependencies dependencies)
-    : ScheduledWorkItem(queue), heartbeat_publication_(heartbeat_topic),
-      dependencies_(dependencies)
-{
-}
-#else
 HelloWorld::HelloWorld() noexcept
     : px4::ScheduledWorkItem("hello_world", px4::wq_configurations::lp_default),
       heartbeat_publication_(ORB_ID(app_heartbeat))
 {
 }
-#endif
 
 bool HelloWorld::start()
 {
@@ -37,12 +26,8 @@ bool HelloWorld::start()
         return true;
     }
 
-#if defined(APP_HOST_TEST)
-    const bool scheduled = ScheduleOnInterval(APP_HELLO_WORLD_INTERVAL_MS);
-#else
     const bool scheduled = ScheduleOnInterval(
         static_cast<uint32_t>(APP_HELLO_WORLD_INTERVAL_MS) * 1000U);
-#endif
     if (!scheduled) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
@@ -65,26 +50,12 @@ dima::middleware::lifecycle::ModuleState HelloWorld::state() const
 
 void HelloWorld::Run()
 {
-#if defined(APP_HOST_TEST)
-    (void)dependencies_.printf_line(dependencies_.context,
-                                    "Hello World\r\n");
-    (void)dependencies_.fflush_stdout(dependencies_.context);
-    const uint64_t timestamp_us = dependencies_.time_us(dependencies_.context);
-#else
     (void)printf("Hello World\r\n");
     (void)fflush(stdout);
     const uint64_t timestamp_us = dima::platform::platform_time_us();
-#endif
 
     const app_heartbeat_s heartbeat{timestamp_us, ++sequence_};
     (void)heartbeat_publication_.publish(heartbeat);
 }
-
-#if defined(APP_HOST_TEST)
-void HelloWorld::RunForTest()
-{
-    Run();
-}
-#endif
 
 } // namespace dima::modules::hello_world

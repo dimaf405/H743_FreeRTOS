@@ -5,7 +5,6 @@
 
 namespace dima::modules::boot_health {
 
-#if !defined(APP_HOST_TEST)
 namespace {
 
 uint64_t production_time_ms(void *)
@@ -19,19 +18,7 @@ int production_confirm_running_image(void *)
 }
 
 } // namespace
-#endif
 
-#if defined(APP_HOST_TEST)
-BootHealthService::BootHealthService(
-    dima::middleware::scheduling::WorkQueue &queue,
-    dima::middleware::messaging::Topic<app_heartbeat_s> &heartbeat_topic,
-    HostDependencies dependencies)
-    : ScheduledWorkItem(queue), heartbeat_subscription_(heartbeat_topic),
-      dependency_context_(dependencies.context), time_ms_(dependencies.time_ms),
-      confirm_running_image_(dependencies.confirm_running_image)
-{
-}
-#else
 BootHealthService::BootHealthService() noexcept
     : px4::ScheduledWorkItem("boot_health", px4::wq_configurations::hp_default),
       heartbeat_subscription_(ORB_ID(app_heartbeat)),
@@ -39,7 +26,6 @@ BootHealthService::BootHealthService() noexcept
       confirm_running_image_(&production_confirm_running_image)
 {
 }
-#endif
 
 bool BootHealthService::start()
 {
@@ -56,17 +42,8 @@ bool BootHealthService::start()
 
     stable_window_start_ms_ = time_ms_(dependency_context_);
     heartbeat_observed_ = false;
-#if defined(APP_HOST_TEST)
-    app_heartbeat_s baseline_heartbeat{};
-    (void)heartbeat_subscription_.copy(baseline_heartbeat);
-#else
     (void)heartbeat_subscription_.update();
-#endif
-#if defined(APP_HOST_TEST)
-    const bool scheduled = ScheduleOnInterval(kCheckIntervalMs);
-#else
     const bool scheduled = ScheduleOnInterval(kCheckIntervalMs * 1000U);
-#endif
     if (!scheduled) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
@@ -96,16 +73,9 @@ void BootHealthService::Run()
         return;
     }
 
-#if defined(APP_HOST_TEST)
-    app_heartbeat_s heartbeat{};
-    if (heartbeat_subscription_.copy(heartbeat)) {
-        heartbeat_observed_ = true;
-    }
-#else
     if (heartbeat_subscription_.update()) {
         heartbeat_observed_ = true;
     }
-#endif
 
     const uint64_t elapsed_ms =
         time_ms_(dependency_context_) - stable_window_start_ms_;
@@ -127,12 +97,5 @@ void BootHealthService::Run()
         break;
     }
 }
-
-#if defined(APP_HOST_TEST)
-void BootHealthService::RunForTest()
-{
-    Run();
-}
-#endif
 
 } // namespace dima::modules::boot_health

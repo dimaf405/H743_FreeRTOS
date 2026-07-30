@@ -1,6 +1,6 @@
 # Dima FreeRTOS Rover 总体移植计划
 
-- 状态：顶层 App 已归并到 Dima；目录迁移后的结构检查已通过；构建、签名和目标运行验证待工具链恢复后执行
+- 状态：顶层 App 已归并到 Dima；Windows ARM 工具链已配置，构建、签名和目标运行结果以本次验证为准
 - 日期：2026-07-30
 - 目标平台：STM32H743 + FreeRTOS
 - 产品类型：支持前进、后退和原地旋转的差速 Rover
@@ -57,7 +57,7 @@ Dima/
 ├── application/                    启动壳、C ABI 入口和 appMainTask
 ├── adapters/                       USB Console、MCUboot 适配
 ├── platform/freertos/              libc、platform_time 与 FreeRTOS 平台适配
-├── middleware/                     lifecycle、messaging、scheduling、parameters、uORB、WorkQueue
+├── middleware/                     lifecycle、parameters、uORB、WorkQueue
 ├── modules/                        boot_health、hello_world、RC、安全、Rover、EKF2
 ├── lib/                            motor、rover_control 与公共算法库
 ├── messages/
@@ -66,7 +66,7 @@ Dima/
 Boards/H743/  Core/  Drivers/  Middlewares/  USB_DEVICE/  Bootloader/
 ```
 
-已退役的顶层 `App/` 已完成目录归并：原启动入口进入 `Dima/application`，BootHealth/HelloWorld 进入 `Dima/modules/{boot_health,hello_world}`，Adapter 进入 `Dima/adapters`，生命周期、Topic 和兼容调度进入 `Dima/middleware/{lifecycle,messaging,scheduling}`，C/C++ Runtime 与时间接口进入 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor/Rover Control 进入 `Dima/lib/{motor,rover_control}`。`Core/Boards/Drivers/Middlewares/USB_DEVICE/Bootloader` 保持独立；结构检查已通过；目标构建、签名镜像和目标板行为待工具链恢复后验证。
+已退役的顶层 `App/` 已完成目录归并：原启动入口进入 `Dima/application`，BootHealth/HelloWorld 进入 `Dima/modules/{boot_health,hello_world}`，Adapter 进入 `Dima/adapters`，生命周期进入 `Dima/middleware/lifecycle`，C/C++ Runtime 与时间接口进入 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor/Rover Control 进入 `Dima/lib/{motor,rover_control}`。`Core/Boards/Drivers/Middlewares/USB_DEVICE/Bootloader` 保持独立；项目自有测试子系统已移除；目标构建、签名镜像和目标板行为以本次验证及后续板测为准。
 
 ## 4. 阶段 0：保存计划并建立重构基线
 
@@ -109,7 +109,7 @@ Storage       128 KiB
 - 当前任务栈及高水位能力现状。
 - Application Slot 剩余空间。
 
-阶段 0 的历史资源数据记录在 [Dima Rover 资源基线](DIMA_RESOURCE_BASELINE_ZH.md)。目录归并后的 ELF、BIN、签名链和 Factory HEX 待工具链恢复后重新生成并验证，历史结果不得作为当前结构的通过结论。
+阶段 0 的历史资源数据记录在 [Dima Rover 资源基线](DIMA_RESOURCE_BASELINE_ZH.md)。目录归并后的 ELF、BIN、签名链和 Factory HEX 已于 2026-07-30 通过 Windows 本地 `make verify` 重新生成并验证；目标板运行行为仍需板测。
 
 固件发布目标控制在 Application Slot 的 85% 以下。阶段 0 不缩小 Primary/Secondary Slot；参数掉电安全需要第二个擦除区域时，优先评估外部 NVM 或后续分区 ADR。
 
@@ -127,11 +127,11 @@ Storage       128 KiB
 
 ## 5. 后续阶段
 
-### 阶段 1：Dima FreeRTOS 平台兼容层（实现已归入 Dima，待工具链恢复后复验）
+### 阶段 1：Dima FreeRTOS 平台兼容层（目标构建已通过，板测待完成）
 
-已建立受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。生产 heartbeat 已迁移到 uORB；BootHealth、HelloWorld 和日志服务已迁移到 Dima WorkQueue。目录迁移后的目标固件、签名镜像、Factory HEX、板上 HRT Overflow、栈高水位和运行期 Heap 余量均待工具链恢复后验证。
+已建立受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。生产 heartbeat 已迁移到 uORB；BootHealth、HelloWorld 和日志服务已迁移到 Dima WorkQueue。目录迁移后的目标固件、签名镜像和 Factory HEX 已通过 Windows 本地 `make verify`；板上 HRT Overflow、栈高水位和运行期 Heap 余量仍待目标板验证。
 
-### 阶段 2：Parameter 与 ModuleParams（实现已存在，目录迁移后待工具链恢复复验）
+### 阶段 2：Parameter 与 ModuleParams（目标构建已通过，板测待完成）
 
 阶段 2 以 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 为唯一参数来源，已建立：
 
@@ -143,9 +143,9 @@ Storage       128 KiB
 - `0x081E0000～0x08200000` 单个 128 KiB Storage 扇区的追加 Journal，包含 Sequence、长度、CRC32 和最终 Commit Marker；扫描使用 ECC 安全读与受限 BusFault 恢复，空间满返回 ENOSPC，不自动擦除。
 - 24 项 PX4 差速 Rover 参数：20 项 `RO_*` 与 4 项 `RD_*`；参数数量由官方生成目录确定，无固定 64 项上限。
 
-最近记录的迁移前资源为 `.text=111020`、`.data=2828`、`.bss=325776` bytes，Signed BIN 为 `115064` bytes；目录迁移后的 `make verify` 待工具链恢复后执行。
+2026-07-30 目录迁移后的 Windows 本地 `make verify` 已通过：`.text=110184`、`.data=2068`、`.bss=326448` bytes，Signed BIN 为 `113471` bytes；应用向量地址为 `0x08040400`。
 
-阶段 2 的实现已存在，但当前目录结构下的编译、链接、签名和目标板行为待工具链恢复后验证。未新增或运行测试框架、测试文件、SITL 或仿真；尚未进行 USB 在线调参、自动保存、掉电恢复、损坏尾部回退、扇区满和人工擦除的目标板验收。阶段 2 工作区改动已按功能拆分提交。许可证保持 `PENDING`，最终处理 `DEFERRED`，不阻塞后续阶段。
+阶段 2 的实现已存在。项目自有测试目录已移除，阶段验收采用目标编译、链接、签名和目标板行为检查；尚未进行 USB 在线调参、自动保存、掉电恢复、损坏尾部回退、扇区满和人工擦除的目标板验收。阶段 2 工作区改动已按功能拆分提交。许可证保持 `PENDING`，最终处理 `DEFERRED`，不阻塞后续阶段。
 
 ### 阶段 3：SBUS、RCUpdate 与 ManualControl
 
@@ -214,6 +214,6 @@ Wheel Encoder 不直接侵入 EKF Core；先通过独立 Dima Odometry Adapter �
 - 许可证状态为 `PENDING`，来源保留和发布限制明确。
 - 阶段 0 不导入 EKF2、SBUS 或控制模块生产源码。
 - Flash 地址和 MCUboot/Application 启动接口不因目录整理而改变。
-- 结构检查、目标编译、链接、签名镜像、Factory HEX 和目标板行为待工具链恢复后验证；完成前不得标记为通过。
+- 目标编译、链接、签名镜像、Factory HEX 和目标板行为必须以当前工具链实测结果为准；完成前不得标记为通过。
 - 不创建测试、SITL 或仿真代码。
 - 不覆盖或回退工作区中已有的其他修改。

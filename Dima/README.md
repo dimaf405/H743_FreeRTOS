@@ -8,7 +8,7 @@
 - `product/rover/`：产品服务与装配根。
 - `modules/`：BootHealth、HelloWorld 以及后续 RC、安全、Rover、Estimator 模块。
 - `adapters/`：USB Console、MCUboot 等外部接口适配。
-- `middleware/`：生命周期、消息、调度、uORB、Parameter、Event、Perf 和 Logging。
+- `middleware/`：生命周期、uORB、WorkQueue、Parameter、Event、Perf 和 Logging。
 - `platform/freertos/`：FreeRTOS、时间、内存、Flash 和 libc 适配。
 - `messages/`：共享消息数据结构与 uORB 声明。
 - `lib/`：平台无关的算法、容器和移植库。

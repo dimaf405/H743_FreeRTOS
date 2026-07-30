@@ -1,13 +1,14 @@
-# Dima Rover 资源基线（目录迁移后待复验）
+# Dima Rover 资源基线与目录迁移后验证
 
 - 历史采集日期：2026-07-29
 - 目录说明更新：2026-07-30
 - 分支：`feature/dima-phase1`
 - 平台：STM32H743VI + FreeRTOS
-- 工具链：GNU Arm Embedded 10.2.1 (`gcc-arm-none-eabi-10-2020-q4-major`)
+- 历史工具链：GNU Arm Embedded 10.2.1 (`gcc-arm-none-eabi-10-2020-q4-major`)
+- 当前验证工具链：GNU Make 4.4.1、Arm GNU Toolchain 16.1.0、binutils 2.47
 - 镜像版本：`0.1.0+0`
 - 构建入口：`GNUmakefile` + `make/project.mk`
-- 当前状态：以下数值是顶层 App 归并到 Dima 之前的历史基线；迁移后的编译、链接、签名和 MCUboot 镜像一致性待工具链恢复后验证
+- 当前状态：2026-07-30 Windows 本地 `make verify` 已通过；本文同时保留迁移前历史基线，目标板运行验收仍待完成
 
 ## 1. 历史构建与镜像记录
 
@@ -46,6 +47,37 @@ build/H743_FreeRTOS_factory.hex    271,620 bytes
 ```
 
 连续执行 `host-tools` 时不会因为工程 Makefile 变化重复运行 pip；旧 `build/host-python` 尚未自动删除。
+
+### 1.1 目录迁移后 Windows 本地验证
+
+2026-07-30（Asia/Shanghai）在当前完整工作区执行：
+
+```powershell
+make verify
+```
+
+结果：应用 ELF/BIN、MCUboot、签名镜像和 Factory HEX 全部生成并通过地址与签名检查。
+
+```text
+Image version: 0.1.0+0
+Image digest: 5bd241f52cae861007498ec5e703e0b2bd3265366c86a0e0afd1d8353f786177
+bootloader: 48,952 bytes @ 0x08000000
+signed app: 113,471 bytes @ 0x08040000
+app vector: 0x08040400
+```
+
+当前产物：
+
+```text
+build/H743_FreeRTOS.elf          1,822,080 bytes（含调试段）
+build/H743_FreeRTOS.bin           112,296 bytes
+build/H743_FreeRTOS_signed.bin    113,471 bytes
+build/H743_FreeRTOS_factory.hex   390,826 bytes
+build/mcuboot/mcuboot.elf       2,638,728 bytes（含调试段）
+build/mcuboot/mcuboot.hex         137,668 bytes
+```
+
+该结果证明当前源码能够完成目标编译、链接、签名和镜像组合，不代表目标板外设、时序、Flash 掉电恢复或实车行为已经验收。
 
 ## 2. Flash 使用量
 
@@ -129,7 +161,7 @@ heap_5 的管理头和对齐会使实际消耗略高于 64 bytes；准确 free/m
 
 ## 4. WorkQueue 与任务栈
 
-生产模块使用 Dima/PX4 兼容 WorkQueue。启动壳位于 `Dima/application`；BootHealth/HelloWorld 位于 `Dima/modules/{boot_health,hello_world}`；生命周期、Topic 和兼容调度位于 `Dima/middleware/{lifecycle,messaging,scheduling}`。目录迁移后的任务创建和调度状态待工具链恢复后验证。
+生产模块使用 Dima/PX4 兼容 WorkQueue。启动壳位于 `Dima/application`；BootHealth/HelloWorld 位于 `Dima/modules/{boot_health,hello_world}`；生命周期位于 `Dima/middleware/lifecycle`。生产任务创建和调度状态以目标构建与后续板测为准。
 
 ```text
 wq:estimator    priority 8    8,192 bytes    实时/禁止分配
@@ -167,7 +199,7 @@ uORB heartbeat runtime：4 个实例，静态状态 224 bytes
 
 uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始化中途失败和正常 shutdown 都会释放已创建 Buffer、清除 generation、advertise 状态和 callback。
 
-## 6. 阶段 1 历史实现边界（目录迁移后待复验）
+## 6. 阶段 1 实现边界
 
 历史基线记录的实现项：
 
@@ -179,7 +211,7 @@ uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始
 - uORB Publication、Subscription、Callback、Queue Depth 和最多四实例。
 - heartbeat 生产链迁移到 uORB。
 - Events、Perf、8 KiB Logging 与 LP USB 刷新服务。
-- Signed BIN、MCUboot HEX 和 Factory HEX 曾生成；目录迁移后待工具链恢复后重新生成并验证。
+- 目录迁移后 Signed BIN、MCUboot HEX 和 Factory HEX 已于 2026-07-30 通过 Windows 本地 `make verify` 重新生成并验证。
 
 尚需目标板人工确认：
 
@@ -195,19 +227,17 @@ uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始
 
 阶段 2 开始移植 Parameter 与 ModuleParams。参数系统必须复用成熟 PX4 Parameter API 和生成逻辑，不设置固定 64 项容量，并提供 USB 在线 `param get/set/show/save/reset/status`。
 
-## 8. 阶段 2 最近记录的构建资源（目录迁移后待复验）
+## 8. 阶段 2 目录迁移前后构建资源
 
-以下是目录迁移前记录的目标构建数值，仅用于后续差异比较：
+| 项目 | 迁移前记录（bytes） | 2026-07-30 当前验证（bytes） | 变化（bytes） |
+|---|---:|---:|---:|
+| `.text` | 111,020 | 110,184 | -836 |
+| `.data` | 2,828 | 2,068 | -760 |
+| `.bss` | 325,776 | 326,448 | +672 |
+| MCUboot Signed BIN | 115,064 | 113,471 | -1,593 |
 
-| 项目 | 字节数 |
-|---|---:|
-| `.text` | 111,020 |
-| `.data` | 2,828 |
-| `.bss` | 325,776 |
-| MCUboot Signed BIN | 115,064 |
-
-目录迁移后的 `make verify`、签名镜像、地址一致性和参数生成重建均待工具链恢复后验证；上表不是当前通过结果。
+当前数值来自目录迁移后 Windows 本地 `make verify`，签名镜像、应用向量地址、MCUboot 镜像和 Factory HEX 验证通过。GCC 16.1.0 仍报告 newlib 未实现系统调用及 ELF RWX LOAD 段警告，后续需单独收敛；这些警告未导致本次构建失败。
 
 阶段 2 新增资源主要来自 Parameter Layer/Core、24 项 metadata、官方生成结果、TinyBSON/flashparams、Autosave、USB RX Ring 和单扇区 Flash Journal，以及参数区 ECC 安全读/BusFault 受控恢复。参数数量由生成结果确定，不存在固定 64 项容量。
 
-当前未新增或运行测试框架、测试文件、SITL 或仿真。阶段 2 尚未完成目标板实车验收，包括 USB 在线调参、自动保存时序、掉电恢复、CRC 尾部损坏回退、ENOSPC 和人工擦除流程。
+项目自有测试目录已移除，不保留 Host Test、SITL 或仿真入口。阶段 2 尚未完成目标板实车验收，包括 USB 在线调参、自动保存时序、掉电恢复、CRC 尾部损坏回退、ENOSPC 和人工擦除流程。
