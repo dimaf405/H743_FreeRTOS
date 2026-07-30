@@ -1,0 +1,8 @@
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+
+[*.{c,cpp,h,hpp,md,py,mk,json,xml,yaml,yml}]
+charset = utf-8
