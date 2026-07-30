@@ -1,10 +1,12 @@
 # Dima Logging
 
-固定 8 KiB 非阻塞字节环形，生产路径不执行 USB、Flash 或其他 service I/O。
+PX4 v1.17.0 默认/Release 构建日志兼容层，固定 8 KiB 非阻塞字节环形。
 
-- `PX4_DEBUG/INFO/WARN/ERR` 映射到 `writef()`。
-- `writef()` 在 ISR 或 `dima::platform::in_realtime_context()` 为真时，在调用 `snprintf/vsnprintf` 前直接拒绝。
-- `write_literal()` 不格式化，可写入预先准备好的文本；环形满时覆盖最旧字节。
-- `service_flush()` 仅供 LP/service 任务使用，通过 `ServiceWriter` 对接 USB、串口或其他输出。
-- service writer 短写时，当前块未接收部分记入 `service_dropped_bytes`，不会反向阻塞生产者。
-- 时间戳来自阶段 1 的全局 `hrt_absolute_time()`。
+- 模块日志严格输出 `%-5s [%s] ` 前缀，例如 `INFO  [commander] armed\n`。
+- `PX4_INFO_RAW` 不增加级别、模块名或换行。
+- 提供 `PX4_INFO/WARN/ERR/PANIC/DEBUG`、`PX4_LOG_NAMED` 和 `px4_log_modulename/px4_log_raw`。
+- 默认构建裁剪 `PX4_DEBUG`；`RELEASE_BUILD` 同时裁剪 WARN，匹配 PX4 宏语义。
+- TRACE/DEBUG_BUILD 专用格式尚未移植，当前编译时 fail-closed。
+- ISR 和实时 WorkQueue 在格式化前拒绝；USB 输出由 LP LogService 刷新。
+
+上游基线：PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`。

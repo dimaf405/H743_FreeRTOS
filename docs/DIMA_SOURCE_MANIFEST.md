@@ -24,8 +24,8 @@
 |---|---|
 | 用途 | Parameter、ModuleParams、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl、Commander Rover 子集、RoverDifferential、执行器链和 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
-| 正式 commit | 待取得 v1.17.0 源码后填写 |
-| 当前状态 | `PLANNED`，阶段 0 不导入生产源码 |
+| 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
+| 当前状态 | 阶段 1 平台兼容接口已开始按 v1.17.0 适配；后续模块继续逐文件登记 |
 | 许可证状态 | `PENDING`；逐文件保留原始许可证 |
 | 本地目录规则 | 产品目录使用 Dima；上游符号和许可证文字保持原样 |
 
@@ -59,7 +59,7 @@ ArduPilot 参考结论可以用于确定功能需求、状态机和验收行为�
 
 | 子系统 | 上游来源 | 计划本地位置 | 阶段 | 当前状态 |
 |---|---|---|---:|---|
-| 时间、WorkQueue、uORB 兼容接口 | PX4 v1.17.0 | `Dima/platform/freertos/`、`Dima/middleware/` | 1 | PLANNED |
+| 时间、WorkQueue、uORB、Logging 兼容接口 | PX4 v1.17.0 | `Dima/platform/freertos/`、`Dima/middleware/` | 1 | ADAPTED |
 | Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | PLANNED |
 | SBUS、SbusRc、RCUpdate、ManualControl | PX4 v1.17.0 | `Dima/modules/rc/` | 3 | PLANNED |
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | PLANNED |
@@ -69,7 +69,11 @@ ArduPilot 参考结论可以用于确定功能需求、状态机和验收行为�
 
 ## 6. 文件级映射
 
-阶段 0 不导入上游生产源码，因此当前没有文件级条目。后续每次导入必须按以下格式追加，不得覆盖历史记录：
+阶段 1 已开始适配上游接口；后续每次导入必须按以下格式追加，不得覆盖历史记录：
+
+| 上游路径 | 上游版本 | 本地路径 | 方式 | 修改摘要 |
+|---|---|---|---|---|
+| `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp` | v1.17.0 / `d6f12ad1c4f7` | `Dima/middleware/logging/` | API/格式适配 | 保留 PX4 默认与 Release 宏语义和模块输出格式；backend 改为固定 Ring + LP USB flush；Debug/Trace 格式未完成时 fail-closed |
 
 | 上游仓库 | tag/commit | 原始路径 | 本地路径 | 许可证 | 本地修改摘要 | 导入日期 |
 |---|---|---|---|---|---|---|

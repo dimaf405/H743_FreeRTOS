@@ -3,15 +3,42 @@
 #include <cstddef>
 #include <cstdint>
 
+// PX4 v1.17.0 logging compatibility surface.
+// Upstream: platforms/common/include/px4_platform_common/log.h
+#define _PX4_LOG_LEVEL_DEBUG 0
+#define _PX4_LOG_LEVEL_INFO 1
+#define _PX4_LOG_LEVEL_WARN 2
+#define _PX4_LOG_LEVEL_ERROR 3
+#define _PX4_LOG_LEVEL_PANIC 4
+
+#ifndef MODULE_NAME
+#define MODULE_NAME "dima"
+#endif
+
+#if defined(TRACE_BUILD) || defined(DEBUG_BUILD)
+#error "Dima PX4 TRACE_BUILD/DEBUG_BUILD log formatting is not ported yet"
+#endif
+
+extern "C" {
+extern const char *__px4_log_level_str[_PX4_LOG_LEVEL_PANIC + 1];
+void px4_log_modulename(int level, const char *module_name,
+                        const char *format, ...)
+    __attribute__((format(printf, 3, 4)));
+void px4_log_raw(int level, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
+void px4_log_initialize(void);
+}
+
 namespace dima::logging {
 
 constexpr std::size_t kLogRingCapacity = 8U * 1024U;
 
 enum class Level : std::uint8_t {
-    Debug = 0U,
-    Info,
-    Warning,
-    Error,
+    Debug = _PX4_LOG_LEVEL_DEBUG,
+    Info = _PX4_LOG_LEVEL_INFO,
+    Warning = _PX4_LOG_LEVEL_WARN,
+    Error = _PX4_LOG_LEVEL_ERROR,
+    Panic = _PX4_LOG_LEVEL_PANIC,
 };
 
 enum class WriteResult : std::uint8_t {
@@ -33,50 +60,47 @@ struct LogStats {
 using ServiceWrite = std::size_t (*)(void *context,
                                      const std::uint8_t *data,
                                      std::size_t length);
-
 struct ServiceWriter {
     void *context;
     ServiceWrite write;
 };
 
-// 格式化入口仅允许普通非实时任务调用；ISR 和实时任务会在格式化前拒绝。
+// Dima internal compatibility entry. Product modules should prefer PX4_* macros.
 WriteResult writef(Level level, const char *format, ...) noexcept
     __attribute__((format(printf, 2, 3)));
-
-// 非格式化入口可用于已经准备好的字节串，包括 ISR/实时路径。
-// 数据写满环形时覆盖最旧字节，调用方不会等待 service I/O。
 WriteResult write_literal(const char *text, std::size_t length) noexcept;
-
-// service/LP 任务调用。数据先从环形取到固定栈缓冲，再调用外部 writer，
-// 因此外部 USB/串口阻塞不会持有生产者临界区。
 std::size_t service_flush(const ServiceWriter &writer,
                           std::size_t max_bytes = kLogRingCapacity) noexcept;
-
 LogStats stats() noexcept;
 void reset() noexcept;
 
 } // namespace dima::logging
 
-#ifndef PX4_DEBUG
-#define PX4_DEBUG(format, ...)                                                   \
-    ((void)::dima::logging::writef(::dima::logging::Level::Debug, format,       \
-                                    ##__VA_ARGS__))
-#endif
+#define __dima_px4_log_module(level, format, ...) \
+    px4_log_modulename(level, MODULE_NAME, format, ##__VA_ARGS__)
+#define __dima_px4_log_omit(level, format, ...) \
+    do { if (false) { px4_log_modulename(level, MODULE_NAME, format, ##__VA_ARGS__); } } while (0)
 
-#ifndef PX4_INFO
-#define PX4_INFO(format, ...)                                                    \
-    ((void)::dima::logging::writef(::dima::logging::Level::Info, format,        \
-                                    ##__VA_ARGS__))
-#endif
+#define PX4_INFO(format, ...) \
+    __dima_px4_log_module(_PX4_LOG_LEVEL_INFO, format, ##__VA_ARGS__)
+#define PX4_INFO_RAW(format, ...) \
+    px4_log_raw(_PX4_LOG_LEVEL_INFO, format, ##__VA_ARGS__)
+#define PX4_PANIC(format, ...) \
+    __dima_px4_log_module(_PX4_LOG_LEVEL_PANIC, format, ##__VA_ARGS__)
+#define PX4_ERR(format, ...) \
+    __dima_px4_log_module(_PX4_LOG_LEVEL_ERROR, format, ##__VA_ARGS__)
 
-#ifndef PX4_WARN
-#define PX4_WARN(format, ...)                                                    \
-    ((void)::dima::logging::writef(::dima::logging::Level::Warning, format,     \
-                                    ##__VA_ARGS__))
+#if defined(RELEASE_BUILD)
+#define PX4_WARN(format, ...) \
+    __dima_px4_log_omit(_PX4_LOG_LEVEL_WARN, format, ##__VA_ARGS__)
+#else
+#define PX4_WARN(format, ...) \
+    __dima_px4_log_module(_PX4_LOG_LEVEL_WARN, format, ##__VA_ARGS__)
 #endif
+#define PX4_DEBUG(format, ...) \
+    __dima_px4_log_omit(_PX4_LOG_LEVEL_DEBUG, format, ##__VA_ARGS__)
 
-#ifndef PX4_ERR
-#define PX4_ERR(format, ...)                                                     \
-    ((void)::dima::logging::writef(::dima::logging::Level::Error, format,       \
-                                    ##__VA_ARGS__))
-#endif
+#define PX4_LOG_NAMED(name, format, ...) \
+    PX4_INFO("%s " format, name, ##__VA_ARGS__)
+#define PX4_LOG_NAMED_COND(name, condition, format, ...) \
+    do { if (condition) { PX4_LOG_NAMED(name, format, ##__VA_ARGS__); } } while (0)

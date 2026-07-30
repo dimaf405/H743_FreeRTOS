@@ -9,13 +9,14 @@
 #include <limits>
 
 extern "C" {
+const char *__px4_log_level_str[_PX4_LOG_LEVEL_PANIC + 1] = {
+    "DEBUG", "INFO", "WARN", "ERROR", "PANIC"};
+}
+
+extern "C" {
 #include "FreeRTOS.h"
 #include "task.h"
 }
-
-using hrt_abstime = std::uint64_t;
-hrt_abstime hrt_absolute_time() noexcept;
-
 
 namespace dima::logging {
 namespace {
@@ -71,22 +72,6 @@ void increment_saturated(std::uint32_t &value,
     const std::uint32_t available =
         std::numeric_limits<std::uint32_t>::max() - value;
     value += (amount > available) ? available : amount;
-}
-
-char level_character(Level level) noexcept
-{
-    switch (level) {
-    case Level::Debug:
-        return 'D';
-    case Level::Info:
-        return 'I';
-    case Level::Warning:
-        return 'W';
-    case Level::Error:
-        return 'E';
-    }
-
-    return '?';
 }
 
 bool formatting_allowed() noexcept
@@ -155,12 +140,14 @@ std::size_t pop_bytes(std::uint8_t *destination,
 
 } // namespace
 
-WriteResult writef(Level level, const char *format, ...) noexcept
+namespace {
+
+WriteResult write_v(Level level, const char *module_name, bool raw,
+                    const char *format, va_list arguments) noexcept
 {
-    if (format == nullptr) {
+    if (format == nullptr || (!raw && module_name == nullptr)) {
         return WriteResult::InvalidArgument;
     }
-
     if (!formatting_allowed()) {
         CriticalSection lock;
         increment_saturated(g_state.formatting_rejections);
@@ -168,55 +155,61 @@ WriteResult writef(Level level, const char *format, ...) noexcept
     }
 
     char buffer[kFormatBufferSize]{};
-    const std::uint64_t timestamp = hrt_absolute_time();
-    int used = std::snprintf(buffer,
-                             sizeof(buffer),
-                             "[%llu][%c] ",
-                             static_cast<unsigned long long>(timestamp),
-                             level_character(level));
-    if (used < 0) {
-        return WriteResult::InvalidArgument;
+    std::size_t prefix_length = 0U;
+    if (!raw) {
+        const auto index = static_cast<std::size_t>(level);
+        if (index > _PX4_LOG_LEVEL_PANIC) {
+            return WriteResult::InvalidArgument;
+        }
+        const int prefix = std::snprintf(buffer, sizeof(buffer), "%-5s [%s] ",
+                                         __px4_log_level_str[index], module_name);
+        if (prefix < 0) {
+            return WriteResult::InvalidArgument;
+        }
+        prefix_length = std::min<std::size_t>(static_cast<std::size_t>(prefix),
+                                               sizeof(buffer) - 1U);
     }
 
-    std::size_t prefix_length = std::min<std::size_t>(
-        static_cast<std::size_t>(used), sizeof(buffer) - 1U);
-
-    va_list arguments;
-    va_start(arguments, format);
     const int body_result = std::vsnprintf(buffer + prefix_length,
                                            sizeof(buffer) - prefix_length,
-                                           format,
-                                           arguments);
-    va_end(arguments);
-
+                                           format, arguments);
     if (body_result < 0) {
         return WriteResult::InvalidArgument;
     }
 
     const std::size_t body_capacity = sizeof(buffer) - prefix_length;
     const bool truncated = static_cast<std::size_t>(body_result) >= body_capacity;
-    std::size_t length = std::min(
-        prefix_length + static_cast<std::size_t>(body_result),
-        sizeof(buffer) - 1U);
+    std::size_t length = std::min(prefix_length + static_cast<std::size_t>(body_result),
+                                  sizeof(buffer) - 1U);
 
-    if ((length == 0U) || (buffer[length - 1U] != '\n')) {
-        if (length < sizeof(buffer)) {
+    // PX4 module logs always append one newline; PX4_INFO_RAW keeps exact bytes.
+    if (!raw) {
+        if (length < sizeof(buffer) - 1U) {
             buffer[length++] = '\n';
         } else {
             buffer[sizeof(buffer) - 1U] = '\n';
+            length = sizeof(buffer);
         }
     }
 
-    {
-        CriticalSection lock;
-        push_bytes_locked(reinterpret_cast<const std::uint8_t *>(buffer), length);
-        increment_saturated(g_state.records_written);
-        if (truncated) {
-            increment_saturated(g_state.records_truncated);
-        }
+    CriticalSection lock;
+    push_bytes_locked(reinterpret_cast<const std::uint8_t *>(buffer), length);
+    increment_saturated(g_state.records_written);
+    if (truncated) {
+        increment_saturated(g_state.records_truncated);
     }
-
     return truncated ? WriteResult::Truncated : WriteResult::Ok;
+}
+
+} // namespace
+
+WriteResult writef(Level level, const char *format, ...) noexcept
+{
+    va_list arguments;
+    va_start(arguments, format);
+    const WriteResult result = write_v(level, "dima", false, format, arguments);
+    va_end(arguments);
+    return result;
 }
 
 WriteResult write_literal(const char *text, std::size_t length) noexcept
@@ -293,3 +286,33 @@ void reset() noexcept
 } // namespace dima::logging
 
 
+
+extern "C" void px4_log_initialize(void)
+{
+    dima::logging::reset();
+}
+
+extern "C" void px4_log_modulename(int level, const char *module_name,
+                                    const char *format, ...)
+{
+    if (level < _PX4_LOG_LEVEL_DEBUG || level > _PX4_LOG_LEVEL_PANIC) {
+        return;
+    }
+    va_list arguments;
+    va_start(arguments, format);
+    (void)dima::logging::write_v(static_cast<dima::logging::Level>(level),
+                                 module_name, false, format, arguments);
+    va_end(arguments);
+}
+
+extern "C" void px4_log_raw(int level, const char *format, ...)
+{
+    if (level < _PX4_LOG_LEVEL_DEBUG || level > _PX4_LOG_LEVEL_PANIC) {
+        return;
+    }
+    va_list arguments;
+    va_start(arguments, format);
+    (void)dima::logging::write_v(static_cast<dima::logging::Level>(level),
+                                 nullptr, true, format, arguments);
+    va_end(arguments);
+}
