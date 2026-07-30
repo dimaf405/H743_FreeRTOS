@@ -69,7 +69,7 @@ def write_include_forwarders(include_output: Path) -> None:
     write_forward_header(include_output / "px4_platform_common" / "param.h", "Dima/middleware/parameters/param.h")
     write_forward_header(include_output / "px4_platform_common" / "param_macros.h", "Dima/middleware/parameters/param_macros.h")
     write_forward_header(include_output / "px4_platform_common" / "module_params.h", "Dima/middleware/parameters/module_params.h")
-    write_forward_header(include_output / "parameters" / "px4_parameters.hpp", "px4_parameters.hpp")
+    write_forward_header(include_output / "parameters" / "px4_parameters.hpp", "../../generated/parameters/px4_parameters.hpp")
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,3 +108,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

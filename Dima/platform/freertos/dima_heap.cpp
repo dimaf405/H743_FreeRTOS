@@ -53,6 +53,11 @@ bool heap_init() noexcept
     return true;
 }
 
+bool in_interrupt_context() noexcept
+{
+    return is_in_isr();
+}
+
 bool in_realtime_context() noexcept
 {
     if (is_in_isr()) {

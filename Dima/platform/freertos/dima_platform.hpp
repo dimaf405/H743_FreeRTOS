@@ -28,6 +28,7 @@ bool heap_init() noexcept;
 void *allocate(size_t size, AllocationDomain domain) noexcept;
 void deallocate(void *ptr) noexcept;
 HeapStats heap_stats() noexcept;
+bool in_interrupt_context() noexcept;
 bool in_realtime_context() noexcept;
 bool register_realtime_task(TaskHandle_t task) noexcept;
 bool unregister_realtime_task(TaskHandle_t task) noexcept;

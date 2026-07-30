@@ -98,6 +98,7 @@ uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 /* USER CODE BEGIN PRIVATE_VARIABLES */
+static volatile uint8_t g_rx_rearm_pending;
 
 /* USER CODE END PRIVATE_VARIABLES */
 
@@ -165,6 +166,7 @@ static int8_t CDC_Init_FS(void)
   {
     return (USBD_FAIL);
   }
+  __atomic_store_n(&g_rx_rearm_pending, 0U, __ATOMIC_RELEASE);
   usb_console_transport_connected();
   return (USBD_OK);
   /* USER CODE END 3 */
@@ -177,6 +179,7 @@ static int8_t CDC_Init_FS(void)
 static int8_t CDC_DeInit_FS(void)
 {
   /* USER CODE BEGIN 4 */
+  __atomic_store_n(&g_rx_rearm_pending, 0U, __ATOMIC_RELEASE);
   usb_console_transport_disconnected();
   return (USBD_OK);
   /* USER CODE END 4 */
@@ -275,9 +278,19 @@ static int8_t CDC_Control_FS(uint8_t cmd, uint8_t* pbuf, uint16_t length)
 static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
 {
   /* USER CODE BEGIN 6 */
-  UNUSED(Len);
-  USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
-  USBD_CDC_ReceivePacket(&hUsbDeviceFS);
+  if ((Buf == NULL) || (Len == NULL))
+  {
+    return (USBD_FAIL);
+  }
+
+  usb_console_receive_from_isr(Buf, (size_t)(*Len));
+  if ((USBD_CDC_SetRxBuffer(&hUsbDeviceFS, Buf) != USBD_OK) ||
+      (USBD_CDC_ReceivePacket(&hUsbDeviceFS) != USBD_OK))
+  {
+    __atomic_store_n(&g_rx_rearm_pending, 1U, __ATOMIC_RELEASE);
+    return (USBD_FAIL);
+  }
+  __atomic_store_n(&g_rx_rearm_pending, 0U, __ATOMIC_RELEASE);
   return (USBD_OK);
   /* USER CODE END 6 */
 }
@@ -293,6 +306,32 @@ static int8_t CDC_Receive_FS(uint8_t* Buf, uint32_t *Len)
   * @param  Len: Number of data to be sent (in bytes)
   * @retval USBD_OK if all operations are OK else USBD_FAIL or USBD_BUSY
   */
+
+uint8_t CDC_RearmRx_FS(void)
+{
+  uint8_t result = USBD_OK;
+  if (__atomic_load_n(&g_rx_rearm_pending, __ATOMIC_ACQUIRE) == 0U)
+  {
+    return USBD_OK;
+  }
+
+  taskENTER_CRITICAL();
+  if ((hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) ||
+      (hUsbDeviceFS.pClassData == NULL) ||
+      (hUsbDeviceFS.pClassDataCmsit[hUsbDeviceFS.classId] == NULL) ||
+      (USBD_CDC_SetRxBuffer(&hUsbDeviceFS, UserRxBufferFS) != USBD_OK) ||
+      (USBD_CDC_ReceivePacket(&hUsbDeviceFS) != USBD_OK))
+  {
+    result = USBD_FAIL;
+  }
+  else
+  {
+    __atomic_store_n(&g_rx_rearm_pending, 0U, __ATOMIC_RELEASE);
+  }
+  taskEXIT_CRITICAL();
+  return result;
+}
+
 uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len)
 {
   uint8_t result = USBD_OK;

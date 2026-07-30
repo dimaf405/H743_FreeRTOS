@@ -46,7 +46,8 @@
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
-
+__attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacked_frame);
+void BusFault_Handler_C(uint32_t *stacked_frame);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -117,15 +118,34 @@ void MemManage_Handler(void)
 /**
   * @brief This function handles Pre-fetch fault, memory access fault.
   */
-void BusFault_Handler(void)
+__attribute__((naked)) void BusFault_Handler(void)
 {
-  /* USER CODE BEGIN BusFault_IRQn 0 */
+  /* 仅参数 Flash 安全读允许恢复；其他 BusFault 仍保持 fail-closed。 */
+  __asm volatile (
+      "tst lr, #4\n"
+      "ite eq\n"
+      "mrseq r0, msp\n"
+      "mrsne r0, psp\n"
+      "tst lr, #0x10\n"
+      "it eq\n"
+      "addeq r0, r0, #72\n"
+      "b BusFault_Handler_C\n");
+}
 
-  /* USER CODE END BusFault_IRQn 0 */
+__attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacked_frame)
+{
+  (void)stacked_frame;
+  return 0;
+}
+
+void BusFault_Handler_C(uint32_t *stacked_frame)
+{
+  if (dima_parameter_flash_recover_busfault(stacked_frame) != 0)
+  {
+    return;
+  }
   while (1)
   {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
   }
 }
 

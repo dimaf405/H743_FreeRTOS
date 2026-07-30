@@ -45,6 +45,15 @@ typedef enum {
     USB_CONSOLE_LOW_FAILED,
 } usb_console_low_result_t;
 
+enum { USB_CONSOLE_RX_CAPACITY = 1024U };
+_Static_assert((USB_CONSOLE_RX_CAPACITY & (USB_CONSOLE_RX_CAPACITY - 1U)) == 0U,
+               "USB RX ring capacity must be a power of two");
+
+static uint8_t usb_console_rx_ring[USB_CONSOLE_RX_CAPACITY];
+static uint32_t usb_console_rx_head;
+static uint32_t usb_console_rx_tail;
+static uint32_t usb_console_rx_overflows;
+
 static uint8_t usb_console_tx_staging[256U];
 static bool usb_console_initialized;
 static bool usb_console_stdout_unbuffered;
@@ -255,6 +264,9 @@ static int usb_console_set_stdout_unbuffered(void)
 void usb_console_init(void)
 {
     if (!usb_console_initialized) {
+        __atomic_store_n(&usb_console_rx_head, 0U, __ATOMIC_RELEASE);
+        __atomic_store_n(&usb_console_rx_tail, 0U, __ATOMIC_RELEASE);
+        __atomic_store_n(&usb_console_rx_overflows, 0U, __ATOMIC_RELEASE);
 #ifdef APP_HOST_TEST
         usb_console_host_mutex_available = true;
         usb_console_host_completion = false;
@@ -272,6 +284,83 @@ void usb_console_init(void)
         && usb_console_set_stdout_unbuffered() == 0) {
         usb_console_stdout_unbuffered = true;
     }
+}
+
+void usb_console_receive_from_isr(const uint8_t *data, size_t length)
+{
+    if (data == NULL || length == 0U) {
+        return;
+    }
+
+    uint32_t head = __atomic_load_n(&usb_console_rx_head, __ATOMIC_RELAXED);
+    const uint32_t tail = __atomic_load_n(&usb_console_rx_tail, __ATOMIC_ACQUIRE);
+    size_t accepted = 0U;
+
+    while (accepted < length && (head - tail) < USB_CONSOLE_RX_CAPACITY) {
+        usb_console_rx_ring[head & (USB_CONSOLE_RX_CAPACITY - 1U)] = data[accepted++];
+        ++head;
+    }
+
+    __atomic_store_n(&usb_console_rx_head, head, __ATOMIC_RELEASE);
+    if (accepted < length) {
+        (void)__atomic_add_fetch(&usb_console_rx_overflows,
+                                 (uint32_t)(length - accepted),
+                                 __ATOMIC_RELAXED);
+    }
+}
+
+size_t usb_console_rx_available(void)
+{
+    const uint32_t head = __atomic_load_n(&usb_console_rx_head, __ATOMIC_ACQUIRE);
+    const uint32_t tail = __atomic_load_n(&usb_console_rx_tail, __ATOMIC_RELAXED);
+    const uint32_t available = head - tail;
+    return available > USB_CONSOLE_RX_CAPACITY ? USB_CONSOLE_RX_CAPACITY
+                                                : (size_t)available;
+}
+
+bool usb_console_read_byte(uint8_t *byte)
+{
+    if (byte == NULL) {
+        return false;
+    }
+
+    uint32_t tail = __atomic_load_n(&usb_console_rx_tail, __ATOMIC_RELAXED);
+    const uint32_t head = __atomic_load_n(&usb_console_rx_head, __ATOMIC_ACQUIRE);
+    if (tail == head) {
+        return false;
+    }
+
+    *byte = usb_console_rx_ring[tail & (USB_CONSOLE_RX_CAPACITY - 1U)];
+    __atomic_store_n(&usb_console_rx_tail, tail + 1U, __ATOMIC_RELEASE);
+    return true;
+}
+
+size_t usb_console_read(uint8_t *data, size_t capacity)
+{
+    if (data == NULL || capacity == 0U) {
+        return 0U;
+    }
+
+    size_t count = 0U;
+    while (count < capacity && usb_console_read_byte(&data[count])) {
+        ++count;
+    }
+    return count;
+}
+
+uint32_t usb_console_rx_overflow_count(void)
+{
+    return __atomic_load_n(&usb_console_rx_overflows, __ATOMIC_ACQUIRE);
+}
+
+
+void usb_console_service(void)
+{
+#ifndef APP_HOST_TEST
+    if (usb_console_initialized) {
+        (void)CDC_RearmRx_FS();
+    }
+#endif
 }
 
 bool usb_console_ready(void)

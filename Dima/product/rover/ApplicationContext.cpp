@@ -38,6 +38,11 @@ bool ApplicationContext::init() noexcept
         px4::work_queue_shutdown();
         return false;
     }
+    if (!parameter_service_.init()) {
+        uORB::shutdown();
+        px4::work_queue_shutdown();
+        return false;
+    }
     if (!module_manager_.register_module(boot_health_)) {
         module_manager_.reset();
         uORB::shutdown();
@@ -75,8 +80,22 @@ bool ApplicationContext::start() noexcept
         return false;
     }
 #endif
+    parameter_started_ = parameter_service_.start();
+    if (!parameter_started_) {
+#if APP_HELLO_WORLD_ENABLED
+        if (hello_started_) {
+            (void)module_manager_.stop(hello_world_);
+            hello_started_ = false;
+        }
+#endif
+        (void)module_manager_.stop(boot_health_);
+        boot_started_ = false;
+        return false;
+    }
     log_started_ = log_service_.start();
     if (!log_started_) {
+        parameter_service_.stop();
+        parameter_started_ = false;
 #if APP_HELLO_WORLD_ENABLED
         if (hello_started_) {
             (void)module_manager_.stop(hello_world_);
@@ -95,6 +114,10 @@ void ApplicationContext::stop() noexcept
     if (log_started_) {
         log_service_.stop();
         log_started_ = false;
+    }
+    if (parameter_started_) {
+        parameter_service_.stop();
+        parameter_started_ = false;
     }
 #if APP_HELLO_WORLD_ENABLED
     if (hello_started_) {

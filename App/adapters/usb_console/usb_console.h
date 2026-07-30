@@ -15,8 +15,13 @@ extern "C" {
  * serializes the raw USB transport, but does not make newlib FILE or errno
  * state safe across tasks. */
 void usb_console_init(void);
+void usb_console_service(void);
 bool usb_console_ready(void);
 int usb_console_write(const uint8_t *data, size_t length, uint32_t timeout_ms);
+size_t usb_console_read(uint8_t *data, size_t capacity);
+bool usb_console_read_byte(uint8_t *byte);
+size_t usb_console_rx_available(void);
+uint32_t usb_console_rx_overflow_count(void);
 void usb_console_tx_complete_from_isr(void);
 int _write(int fd, char *data, int length);
 

@@ -45,7 +45,41 @@ C_DEFS += -DH743_APPLICATION_IMAGE \
 	-DBOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT) \
 	-DAPP_HELLO_WORLD_ENABLED=$(APP_HELLO_WORLD_ENABLED) \
 	-DAPP_HELLO_WORLD_INTERVAL_MS=$(APP_HELLO_WORLD_INTERVAL_VALIDATED)
-C_INCLUDES += -I.
+C_INCLUDES += -I. \
+	-I$(BUILD_DIR)/generated_include \
+	-I$(BUILD_DIR)/generated/parameters
+
+PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
+PARAMETER_GENERATOR_DEPS := $(wildcard tools/parameters/*.py tools/parameters/dima_params/*.py)
+PARAMETER_DEFINITIONS := \
+	Dima/middleware/parameters/definitions/rover_control_params.c \
+	Dima/middleware/parameters/definitions/rover_differential_params.c
+PARAMETER_GENERATED_DIR := $(BUILD_DIR)/generated/parameters
+PARAMETER_INCLUDE_DIR := $(BUILD_DIR)/generated_include
+PARAMETER_GENERATED_STAMP := $(PARAMETER_GENERATED_DIR)/.generated
+PARAMETER_GENERATED_OUTPUTS := \
+	$(PARAMETER_GENERATED_DIR)/parameters.xml \
+	$(PARAMETER_GENERATED_DIR)/parameters.json \
+	$(PARAMETER_GENERATED_DIR)/px4_parameters.hpp \
+	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c \
+	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/param.h \
+	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/param_macros.h \
+	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/module_params.h \
+	$(PARAMETER_INCLUDE_DIR)/parameters/px4_parameters.hpp
+
+$(PARAMETER_GENERATED_STAMP): $(PARAMETER_GENERATOR_DEPS) $(PARAMETER_DEFINITIONS)
+	$(PYTHON) $(PARAMETER_GENERATOR) \
+		--source $(word 1,$(PARAMETER_DEFINITIONS)) \
+		--source $(word 2,$(PARAMETER_DEFINITIONS)) \
+		--output $(PARAMETER_GENERATED_DIR) \
+		--include-output $(PARAMETER_INCLUDE_DIR)
+	@touch $@
+
+$(PARAMETER_GENERATED_OUTPUTS): $(PARAMETER_GENERATED_STAMP)
+	@test -f $@
+
+.PHONY: parameter-generated
+parameter-generated: $(PARAMETER_GENERATED_OUTPUTS)
 
 # newlib-nano lazily allocates its three standard FILE objects on the first
 # setvbuf/printf call.  This application has no runtime heap, so link the full
@@ -72,6 +106,7 @@ $(FREERTOS_DYNAMIC_HEAP_OBJECT):
 CUBEMX_OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(OBJECTS))
 override OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(CUBEMX_OBJECTS))
 PROJECT_C_SOURCES ?= \
+	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c \
 	App/adapters/mcuboot/mcuboot_app.c \
 	Boards/H743/Src/board_init.c \
 	Boards/H743/Src/motor_pwm.c \
@@ -83,8 +118,10 @@ PROJECT_CXX_SOURCES ?= \
 	App/application/app_bootstrap.cpp \
 	Dima/platform/freertos/dima_heap.cpp \
 	Dima/platform/freertos/hrt.cpp \
+	Dima/platform/freertos/parameter_flash.cpp \
 	Dima/product/rover/ApplicationContext.cpp \
 	Dima/product/rover/LogService.cpp \
+	Dima/product/rover/ParameterService.cpp \
 	App/application/app_main.cpp \
 	App/domain/motor/speed_to_pwm.cpp \
 	App/domain/rover_control/rover_control.cpp \
@@ -97,7 +134,12 @@ PROJECT_CXX_SOURCES ?= \
 	App/runtime/time/platform_time.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uorb/uORB.cpp \
+	Dima/middleware/parameters/param.cpp \
+	Dima/middleware/parameters/autosave.cpp \
+	Dima/lib/tinybson/tinybson.cpp \
+	Dima/middleware/parameters/flashparams/flashparams.cpp \
 	Dima/messages/app_heartbeat.cpp \
+	Dima/messages/parameter_update.cpp \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
@@ -105,6 +147,7 @@ PROJECT_CXX_SOURCES ?= \
 PROJECT_C_OBJECTS := $(addprefix $(BUILD_DIR)/,$(PROJECT_C_SOURCES:.c=.o))
 PROJECT_CXX_OBJECTS := $(addprefix $(BUILD_DIR)/,$(PROJECT_CXX_SOURCES:.cpp=.o))
 PROJECT_OBJECTS := $(PROJECT_C_OBJECTS) $(PROJECT_CXX_OBJECTS)
+$(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP)
 override OBJECTS += $(PROJECT_OBJECTS)
 
 ifneq ($(strip $(CUBEMX_OBJECTS)),)
