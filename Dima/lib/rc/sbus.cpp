@@ -28,8 +28,8 @@ bool valid_footer(std::uint8_t footer) noexcept
 
 std::uint16_t raw_to_pwm(std::uint16_t raw) noexcept
 {
-    // PX4 映射：原始 200..1800 对应 PWM 1000..2000；整数式保持四舍五入语义。
-    return static_cast<std::uint16_t>(((static_cast<std::uint32_t>(raw) * 5U) + 4U) / 8U + 875U);
+    // PX4 映射：保持 PX4 的 200..1800 到约 999..1999 PWM 映射与整数四舍五入语义。
+    return static_cast<std::uint16_t>(((static_cast<std::uint32_t>(raw) * 5U) + 4U) / 8U + 874U);
 }
 
 std::uint16_t unpack_11_bits(const std::uint8_t *payload,

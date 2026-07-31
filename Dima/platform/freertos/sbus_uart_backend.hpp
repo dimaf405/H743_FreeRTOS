@@ -20,7 +20,8 @@ public:
     bool configure(std::int32_t port, bool inverted) noexcept override;
     bool start(px4::WorkItem &consumer) noexcept override;
     void stop() noexcept override;
-    std::size_t read(std::uint8_t *destination, std::size_t capacity) noexcept override;
+    std::size_t read(std::uint8_t *destination,
+                     std::size_t capacity) noexcept override;
     bool service() noexcept override;
     bool running() const noexcept override { return running_; }
     bool handles_uart(const void *uart) const noexcept { return uart_ == uart; }
@@ -44,7 +45,8 @@ private:
     volatile std::uint32_t uart_errors_{0U};
     std::uint32_t overwritten_bytes_{0U};
     std::uint32_t rearm_failures_{0U};
-    bool running_{false};
+    bool dma_initialized_{false};
+    volatile bool running_{false};
 };
 
 SbusUartBackend &sbus_uart_backend() noexcept;

@@ -8,6 +8,7 @@
 #include "Dima/messages/input_rc.hpp"
 #include "Dima/middleware/lifecycle/module_base.hpp"
 #include "Dima/middleware/parameters/param.h"
+#include "Dima/middleware/perf/perf_counter.h"
 #include "Dima/middleware/uorb/Publication.hpp"
 #include "Dima/middleware/work_queue/WorkQueue.hpp"
 
@@ -38,6 +39,8 @@ private:
     static constexpr std::size_t kReadBufferSize = 64U;
     void Run() override;
     void schedule_retry() noexcept;
+    void allocate_perf_counters() noexcept;
+    void free_perf_counters() noexcept;
     void publish(const dima::rc::SbusParser::Frame &frame,
                  std::uint64_t now_us) noexcept;
 
@@ -51,6 +54,17 @@ private:
     std::uint64_t timestamp_last_signal_us_{0U};
     bool backend_started_{false};
     bool signal_locked_{false};
+    bool signal_seen_{false};
+    bool failsafe_active_{false};
+    bool backend_fault_reported_{false};
+    std::uint32_t last_invalid_frames_{0U};
+    std::uint32_t last_uart_errors_{0U};
+    perf_counter_t byte_count_{nullptr};
+    perf_counter_t frame_count_{nullptr};
+    perf_counter_t invalid_frame_count_{nullptr};
+    perf_counter_t lost_frame_count_{nullptr};
+    perf_counter_t uart_error_count_{nullptr};
+    perf_counter_t publish_interval_{nullptr};
     Stats stats_{};
 };
 
