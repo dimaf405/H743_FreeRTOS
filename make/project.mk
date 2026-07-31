@@ -128,6 +128,8 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/lib/rover_control/rover_control.cpp \
 	Dima/lib/rc/sbus.cpp \
 	Dima/modules/rc/SbusRc.cpp \
+	Dima/modules/rc/RCUpdate.cpp \
+	Dima/modules/rc/ManualControl.cpp \
 	Dima/modules/hello_world/hello_world.cpp \
 	Dima/modules/boot_health/boot_health.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \

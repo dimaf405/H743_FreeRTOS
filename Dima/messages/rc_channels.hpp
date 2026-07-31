@@ -73,7 +73,7 @@ struct rc_channels_s {
 
     std::uint64_t timestamp;
     std::uint64_t timestamp_last_valid;
-    float channels[18];     // 标准化为 -1..1，油门功能使用 0..1。
+    float channels[18];     // 所有物理通道统一标准化为 -1..1。
     std::uint8_t channel_count;
     std::int8_t function[30];
     std::uint8_t rssi;

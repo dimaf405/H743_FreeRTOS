@@ -793,37 +793,108 @@ PARAM_DEFINE_FLOAT(RC18_DZ, 0.0f);
  */
 PARAM_DEFINE_INT32(RC_CHAN_CNT, 0);
 
-/** Roll 对应物理通道，0 表示未映射。 @min 0 @max 18 @group RC Mapping */
+/** Roll 对应物理通道，0 表示未映射。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_ROLL, 1);
-/** Pitch 对应物理通道。 @min 0 @max 18 @group RC Mapping */
+/** Pitch 对应物理通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_PITCH, 2);
-/** Throttle 对应物理通道；Dima 保持中心双向语义。 @min 0 @max 18 @group RC Mapping */
+/** Throttle 对应物理通道；Dima 保持中心双向语义。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_THROTTLE, 3);
-/** Yaw 对应物理通道。 @min 0 @max 18 @group RC Mapping */
+/** Yaw 对应物理通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_YAW, 4);
-/** Arm 开关通道，默认不映射。 @min 0 @max 18 @group RC Mapping */
+/** Arm 开关通道，默认不映射。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_ARM_SW, 0);
-/** Kill 开关通道，默认不映射。 @min 0 @max 18 @group RC Mapping */
+/** Kill 开关通道，默认不映射。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_KILL_SW, 0);
-/** Flight mode 开关通道，默认不映射。 @min 0 @max 18 @group RC Mapping */
+/** Flight mode 开关通道，默认不映射。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_FLTMODE, 0);
-/** Aux1 通道。 @min 0 @max 18 @group RC Mapping */
+/** Aux1 通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_AUX1, 0);
-/** Aux2 通道。 @min 0 @max 18 @group RC Mapping */
+/** Aux2 通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_AUX2, 0);
-/** Aux3 通道。 @min 0 @max 18 @group RC Mapping */
+/** Aux3 通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_AUX3, 0);
-/** Aux4 通道。 @min 0 @max 18 @group RC Mapping */
+/** Aux4 通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_AUX4, 0);
-/** Aux5 通道。 @min 0 @max 18 @group RC Mapping */
+/** Aux5 通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_AUX5, 0);
-/** Aux6 通道。 @min 0 @max 18 @group RC Mapping */
+/** Aux6 通道。
+ * @min 0
+ * @max 18
+ * @group RC Mapping
+ */
 PARAM_DEFINE_INT32(RC_MAP_AUX6, 0);
-/** Arm 开关触发阈值。 @min 0 @max 1 @increment 0.01 @group RC Mapping */
+/** Arm 开关触发阈值。
+ * @min 0
+ * @max 1
+ * @increment 0.01
+ * @group RC Mapping
+ */
 PARAM_DEFINE_FLOAT(RC_ARMSWITCH_TH, 0.75f);
-/** Kill 开关触发阈值。 @min 0 @max 1 @increment 0.01 @group RC Mapping */
+/** Kill 开关触发阈值。
+ * @min 0
+ * @max 1
+ * @increment 0.01
+ * @group RC Mapping
+ */
 PARAM_DEFINE_FLOAT(RC_KILLSWITCH_TH, 0.75f);
-/** RC 信号丢失超时。 @unit s @min 0 @max 35 @increment 0.1 @group Commander */
+/** RC 信号丢失超时。
+ * @unit s
+ * @min 0
+ * @max 35
+ * @increment 0.1
+ * @group Commander
+ */
 PARAM_DEFINE_FLOAT(COM_RC_LOSS_T, 0.5f);
-/** 摇杆解锁手势；首版默认禁用。 @boolean @group Manual Control */
+/** 摇杆解锁手势；首版默认禁用。
+ * @boolean
+ * @group Manual Control
+ */
 PARAM_DEFINE_INT32(MAN_ARM_GESTURE, 0);
