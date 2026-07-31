@@ -65,11 +65,14 @@ def write_forward_header(path: Path, include_target: str) -> None:
     path.write_text(f'#pragma once\n#include "{include_target}"\n', encoding="utf-8")
 
 
-def write_include_forwarders(include_output: Path) -> None:
+def write_include_forwarders(include_output: Path, generated_header: Path) -> None:
     write_forward_header(include_output / "px4_platform_common" / "param.h", "Dima/middleware/parameters/param.h")
     write_forward_header(include_output / "px4_platform_common" / "param_macros.h", "Dima/middleware/parameters/param_macros.h")
     write_forward_header(include_output / "px4_platform_common" / "module_params.h", "Dima/middleware/parameters/module_params.h")
-    write_forward_header(include_output / "parameters" / "px4_parameters.hpp", "../../generated/parameters/px4_parameters.hpp")
+    # DrvFS 上的转发 include 会把 Windows 盘符写入 GCC .d 文件并破坏 GNU Make 解析。
+    parameter_header = include_output / "parameters" / "px4_parameters.hpp"
+    parameter_header.parent.mkdir(parents=True, exist_ok=True)
+    parameter_header.write_bytes(generated_header.read_bytes())
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,7 +104,7 @@ def main() -> int:
         )
 
     write_metadata(args.output / "parameter_metadata.c", parameters)
-    write_include_forwarders(args.include_output)
+    write_include_forwarders(args.include_output, args.output / "px4_parameters.hpp")
     print(f"generated {len(parameters)} parameters in {args.output}")
     return 0
 
