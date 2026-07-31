@@ -1,5 +1,6 @@
 # Build directories and generated build-system state
 build/
+build-*/
 out/
 cmake-build-*/
 CMakeFiles/
