@@ -1,7 +1,7 @@
 # Dima FreeRTOS Rover 总体移植计划
 
-- 状态：顶层 App 已归并到 Dima；Windows ARM 工具链已配置，构建、签名和目标运行结果以本次验证为准
-- 日期：2026-07-30
+- 状态：阶段 3 SBUS/RCUpdate/ManualControl 模块链已完成并通过目标编译、签名与镜像校验；目标板接收与遥控行为仍待人工验收
+- 日期：2026-07-31
 - 目标平台：STM32H743 + FreeRTOS
 - 产品类型：支持前进、后退和原地旋转的差速 Rover
 
@@ -143,13 +143,34 @@ Storage       128 KiB
 - `0x081E0000～0x08200000` 单个 128 KiB Storage 扇区的追加 Journal，包含 Sequence、长度、CRC32 和最终 Commit Marker；扫描使用 ECC 安全读与受限 BusFault 恢复，空间满返回 ENOSPC，不自动擦除。
 - 24 项 PX4 差速 Rover 参数：20 项 `RO_*` 与 4 项 `RD_*`；参数数量由官方生成目录确定，无固定 64 项上限。
 
-2026-07-30 目录迁移后的 Windows 本地 `make verify` 已通过：`.text=110184`、`.data=2068`、`.bss=326448` bytes，Signed BIN 为 `113471` bytes；应用向量地址为 `0x08040400`。
+2026-07-30 目录迁移后的 Windows 本地 `make verify` 已通过：`.text=112720`、`.data=2068`、`.bss=326672` bytes，Signed BIN 为 `116008` bytes；应用向量地址为 `0x08040400`。
 
 阶段 2 的实现已存在。项目自有测试目录已移除，阶段验收采用目标编译、链接、签名和目标板行为检查；尚未进行 USB 在线调参、自动保存、掉电恢复、损坏尾部回退、扇区满和人工擦除的目标板验收。阶段 2 工作区改动已按功能拆分提交。许可证保持 `PENDING`，最终处理 `DEFERRED`，不阻塞后续阶段。
 
 ### 阶段 3：SBUS、RCUpdate 与 ManualControl
 
 移植成熟 SBUS parser 和 SbusRc 接收逻辑，使用 STM32 UART RXINV 与循环 DMA 适配；接入 18 通道校准、MIN/MAX/TRIM/DZ/REV、功能映射、失联判断、ManualControl 和 Action Request。SBUS 模块不得直接驱动 PWM。
+
+2026-07-31 阶段 3 实现已收敛：
+
+```text
+可配置 SBUS UART + DMA1 Stream2
+→ SbusParser / SbusRc
+→ input_rc
+→ RCUpdate
+→ rc_channels + manual_control_switches
+→ ManualControl
+→ manual_control_setpoint + action_request
+```
+
+- `RC_PORT_CONFIG` 支持 0 禁用、1 UART4/PB8、2 UART7/PE7、3 UART8/PE0、4 USART2/PD6；默认 UART4/PB8。
+- 原始反相 SBUS 使用 100000 bit/s、8E2、UART RXINV、D2 SRAM 64-byte 循环 DMA Buffer；ISR 仅更新时间和唤醒 `wq:io`。
+- RC 参数由生成器扩展到 135 项总量，其中阶段 3 新增 111 项 RC 配置、18 通道校准、映射和失联参数。
+- `RC_CHAN_CNT=0` 时按实际接收通道数工作，仍可通过在线参数显式限制通道数；校准与映射在 `parameter_update` 后在线刷新。
+- SBUS 单帧丢失只累计丢帧统计，不误判为整条链路失联；Failsafe、显式 `rc_lost` 或 `COM_RC_LOSS_T` 超时才发布失联状态。
+- Arm/Kill 开关首个稳定样本只建立基线，之后仅在边沿发布 `action_request`；阶段 4 接入 Commander 前没有消费者。
+- 阶段 3 没有连接 PWM、Mixer、Arming 或 Actuator 输出，因此完成后车辆仍不能移动。
+- Windows Arm GNU Toolchain 16.1.0 下的独立 `make verify BUILD_DIR=build-phase3-final` 已通过；未新增测试、SITL 或仿真。
 
 ### 阶段 4：Commander Rover 子集
 

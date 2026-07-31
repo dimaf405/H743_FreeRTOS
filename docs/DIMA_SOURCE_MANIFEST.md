@@ -73,7 +73,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 |---|---|---|---:|---|
 | 时间、WorkQueue、uORB、Logging 兼容接口 | PX4 v1.17.0 | `Dima/platform/freertos/`、`Dima/middleware/` | 1 | ADAPTED |
 | Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / TARGET VERIFY PASS |
-| SBUS、SbusRc、RCUpdate、ManualControl | PX4 v1.17.0 | `Dima/lib/rc/`、`Dima/modules/rc/`、`Dima/platform/freertos/` | 3 | ADAPTED / TARGET VERIFY PASS |
+| SBUS、SbusRc、RCUpdate、ManualControl | PX4 v1.17.0 | `Dima/lib/rc/`、`Dima/modules/rc/`、`Dima/platform/freertos/` | 3 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | PLANNED |
 | RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/rover/` | 5 | PLANNED |
 | EKF2 与 Estimator 支撑库 | PX4 v1.17.0 | `Dima/modules/estimator/ekf2/`、`Dima/lib/estimator/` | 7 | PLANNED |
