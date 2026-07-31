@@ -1,0 +1,57 @@
+/****************************************************************************
+ * PX4-Autopilot v1.17.0 SbusRc receive flow adapted to Dima FreeRTOS.
+ ****************************************************************************/
+#pragma once
+
+#include "Dima/lib/rc/sbus.hpp"
+#include "Dima/lib/rc/sbus_backend.hpp"
+#include "Dima/messages/input_rc.hpp"
+#include "Dima/middleware/lifecycle/module_base.hpp"
+#include "Dima/middleware/parameters/param.h"
+#include "Dima/middleware/uorb/Publication.hpp"
+#include "Dima/middleware/work_queue/WorkQueue.hpp"
+
+#include <cstddef>
+#include <cstdint>
+
+namespace dima::modules::rc {
+
+class SbusRc final : public dima::middleware::lifecycle::ModuleBase,
+                     public px4::ScheduledWorkItem {
+public:
+    struct Stats {
+        std::uint32_t start_failures{0U};
+        std::uint32_t service_failures{0U};
+        std::uint32_t publications{0U};
+        std::uint32_t read_wakeups{0U};
+    };
+
+    explicit SbusRc(dima::rc::SbusBackend &backend) noexcept;
+    bool start() override;
+    void stop() override;
+    dima::middleware::lifecycle::ModuleState state() const override;
+    const Stats &stats() const noexcept { return stats_; }
+    const dima::rc::SbusParser::Stats &parser_stats() const noexcept { return parser_.stats(); }
+
+private:
+    static constexpr std::uint32_t kRetryDelayUs = 100000U;
+    static constexpr std::size_t kReadBufferSize = 64U;
+    void Run() override;
+    void schedule_retry() noexcept;
+    void publish(const dima::rc::SbusParser::Frame &frame,
+                 std::uint64_t now_us) noexcept;
+
+    dima::rc::SbusBackend &backend_;
+    dima::rc::SbusParser parser_{};
+    uORB::Publication<input_rc_s> input_rc_pub_{ORB_ID(input_rc)};
+    px4::ParamInt<px4::params::RC_PORT_CONFIG> rc_port_{};
+    px4::ParamInt<px4::params::RC_INPUT_PROTO> rc_protocol_{};
+    px4::ParamBool<px4::params::DIMA_SBUS_INV> sbus_inverted_{};
+    dima::middleware::lifecycle::ModuleState state_{dima::middleware::lifecycle::ModuleState::Stopped};
+    std::uint64_t timestamp_last_signal_us_{0U};
+    bool backend_started_{false};
+    bool signal_locked_{false};
+    Stats stats_{};
+};
+
+} // namespace dima::modules::rc

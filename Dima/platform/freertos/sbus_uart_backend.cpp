@@ -46,12 +46,20 @@ IRQn_Type irq_for(const UART_HandleTypeDef *uart) noexcept
 
 } // namespace
 
-bool SbusUartBackend::start(SbusPort port, bool inverted,
-                            px4::WorkItem &consumer) noexcept
+bool SbusUartBackend::configure(std::int32_t port, bool inverted) noexcept
+{
+    const auto selected = static_cast<SbusPort>(port);
+    if (uart_for(selected) == nullptr || request_for(selected) == 0U) return false;
+    configured_port_ = selected;
+    configured_inverted_ = inverted;
+    return true;
+}
+
+bool SbusUartBackend::start(px4::WorkItem &consumer) noexcept
 {
     stop();
-    auto *const uart = uart_for(port);
-    const std::uint32_t request = request_for(port);
+    auto *const uart = uart_for(configured_port_);
+    const std::uint32_t request = request_for(configured_port_);
     if (uart == nullptr || request == 0U) return false;
 
     (void)HAL_UART_DeInit(uart);
@@ -65,7 +73,7 @@ bool SbusUartBackend::start(SbusPort port, bool inverted,
     uart->Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
     uart->Init.ClockPrescaler = UART_PRESCALER_DIV1;
     uart->AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_RXINVERT_INIT;
-    uart->AdvancedInit.RxPinLevelInvert = inverted ? UART_ADVFEATURE_RXINV_ENABLE
+    uart->AdvancedInit.RxPinLevelInvert = configured_inverted_ ? UART_ADVFEATURE_RXINV_ENABLE
                                                    : UART_ADVFEATURE_RXINV_DISABLE;
     if (HAL_UART_Init(uart) != HAL_OK) return false;
 
@@ -179,7 +187,7 @@ void SbusUartBackend::on_error_from_isr(std::uint32_t error) noexcept
     notify_consumer_from_isr();
 }
 
-SbusUartStats SbusUartBackend::stats() const noexcept
+dima::rc::SbusBackendStats SbusUartBackend::stats() const noexcept
 {
     return {produced_, overwritten_bytes_, uart_errors_, rearm_failures_};
 }

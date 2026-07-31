@@ -126,6 +126,8 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/application/app_main.cpp \
 	Dima/lib/motor/speed_to_pwm.cpp \
 	Dima/lib/rover_control/rover_control.cpp \
+	Dima/lib/rc/sbus.cpp \
+	Dima/modules/rc/SbusRc.cpp \
 	Dima/modules/hello_world/hello_world.cpp \
 	Dima/modules/boot_health/boot_health.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
