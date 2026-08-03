@@ -1,7 +1,7 @@
 # Dima FreeRTOS Rover 总体移植计划
 
-- 状态：阶段 3 SBUS/RCUpdate/ManualControl 模块链已完成并通过目标编译、签名与镜像校验；目标板接收与遥控行为仍待人工验收
-- 日期：2026-07-31
+- 状态：阶段 4 Commander Rover 子集已完成并通过目标编译、签名与镜像校验；阶段 1～4 目标板行为仍待人工验收
+- 日期：2026-08-03
 - 目标平台：STM32H743 + FreeRTOS
 - 产品类型：支持前进、后退和原地旋转的差速 Rover
 
@@ -172,9 +172,19 @@ Storage       128 KiB
 - 阶段 3 没有连接 PWM、Mixer、Arming 或 Actuator 输出，因此完成后车辆仍不能移动。
 - Windows Arm GNU Toolchain 16.1.0 下的独立 `make verify BUILD_DIR=build-phase3-final` 已通过；未新增测试、SITL 或仿真。
 
-### 阶段 4：Commander Rover 子集
+### 阶段 4：Commander Rover 子集（目标构建已通过，板测待完成）
 
-建立 `action_request → vehicle_status / vehicle_control_mode / actuator_armed`，实现 Rover 所需的 Arming、Disarming、Emergency Stop 和统一 Failsafe。Manual 模式不强制位置有效；Position/Auto 模式按需检查 Estimator。
+阶段 4 以 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 为直接代码来源，ArduPilot `3f2e4763accb` 只作 Rover 安全行为参考，已完成：
+
+- 完整导入 `vehicle_status`、`vehicle_control_mode` 和 `actuator_armed` 公开消息契约，三个 Topic 深度为 1，`action_request` 保持深度 8。
+- Commander 复用 `wq:hp_default`，20 ms 检查 RC/参数，状态变化立即发布，静态状态至少每 500 ms 发布一次。
+- 冷启动 `DISARMED + MANUAL`；Arm 要求参数核心、Manual、新鲜有效 RC、throttle/yaw 中位以及未 Kill/Termination。
+- ARMED 时 RC/参数故障强制 Disarm；RC 恢复不自动 Arm。Kill/Unkill 可逆，Termination 锁存到 MCU 重启。
+- 仅 Manual 可由用户选择；Termination 只作为内部状态，Position、Auto、Offboard、VTOL 等模式均拒绝。
+- Parameter Flash 保存和擦除在 ARMED 期间禁止，Autosave 保持 pending 并在 Disarm 后重试。
+- 启动顺序为基础服务、Parameter、Log、Commander、RC；停止顺序为 RC、Commander、Log、Parameter。RC 链失败不停止 Commander，Commander 启动失败则回滚应用服务。
+- 最终目标构建为 Application `136956/7660/331912` bytes、Signed BIN `145830` bytes，签名、Factory HEX、MCUboot 和 `0x08040400` 向量检查通过；详见 [阶段 4 资源与验收基线](DIMA_PHASE4_RESOURCE_BASELINE_ZH.md)。
+- 本阶段未接 PWM、Mixer、RoverDifferential 或 HAL 执行器输出，因此车辆仍不能运动；目标板行为尚未验收。
 
 ### 阶段 5：差速执行器链
 

@@ -1,7 +1,7 @@
 # Dima 上游源码与许可证清单
 
-- 日期：2026-07-31
-- 文档状态：阶段 3 SBUS、RCUpdate 与 ManualControl 已适配并通过目标构建/签名校验；目标板接收和遥控行为待人工验收
+- 日期：2026-08-03
+- 文档状态：阶段 4 Commander Rover 子集已适配并通过目标构建、签名与镜像校验；阶段 1～4 目标板行为待人工验收
 - 许可证决策：`PENDING`
 
 ## 1. 管理规则
@@ -22,7 +22,7 @@
 | 用途 | Parameter、ModuleParams、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl、Commander Rover 子集、RoverDifferential、执行器链和 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
 | 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
-| 当前状态 | 阶段 1～3 基础链已按 v1.17.0 接口和行为适配；阶段 3 已通过 Windows 目标构建与签名校验 |
+| 当前状态 | 阶段 1～4 基础链已按 v1.17.0 接口和行为适配；阶段 4 已通过目标构建、签名和镜像校验，板测待完成 |
 | 许可证状态 | `PENDING`；逐文件保留原始许可证 |
 | 本地目录规则 | 产品目录使用 Dima；上游符号和许可证文字保持原样 |
 
@@ -64,6 +64,8 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | 生命周期 | `Dima/middleware/lifecycle/` | RELOCATED / TARGET VERIFY PASS |
 | C/C++ Runtime、no-heap、平台时间 | `Dima/platform/freertos/libc/`、`Dima/platform/freertos/platform_time.*` | RELOCATED / TARGET VERIFY PASS |
 | Motor、Rover Control | `Dima/lib/motor/`、`Dima/lib/rover_control/` | RELOCATED / TARGET VERIFY PASS |
+| Commander Rover 安全子集 | `Dima/modules/safety/` | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
+| Commander 状态消息 | `Dima/messages/` | ADAPTED / TARGET VERIFY PASS |
 
 `Core/`、`Boards/`、`Drivers/`、`Middlewares/`、`USB_DEVICE/` 和 `Bootloader/` 保持独立边界。目录边界已收敛；2026-07-30 Windows 本地目标构建与签名验证通过，目标运行仍待板测。
 
@@ -74,14 +76,14 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | 时间、WorkQueue、uORB、Logging 兼容接口 | PX4 v1.17.0 | `Dima/platform/freertos/`、`Dima/middleware/` | 1 | ADAPTED |
 | Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / TARGET VERIFY PASS |
 | SBUS、SbusRc、RCUpdate、ManualControl | PX4 v1.17.0 | `Dima/lib/rc/`、`Dima/modules/rc/`、`Dima/platform/freertos/` | 3 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
-| Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | PLANNED |
+| Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/rover/` | 5 | PLANNED |
 | EKF2 与 Estimator 支撑库 | PX4 v1.17.0 | `Dima/modules/estimator/ekf2/`、`Dima/lib/estimator/` | 7 | PLANNED |
 | Position、Waypoint、Reverse、PivotTurn | PX4 v1.17.0；APM 行为参考 | `Dima/modules/rover/` | 9 | PLANNED |
 
 ## 7. 文件级映射
 
-阶段 2 的唯一 PX4 Parameter 来源基线为 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`。
+阶段 2～4 的唯一 PX4 直接代码来源基线为 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`；ArduPilot commit `3f2e4763accb` 在阶段 4 仅作 Rover 安全行为参考，不直接导入代码。
 
 | 上游原始路径/功能 | 本地映射 | 适配方式 | 状态 |
 |---|---|---|---|
@@ -99,9 +101,12 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `src/drivers/rc/sbus_rc/SbusRc.hpp`、`SbusRc.cpp` | `Dima/modules/rc/SbusRc.*` | 保留 WorkItem 接收、锁定、重试和 `input_rc` 发布流程；串口抽象映射到 FreeRTOS/HAL 后端 | ADAPTED |
 | PX4 串口配置与板级 RC 输入行为 | `Dima/platform/freertos/sbus_uart_backend.*` | 适配 STM32H743 UART RXINV、DMA1 Stream2、DMAMUX、多 UART 参数选择、D2 Cache 维护和 FromISR 唤醒 | DIMA BACKEND |
 | `src/modules/rc_update/rc_update.h`、`rc_update.cpp` | `Dima/modules/rc/RCUpdate.*` | 保留 18 通道校准、功能映射、开关离散化、失联与 `parameter_update` 语义；裁剪 MAVLink RC 参数映射及非 Rover 功能 | ADAPTED |
-| `src/modules/manual_control/ManualControl.hpp`、`ManualControl.cpp` | `Dima/modules/rc/ManualControl.*` | 保留 RC setpoint 和开关边沿 Action Request；阶段 3 只要求差速 Rover 的 throttle/yaw 有效，未接 Commander | ADAPTED |
+| `src/modules/manual_control/ManualControl.hpp`、`ManualControl.cpp` | `Dima/modules/rc/ManualControl.*` | 保留 RC setpoint 和开关边沿 Action Request；差速 Rover 的 throttle/yaw 保持中心双向语义，阶段 4 由 Commander 消费动作 | ADAPTED |
+| `src/modules/commander/Commander.hpp`、`Commander.cpp`、`ModeUtil/control_mode.*` | `Dima/modules/safety/Commander.*` | 保留 Action Request、Arming/Kill/Termination、状态发布顺序和 Manual/Termination 控制模式语义；改为 `wq:hp_default` WorkItem，裁剪飞行器模式、任务、执行器和其他 Commander 服务 | ADAPTED |
 | `msg/InputRc.msg`、`RcChannels.msg`、`ManualControlSetpoint.msg`、`ManualControlSwitches.msg`、`ActionRequest.msg` | `Dima/messages/` | 保留 PX4 字段、枚举和 Topic 契约；`action_request` Queue Depth 为 8 | ADAPTED |
-| PX4 RC 参数定义与生成元数据 | `Dima/middleware/parameters/definitions/rc_params.c` | 导入 18 通道 MIN/TRIM/MAX/REV/DZ、核心映射、失联和板级 SBUS 端口参数；阶段 3 后总参数数为 135 | ADAPTED |
+| `msg/versioned/VehicleStatus.msg`、`msg/versioned/VehicleControlMode.msg`、`msg/ActuatorArmed.msg` | `Dima/messages/` | 完整保留三个公开消息的字段、枚举和版本号；本地三个 Topic 均为单深度 | ADAPTED |
+| PX4 RC/Commander 参数定义与生成元数据 | `Dima/middleware/parameters/definitions/rc_params.c`、`commander_params.c` | 保留 RC 失联参数；增加 Dima Rover 公开参数 `COM_ARM_STICK_DZ`，避免复用单位为 m/s 的 `RO_SPEED_TH`；阶段 4 后总参数数为 136 | ADAPTED / DIMA PARAMETER |
+| Dima 产品生命周期与 Parameter Autosave 写门控 | `Dima/product/rover/ApplicationContext.*`、`ParameterService.*` | 启动顺序固定为 Parameter、Log、Commander、RC；ARMED 时禁止 Flash 保存/擦除，Autosave 保持 pending 并在 Disarm 后重试 | DIMA INTEGRATION |
 
 许可证状态仅记录为 `PENDING`；延后处理项记录为 `DEFERRED`。该状态不阻塞当前内部移植、编译和板级调试工作。
 

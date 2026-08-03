@@ -1,0 +1,100 @@
+# Dima 阶段 4 Commander 资源与验收基线
+
+日期：2026-08-03
+
+状态：目标构建通过，目标板行为验收待完成。
+
+## 1. 完成范围
+
+阶段 4 已建立以下安全状态链：
+
+```text
+manual_control_setpoint + action_request
+→ Commander（wq:hp_default）
+→ actuator_armed
+→ vehicle_control_mode
+→ vehicle_status
+```
+
+- 冷启动为 `DISARMED + MANUAL`；无新鲜 RC 时预解锁检查失败，但冷启动本身不置 Failsafe。
+- Arm 要求 Parameter Core 和 Commander 参数有效、Manual 模式、RC 新鲜有效、throttle/yaw 有限且位于 `COM_ARM_STICK_DZ` 中位范围内，并且未 Kill/Termination。
+- Action Request 深度保持 8；Commander 使用循环逐条消费，并在每次状态变化后按 `actuator_armed → vehicle_control_mode → vehicle_status` 发布。
+- RC/参数故障在 ARMED 时强制 Disarm 并置 Failsafe；恢复只清除可恢复原因，不自动 Arm。
+- Kill/Unkill 可逆且不单独置 Failsafe；Termination 进入内部终止模式并锁存到 MCU 重启。
+- 用户只可选择 Manual；Position、Auto、Offboard、VTOL 和其他未实现模式全部拒绝。
+- Parameter Flash 保存和擦除在 ARMED 期间禁止；Autosave 保持 pending，并在 Disarm 后重试。
+- 本阶段没有 PWM、Mixer、RoverDifferential 或 HAL 执行器消费者，车辆仍不能运动。
+
+## 2. 构建结果与阶段增量
+
+阶段 4 前从 `feature/dima-phase3`、commit `cd9b41f` 执行：
+
+```text
+make clean && make -j4 verify
+```
+
+实测基线为 Application `132460/7600/330832` bytes，Signed BIN `141275` bytes，MCUboot `45568/380/9788` bytes，应用向量 `0x08040400`。计划草案中的 Signed BIN `141274` 与实测相差 1 byte，本文件以实测为准。
+
+Commander 接入后的目标构建结果：
+
+```text
+Application（text/data/bss）  136956 / 7660 / 331912 bytes
+ELF                            1,883,968 bytes（含调试段）
+BIN                              144,656 bytes
+Signed BIN                       145,830 bytes
+Factory HEX                      455,592 bytes
+MCUboot（text/data/bss）        45568 / 380 / 9788 bytes
+MCUboot BIN                       45,956 bytes
+应用向量地址                  0x08040400
+```
+
+相对阶段 4 前基线：
+
+| 资源 | 基线 | 阶段 4 | 增量 |
+|---|---:|---:|---:|
+| Application text | 132460 | 136956 | +4496 |
+| Application data | 7600 | 7660 | +60 |
+| Application bss | 330832 | 331912 | +1080 |
+| Signed BIN | 141275 | 145830 | +4555 |
+
+Signed BIN 占 768 KiB Application Slot 约 18.5%，低于 85% 控制线。构建已通过链接、签名、Factory HEX 合并、MCUboot 地址布局和 `0x08040400` 向量检查。
+
+## 3. 调度、静态对象与 uORB 资源
+
+- Commander 不创建 FreeRTOS Task，复用现有 `wq:hp_default` 2,048-byte 静态栈；七个 WorkQueue 栈总量不变。
+- Commander 静态对象目标 ABI 大小为 400 bytes；状态机热路径不动态分配。
+- 新增三个 Topic 的静态 runtime instance 数组共增加 672 bytes BSS；metadata、registrar 和初始化表合计对应 60 bytes data 增量。
+- uORB 启动分配器仍从固定 D1 Heap 分配消息 Buffer；三个 Topic 的四实例 Buffer 共增加 480 bytes。
+
+| Topic | 结构大小 | 队列深度 | 单实例 Buffer | 四实例启动分配 |
+|---|---:|---:|---:|---:|
+| `actuator_armed` | 16 | 1 | 16 | 64 |
+| `vehicle_control_mode` | 24 | 1 | 24 | 96 |
+| `vehicle_status` | 80 | 1 | 80 | 320 |
+| 合计 | 120 | — | 120 | 480 |
+
+阶段 3 的全部 Topic Buffer 为 2,016 bytes；阶段 4 增加后为 2,496 bytes。`action_request` 仍为 16-byte 结构、深度 8、四实例共 512 bytes，不因 Commander 接入扩大。
+
+## 4. 静态验收
+
+- 参数生成器输出 136 项参数；`COM_ARM_STICK_DZ` 的默认值、`0.00～0.50` 范围和 metadata 已进入 XML、JSON、C++ 枚举及最终 ELF。
+- Commander 对 Action Request 使用 `while (copy())`，不是只读取队尾最新值；Arm、Disarm、Toggle、Kill、Unkill、Termination、Manual 模式和未知动作均有显式分支。
+- 三个状态 Topic 和 Commander 符号均已链接进入最终 ELF；发布调用顺序固定为 armed、control mode、vehicle status。
+- Commander 源码及 Run/状态转换调用路径不调用 `new`、`malloc`、`free`、PWM、Mixer、RoverDifferential 或 HAL 输出。由于公共 `WorkItem` 基类具有虚析构，目标文件仍带有编译器生成的 deleting-destructor `operator delete` 重定位；它不在 Commander Run/状态转换调用路径中，也与其他现有 WorkItem 子类一致。
+- 没有新增 Host Test、Mock、Fixture、测试目标、SITL 或仿真入口。
+
+## 5. 证据边界与待办
+
+本文件只证明目标源码可编译、链接、签名并满足静态镜像布局；不证明以下目标板运行行为已经通过：
+
+1. 冷启动无 RC 时保持 DISARMED、非 Failsafe。
+2. throttle/yaw 任一不在中位时拒绝 Arm。
+3. 正常 Arm、Disarm 和 Toggle 幂等行为。
+4. ARMED 时 RC 失联强制 Disarm，恢复后不自动 Arm，Arm 开关必须重新产生 OFF→ON 边沿。
+5. Kill/Unkill 在 ARMED 状态下保持可逆，并正确限制未来执行器许可。
+6. Termination 锁存、Failsafe 和模式拒绝行为。
+7. ARMED 期间人工保存、擦除和 Autosave 延后，Disarm 后重试。
+8. 阶段 1～3 尚未完成的 HRT、Parameter、SBUS 和 RC 链目标板验收。
+9. 全阶段 PWM 保持未启动。
+
+完成上述人工项目之前，阶段状态必须保持“目标构建通过、板测待完成”。
