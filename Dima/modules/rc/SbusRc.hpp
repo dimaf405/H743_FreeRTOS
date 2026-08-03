@@ -42,7 +42,7 @@ private:
     void allocate_perf_counters() noexcept;
     void free_perf_counters() noexcept;
     void publish(const dima::rc::SbusParser::Frame &frame,
-                 std::uint64_t now_us) noexcept;
+                 std::uint64_t frame_arrival_us) noexcept;
 
     dima::rc::SbusBackend &backend_;
     dima::rc::SbusParser parser_{};

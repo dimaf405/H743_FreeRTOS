@@ -5,7 +5,6 @@
 
 #include "events/events.hpp"
 #include "logging/logging.hpp"
-#include "freertos/hrt.hpp"
 
 #include <cmath>
 
@@ -121,21 +120,23 @@ void SbusRc::Run()
     }
 
     std::uint8_t buffer[kReadBufferSize]{};
+    std::uint64_t arrival_timestamps_us[kReadBufferSize]{};
     bool received = false;
     for (;;) {
-        const std::size_t count = backend_.read(buffer, sizeof(buffer));
+        const std::size_t count = backend_.read(
+            buffer, arrival_timestamps_us, sizeof(buffer));
         if (count == 0U) break;
         received = true;
-        for (std::size_t index = 0U; index < count; ++index) perf_count(byte_count_);
-        const std::uint64_t now_us = hrt_absolute_time();
-        dima::rc::SbusParser::Frame frame{};
-        const bool frame_ready = parser_.parse(now_us, buffer, count, frame);
-        const auto &parser_stats = parser_.stats();
-        count_delta(invalid_frame_count_,
-                    parser_stats.invalid_headers + parser_stats.invalid_footers,
-                    last_invalid_frames_);
-        if (frame_ready) {
-            timestamp_last_signal_us_ = now_us;
+        for (std::size_t index = 0U; index < count; ++index) {
+            perf_count(byte_count_);
+            dima::rc::SbusParser::Frame frame{};
+            if (!parser_.parse(arrival_timestamps_us[index], buffer[index],
+                               frame)) {
+                continue;
+            }
+
+            const std::uint64_t frame_arrival_us = arrival_timestamps_us[index];
+            timestamp_last_signal_us_ = frame_arrival_us;
             if (!signal_locked_) {
                 PX4_INFO(signal_seen_ ? "SBUS signal recovered channels=%u"
                                       : "SBUS signal locked channels=%u",
@@ -143,8 +144,12 @@ void SbusRc::Run()
                 signal_locked_ = true;
                 signal_seen_ = true;
             }
-            publish(frame, now_us);
+            publish(frame, frame_arrival_us);
         }
+        const auto &parser_stats = parser_.stats();
+        count_delta(invalid_frame_count_,
+                    parser_stats.invalid_headers + parser_stats.invalid_footers,
+                    last_invalid_frames_);
     }
     if (received) ++stats_.read_wakeups;
 }
@@ -177,10 +182,10 @@ void SbusRc::schedule_retry() noexcept
 }
 
 void SbusRc::publish(const dima::rc::SbusParser::Frame &frame,
-                     std::uint64_t now_us) noexcept
+                     std::uint64_t frame_arrival_us) noexcept
 {
     input_rc_s message{};
-    message.timestamp = now_us;
+    message.timestamp = frame_arrival_us;
     message.timestamp_last_signal = timestamp_last_signal_us_;
     message.channel_count = frame.channel_count > input_rc_s::RC_INPUT_MAX_CHANNELS
         ? input_rc_s::RC_INPUT_MAX_CHANNELS : frame.channel_count;

@@ -50,52 +50,41 @@ std::uint16_t unpack_11_bits(const std::uint8_t *payload,
 
 } // namespace
 
-bool SbusParser::parse(std::uint64_t now_us, const std::uint8_t *data,
-                       std::size_t length, Frame &latest_frame) noexcept
+bool SbusParser::parse(std::uint64_t byte_arrival_us, std::uint8_t byte,
+                       Frame &frame) noexcept
 {
-    if (data == nullptr || length == 0U) {
-        return false;
-    }
-
-    // 25 字节在 100 kbit/s、8E2 下约占 3 ms；超过 4 ms 的调用间隔视为新帧边界。
-    if (last_rx_time_us_ != 0U && now_us - last_rx_time_us_ > kResyncGapUs &&
+    // 使用 ISR 记录的逐字节时间；超过 4 ms 的真实线间隔视为新帧边界。
+    if (last_rx_time_us_ != 0U && byte_arrival_us > last_rx_time_us_ &&
+        byte_arrival_us - last_rx_time_us_ > kResyncGapUs &&
         frame_length_ != 0U) {
         frame_length_ = 0U;
         ++stats_.resyncs;
         ++stats_.dropped_frames;
     }
 
-    last_rx_time_us_ = now_us;
-    stats_.bytes_received += static_cast<std::uint32_t>(length);
-    bool decoded = false;
-
-    for (std::size_t index = 0U; index < length; ++index) {
-        const std::uint8_t byte = data[index];
-
-        if (frame_length_ == 0U) {
-            if (byte != kHeader) {
-                ++stats_.discarded_bytes;
-                continue;
-            }
-        }
-
-        frame_[frame_length_++] = byte;
-
-        if (frame_length_ == kFrameSize) {
-            Frame candidate{};
-
-            if (decode(candidate)) {
-                latest_frame = candidate;
-                decoded = true;
-                frame_length_ = 0U;
-
-            } else {
-                recover_after_invalid_frame();
-            }
+    last_rx_time_us_ = byte_arrival_us;
+    ++stats_.bytes_received;
+    if (frame_length_ == 0U) {
+        if (byte != kHeader) {
+            ++stats_.discarded_bytes;
+            return false;
         }
     }
 
-    return decoded;
+    frame_[frame_length_++] = byte;
+    if (frame_length_ < kFrameSize) {
+        return false;
+    }
+
+    Frame candidate{};
+    if (decode(candidate)) {
+        frame = candidate;
+        frame_length_ = 0U;
+        return true;
+    }
+
+    recover_after_invalid_frame();
+    return false;
 }
 
 void SbusParser::reset() noexcept

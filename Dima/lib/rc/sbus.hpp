@@ -55,8 +55,8 @@ public:
         std::uint32_t failsafe_frames{0U};
     };
 
-    bool parse(std::uint64_t now_us, const std::uint8_t *data,
-               std::size_t length, Frame &latest_frame) noexcept;
+    bool parse(std::uint64_t byte_arrival_us, std::uint8_t byte,
+               Frame &frame) noexcept;
     void reset() noexcept;
     const Stats &stats() const noexcept { return stats_; }
 

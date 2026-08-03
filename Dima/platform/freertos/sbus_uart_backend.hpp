@@ -21,13 +21,15 @@ public:
     bool start(px4::WorkItem &consumer) noexcept override;
     void stop() noexcept override;
     std::size_t read(std::uint8_t *destination,
+                     std::uint64_t *arrival_timestamps_us,
                      std::size_t capacity) noexcept override;
     bool service() noexcept override;
     bool running() const noexcept override { return running_; }
     bool handles_uart(const void *uart) const noexcept { return uart_ == uart; }
     dima::rc::SbusBackendStats stats() const noexcept override;
 
-    void on_rx_position_from_isr(std::uint16_t position) noexcept;
+    void on_rx_position_from_isr(std::uint16_t position,
+                                 std::uint64_t last_byte_arrival_us) noexcept;
     void on_error_from_isr(std::uint32_t error) noexcept;
 
 private:
@@ -41,6 +43,7 @@ private:
     volatile std::uint32_t produced_{0U};
     std::uint32_t consumed_{0U};
     volatile std::uint16_t last_dma_position_{0U};
+    volatile std::uint64_t last_byte_arrival_us_{0U};
     volatile std::uint32_t pending_error_{0U};
     volatile std::uint32_t uart_errors_{0U};
     std::uint32_t overwritten_bytes_{0U};

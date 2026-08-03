@@ -182,7 +182,7 @@ bool Commander::refresh_parameters() noexcept
                         param_get(rc_loss_timeout_handle_, &loss_timeout) == 0 &&
                         param_get(arm_stick_deadzone_handle_, &stick_deadzone) == 0;
     const bool valid = loaded && std::isfinite(loss_timeout) &&
-                       loss_timeout > 0.0F && loss_timeout <= 35.0F &&
+                       loss_timeout >= 0.1F && loss_timeout <= 35.0F &&
                        std::isfinite(stick_deadzone) &&
                        stick_deadzone >= 0.0F && stick_deadzone <= 0.5F;
     const bool changed = valid != parameters_valid_ ||

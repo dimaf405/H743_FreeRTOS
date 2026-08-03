@@ -1,6 +1,7 @@
 #include "sbus_uart_backend.hpp"
 
 #include "dma.h"
+#include "freertos/hrt.hpp"
 #include "usart.h"
 
 #include <algorithm>
@@ -9,8 +10,11 @@ namespace dima::platform {
 namespace {
 
 constexpr std::size_t kDmaBufferSize = 64U;
+constexpr std::uint64_t kSbusByteTimeUs = 120U;
 alignas(32) __attribute__((section(".dima_dma")))
 std::uint8_t g_dma_buffer[kDmaBufferSize]{};
+alignas(8) volatile std::uint64_t
+    g_dma_arrival_timestamps_us[kDmaBufferSize]{};
 DMA_HandleTypeDef g_sbus_dma{};
 SbusUartBackend g_backend{};
 
@@ -107,7 +111,11 @@ bool SbusUartBackend::start(px4::WorkItem &consumer) noexcept
     produced_ = 0U;
     consumed_ = 0U;
     last_dma_position_ = 0U;
+    last_byte_arrival_us_ = 0U;
     pending_error_ = 0U;
+    for (auto &timestamp : g_dma_arrival_timestamps_us) {
+        timestamp = 0U;
+    }
     SCB_CleanInvalidateDCache_by_Addr(
         reinterpret_cast<std::uint32_t *>(g_dma_buffer), kDmaBufferSize);
 
@@ -151,6 +159,7 @@ void SbusUartBackend::stop() noexcept
     uart_ = nullptr;
     pending_error_ = 0U;
     last_dma_position_ = 0U;
+    last_byte_arrival_us_ = 0U;
 }
 
 bool SbusUartBackend::arm_receive() noexcept
@@ -164,13 +173,16 @@ bool SbusUartBackend::arm_receive() noexcept
 }
 
 std::size_t SbusUartBackend::read(std::uint8_t *destination,
+                                  std::uint64_t *arrival_timestamps_us,
                                   std::size_t capacity) noexcept
 {
-    if (destination == nullptr || capacity == 0U) {
+    if (destination == nullptr || arrival_timestamps_us == nullptr ||
+        capacity == 0U) {
         return 0U;
     }
 
     const std::uint32_t produced = produced_;
+    __DMB();
     std::uint32_t available = produced - consumed_;
     if (available > kDmaBufferSize) {
         overwritten_bytes_ += available - kDmaBufferSize;
@@ -182,7 +194,9 @@ std::size_t SbusUartBackend::read(std::uint8_t *destination,
     SCB_InvalidateDCache_by_Addr(
         reinterpret_cast<std::uint32_t *>(g_dma_buffer), kDmaBufferSize);
     for (std::size_t i = 0U; i < count; ++i) {
-        destination[i] = g_dma_buffer[(consumed_ + i) % kDmaBufferSize];
+        const std::size_t index = (consumed_ + i) % kDmaBufferSize;
+        destination[i] = g_dma_buffer[index];
+        arrival_timestamps_us[i] = g_dma_arrival_timestamps_us[index];
     }
     consumed_ += static_cast<std::uint32_t>(count);
     return count;
@@ -205,6 +219,7 @@ bool SbusUartBackend::service() noexcept
     // 重挂 DMA 后写指针从 0 开始；旧半帧不能继续交给解析器。
     consumed_ = produced_;
     last_dma_position_ = 0U;
+    last_byte_arrival_us_ = 0U;
     __HAL_UART_CLEAR_FLAG(uart, UART_CLEAR_OREF | UART_CLEAR_NEF |
                                UART_CLEAR_FEF | UART_CLEAR_PEF |
                                UART_CLEAR_IDLEF);
@@ -222,16 +237,42 @@ void SbusUartBackend::notify_consumer_from_isr() noexcept
     }
 }
 
-void SbusUartBackend::on_rx_position_from_isr(std::uint16_t position) noexcept
+void SbusUartBackend::on_rx_position_from_isr(
+    std::uint16_t position, std::uint64_t last_byte_arrival_us) noexcept
 {
     const std::uint16_t normalized = position >= kDmaBufferSize ? 0U : position;
     const std::uint16_t previous = last_dma_position_;
-    const std::uint16_t delta = normalized >= previous
-        ? normalized - previous
-        : kDmaBufferSize - previous + normalized;
+    const std::uint16_t delta = position == kDmaBufferSize && previous == 0U
+        ? static_cast<std::uint16_t>(kDmaBufferSize)
+        : (normalized >= previous
+               ? normalized - previous
+               : static_cast<std::uint16_t>(kDmaBufferSize - previous +
+                                            normalized));
+    if (delta == 0U) {
+        return;
+    }
+
+    const std::uint64_t span_us =
+        static_cast<std::uint64_t>(delta - 1U) * kSbusByteTimeUs;
+    const std::uint64_t first_arrival_us =
+        last_byte_arrival_us >= span_us ? last_byte_arrival_us - span_us : 0U;
+    std::uint64_t previous_arrival_us = last_byte_arrival_us_;
+    for (std::uint16_t offset = 0U; offset < delta; ++offset) {
+        std::uint64_t arrival_us =
+            first_arrival_us + static_cast<std::uint64_t>(offset) *
+                                   kSbusByteTimeUs;
+        if (arrival_us < previous_arrival_us) {
+            arrival_us = previous_arrival_us;
+        }
+        const std::size_t index =
+            (static_cast<std::size_t>(previous) + offset) % kDmaBufferSize;
+        g_dma_arrival_timestamps_us[index] = arrival_us;
+        previous_arrival_us = arrival_us;
+    }
     __DMB();
     produced_ += delta;
     last_dma_position_ = normalized;
+    last_byte_arrival_us_ = previous_arrival_us;
     notify_consumer_from_isr();
 }
 
@@ -260,7 +301,16 @@ extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
 {
     auto &backend = dima::platform::sbus_uart_backend();
     if (backend.running() && backend.handles_uart(huart)) {
-        backend.on_rx_position_from_isr(size);
+        std::uint64_t last_byte_arrival_us = hrt_absolute_time();
+        const std::uint32_t active_exception = __get_IPSR();
+        const std::uint32_t uart_exception =
+            static_cast<std::uint32_t>(dima::platform::irq_for(huart)) + 16U;
+        if (active_exception == uart_exception &&
+            last_byte_arrival_us >= dima::platform::kSbusByteTimeUs) {
+            // UART IDLE 在一个字符时间后置位，回推到最后一个 stop bit。
+            last_byte_arrival_us -= dima::platform::kSbusByteTimeUs;
+        }
+        backend.on_rx_position_from_isr(size, last_byte_arrival_us);
     }
 }
 

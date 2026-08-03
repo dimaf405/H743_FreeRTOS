@@ -887,7 +887,7 @@ PARAM_DEFINE_FLOAT(RC_ARMSWITCH_TH, 0.75f);
 PARAM_DEFINE_FLOAT(RC_KILLSWITCH_TH, 0.75f);
 /** RC 信号丢失超时。
  * @unit s
- * @min 0
+ * @min 0.1
  * @max 35
  * @increment 0.1
  * @group Commander

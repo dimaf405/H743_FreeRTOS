@@ -129,13 +129,17 @@ void RCUpdate::Run()
     if (input_rc_sub_.copy(&input)) {
         latest_input_ = input;
         have_input_ = true;
-        last_input_time_us_ = hrt_absolute_time();
+        last_input_time_us_ = input.timestamp_last_signal != 0U
+                                  ? input.timestamp_last_signal
+                                  : input.timestamp;
         input_changed = true;
     }
 
     const std::uint64_t now_us = hrt_absolute_time();
     const std::uint64_t timeout_us = static_cast<std::uint64_t>(loss_timeout_s_ * 1000000.0F);
     const bool timed_out = !have_input_ || timeout_us == 0U ||
+                           last_input_time_us_ == 0U ||
+                           last_input_time_us_ > now_us ||
                            (now_us - last_input_time_us_) > timeout_us;
     const std::uint8_t required_channels = configured_channel_count_ > 0 ?
                                            static_cast<std::uint8_t>(configured_channel_count_) : 1U;
@@ -211,7 +215,8 @@ bool RCUpdate::load_parameters() noexcept
             configured_channel_count_ <= static_cast<std::int32_t>(kChannelCount) &&
             std::isfinite(arm_threshold_) && arm_threshold_ >= 0.0F && arm_threshold_ <= 1.0F &&
             std::isfinite(kill_threshold_) && kill_threshold_ >= 0.0F && kill_threshold_ <= 1.0F &&
-            std::isfinite(loss_timeout_s_) && loss_timeout_s_ > 0.0F;
+            std::isfinite(loss_timeout_s_) && loss_timeout_s_ >= 0.1F &&
+            loss_timeout_s_ <= 35.0F;
 
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
         const Calibration &cal = calibration_[channel];
@@ -391,8 +396,10 @@ std::uint8_t RCUpdate::switch_position(std::uint8_t function, float threshold) c
 
     float value = 0.5F * rc_.channels[static_cast<std::size_t>(channel)] + 0.5F;
     if (threshold < 0.0F) value = -value;
-    return value > threshold ? manual_control_switches_s::SWITCH_POS_ON :
-                               manual_control_switches_s::SWITCH_POS_OFF;
+    const bool active = threshold == 1.0F ? value >= threshold
+                                          : value > threshold;
+    return active ? manual_control_switches_s::SWITCH_POS_ON :
+                    manual_control_switches_s::SWITCH_POS_OFF;
 }
 
 std::uint8_t RCUpdate::mode_slot() const noexcept

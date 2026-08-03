@@ -21,6 +21,7 @@ public:
     virtual bool start(px4::WorkItem &consumer) noexcept = 0;
     virtual void stop() noexcept = 0;
     virtual std::size_t read(std::uint8_t *destination,
+                             std::uint64_t *arrival_timestamps_us,
                              std::size_t capacity) noexcept = 0;
     virtual bool service() noexcept = 0;
     virtual bool running() const noexcept = 0;
