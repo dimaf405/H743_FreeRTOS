@@ -1,14 +1,14 @@
 #define MODULE_NAME "param"
-#include "Dima/product/rover/ParameterService.hpp"
+#include "ParameterService.hpp"
 
-#include "Dima/adapters/usb_console/usb_console.h"
-#include "Dima/middleware/logging/logging.hpp"
-#include "Dima/middleware/parameters/param.h"
-#include "Dima/middleware/parameters/flashparams/flashparams.h"
-#include "Dima/messages/parameter_update.hpp"
-#include "Dima/middleware/uorb/uORB.hpp"
-#include "Dima/platform/freertos/hrt.hpp"
-#include "Dima/platform/freertos/parameter_flash.hpp"
+#include "usb_console/usb_console.h"
+#include "logging/logging.hpp"
+#include "parameters/param.h"
+#include "parameters/flashparams/flashparams.h"
+#include "parameter_update.hpp"
+#include "uorb/uORB.hpp"
+#include "freertos/hrt.hpp"
+#include "freertos/parameter_flash.hpp"
 
 #include <cerrno>
 #include <cmath>

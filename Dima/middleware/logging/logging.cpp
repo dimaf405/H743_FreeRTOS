@@ -1,6 +1,6 @@
-#include "Dima/middleware/logging/logging.hpp"
+#include "logging.hpp"
 
-#include "Dima/platform/freertos/dima_platform.hpp"
+#include "freertos/dima_platform.hpp"
 
 #include <algorithm>
 #include <cstdarg>

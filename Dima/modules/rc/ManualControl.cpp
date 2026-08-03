@@ -1,9 +1,9 @@
 /****************************************************************************
  * PX4-Autopilot v1.17.0 ManualControl RC subset adapted to Dima FreeRTOS.
  ****************************************************************************/
-#include "Dima/modules/rc/ManualControl.hpp"
+#include "ManualControl.hpp"
 
-#include "Dima/platform/freertos/hrt.hpp"
+#include "freertos/hrt.hpp"
 
 #include <cmath>
 #include <limits>

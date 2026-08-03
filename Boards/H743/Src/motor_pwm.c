@@ -1,4 +1,4 @@
-#include "Boards/H743/Inc/motor_pwm.h"
+#include "motor_pwm.h"
 
 #include "tim.h"
 

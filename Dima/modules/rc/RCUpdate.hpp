@@ -3,15 +3,15 @@
  ****************************************************************************/
 #pragma once
 
-#include "Dima/messages/input_rc.hpp"
-#include "Dima/messages/manual_control_switches.hpp"
-#include "Dima/messages/parameter_update.hpp"
-#include "Dima/messages/rc_channels.hpp"
-#include "Dima/middleware/lifecycle/module_base.hpp"
-#include "Dima/middleware/parameters/param.h"
-#include "Dima/middleware/perf/perf_counter.h"
-#include "Dima/middleware/uorb/Publication.hpp"
-#include "Dima/middleware/work_queue/WorkQueue.hpp"
+#include "input_rc.hpp"
+#include "manual_control_switches.hpp"
+#include "parameter_update.hpp"
+#include "rc_channels.hpp"
+#include "lifecycle/module_base.hpp"
+#include "parameters/param.h"
+#include "perf/perf_counter.h"
+#include "uorb/Publication.hpp"
+#include "work_queue/WorkQueue.hpp"
 
 #include <array>
 #include <cstddef>

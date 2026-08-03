@@ -1,4 +1,4 @@
-#include "Dima/middleware/lifecycle/module_manager.hpp"
+#include "module_manager.hpp"
 
 namespace dima::middleware::lifecycle {
 

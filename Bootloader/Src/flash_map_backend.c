@@ -3,7 +3,7 @@
 #include <errno.h>
 #include <string.h>
 
-#include "Boards/H743/Inc/boot_layout.h"
+#include "boot_layout.h"
 #include "stm32h7xx_hal.h"
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))

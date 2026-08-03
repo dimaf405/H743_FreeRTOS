@@ -33,7 +33,7 @@
 
 #pragma once
 
-#include "Dima/lib/containers/AtomicBitset.hpp"
+#include "containers/AtomicBitset.hpp"
 #include "atomic_transaction.h"
 #include "param.h"
 // Upstream path: src/lib/parameters/ParamLayer.h @ d6f12ad1

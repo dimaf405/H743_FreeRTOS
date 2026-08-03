@@ -30,6 +30,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
-#include "Dima/messages/manual_control_setpoint.hpp"
+#include "manual_control_setpoint.hpp"
 
 ORB_DEFINE(manual_control_setpoint, manual_control_setpoint_s, 1U);

@@ -50,7 +50,7 @@ def write_metadata(path: Path, parameters) -> None:
 
     text = (
         BSD_HEADER
-        + '#include "Dima/middleware/parameters/param.h"\n\n'
+        + '#include "parameters/param.h"\n\n'
         + f"#define PARAM_INFO_COUNT {len(parameters)}\n\n"
         + "const param_info_s param_info[PARAM_INFO_COUNT] = {\n"
         + ",\n".join(rows)
@@ -66,9 +66,9 @@ def write_forward_header(path: Path, include_target: str) -> None:
 
 
 def write_include_forwarders(include_output: Path, generated_header: Path) -> None:
-    write_forward_header(include_output / "px4_platform_common" / "param.h", "Dima/middleware/parameters/param.h")
-    write_forward_header(include_output / "px4_platform_common" / "param_macros.h", "Dima/middleware/parameters/param_macros.h")
-    write_forward_header(include_output / "px4_platform_common" / "module_params.h", "Dima/middleware/parameters/module_params.h")
+    write_forward_header(include_output / "px4_platform_common" / "param.h", "parameters/param.h")
+    write_forward_header(include_output / "px4_platform_common" / "param_macros.h", "parameters/param_macros.h")
+    write_forward_header(include_output / "px4_platform_common" / "module_params.h", "parameters/module_params.h")
     # DrvFS 上的转发 include 会把 Windows 盘符写入 GCC .d 文件并破坏 GNU Make 解析。
     parameter_header = include_output / "parameters" / "px4_parameters.hpp"
     parameter_header.parent.mkdir(parents=True, exist_ok=True)

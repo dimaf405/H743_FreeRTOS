@@ -1,10 +1,10 @@
-#include "Dima/adapters/mcuboot/mcuboot_app.h"
+#include "mcuboot_app.h"
 
 #include <stdint.h>
 #include <string.h>
 
-#include "Boards/H743/Inc/boot_layout.h"
-#include "Dima/platform/freertos/flash_operation_lock.h"
+#include "boot_layout.h"
+#include "freertos/flash_operation_lock.h"
 #include "stm32h7xx_hal.h"
 
 #define MCUBOOT_MAGIC_SIZE       16U

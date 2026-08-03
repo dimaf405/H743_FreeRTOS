@@ -30,6 +30,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
-#include "Dima/messages/manual_control_switches.hpp"
+#include "manual_control_switches.hpp"
 
 ORB_DEFINE(manual_control_switches, manual_control_switches_s, 1U);

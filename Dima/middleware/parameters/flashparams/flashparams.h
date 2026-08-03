@@ -32,7 +32,7 @@
  ****************************************************************************/
 /* Source: PX4-Autopilot d6f12ad1 flashparams; buffer adapter. */
 #pragma once
-#include "Dima/middleware/parameters/param.h"
+#include "parameters/param.h"
 #include <stddef.h>
 #ifdef __cplusplus
 extern "C" {

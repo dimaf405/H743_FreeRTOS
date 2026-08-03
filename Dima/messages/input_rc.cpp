@@ -30,6 +30,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
-#include "Dima/messages/input_rc.hpp"
+#include "input_rc.hpp"
 
 ORB_DEFINE(input_rc, input_rc_s, 1U);

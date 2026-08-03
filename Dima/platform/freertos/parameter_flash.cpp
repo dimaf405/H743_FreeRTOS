@@ -1,10 +1,10 @@
-#include "Dima/platform/freertos/parameter_flash.hpp"
+#include "parameter_flash.hpp"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
 
-#include "Boards/H743/Inc/boot_layout.h"
+#include "boot_layout.h"
 #include "stm32h7xx_hal.h"
 
 extern "C" {

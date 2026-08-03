@@ -33,7 +33,7 @@
 
 #pragma once
 
-#include "Dima/middleware/uorb/uORB.hpp"
+#include "uorb/uORB.hpp"
 
 #include <cstdint>
 

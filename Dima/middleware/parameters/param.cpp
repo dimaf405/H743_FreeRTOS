@@ -8,8 +8,8 @@
 
 #include "ConstLayer.h"
 #include "DynamicSparseLayer.h"
-#include "Dima/lib/containers/AtomicBitset.hpp"
-#include "Dima/platform/freertos/dima_platform.hpp"
+#include "containers/AtomicBitset.hpp"
+#include "freertos/dima_platform.hpp"
 
 #include <cerrno>
 #include <cstdio>

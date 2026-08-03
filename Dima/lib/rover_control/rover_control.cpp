@@ -2,7 +2,7 @@
  * Rover controller core adapted from PX4-Autopilot v1.17.0 rover-control
  * algorithms. See PX4_NOTICE.md for source and BSD-3-Clause attribution.
  */
-#include "Dima/lib/rover_control/rover_control.hpp"
+#include "rover_control.hpp"
 
 namespace dima::lib::rover_control {
 namespace {

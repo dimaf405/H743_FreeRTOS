@@ -1,6 +1,6 @@
-#include "Boards/H743/Inc/board_init.h"
+#include "board_init.h"
 
-#include "Boards/H743/Inc/boot_layout.h"
+#include "boot_layout.h"
 #include "dma.h"
 #include "fdcan.h"
 #include "gpio.h"

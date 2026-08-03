@@ -30,6 +30,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
-#include "Dima/messages/rc_channels.hpp"
+#include "rc_channels.hpp"
 
 ORB_DEFINE(rc_channels, rc_channels_s, 1U);

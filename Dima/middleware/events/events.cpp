@@ -1,4 +1,4 @@
-#include "Dima/middleware/events/events.hpp"
+#include "events.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -9,7 +9,7 @@ extern "C" {
 #include "task.h"
 }
 
-#include "Dima/platform/freertos/hrt.hpp"
+#include "freertos/hrt.hpp"
 
 namespace dima::events {
 namespace {

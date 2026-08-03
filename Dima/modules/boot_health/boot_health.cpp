@@ -1,7 +1,7 @@
-#include "Dima/modules/boot_health/boot_health.hpp"
+#include "boot_health.hpp"
 
-#include "Dima/adapters/mcuboot/mcuboot_app.h"
-#include "Dima/platform/freertos/platform_time.hpp"
+#include "mcuboot/mcuboot_app.h"
+#include "freertos/platform_time.hpp"
 
 namespace dima::modules::boot_health {
 

@@ -1,6 +1,6 @@
-#include "Dima/platform/freertos/platform_time.hpp"
+#include "platform_time.hpp"
 
-#include "Dima/platform/freertos/hrt.hpp"
+#include "hrt.hpp"
 
 namespace dima::platform {
 

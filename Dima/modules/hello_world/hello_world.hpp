@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Dima/messages/app_heartbeat.hpp"
-#include "Dima/middleware/lifecycle/module_base.hpp"
+#include "app_heartbeat.hpp"
+#include "lifecycle/module_base.hpp"
 
-#include "Dima/middleware/uorb/Publication.hpp"
-#include "Dima/middleware/work_queue/ScheduledWorkItem.hpp"
+#include "uorb/Publication.hpp"
+#include "work_queue/ScheduledWorkItem.hpp"
 
 #include <stdint.h>
 

@@ -31,8 +31,8 @@
  *
  ****************************************************************************/
 /* Source: PX4-Autopilot d6f12ad1; flashfs/POSIX paths removed. */
-#include "Dima/middleware/parameters/flashparams/flashparams.h"
-#include "Dima/lib/tinybson/tinybson.h"
+#include "flashparams.h"
+#include "tinybson/tinybson.h"
 #include <cerrno>
 #include <cstring>
 namespace {

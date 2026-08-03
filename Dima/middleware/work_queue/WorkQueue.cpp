@@ -1,7 +1,7 @@
-#include "Dima/middleware/work_queue/WorkQueue.hpp"
+#include "WorkQueue.hpp"
 
-#include "Dima/platform/freertos/platform_time.hpp"
-#include "Dima/platform/freertos/dima_platform.hpp"
+#include "freertos/platform_time.hpp"
+#include "freertos/dima_platform.hpp"
 
 extern "C" {
 #include "FreeRTOS.h"

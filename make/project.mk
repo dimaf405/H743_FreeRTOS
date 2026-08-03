@@ -45,7 +45,18 @@ C_DEFS += -DH743_APPLICATION_IMAGE \
 	-DBOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT) \
 	-DAPP_HELLO_WORLD_ENABLED=$(APP_HELLO_WORLD_ENABLED) \
 	-DAPP_HELLO_WORLD_INTERVAL_MS=$(APP_HELLO_WORLD_INTERVAL_VALIDATED)
+PROJECT_HEADER_DIRS := \
+	Dima/application \
+	Dima/product \
+	Dima/modules \
+	Dima/platform \
+	Dima/middleware \
+	Dima/messages \
+	Dima/lib \
+	Dima/adapters \
+	Boards/H743/Inc
 C_INCLUDES += -I. \
+	$(addprefix -I,$(PROJECT_HEADER_DIRS)) \
 	-I$(BUILD_DIR)/generated_include \
 	-I$(BUILD_DIR)/generated/parameters
 

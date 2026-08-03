@@ -1,6 +1,6 @@
-#include "Dima/modules/hello_world/hello_world.hpp"
+#include "hello_world.hpp"
 
-#include "Dima/platform/freertos/platform_time.hpp"
+#include "freertos/platform_time.hpp"
 
 #include <stdio.h>
 

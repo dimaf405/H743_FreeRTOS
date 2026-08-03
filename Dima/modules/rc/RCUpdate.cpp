@@ -1,11 +1,11 @@
 /****************************************************************************
  * PX4-Autopilot v1.17.0 RCUpdate Rover subset adapted to Dima FreeRTOS.
  ****************************************************************************/
-#include "Dima/modules/rc/RCUpdate.hpp"
+#include "RCUpdate.hpp"
 
-#include "Dima/middleware/events/events.hpp"
-#include "Dima/middleware/logging/logging.hpp"
-#include "Dima/platform/freertos/hrt.hpp"
+#include "events/events.hpp"
+#include "logging/logging.hpp"
+#include "freertos/hrt.hpp"
 
 #include <cmath>
 #include <limits>

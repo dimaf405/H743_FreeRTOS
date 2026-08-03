@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Dima/middleware/work_queue/WorkQueue.hpp"
+#include "work_queue/WorkQueue.hpp"
 
 #include <cstddef>
 #include <cstdint>

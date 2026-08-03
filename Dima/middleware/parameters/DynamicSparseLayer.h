@@ -34,8 +34,8 @@
 #pragma once
 
 #include "ParamLayer.h"
-#include "Dima/lib/containers/atomic.h"
-#include "Dima/platform/freertos/dima_platform.hpp"
+#include "containers/atomic.h"
+#include "freertos/dima_platform.hpp"
 
 #include <cstring>
 #include <cstdlib>

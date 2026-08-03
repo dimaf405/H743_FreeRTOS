@@ -22,8 +22,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "Dima/application/app_main.h"
-#include "Boards/H743/Inc/board_init.h"
+#include "app_main.h"
+#include "board_init.h"
 
 extern bool dima_platform_early_init(void);
 /* USER CODE END Includes */

@@ -24,8 +24,8 @@
 /* USER CODE BEGIN INCLUDE */
 #include "FreeRTOS.h"
 #include "task.h"
-#include "Dima/adapters/usb_console/usb_console.h"
-#include "Dima/adapters/usb_console/usb_console_internal.h"
+#include "usb_console/usb_console.h"
+#include "usb_console/usb_console_internal.h"
 
 /* USER CODE END INCLUDE */
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Dima/middleware/parameters/autosave.h"
-#include "Dima/middleware/work_queue/ScheduledWorkItem.hpp"
+#include "parameters/autosave.h"
+#include "work_queue/ScheduledWorkItem.hpp"
 
 namespace dima::product::rover {
 

@@ -33,7 +33,7 @@
 
 #pragma once
 
-#include "Dima/lib/containers/atomic.h"
+#include "atomic.h"
 
 namespace px4
 {

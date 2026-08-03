@@ -1,6 +1,6 @@
-#include "Dima/application/app_main.h"
+#include "app_main.h"
 
-#include "Dima/product/rover/ApplicationContext.hpp"
+#include "rover/ApplicationContext.hpp"
 
 extern "C" {
 #include "FreeRTOS.h"

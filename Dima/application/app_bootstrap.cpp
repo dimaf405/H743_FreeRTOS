@@ -1,4 +1,4 @@
-#include "Dima/application/app_main.h"
+#include "app_main.h"
 
 extern "C" {
 #include "FreeRTOS.h"

@@ -1,4 +1,4 @@
-#include "Dima/middleware/uorb/uORB.hpp"
+#include "uORB.hpp"
 
 extern "C" {
 #include "FreeRTOS.h"

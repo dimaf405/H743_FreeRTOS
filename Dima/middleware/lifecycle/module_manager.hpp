@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Dima/middleware/lifecycle/module_base.hpp"
+#include "module_base.hpp"
 
 #include <stdint.h>
 

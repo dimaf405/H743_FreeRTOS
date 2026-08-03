@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Dima/lib/rc/sbus_backend.hpp"
+#include "rc/sbus_backend.hpp"
 
 #include <cstddef>
 #include <cstdint>

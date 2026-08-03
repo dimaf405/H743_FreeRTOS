@@ -1,16 +1,16 @@
 #pragma once
 
-#include "Dima/modules/boot_health/boot_health.hpp"
-#include "Dima/modules/rc/ManualControl.hpp"
-#include "Dima/modules/rc/RCUpdate.hpp"
-#include "Dima/modules/rc/SbusRc.hpp"
-#include "Dima/platform/freertos/sbus_uart_backend.hpp"
-#include "Dima/middleware/lifecycle/module_manager.hpp"
-#include "Dima/product/rover/LogService.hpp"
-#include "Dima/product/rover/ParameterService.hpp"
+#include "boot_health/boot_health.hpp"
+#include "rc/ManualControl.hpp"
+#include "rc/RCUpdate.hpp"
+#include "rc/SbusRc.hpp"
+#include "freertos/sbus_uart_backend.hpp"
+#include "lifecycle/module_manager.hpp"
+#include "LogService.hpp"
+#include "ParameterService.hpp"
 
 #if APP_HELLO_WORLD_ENABLED
-#include "Dima/modules/hello_world/hello_world.hpp"
+#include "hello_world/hello_world.hpp"
 #endif
 
 namespace dima::product::rover {

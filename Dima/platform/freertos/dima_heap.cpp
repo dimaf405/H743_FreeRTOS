@@ -1,6 +1,6 @@
-#include "Dima/platform/freertos/dima_platform.hpp"
-#include "Dima/platform/freertos/hrt.hpp"
-#include "Dima/middleware/events/events.hpp"
+#include "dima_platform.hpp"
+#include "hrt.hpp"
+#include "events/events.hpp"
 
 #include <atomic>
 #include <new>

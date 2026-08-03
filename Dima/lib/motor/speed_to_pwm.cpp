@@ -1,4 +1,4 @@
-#include "Dima/lib/motor/speed_to_pwm.hpp"
+#include "speed_to_pwm.hpp"
 
 namespace dima::lib::motor {
 namespace {

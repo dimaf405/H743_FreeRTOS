@@ -6,9 +6,9 @@
 #define MODULE_NAME "param"
 #include "autosave.h"
 
-#include "Dima/middleware/events/events.hpp"
-#include "Dima/middleware/logging/logging.hpp"
-#include "Dima/middleware/parameters/param.h"
+#include "events/events.hpp"
+#include "logging/logging.hpp"
+#include "param.h"
 
 #include <cerrno>
 

@@ -1,4 +1,4 @@
-#include "Dima/platform/freertos/sbus_uart_backend.hpp"
+#include "sbus_uart_backend.hpp"
 
 #include "dma.h"
 #include "usart.h"

@@ -1,9 +1,9 @@
-#include "Dima/product/rover/ApplicationContext.hpp"
+#include "ApplicationContext.hpp"
 
-#include "Dima/middleware/logging/logging.hpp"
-#include "Dima/middleware/uorb/uORB.hpp"
-#include "Dima/middleware/work_queue/WorkQueue.hpp"
-#include "Dima/platform/freertos/dima_platform.hpp"
+#include "logging/logging.hpp"
+#include "uorb/uORB.hpp"
+#include "work_queue/WorkQueue.hpp"
+#include "freertos/dima_platform.hpp"
 #include "usb_device.h"
 
 namespace dima::product::rover {

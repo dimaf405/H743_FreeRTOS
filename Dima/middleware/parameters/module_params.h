@@ -39,7 +39,7 @@
 
 #pragma once
 
-#include "Dima/lib/containers/List.hpp"
+#include "containers/List.hpp"
 // Upstream path: platforms/common/include/px4_platform_common/module_params.h @ d6f12ad1
 
 #include "param.h"

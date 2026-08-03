@@ -30,6 +30,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
-#include "Dima/messages/action_request.hpp"
+#include "action_request.hpp"
 
 ORB_DEFINE(action_request, action_request_s, 8U);

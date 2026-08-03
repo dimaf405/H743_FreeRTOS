@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Dima/middleware/work_queue/ScheduledWorkItem.hpp"
+#include "work_queue/ScheduledWorkItem.hpp"
 
 namespace dima::product::rover {
 

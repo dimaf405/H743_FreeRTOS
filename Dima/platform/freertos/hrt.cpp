@@ -1,4 +1,4 @@
-#include "Dima/platform/freertos/hrt.hpp"
+#include "hrt.hpp"
 
 #include "stm32h7xx_hal.h"
 

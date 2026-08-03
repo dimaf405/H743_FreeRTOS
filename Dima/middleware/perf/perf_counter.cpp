@@ -1,4 +1,4 @@
-#include "Dima/middleware/perf/perf_counter.h"
+#include "perf_counter.h"
 
 #include <cstdint>
 #include <limits>
@@ -8,7 +8,7 @@ extern "C" {
 #include "task.h"
 }
 
-#include "Dima/platform/freertos/hrt.hpp"
+#include "freertos/hrt.hpp"
 
 namespace {
 

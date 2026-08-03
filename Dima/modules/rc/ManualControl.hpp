@@ -3,14 +3,14 @@
  ****************************************************************************/
 #pragma once
 
-#include "Dima/messages/action_request.hpp"
-#include "Dima/messages/manual_control_setpoint.hpp"
-#include "Dima/messages/manual_control_switches.hpp"
-#include "Dima/messages/rc_channels.hpp"
-#include "Dima/middleware/lifecycle/module_base.hpp"
-#include "Dima/middleware/uorb/Publication.hpp"
-#include "Dima/middleware/uorb/SubscriptionData.hpp"
-#include "Dima/middleware/work_queue/ScheduledWorkItem.hpp"
+#include "action_request.hpp"
+#include "manual_control_setpoint.hpp"
+#include "manual_control_switches.hpp"
+#include "rc_channels.hpp"
+#include "lifecycle/module_base.hpp"
+#include "uorb/Publication.hpp"
+#include "uorb/SubscriptionData.hpp"
+#include "work_queue/ScheduledWorkItem.hpp"
 
 #include <cstdint>
 

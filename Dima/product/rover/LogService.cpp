@@ -1,7 +1,7 @@
-#include "Dima/product/rover/LogService.hpp"
+#include "LogService.hpp"
 
-#include "Dima/adapters/usb_console/usb_console.h"
-#include "Dima/middleware/logging/logging.hpp"
+#include "usb_console/usb_console.h"
+#include "logging/logging.hpp"
 
 namespace dima::product::rover {
 namespace {

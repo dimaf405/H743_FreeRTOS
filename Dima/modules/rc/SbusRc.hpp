@@ -3,14 +3,14 @@
  ****************************************************************************/
 #pragma once
 
-#include "Dima/lib/rc/sbus.hpp"
-#include "Dima/lib/rc/sbus_backend.hpp"
-#include "Dima/messages/input_rc.hpp"
-#include "Dima/middleware/lifecycle/module_base.hpp"
-#include "Dima/middleware/parameters/param.h"
-#include "Dima/middleware/perf/perf_counter.h"
-#include "Dima/middleware/uorb/Publication.hpp"
-#include "Dima/middleware/work_queue/WorkQueue.hpp"
+#include "rc/sbus.hpp"
+#include "rc/sbus_backend.hpp"
+#include "input_rc.hpp"
+#include "lifecycle/module_base.hpp"
+#include "parameters/param.h"
+#include "perf/perf_counter.h"
+#include "uorb/Publication.hpp"
+#include "work_queue/WorkQueue.hpp"
 
 #include <cstddef>
 #include <cstdint>

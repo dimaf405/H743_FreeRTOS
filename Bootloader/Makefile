@@ -85,6 +85,7 @@ MCU := -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
 C_DEFS := -DUSE_HAL_DRIVER -DSTM32H743xx
 C_INCLUDES := \
 -I. \
+-IBoards/H743/Inc \
 -IBootloader/Inc \
 -ICore/Inc \
 -IUSB_DEVICE/Target \

@@ -7,7 +7,7 @@
  *
  ****************************************************************************/
 
-#include "Dima/lib/rc/sbus.hpp"
+#include "sbus.hpp"
 
 namespace dima::rc {
 namespace {

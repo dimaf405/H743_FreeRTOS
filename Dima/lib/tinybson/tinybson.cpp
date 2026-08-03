@@ -31,7 +31,7 @@
  *
  ****************************************************************************/
 /* Source: PX4-Autopilot d6f12ad1; fd/POSIX/realloc paths removed. */
-#include "Dima/lib/tinybson/tinybson.h"
+#include "tinybson.h"
 #include <cerrno>
 #include <cstring>
 namespace {

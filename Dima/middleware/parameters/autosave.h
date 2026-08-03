@@ -33,9 +33,9 @@
 
 #pragma once
 
-#include "Dima/lib/containers/atomic.h"
-#include "Dima/middleware/work_queue/ScheduledWorkItem.hpp"
-#include "Dima/platform/freertos/hrt.hpp"
+#include "containers/atomic.h"
+#include "work_queue/ScheduledWorkItem.hpp"
+#include "freertos/hrt.hpp"
 
 class ParamAutosave : public px4::ScheduledWorkItem
 {
