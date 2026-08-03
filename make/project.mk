@@ -158,6 +158,9 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/messages/manual_control_setpoint.cpp \
 	Dima/messages/manual_control_switches.cpp \
 	Dima/messages/action_request.cpp \
+	Dima/messages/vehicle_status.cpp \
+	Dima/messages/vehicle_control_mode.cpp \
+	Dima/messages/actuator_armed.cpp \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
