@@ -63,6 +63,7 @@ C_INCLUDES += -I. \
 PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
 PARAMETER_GENERATOR_DEPS := $(wildcard tools/parameters/*.py tools/parameters/dima_params/*.py)
 PARAMETER_DEFINITIONS := \
+	Dima/middleware/parameters/definitions/commander_params.c \
 	Dima/middleware/parameters/definitions/rover_control_params.c \
 	Dima/middleware/parameters/definitions/rover_differential_params.c \
 	Dima/middleware/parameters/definitions/rc_params.c
@@ -141,6 +142,7 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/modules/rc/SbusRc.cpp \
 	Dima/modules/rc/RCUpdate.cpp \
 	Dima/modules/rc/ManualControl.cpp \
+	Dima/modules/safety/Commander.cpp \
 	Dima/modules/hello_world/hello_world.cpp \
 	Dima/modules/boot_health/boot_health.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
