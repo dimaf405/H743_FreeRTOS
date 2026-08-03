@@ -81,6 +81,8 @@ void Error_Handler(void);
 #define S2_GPIO_Port GPIOB
 #define ICM42688_INT2_Pin GPIO_PIN_10
 #define ICM42688_INT2_GPIO_Port GPIOE
+#define ICM42688_CS_Pin GPIO_PIN_11
+#define ICM42688_CS_GPIO_Port GPIOE
 #define ICM42688_INT1_Pin GPIO_PIN_15
 #define ICM42688_INT1_GPIO_Port GPIOE
 #define S7_Pin GPIO_PIN_12

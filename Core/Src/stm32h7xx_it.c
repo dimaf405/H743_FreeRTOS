@@ -51,6 +51,7 @@ static volatile uint32_t g_hal_tick_suspended;
 __attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacked_frame);
 void BusFault_Handler_C(uint32_t *stacked_frame);
 void dima_hrt_overflow_isr(void);
+void dima_icm42688_exti_isr(uint16_t pending_pins);
 void xPortSysTickHandler(void);
 /* USER CODE END PFP */
 
@@ -221,6 +222,29 @@ void SysTick_Handler(void)
 void TIM2_IRQHandler(void)
 {
   dima_hrt_overflow_isr();
+}
+
+/**
+  * @brief This function handles EXTI lines 10 through 15.
+  */
+void EXTI15_10_IRQHandler(void)
+{
+  uint16_t pending_pins = 0U;
+
+  if (__HAL_GPIO_EXTI_GET_IT(ICM42688_INT1_Pin) != 0U)
+  {
+    __HAL_GPIO_EXTI_CLEAR_IT(ICM42688_INT1_Pin);
+    pending_pins |= ICM42688_INT1_Pin;
+  }
+  if (__HAL_GPIO_EXTI_GET_IT(ICM42688_INT2_Pin) != 0U)
+  {
+    __HAL_GPIO_EXTI_CLEAR_IT(ICM42688_INT2_Pin);
+    pending_pins |= ICM42688_INT2_Pin;
+  }
+  if (pending_pins != 0U)
+  {
+    dima_icm42688_exti_isr(pending_pins);
+  }
 }
 
 /**

@@ -130,6 +130,7 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/application/app_bootstrap.cpp \
 	Dima/platform/freertos/dima_heap.cpp \
 	Dima/platform/freertos/hrt.cpp \
+	Dima/platform/freertos/icm42688_interrupt.cpp \
 	Dima/platform/freertos/parameter_flash.cpp \
 	Dima/platform/freertos/sbus_uart_backend.cpp \
 	Dima/product/rover/ApplicationContext.cpp \
