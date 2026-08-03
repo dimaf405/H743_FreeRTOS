@@ -1,10 +1,16 @@
 #include "hrt.hpp"
 
+#include "FreeRTOS.h"
 #include "stm32h7xx_hal.h"
 
 namespace {
 
 constexpr std::uint32_t kTimerFrequencyHz = 1000000U;
+constexpr std::uint32_t kExpectedTimerInputClockHz = 240000000U;
+static_assert(configTICK_RATE_HZ == 1000U,
+              "the shared HAL and FreeRTOS SysTick must remain at 1 kHz");
+static_assert(configUSE_TICKLESS_IDLE == 0,
+              "TIM2 HRT needs an explicit low-power compensation design");
 volatile std::uint32_t g_overflow_high{0U};
 volatile std::uint32_t g_sequence{0U};
 bool g_initialized{false};
@@ -27,7 +33,8 @@ bool hrt_init() noexcept
     }
 
     const std::uint32_t timer_clock = tim2_input_clock_hz();
-    if (timer_clock < kTimerFrequencyHz ||
+    if (timer_clock != kExpectedTimerInputClockHz ||
+        timer_clock < kTimerFrequencyHz ||
         (timer_clock % kTimerFrequencyHz) != 0U) {
         return false;
     }
@@ -37,6 +44,10 @@ bool hrt_init() noexcept
     TIM2->CR2 = 0U;
     TIM2->SMCR = 0U;
     TIM2->DIER = 0U;
+    TIM2->CCMR1 = 0U;
+    TIM2->CCMR2 = 0U;
+    TIM2->CCER = 0U;
+    TIM2->CCR1 = 0U;
     TIM2->PSC = timer_clock / kTimerFrequencyHz - 1U;
     TIM2->ARR = 0xFFFFFFFFU;
     TIM2->CNT = 0U;
@@ -45,7 +56,8 @@ bool hrt_init() noexcept
 
     g_overflow_high = 0U;
     g_sequence = 0U;
-    NVIC_SetPriority(TIM2_IRQn, 4U);
+    NVIC_SetPriority(TIM2_IRQn,
+                     configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY);
     NVIC_ClearPendingIRQ(TIM2_IRQn);
     NVIC_EnableIRQ(TIM2_IRQn);
     TIM2->DIER = TIM_DIER_UIE;
@@ -101,7 +113,7 @@ extern "C" void dima_hrt_overflow_isr(void)
     }
     ++g_sequence;
     __DMB();
-    TIM2->SR &= ~TIM_SR_UIF;
+    TIM2->SR = ~TIM_SR_UIF;
     ++g_overflow_high;
     __DMB();
     ++g_sequence;

@@ -58,14 +58,22 @@ TickType_t duration_to_ticks(hrt_abstime duration_us) noexcept
         return 0U;
     }
 
+    constexpr TickType_t maximum_wait_ticks = portMAX_DELAY - 1U;
+    constexpr uint64_t maximum_finite_duration_us =
+        (static_cast<uint64_t>(maximum_wait_ticks) * kMicrosecondsPerSecond) /
+        configTICK_RATE_HZ;
+    if (duration_us >= maximum_finite_duration_us) {
+        return maximum_wait_ticks;
+    }
+
     uint64_t ticks = (duration_us * configTICK_RATE_HZ +
                       kMicrosecondsPerSecond - 1U) /
                      kMicrosecondsPerSecond;
     if (ticks == 0U) {
         ticks = 1U;
     }
-    if (ticks > static_cast<uint64_t>(portMAX_DELAY)) {
-        ticks = static_cast<uint64_t>(portMAX_DELAY);
+    if (ticks > static_cast<uint64_t>(maximum_wait_ticks)) {
+        ticks = static_cast<uint64_t>(maximum_wait_ticks);
     }
     return static_cast<TickType_t>(ticks);
 }
@@ -209,8 +217,18 @@ void WorkQueueManager::worker(void *argument)
         ready->running_ = false;
         // Run() 内若重新调度或清除，revision 会变化，此处不得覆盖新请求。
         if (ready->schedule_revision_ == revision && ready->interval_ != 0U) {
-            ready->deadline_ = finished + ready->interval_;
-            ready->scheduled_ = true;
+            const hrt_abstime elapsed_periods =
+                (finished - deadline) / ready->interval_;
+            const hrt_abstime maximum_periods =
+                (UINT64_MAX - deadline) / ready->interval_;
+            if (elapsed_periods < maximum_periods) {
+                // Keep the original phase and skip missed periods without bursts.
+                ready->deadline_ =
+                    deadline + (elapsed_periods + 1U) * ready->interval_;
+                ready->scheduled_ = true;
+            } else {
+                ready->interval_ = 0U;
+            }
         }
         taskEXIT_CRITICAL();
     }

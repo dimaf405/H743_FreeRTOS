@@ -26,19 +26,19 @@ unexport APP_HELLO_WORLD_INTERVAL_MS
 export APP_HELLO_WORLD_INTERVAL_RAW
 APP_HELLO_WORLD_INTERVAL_NON_DIGITS := $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(APP_HELLO_WORLD_INTERVAL_RAW)))))))))))
 ifneq ($(words $(APP_HELLO_WORLD_INTERVAL_RAW)),1)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..2147483647)
+$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
 endif
 ifneq ($(strip $(APP_HELLO_WORLD_INTERVAL_NON_DIGITS)),)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..2147483647)
+$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
 endif
 strip_interval_leading_zeros = $(if $(filter 0%,$(1)),$(call strip_interval_leading_zeros,$(patsubst 0%,%,$(1))),$(1))
 APP_HELLO_WORLD_INTERVAL_CANONICAL := $(call strip_interval_leading_zeros,$(APP_HELLO_WORLD_INTERVAL_RAW))
 ifeq ($(APP_HELLO_WORLD_INTERVAL_CANONICAL),)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..2147483647)
+$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
 endif
 APP_HELLO_WORLD_INTERVAL_VALIDATED := $(shell APP_HELLO_WORLD_INTERVAL_RAW=$(APP_HELLO_WORLD_INTERVAL_CANONICAL) $(PYTHON) tools/validate_hello_world_interval.py)
 ifeq ($(strip $(APP_HELLO_WORLD_INTERVAL_VALIDATED)),)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..2147483647)
+$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
 endif
 
 C_DEFS += -DH743_APPLICATION_IMAGE \

@@ -48,7 +48,6 @@ Core/Src/usart.c \
 Core/Src/freertos.c \
 Core/Src/stm32h7xx_it.c \
 Core/Src/stm32h7xx_hal_msp.c \
-Core/Src/stm32h7xx_hal_timebase_tim.c \
 USB_DEVICE/App/usb_device.c \
 USB_DEVICE/App/usbd_desc.c \
 USB_DEVICE/App/usbd_cdc_if.c \

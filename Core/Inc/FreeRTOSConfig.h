@@ -60,6 +60,7 @@
 #define configENABLE_MPU                         0
 
 #define configUSE_PREEMPTION                     1
+#define configUSE_TICKLESS_IDLE                  0
 #define configSUPPORT_STATIC_ALLOCATION          1
 #define configUSE_MALLOC_FAILED_HOOK              1
 #define configSUPPORT_DYNAMIC_ALLOCATION         1
@@ -156,7 +157,7 @@ standard names. */
 
 /* IMPORTANT: After 10.3.1 update, Systick_Handler comes from NVIC (if SYS timebase = systick), otherwise from cmsis_os2.c */
 
-#define USE_CUSTOM_SYSTICK_HANDLER_IMPLEMENTATION 0
+#define USE_CUSTOM_SYSTICK_HANDLER_IMPLEMENTATION 1
 
 /* USER CODE BEGIN Defines */
 #ifdef INCLUDE_xTaskGetHandle

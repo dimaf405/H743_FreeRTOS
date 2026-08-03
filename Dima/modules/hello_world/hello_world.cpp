@@ -8,8 +8,8 @@
 #error "APP_HELLO_WORLD_INTERVAL_MS must be supplied by the build"
 #elif APP_HELLO_WORLD_INTERVAL_MS == 0
 #error "APP_HELLO_WORLD_INTERVAL_MS must be nonzero"
-#elif APP_HELLO_WORLD_INTERVAL_MS > 0x7FFFFFFF
-#error "APP_HELLO_WORLD_INTERVAL_MS must not exceed 0x7fffffff"
+#elif APP_HELLO_WORLD_INTERVAL_MS > 4294967
+#error "APP_HELLO_WORLD_INTERVAL_MS must not exceed 4294967"
 #endif
 
 namespace dima::modules::hello_world {

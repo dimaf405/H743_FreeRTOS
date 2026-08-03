@@ -22,6 +22,8 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "FreeRTOS.h"
+#include "task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -41,18 +43,29 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
-
+static volatile uint32_t g_hal_tick_suspended;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
 __attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacked_frame);
 void BusFault_Handler_C(uint32_t *stacked_frame);
+void dima_hrt_overflow_isr(void);
+void xPortSysTickHandler(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_SuspendTick(void)
+{
+  /* SysTick also drives FreeRTOS, so only suspend the HAL logical counter. */
+  g_hal_tick_suspended = 1U;
+}
 
+void HAL_ResumeTick(void)
+{
+  g_hal_tick_suspended = 0U;
+}
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -61,7 +74,6 @@ extern DMA_HandleTypeDef hdma_spi4_rx;
 extern DMA_HandleTypeDef hdma_spi4_tx;
 extern SPI_HandleTypeDef hspi4;
 extern TIM_HandleTypeDef htim8;
-extern TIM_HandleTypeDef htim12;
 
 /* USER CODE BEGIN EV */
 
@@ -177,12 +189,39 @@ void DebugMon_Handler(void)
   /* USER CODE END DebugMonitor_IRQn 1 */
 }
 
+/**
+  * @brief This function handles the shared HAL and FreeRTOS 1 ms time base.
+  */
+void SysTick_Handler(void)
+{
+  /* Read CTRL to acknowledge COUNTFLAG, matching the CMSIS-RTOS handler. */
+  (void)SysTick->CTRL;
+
+  if (g_hal_tick_suspended == 0U)
+  {
+    HAL_IncTick();
+  }
+
+  if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
+  {
+    xPortSysTickHandler();
+  }
+}
+
 /******************************************************************************/
 /* STM32H7xx Peripheral Interrupt Handlers                                    */
 /* Add here the Interrupt Handlers for the used peripherals.                  */
 /* For the available peripheral interrupt handler names,                      */
 /* please refer to the startup file (startup_stm32h7xx.s).                    */
 /******************************************************************************/
+
+/**
+  * @brief This function handles the TIM2 HRT overflow interrupt.
+  */
+void TIM2_IRQHandler(void)
+{
+  dima_hrt_overflow_isr();
+}
 
 /**
   * @brief This function handles DMA1 stream0 global interrupt.
@@ -210,20 +249,6 @@ void DMA1_Stream1_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Stream1_IRQn 1 */
 
   /* USER CODE END DMA1_Stream1_IRQn 1 */
-}
-
-/**
-  * @brief This function handles TIM8 break interrupt and TIM12 global interrupt.
-  */
-void TIM8_BRK_TIM12_IRQHandler(void)
-{
-  /* USER CODE BEGIN TIM8_BRK_TIM12_IRQn 0 */
-  HAL_TIM_IRQHandler(&htim12);
-
-  /* USER CODE END TIM8_BRK_TIM12_IRQn 0 */
-  /* USER CODE BEGIN TIM8_BRK_TIM12_IRQn 1 */
-
-  /* USER CODE END TIM8_BRK_TIM12_IRQn 1 */
 }
 
 /**
