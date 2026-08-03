@@ -5,6 +5,7 @@
 
 #include "boot_layout.h"
 #include "freertos/flash_operation_lock.h"
+#include "safety/ArmingFlashInterlock.h"
 #include "stm32h7xx_hal.h"
 
 #define MCUBOOT_MAGIC_SIZE       16U
@@ -23,8 +24,9 @@ static const uint8_t mcuboot_magic[MCUBOOT_MAGIC_SIZE] = {
 int mcuboot_confirm_running_image(void)
 {
     int result = MCUBOOT_CONFIRM_FLASH_ERROR;
+    int flash_interlock_acquired = 0;
     if (!dima_flash_operation_lock()) {
-        return result;
+        return MCUBOOT_CONFIRM_DEFERRED;
     }
 
     const uint8_t *magic = (const uint8_t *)(uintptr_t)MCUBOOT_MAGIC_ADDRESS;
@@ -41,6 +43,11 @@ int mcuboot_confirm_running_image(void)
     if (*image_ok != 0xFFU) {
         goto out;
     }
+    if (dima_arming_flash_begin() != DIMA_FLASH_BEGIN_ACQUIRED) {
+        result = MCUBOOT_CONFIRM_DEFERRED;
+        goto out;
+    }
+    flash_interlock_acquired = 1;
 
     uint32_t flash_word[H743_FLASH_WRITE_SIZE / sizeof(uint32_t)]
         __attribute__((aligned(H743_FLASH_WRITE_SIZE)));
@@ -58,6 +65,8 @@ int mcuboot_confirm_running_image(void)
                           (uint32_t)(uintptr_t)flash_word);
     (void)HAL_FLASH_Lock();
 
+    SCB_InvalidateDCache_by_Addr((void *)(uintptr_t)MCUBOOT_IMAGE_OK_ADDRESS,
+                                H743_FLASH_WRITE_SIZE);
     __DSB();
     __ISB();
     if (status == HAL_OK && *image_ok == 0x01U) {
@@ -65,6 +74,9 @@ int mcuboot_confirm_running_image(void)
     }
 
 out:
+    if (flash_interlock_acquired != 0) {
+        dima_arming_flash_end();
+    }
     dima_flash_operation_unlock();
     return result;
 }

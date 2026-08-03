@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "boot_layout.h"
+#include "safety/ArmingFlashInterlock.h"
 #include "stm32h7xx_hal.h"
 
 extern "C" {
@@ -86,6 +87,26 @@ public:
 
 private:
     bool locked_;
+};
+
+class FlashWriteGuard {
+public:
+    FlashWriteGuard() noexcept
+        : acquired_(dima_arming_flash_begin() == DIMA_FLASH_BEGIN_ACQUIRED)
+    {
+    }
+
+    ~FlashWriteGuard()
+    {
+        if (acquired_) {
+            dima_arming_flash_end();
+        }
+    }
+
+    explicit operator bool() const noexcept { return acquired_; }
+
+private:
+    bool acquired_;
 };
 
 bool in_isr() noexcept
@@ -484,7 +505,7 @@ extern "C" int dima_flash_operation_lock(void)
     if (in_isr() || !g_initialized || g_mutex == nullptr) {
         return 0;
     }
-    return xSemaphoreTakeRecursive(g_mutex, portMAX_DELAY) == pdTRUE ? 1 : 0;
+    return xSemaphoreTakeRecursive(g_mutex, 0U) == pdTRUE ? 1 : 0;
 }
 
 extern "C" void dima_flash_operation_unlock(void)
@@ -594,7 +615,11 @@ int parameter_flash_append(const void *payload, size_t payload_size,
         return -EPERM;
     }
     FlashLock lock;
-    return lock ? append_locked(payload, payload_size, sequence) : -EDEADLK;
+    if (!lock) {
+        return -EDEADLK;
+    }
+    FlashWriteGuard write_guard;
+    return write_guard ? append_locked(payload, payload_size, sequence) : -EAGAIN;
 }
 
 int parameter_flash_erase() noexcept
@@ -603,7 +628,11 @@ int parameter_flash_erase() noexcept
         return -EPERM;
     }
     FlashLock lock;
-    return lock ? erase_locked() : -EDEADLK;
+    if (!lock) {
+        return -EDEADLK;
+    }
+    FlashWriteGuard write_guard;
+    return write_guard ? erase_locked() : -EAGAIN;
 }
 
 int parameter_flash_erase_and_append(const void *payload, size_t payload_size,
@@ -615,6 +644,10 @@ int parameter_flash_erase_and_append(const void *payload, size_t payload_size,
     FlashLock lock;
     if (!lock) {
         return -EDEADLK;
+    }
+    FlashWriteGuard write_guard;
+    if (!write_guard) {
+        return -EAGAIN;
     }
     const int erase_result = erase_locked();
     return erase_result == 0 ? append_locked(payload, payload_size, sequence)

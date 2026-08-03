@@ -159,6 +159,12 @@ void ParamAutosave::Run()
             _disabled = true;
             _retry_count = 0;
             storage_full = true;
+        } else if (result == -EAGAIN || result == -EPERM) {
+            _retry_count = 0;
+            _scheduled.store(true);
+            if (!ScheduleDelayed(kWriteBlockedRetryUs)) {
+                _scheduled.store(false);
+            }
         } else if (_retry_count < 3) {
             ++_retry_count;
             retry = true;

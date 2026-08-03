@@ -4,6 +4,7 @@
 #define MODULE_NAME "commander"
 #include "Commander.hpp"
 
+#include "ArmingFlashInterlock.h"
 #include "logging/logging.hpp"
 #include "freertos/hrt.hpp"
 
@@ -55,6 +56,7 @@ bool Commander::start()
     manual_control_setpoint_ = manual_control_setpoint_s{};
     recoverable_failsafe_causes_ = FailsafeNone;
     armed_snapshot_.store(false);
+    dima_arming_flash_disarm();
 
     if (!action_request_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -85,6 +87,7 @@ bool Commander::start()
         action_request_subscription_.unregisterCallback();
         ScheduleClear();
         armed_snapshot_.store(false);
+        dima_arming_flash_disarm();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         PX4_ERR("Commander startup publication or scheduling failed");
         return false;
@@ -95,10 +98,11 @@ bool Commander::start()
 
 void Commander::stop()
 {
-    armed_snapshot_.store(false);
     actuator_armed_.armed = false;
     vehicle_control_mode_.flag_armed = false;
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
+    armed_snapshot_.store(false);
+    dima_arming_flash_disarm();
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();
@@ -338,6 +342,10 @@ bool Commander::arm(std::uint8_t reason, std::uint64_t now) noexcept
         PX4_WARN("Arming denied: safety checks failed");
         return false;
     }
+    if (!dima_arming_flash_try_arm()) {
+        PX4_WARN("Arming denied: Flash operation in progress");
+        return false;
+    }
 
     actuator_armed_.armed = true;
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_ARMED;
@@ -354,12 +362,13 @@ bool Commander::disarm(std::uint8_t reason) noexcept
         return false;
     }
 
-    armed_snapshot_.store(false);
     actuator_armed_.armed = false;
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
     vehicle_status_.latest_disarming_reason = reason;
     vehicle_status_.armed_time = 0U;
     vehicle_status_.takeoff_time = 0U;
+    armed_snapshot_.store(false);
+    dima_arming_flash_disarm();
     PX4_INFO("Rover disarmed");
     return true;
 }
@@ -473,8 +482,11 @@ void Commander::initialize_public_state(std::uint64_t now) noexcept
 
 void Commander::handle_publication_failure() noexcept
 {
-    armed_snapshot_.store(false);
     actuator_armed_.armed = false;
+    vehicle_control_mode_.flag_armed = false;
+    vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
+    armed_snapshot_.store(false);
+    dima_arming_flash_disarm();
     ScheduleClear();
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     PX4_ERR("Commander state publication or scheduling failed");

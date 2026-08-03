@@ -142,6 +142,7 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/modules/rc/SbusRc.cpp \
 	Dima/modules/rc/RCUpdate.cpp \
 	Dima/modules/rc/ManualControl.cpp \
+	Dima/modules/safety/ArmingFlashInterlock.cpp \
 	Dima/modules/safety/Commander.cpp \
 	Dima/modules/hello_world/hello_world.cpp \
 	Dima/modules/boot_health/boot_health.cpp \

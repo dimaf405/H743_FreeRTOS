@@ -83,16 +83,20 @@ void BootHealthService::Run()
         return;
     }
 
-    confirmation_attempted_ = true;
-    ScheduleClear();
     const int result = confirm_running_image_(dependency_context_);
     switch (result) {
     case MCUBOOT_CONFIRM_OK:
     case MCUBOOT_CONFIRM_ALREADY_CONFIRMED:
     case MCUBOOT_CONFIRM_NOT_A_TEST_IMAGE:
+        confirmation_attempted_ = true;
+        ScheduleClear();
+        break;
+    case MCUBOOT_CONFIRM_DEFERRED:
         break;
     case MCUBOOT_CONFIRM_FLASH_ERROR:
     default:
+        confirmation_attempted_ = true;
+        ScheduleClear();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         break;
     }
