@@ -184,7 +184,7 @@ Storage       128 KiB
 - Parameter Flash 保存和擦除在 ARMED 期间禁止，Autosave 保持 pending 并在 Disarm 后重试。
 - 启动顺序为基础服务、Parameter、Log、Commander、RC；停止顺序为 RC、Commander、Log、Parameter。RC 链失败不停止 Commander，Commander 启动失败则回滚应用服务。
 - 最终目标构建为 Application `136956/7660/331912` bytes、Signed BIN `145830` bytes，签名、Factory HEX、MCUboot 和 `0x08040400` 向量检查通过；详见 [阶段 4 资源与验收基线](DIMA_PHASE4_RESOURCE_BASELINE_ZH.md)。
-- 2026-08-03 全量回归修复后，应用收敛为 SysTick + TIM2 双时基，补齐 Flash/Arming 原子互锁、Commander 发布失效安全、真实 RC DMA 到达时间、ICM42688 板级接口、参数快照回退和 WorkQueue cancel-and-drain。增量目标构建为 Application `141428/7668/332584` bytes、Signed BIN `150310` bytes；实板时序、电气和并发验收仍待完成。
+- 2026-08-03 全量回归修复后，应用收敛为 SysTick + TIM2 双时基，补齐 Flash/Arming 原子互锁、Commander 发布失效安全、真实 RC DMA 到达时间、ICM42688 板级接口、参数快照回退和 WorkQueue cancel-and-drain。增量目标构建为 Application `141428/7668/332584` bytes、Signed BIN `150311` bytes；实板时序、电气和并发验收仍待完成。
 - 本阶段未接 PWM、Mixer、RoverDifferential 或 HAL 执行器输出，因此车辆仍不能运动；目标板行为尚未验收。
 
 ### 阶段 5：差速执行器链

@@ -114,11 +114,11 @@ Signed BIN 占 768 KiB Application Slot 约 18.5%，低于 85% 控制线。构�
 
 ```text
 Application（text/data/bss）  141428 / 7668 / 332584 bytes
-Signed BIN                       150310 bytes
+Signed BIN                       150311 bytes
 MCUboot（当前工作区）             46060 bytes
 应用向量地址                  0x08040400
 ```
 
-本轮应用增量为 text `+1296` bytes、data `0`、bss `+32` bytes、Signed BIN `+1295` bytes；Signed BIN 占 768 KiB Slot 约 19.1%，仍低于 85% 控制线。MCUboot `46060` bytes 包含保留在工作区、未混入本轮提交的 Recovery 请求改动，不能归因于上述应用修复。
+本轮应用增量为 text `+1296` bytes、data `0`、bss `+32` bytes、Signed BIN `+1296` bytes；Signed BIN 占 768 KiB Slot 约 19.1%，仍低于 85% 控制线。MCUboot `46060` bytes 包含保留在工作区、未混入本轮提交的 Recovery 请求改动，不能归因于上述应用修复。
 
 `make -j4 verify`、链接、签名、Factory HEX、MCUboot 地址校验、`0x08040400` 向量检查和 `git diff --check` 已通过。以下项目没有由目标构建证明，仍必须在目标板执行：HAL/FreeRTOS tick 同速、TIM2 加速回绕、10/20/500 ms 抖动统计、Flash/Arm 并发、损坏快照回退、stop/run 竞争、RC DMA 积压，以及 ICM42688 的 SPI/CS/INT 示波器检查。当前结论仍为“源码及目标构建通过，板测待完成”。

@@ -56,8 +56,8 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : ICM42688_INT2_Pin ICM42688_INT1_Pin */
-  GPIO_InitStruct.Pin = ICM42688_INT2_Pin|ICM42688_INT1_Pin;
+  /*Configure GPIO pins : ICM42688_INT1_Pin ICM42688_INT2_Pin */
+  GPIO_InitStruct.Pin = ICM42688_INT1_Pin|ICM42688_INT2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
