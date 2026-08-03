@@ -265,7 +265,12 @@ bool ParameterService::init() noexcept
 bool ParameterService::start() noexcept
 {
     if (!initialized_ || started_) { return initialized_ && started_; }
+    if (!ScheduleEnable()) { return false; }
     autosave_.enable(true);
+    if (!autosave_.enabled()) {
+        ScheduleCancelAndDrain();
+        return false;
+    }
     param_register_notify_callback(notify_params, nullptr);
     for (param_t param = 0U; param < param_count(); ++param) {
         if (param_value_unsaved(param)) {
@@ -277,6 +282,7 @@ bool ParameterService::start() noexcept
     if (!started_) {
         param_register_notify_callback(nullptr, nullptr);
         autosave_.stop();
+        ScheduleCancelAndDrain();
     }
     return started_;
 }
@@ -285,14 +291,12 @@ void ParameterService::stop() noexcept
 {
     param_register_notify_callback(nullptr, nullptr);
     autosave_.stop();
+    started_ = false;
+    ScheduleCancelAndDrain();
     taskENTER_CRITICAL();
     g_update_pending = false;
     g_autosave_request_pending = false;
     taskEXIT_CRITICAL();
-    if (started_) {
-        ScheduleClear();
-        started_ = false;
-    }
 }
 
 void ParameterService::Run()

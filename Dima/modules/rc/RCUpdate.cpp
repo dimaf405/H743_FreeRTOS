@@ -51,24 +51,30 @@ RCUpdate::RCUpdate() noexcept
 bool RCUpdate::start()
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) return true;
+    if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
 
     parameter_handles_ready_ = initialize_parameter_handles();
     parameters_valid_ = parameter_handles_ready_ && load_parameters();
     publish_interval_ = perf_alloc(PC_INTERVAL, "rc_update:rc_channels_interval");
 
     if (!input_rc_sub_.registerCallback()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         perf_free(publish_interval_);
         publish_interval_ = nullptr;
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
         PX4_ERR("RCUpdate input_rc callback registration failed");
         return false;
     }
 
     if (!parameter_update_sub_.registerCallback()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         input_rc_sub_.unregisterCallback();
+        ScheduleCancelAndDrain();
         perf_free(publish_interval_);
         publish_interval_ = nullptr;
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
         PX4_ERR("RCUpdate parameter callback registration failed");
         return false;
     }
@@ -79,11 +85,12 @@ bool RCUpdate::start()
     switches_initialized_ = false;
 
     if (!ScheduleOnInterval(kPollIntervalUs)) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         parameter_update_sub_.unregisterCallback();
         input_rc_sub_.unregisterCallback();
+        ScheduleCancelAndDrain();
         perf_free(publish_interval_);
         publish_interval_ = nullptr;
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
         PX4_ERR("RCUpdate scheduling failed");
         return false;
     }
@@ -93,14 +100,14 @@ bool RCUpdate::start()
 
 void RCUpdate::stop()
 {
-    ScheduleClear();
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     input_rc_sub_.unregisterCallback();
     parameter_update_sub_.unregisterCallback();
+    ScheduleCancelAndDrain();
     perf_free(publish_interval_);
     publish_interval_ = nullptr;
     have_input_ = false;
     switches_initialized_ = false;
-    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
 }
 
 dima::middleware::lifecycle::ModuleState RCUpdate::state() const { return state_; }

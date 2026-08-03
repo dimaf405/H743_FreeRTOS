@@ -25,14 +25,20 @@ bool LogService::start() noexcept
     if (started_) {
         return true;
     }
+    if (!ScheduleEnable()) {
+        return false;
+    }
     started_ = ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs);
+    if (!started_) {
+        ScheduleCancelAndDrain();
+    }
     return started_;
 }
 
 void LogService::stop() noexcept
 {
-    ScheduleClear();
     started_ = false;
+    ScheduleCancelAndDrain();
 }
 
 void LogService::Run()

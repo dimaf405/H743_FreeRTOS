@@ -31,6 +31,10 @@ bool ManualControl::start()
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
+    if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
 
     rc_signal_available_ = false;
     lost_invalid_published_ = false;
@@ -38,12 +42,14 @@ bool ManualControl::start()
 
     if (!rc_channels_subscription_.registerCallback(*this)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         return false;
     }
 
     if (!switches_subscription_.registerCallback(*this)) {
-        rc_channels_subscription_.unregisterCallback();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        rc_channels_subscription_.unregisterCallback();
+        ScheduleCancelAndDrain();
         return false;
     }
 
@@ -51,9 +57,10 @@ bool ManualControl::start()
 
     // 启动时主动消费已存在的最新样本，避免等待下一次 RC 发布。
     if (!ScheduleNow()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         switches_subscription_.unregisterCallback();
         rc_channels_subscription_.unregisterCallback();
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         return false;
     }
 
@@ -62,13 +69,13 @@ bool ManualControl::start()
 
 void ManualControl::stop()
 {
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     switches_subscription_.unregisterCallback();
     rc_channels_subscription_.unregisterCallback();
-    ScheduleClear();
+    ScheduleCancelAndDrain();
     rc_signal_available_ = false;
     lost_invalid_published_ = false;
     reset_switch_baseline();
-    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
 }
 
 dima::middleware::lifecycle::ModuleState ManualControl::state() const

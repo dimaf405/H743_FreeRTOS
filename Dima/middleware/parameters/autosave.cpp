@@ -58,6 +58,10 @@ void ParamAutosave::enable(bool enable) noexcept
     px4::AtomicTransaction transaction;
     _disabled = !enable;
     if (enable) {
+        if (!ScheduleEnable()) {
+            _disabled = true;
+            return;
+        }
         _retry_count = 0;
     } else if (_scheduled.load()) {
         _scheduled.store(false);
@@ -67,10 +71,12 @@ void ParamAutosave::enable(bool enable) noexcept
 
 void ParamAutosave::stop() noexcept
 {
-    px4::AtomicTransaction transaction;
-    _disabled = true;
-    _scheduled.store(false);
-    ScheduleClear();
+    {
+        px4::AtomicTransaction transaction;
+        _disabled = true;
+        _scheduled.store(false);
+    }
+    ScheduleCancelAndDrain();
 }
 
 bool ParamAutosave::enabled() const noexcept

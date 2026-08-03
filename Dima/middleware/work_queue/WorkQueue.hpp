@@ -38,7 +38,9 @@ public:
 
     bool ScheduleNow() noexcept;
     bool ScheduleNowFromISR() noexcept;
+    bool ScheduleEnable() noexcept;
     void ScheduleClear() noexcept;
+    void ScheduleCancelAndDrain() noexcept;
     const char *Name() const noexcept { return name_; }
     const WorkQueueStats &statistics() const noexcept { return statistics_; }
 
@@ -54,6 +56,7 @@ private:
     hrt_abstime interval_{0U};
     bool scheduled_{false};
     bool running_{false};
+    bool accepting_schedules_{true};
     WorkQueueStats statistics_{};
 };
 

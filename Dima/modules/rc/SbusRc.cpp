@@ -34,6 +34,10 @@ SbusRc::SbusRc(dima::rc::SbusBackend &backend) noexcept
 bool SbusRc::start()
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) return true;
+    if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
     (void)rc_port_.update();
     (void)rc_protocol_.update();
     (void)sbus_inverted_.update();
@@ -41,6 +45,7 @@ bool SbusRc::start()
         !backend_.configure(rc_port_.get(), sbus_inverted_.get())) {
         ++stats_.start_failures;
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         PX4_ERR("SBUS configuration invalid");
         (void)dima::events::report(kEventConfigInvalid, dima::events::Severity::Error);
         return false;
@@ -58,8 +63,9 @@ bool SbusRc::start()
     state_ = dima::middleware::lifecycle::ModuleState::Running;
     PX4_INFO("SBUS port=%ld inverted=%d", static_cast<long>(rc_port_.get()), sbus_inverted_.get() ? 1 : 0);
     if (!ScheduleNow()) {
-        free_perf_counters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
+        free_perf_counters();
         return false;
     }
     return true;
@@ -67,7 +73,8 @@ bool SbusRc::start()
 
 void SbusRc::stop()
 {
-    ScheduleClear();
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    ScheduleCancelAndDrain();
     backend_.stop();
     backend_started_ = false;
     signal_locked_ = false;
@@ -77,7 +84,6 @@ void SbusRc::stop()
     parser_.reset();
     free_perf_counters();
     timestamp_last_signal_us_ = 0U;
-    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
 }
 
 dima::middleware::lifecycle::ModuleState SbusRc::state() const { return state_; }

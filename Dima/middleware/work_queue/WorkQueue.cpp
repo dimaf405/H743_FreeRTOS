@@ -104,6 +104,16 @@ bool attach_item(QueueRuntime &queue, WorkItem &item) noexcept
     return false;
 }
 
+void detach_item(QueueRuntime &queue, WorkItem &item) noexcept
+{
+    for (auto &entry : queue.items) {
+        if (entry == &item) {
+            entry = nullptr;
+            return;
+        }
+    }
+}
+
 } // namespace
 
 bool WorkQueueManager::schedule(WorkItem &item, hrt_abstime deadline,
@@ -120,7 +130,7 @@ bool WorkQueueManager::schedule(WorkItem &item, hrt_abstime deadline,
 
     bool accepted = false;
     taskENTER_CRITICAL();
-    if (attach_item(*queue, item)) {
+    if (item.accepting_schedules_ && attach_item(*queue, item)) {
         ++item.schedule_revision_;
         item.deadline_ = deadline;
         item.interval_ = interval;
@@ -146,7 +156,7 @@ bool WorkQueueManager::schedule_from_isr(WorkItem &item) noexcept
     }
     BaseType_t higher_priority_task_woken = pdFALSE;
     const UBaseType_t saved = taskENTER_CRITICAL_FROM_ISR();
-    const bool accepted = attach_item(*queue, item);
+    const bool accepted = item.accepting_schedules_ && attach_item(*queue, item);
     if (accepted) {
         ++item.schedule_revision_;
         item.deadline_ = work_queue_time_us();
@@ -216,7 +226,9 @@ void WorkQueueManager::worker(void *argument)
         }
         ready->running_ = false;
         // Run() 内若重新调度或清除，revision 会变化，此处不得覆盖新请求。
-        if (ready->schedule_revision_ == revision && ready->interval_ != 0U) {
+        if (!ready->accepting_schedules_) {
+            detach_item(queue, *ready);
+        } else if (ready->schedule_revision_ == revision && ready->interval_ != 0U) {
             const hrt_abstime elapsed_periods =
                 (finished - deadline) / ready->interval_;
             const hrt_abstime maximum_periods =
@@ -286,6 +298,22 @@ bool WorkItem::ScheduleNowFromISR() noexcept
     return WorkQueueManager::schedule_from_isr(*this);
 }
 
+bool WorkItem::ScheduleEnable() noexcept
+{
+    if (in_isr()) {
+        return false;
+    }
+
+    bool enabled = false;
+    taskENTER_CRITICAL();
+    if (accepting_schedules_ || !running_) {
+        accepting_schedules_ = true;
+        enabled = true;
+    }
+    taskEXIT_CRITICAL();
+    return enabled;
+}
+
 void WorkItem::ScheduleClear() noexcept
 {
     if (in_isr()) {
@@ -296,6 +324,46 @@ void WorkItem::ScheduleClear() noexcept
     scheduled_ = false;
     interval_ = 0U;
     taskEXIT_CRITICAL();
+}
+
+void WorkItem::ScheduleCancelAndDrain() noexcept
+{
+    if (in_isr()) {
+        return;
+    }
+
+    QueueRuntime *const queue = find_queue(*config_);
+    const TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+    bool running = false;
+    bool called_from_run = false;
+
+    taskENTER_CRITICAL();
+    ++schedule_revision_;
+    scheduled_ = false;
+    interval_ = 0U;
+    accepting_schedules_ = false;
+    running = running_;
+    called_from_run = running && queue != nullptr
+                      && queue->task == current_task;
+    if (!running && queue != nullptr) {
+        detach_item(*queue, *this);
+    }
+    taskEXIT_CRITICAL();
+
+    if (called_from_run) {
+        return;
+    }
+
+    while (running) {
+        // The caller must block so even a lower-priority WorkQueue can finish.
+        vTaskDelay(1U);
+        taskENTER_CRITICAL();
+        running = running_;
+        if (!running && queue != nullptr) {
+            detach_item(*queue, *this);
+        }
+        taskEXIT_CRITICAL();
+    }
 }
 
 bool ScheduledWorkItem::ScheduleDelayed(uint32_t delay_us) noexcept
@@ -350,6 +418,25 @@ void work_queue_shutdown() noexcept
 {
     if (in_isr()) {
         return;
+    }
+    if (g_initialized) {
+        for (auto &queue : g_queues) {
+            for (;;) {
+                WorkItem *item = nullptr;
+                taskENTER_CRITICAL();
+                for (auto *entry : queue.items) {
+                    if (entry != nullptr) {
+                        item = entry;
+                        break;
+                    }
+                }
+                taskEXIT_CRITICAL();
+                if (item == nullptr) {
+                    break;
+                }
+                item->ScheduleCancelAndDrain();
+            }
+        }
     }
     for (auto &queue : g_queues) {
         if (queue.started && queue.task != nullptr) {

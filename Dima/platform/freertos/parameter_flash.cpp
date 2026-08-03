@@ -271,6 +271,40 @@ bool marker_valid(const RecordHeader &header, const CommitMarker &marker) noexce
                   == crc32(&marker, offsetof(CommitMarker, marker_crc32));
 }
 
+int validate_record_locked(size_t offset, RecordHeader &header) noexcept
+{
+    if (offset > kStorageBytes - sizeof(RecordHeader)
+        || !safe_read_bytes(kStorageBegin + offset, &header, sizeof(header))
+        || !header_valid(header, offset)) {
+        if (offset < kStorageBytes && mark_fault_once(g_invalid_faults, offset)) {
+            ++g_status.invalid_records;
+        }
+        return -EIO;
+    }
+
+    const size_t marker_offset = offset + header.record_length
+                                 - sizeof(CommitMarker);
+    CommitMarker marker{};
+    if (!safe_read_bytes(kStorageBegin + marker_offset, &marker, sizeof(marker))
+        || !marker_valid(header, marker)) {
+        if (mark_fault_once(g_invalid_faults, offset)) {
+            ++g_status.invalid_records;
+        }
+        return -EIO;
+    }
+
+    uint32_t payload_crc{};
+    if (!flash_crc32(kStorageBegin + offset + sizeof(RecordHeader),
+                     header.payload_length, payload_crc)
+        || payload_crc != header.payload_crc32) {
+        if (mark_fault_once(g_crc_faults, offset)) {
+            ++g_status.crc_failures;
+        }
+        return -EILSEQ;
+    }
+    return 0;
+}
+
 int scan_locked() noexcept
 {
     invalidate_flash(kStorageBegin, kStorageBytes);
@@ -579,33 +613,53 @@ int parameter_flash_load(void *payload, size_t capacity, size_t *payload_size,
     if (!lock) {
         return -EDEADLK;
     }
-    if (!g_has_snapshot) {
-        return -ENOENT;
-    }
+    bool rescanned = false;
+    for (;;) {
+        if (!g_has_snapshot) {
+            return rescanned ? -EIO : -ENOENT;
+        }
 
-    invalidate_flash(kStorageBegin + g_latest_offset, kStorageBytes - g_latest_offset);
-    RecordHeader header{};
-    if (!safe_read_bytes(kStorageBegin + g_latest_offset, &header, sizeof(header))
-        || !header_valid(header, g_latest_offset)) {
-        return -EIO;
-    }
-    if (payload_size != nullptr) {
-        *payload_size = header.payload_length;
-    }
-    if (sequence != nullptr) {
-        *sequence = header.sequence;
-    }
-    if (header.payload_length > capacity
-        || (payload == nullptr && header.payload_length != 0U)) {
-        return -ENOBUFS;
-    }
+        invalidate_flash(kStorageBegin + g_latest_offset,
+                         kStorageBytes - g_latest_offset);
+        RecordHeader header{};
+        int validation = validate_record_locked(g_latest_offset, header);
+        if (validation == 0) {
+            if (payload_size != nullptr) {
+                *payload_size = header.payload_length;
+            }
+            if (sequence != nullptr) {
+                *sequence = header.sequence;
+            }
+            if (header.payload_length > capacity
+                || (payload == nullptr && header.payload_length != 0U)) {
+                return -ENOBUFS;
+            }
 
-    if (header.payload_length > 0U
-        && !safe_read_bytes(kStorageBegin + g_latest_offset + sizeof(RecordHeader),
-                            payload, header.payload_length)) {
-        return -EIO;
+            if (header.payload_length == 0U) {
+                return 0;
+            }
+            if (safe_read_bytes(kStorageBegin + g_latest_offset
+                                    + sizeof(RecordHeader),
+                                payload, header.payload_length)
+                && crc32(payload, header.payload_length)
+                       == header.payload_crc32) {
+                return 0;
+            }
+            if (mark_fault_once(g_crc_faults, g_latest_offset)) {
+                ++g_status.crc_failures;
+            }
+            validation = -EILSEQ;
+        }
+
+        if (rescanned) {
+            return validation;
+        }
+        rescanned = true;
+        if (scan_locked() != 0) {
+            // A previously known snapshot became corrupt and no fallback exists.
+            return -EIO;
+        }
     }
-    return 0;
 }
 
 int parameter_flash_append(const void *payload, size_t payload_size,

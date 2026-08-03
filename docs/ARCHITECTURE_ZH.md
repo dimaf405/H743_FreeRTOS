@@ -57,6 +57,14 @@ docs/                         计划、架构、ADR、来源和维护文档
 5. `osKernelInitialize()` → `Dima/application/app_bootstrap.cpp` 中的 `app_bootstrap_create()` → `osKernelStart()`；
 6. `Dima/application/app_main.cpp` 进入 `Dima/product/rover/ApplicationContext`，由产品装配根初始化 USB、运行时服务和产品模块。
 
+### 4.1 双时基与调度边界
+
+- SysTick 固定 1 kHz，同时推进 HAL 32 位毫秒计数和 FreeRTOS tick；`HAL_SuspendTick()` 只暂停 HAL 逻辑计数，不得关闭 SysTick 或停止任务调度。
+- TIM2 固定为 1 MHz、32 位 HRT，并由溢出中断扩展为 64 位 `hrt_absolute_time()`；TIM2 及 CH1 保留给 HRT 和未来 compare，不得分配给 PWM、编码器或输入捕获。
+- 当前禁止 tickless sleep、STOP 模式补偿和运行期动态改频。恢复这些能力前，必须同时证明 SysTick 与 TIM2 在低功耗和变频边界上的连续性。
+- 普通 WorkQueue 由 1 ms FreeRTOS tick 唤醒，截止时间向上取整，因此不得提前执行；周期任务以前一截止时间锁相并跳过错过周期，不执行突发补偿。
+- IMU、Estimator 和 Rate Controller 等高频链必须由 DMA、EXTI 或消息事件唤醒。确需亚毫秒 one-shot 时只扩展 TIM2 CH1 compare，不再增加第三套系统时基。
+
 后续将形成独立执行域：
 
 ```text
@@ -91,6 +99,7 @@ USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 - 生产消息接口统一采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 使用生产 uORB 链。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
 - 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。
+- 参数 Journal 每次 load 都重新验证 Header、Commit Marker 和 payload CRC；最新记录损坏时重扫并回退上一条有效快照。
 - Estimator 采用 EKF2，首版即保留多实例与 Estimator Selector，至少支持两个 EKF 实例；实际激活数量由可用 IMU/Mag 组合和参数决定。控制器只消费 `vehicle_attitude`、`vehicle_local_position`、`vehicle_global_position` 和健康状态，不直接访问 EKF 内部对象。
 - Wheel Encoder 先通过 Dima Odometry Adapter 转为受支持的速度或里程计观测，不直接修改 EKF Core。
 - Arming 状态与 PWM 外设是否启动分离，最终输出必须经过统一 Failsafe 和 Actuator Gate。
@@ -113,6 +122,7 @@ Storage       128 KiB
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源。
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。
+- Arm 与应用 Flash 操作由同一原子互锁协调；模块停止先关闭新调度并 drain 正在执行的 `Run()`，再释放订阅、DMA、Perf、Flash 或日志资源。
 
 目录迁移已完成。2026-07-30 已在 Windows 本地使用 GNU Make 4.4.1、Arm GNU Toolchain 16.1.0 和 binutils 2.47 执行正式项目入口，目标编译、链接、签名、MCUboot 地址一致性和 Factory HEX 验证通过；目标板运行行为仍需板测。项目不新增 Host Test、SITL 或仿真入口：
 

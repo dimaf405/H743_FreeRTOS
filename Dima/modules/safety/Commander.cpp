@@ -43,10 +43,16 @@ bool Commander::start()
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
+    if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        PX4_ERR("Commander WorkQueue unavailable");
+        return false;
+    }
 
     parameter_handles_ready_ = initialize_parameter_handles();
     if (!parameter_handles_ready_) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         PX4_ERR("Commander parameter handles unavailable");
         return false;
     }
@@ -60,19 +66,22 @@ bool Commander::start()
 
     if (!action_request_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         PX4_ERR("Commander action callback registration failed");
         return false;
     }
     if (!manual_control_subscription_.registerCallback()) {
-        action_request_subscription_.unregisterCallback();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        action_request_subscription_.unregisterCallback();
+        ScheduleCancelAndDrain();
         PX4_ERR("Commander manual callback registration failed");
         return false;
     }
     if (!parameter_update_subscription_.registerCallback()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         manual_control_subscription_.unregisterCallback();
         action_request_subscription_.unregisterCallback();
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         PX4_ERR("Commander parameter callback registration failed");
         return false;
     }
@@ -94,20 +103,22 @@ bool Commander::start()
 
 void Commander::stop()
 {
+    armed_snapshot_.store(false);
+    dima_arming_flash_disarm();
+    if (state_ != dima::middleware::lifecycle::ModuleState::Error) {
+        state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    }
+    parameter_update_subscription_.unregisterCallback();
+    manual_control_subscription_.unregisterCallback();
+    action_request_subscription_.unregisterCallback();
+    ScheduleCancelAndDrain();
     actuator_armed_.armed = false;
     vehicle_control_mode_.flag_armed = false;
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
     armed_snapshot_.store(false);
     dima_arming_flash_disarm();
-    parameter_update_subscription_.unregisterCallback();
-    manual_control_subscription_.unregisterCallback();
-    action_request_subscription_.unregisterCallback();
-    ScheduleClear();
     have_manual_control_ = false;
     recoverable_failsafe_causes_ = FailsafeNone;
-    if (state_ != dima::middleware::lifecycle::ModuleState::Error) {
-        state_ = dima::middleware::lifecycle::ModuleState::Stopped;
-    }
 }
 
 dima::middleware::lifecycle::ModuleState Commander::state() const
@@ -546,13 +557,18 @@ void Commander::handle_scheduling_failure(std::uint64_t now) noexcept
 
 void Commander::enter_error(const char *reason) noexcept
 {
+    state_ = dima::middleware::lifecycle::ModuleState::Error;
     armed_snapshot_.store(false);
     dima_arming_flash_disarm();
-    ScheduleClear();
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();
-    state_ = dima::middleware::lifecycle::ModuleState::Error;
+    ScheduleCancelAndDrain();
+    actuator_armed_.armed = false;
+    vehicle_control_mode_.flag_armed = false;
+    vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
+    armed_snapshot_.store(false);
+    dima_arming_flash_disarm();
     PX4_ERR("%s", reason);
 }
 

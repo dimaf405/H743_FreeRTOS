@@ -98,3 +98,27 @@ Signed BIN 占 768 KiB Application Slot 约 18.5%，低于 85% 控制线。构�
 9. 全阶段 PWM 保持未启动。
 
 完成上述人工项目之前，阶段状态必须保持“目标构建通过、板测待完成”。
+
+## 6. 全量回归修复追加基线
+
+2026-08-03 在阶段 4 之后完成了六批源码修复：
+
+- 时基收敛为 `SysTick + TIM2`。SysTick 统一 HAL/FreeRTOS 1 ms tick，TIM2 专职 1 MHz 32 位 HRT 和 64 位单调扩展，TIM12 已释放。
+- WorkQueue 周期以前一截止时间锁相并跳过错过周期；停止使用持久调度屏障和 cancel-and-drain，外部 stop 等待 `Run()` 返回，self-stop 不自等待。
+- Arm 与 Parameter/MCUboot Flash 写统一通过原子互锁；Commander/uORB 发布失败、新鲜 Action Request 和连续 BootHealth 已按 fail-closed 处理。
+- SBUS UART/DMA 使用真实到达时间并逐帧发布；`COM_RC_LOSS_T` 下界和 Arm/Kill 端点比较已校正。
+- SPI4 固定 8-bit、约 7.5 MHz 和软件 GPIO CS；PE10/PE15 rising EXTI 只记录 HRT 时间并通知 WorkItem，本轮不导入完整 IMU 驱动。
+- Parameter Journal 每次 load 复验 Header、Commit Marker 和 payload CRC；最新记录损坏时重扫并回退上一条有效快照。
+
+以第四批 RC 修复后的 `348c706` 为本轮代码基线，应用从 `140132/7668/332552` bytes、Signed BIN `149015` bytes变为：
+
+```text
+Application（text/data/bss）  141428 / 7668 / 332584 bytes
+Signed BIN                       150310 bytes
+MCUboot（当前工作区）             46060 bytes
+应用向量地址                  0x08040400
+```
+
+本轮应用增量为 text `+1296` bytes、data `0`、bss `+32` bytes、Signed BIN `+1295` bytes；Signed BIN 占 768 KiB Slot 约 19.1%，仍低于 85% 控制线。MCUboot `46060` bytes 包含保留在工作区、未混入本轮提交的 Recovery 请求改动，不能归因于上述应用修复。
+
+`make -j4 verify`、链接、签名、Factory HEX、MCUboot 地址校验、`0x08040400` 向量检查和 `git diff --check` 已通过。以下项目没有由目标构建证明，仍必须在目标板执行：HAL/FreeRTOS tick 同速、TIM2 加速回绕、10/20/500 ms 抖动统计、Flash/Arm 并发、损坏快照回退、stop/run 竞争、RC DMA 积压，以及 ICM42688 的 SPI/CS/INT 示波器检查。当前结论仍为“源码及目标构建通过，板测待完成”。

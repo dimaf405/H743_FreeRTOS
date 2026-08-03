@@ -31,6 +31,7 @@ PX4 PARAM_DEFINE_* 参数定义
 - Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，失败最多重试 3 次。
 - USB CDC RX 使用固定 1024-byte SPSC Ring；ISR 不解析命令、不访问参数或 Flash、不格式化日志、不分配内存。
 - 参数持久化使用 `0x081E0000～0x08200000` 单个 128 KiB 扇区追加 Journal；记录包含 Sequence、Payload Length、CRC32 和最终 Commit Marker；Bank 2 扫描使用 ECC 安全读，DBECC 仅在参数区受控恢复并跳过不可读记录；空间不足返回 ENOSPC且不自动擦除。
+- 每次 load 都重新读取并验证 Header CRC、最终 Commit Marker 和 payload CRC；缓存的最新记录失效时重新扫描整个 Journal，回退到上一条有效快照后再次复验。
 
 ## 当前资源与验证
 

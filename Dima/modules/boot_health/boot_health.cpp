@@ -50,6 +50,10 @@ bool BootHealthService::start()
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
+    if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
 
     stable_window_start_ms_ = time_ms_(dependency_context_);
     heartbeat_observed_ = false;
@@ -64,6 +68,7 @@ bool BootHealthService::start()
     const bool scheduled = ScheduleOnInterval(kCheckIntervalMs * 1000U);
     if (!scheduled) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         return false;
     }
 
@@ -73,11 +78,11 @@ bool BootHealthService::start()
 
 void BootHealthService::stop()
 {
-    ScheduleClear();
-    stable_window_active_ = false;
     if (state_ != dima::middleware::lifecycle::ModuleState::Error) {
         state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     }
+    ScheduleCancelAndDrain();
+    stable_window_active_ = false;
 }
 
 dima::middleware::lifecycle::ModuleState BootHealthService::state() const
@@ -125,15 +130,15 @@ void BootHealthService::Run()
     case MCUBOOT_CONFIRM_ALREADY_CONFIRMED:
     case MCUBOOT_CONFIRM_NOT_A_TEST_IMAGE:
         confirmation_attempted_ = true;
-        ScheduleClear();
+        ScheduleCancelAndDrain();
         break;
     case MCUBOOT_CONFIRM_DEFERRED:
         break;
     case MCUBOOT_CONFIRM_FLASH_ERROR:
     default:
         confirmation_attempted_ = true;
-        ScheduleClear();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         break;
     }
 }

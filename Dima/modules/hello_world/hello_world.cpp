@@ -25,11 +25,16 @@ bool HelloWorld::start()
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
+    if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
 
     const bool scheduled = ScheduleOnInterval(
         static_cast<uint32_t>(APP_HELLO_WORLD_INTERVAL_MS) * 1000U);
     if (!scheduled) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
         return false;
     }
 
@@ -39,8 +44,8 @@ bool HelloWorld::start()
 
 void HelloWorld::stop()
 {
-    ScheduleClear();
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    ScheduleCancelAndDrain();
 }
 
 dima::middleware::lifecycle::ModuleState HelloWorld::state() const
