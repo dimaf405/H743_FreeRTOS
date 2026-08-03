@@ -4,6 +4,7 @@
 #include "rc/ManualControl.hpp"
 #include "rc/RCUpdate.hpp"
 #include "rc/SbusRc.hpp"
+#include "safety/Commander.hpp"
 #include "freertos/sbus_uart_backend.hpp"
 #include "lifecycle/module_manager.hpp"
 #include "LogService.hpp"
@@ -24,6 +25,7 @@ public:
     void stop() noexcept;
 
 private:
+    static bool commander_allows_flash_write() noexcept;
     bool start_rc_chain() noexcept;
     void stop_rc_chain() noexcept;
 
@@ -31,6 +33,7 @@ private:
     dima::modules::boot_health::BootHealthService boot_health_;
     LogService log_service_{};
     ParameterService parameter_service_{};
+    dima::modules::safety::Commander commander_{};
     dima::modules::rc::SbusRc sbus_rc_;
     dima::modules::rc::RCUpdate rc_update_{};
     dima::modules::rc::ManualControl manual_control_{};
@@ -41,6 +44,7 @@ private:
     bool boot_started_{false};
     bool log_started_{false};
     bool parameter_started_{false};
+    bool commander_started_{false};
     bool sbus_started_{false};
     bool rc_update_started_{false};
     bool manual_control_started_{false};

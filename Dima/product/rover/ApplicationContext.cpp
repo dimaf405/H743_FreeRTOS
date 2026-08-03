@@ -61,7 +61,8 @@ bool ApplicationContext::init() noexcept
         return false;
     }
 #endif
-    if (!module_manager_.register_module(sbus_rc_) ||
+    if (!module_manager_.register_module(commander_) ||
+        !module_manager_.register_module(sbus_rc_) ||
         !module_manager_.register_module(rc_update_) ||
         !module_manager_.register_module(manual_control_)) {
         module_manager_.reset();
@@ -114,11 +115,34 @@ bool ApplicationContext::start() noexcept
         return false;
     }
 
+    commander_started_ = module_manager_.start(commander_);
+    if (!commander_started_) {
+        stop_rc_chain();
+        set_flash_write_allowed_hook(nullptr);
+        log_service_.stop();
+        log_started_ = false;
+        parameter_service_.stop();
+        parameter_started_ = false;
+#if APP_HELLO_WORLD_ENABLED
+        (void)module_manager_.stop(hello_world_);
+        hello_started_ = false;
+#endif
+        (void)module_manager_.stop(boot_health_);
+        boot_started_ = false;
+        return false;
+    }
+    set_flash_write_allowed_hook(&ApplicationContext::commander_allows_flash_write);
+
     // RC 链故障只降级手动输入，不能拖垮参数、日志和恢复服务。
     if (!start_rc_chain()) {
         PX4_WARN("Dima RC chain unavailable; actuator output remains disabled");
     }
     return true;
+}
+
+bool ApplicationContext::commander_allows_flash_write() noexcept
+{
+    return !application_context().commander_.armed();
 }
 
 bool ApplicationContext::start_rc_chain() noexcept
@@ -163,6 +187,11 @@ void ApplicationContext::stop_rc_chain() noexcept
 void ApplicationContext::stop() noexcept
 {
     stop_rc_chain();
+    if (commander_started_) {
+        (void)module_manager_.stop(commander_);
+        commander_started_ = false;
+    }
+    set_flash_write_allowed_hook(nullptr);
     if (log_started_) {
         log_service_.stop();
         log_started_ = false;
