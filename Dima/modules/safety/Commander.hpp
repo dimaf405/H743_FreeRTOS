@@ -70,6 +70,8 @@ public:
 private:
     static constexpr std::uint32_t kCheckIntervalUs = 20000U;
     static constexpr std::uint64_t kPublishIntervalUs = 500000ULL;
+    // 安全正向动作不得在队列中滞留超过一个公开状态心跳周期。
+    static constexpr std::uint64_t kActionRequestMaxAgeUs = kPublishIntervalUs;
 
     enum FailsafeCause : std::uint8_t {
         FailsafeNone = 0U,
@@ -91,9 +93,14 @@ private:
     bool rc_input_valid(std::uint64_t now) const noexcept;
     bool sticks_centered() const noexcept;
     bool preflight_checks_pass(std::uint64_t now) const noexcept;
+    bool action_request_fresh(const action_request_s &request,
+                              std::uint64_t now) const noexcept;
     bool publish_state(std::uint64_t now) noexcept;
     void initialize_public_state(std::uint64_t now) noexcept;
-    void handle_publication_failure() noexcept;
+    void initialize_disarmed_snapshot(std::uint64_t now) noexcept;
+    bool handle_publication_failure(std::uint64_t now) noexcept;
+    void handle_scheduling_failure(std::uint64_t now) noexcept;
+    void enter_error(const char *reason) noexcept;
     static std::uint8_t reason_from_source(std::uint8_t source) noexcept;
 
     uORB::SubscriptionCallbackWorkItem action_request_subscription_{

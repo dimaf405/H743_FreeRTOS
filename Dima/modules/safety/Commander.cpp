@@ -81,15 +81,11 @@ bool Commander::start()
     initialize_public_state(now);
     state_ = dima::middleware::lifecycle::ModuleState::Running;
 
-    if (!publish_state(now) || !ScheduleOnInterval(kCheckIntervalUs)) {
-        parameter_update_subscription_.unregisterCallback();
-        manual_control_subscription_.unregisterCallback();
-        action_request_subscription_.unregisterCallback();
-        ScheduleClear();
-        armed_snapshot_.store(false);
-        dima_arming_flash_disarm();
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
-        PX4_ERR("Commander startup publication or scheduling failed");
+    if (!publish_state(now)) {
+        return handle_publication_failure(now);
+    }
+    if (!ScheduleOnInterval(kCheckIntervalUs)) {
+        handle_scheduling_failure(now);
         return false;
     }
 
@@ -137,7 +133,7 @@ void Commander::Run()
     state_changed = evaluate_safety(now) || state_changed;
     state_changed = update_public_projection(now) || state_changed;
     if (state_changed && !publish_state(now)) {
-        handle_publication_failure();
+        (void)handle_publication_failure(now);
         return;
     }
 
@@ -149,7 +145,7 @@ void Commander::Run()
 
         // 每一个状态转换都完成一次固定顺序发布，保持 Arm/Kill 队列顺序。
         if (action_changed && !publish_state(now)) {
-            handle_publication_failure();
+            (void)handle_publication_failure(now);
             return;
         }
     }
@@ -159,13 +155,13 @@ void Commander::Run()
     state_changed = update_public_projection(now) || state_changed;
     const bool heartbeat_due = now - last_publish_time_ >= kPublishIntervalUs;
     if ((state_changed || heartbeat_due) && !publish_state(now)) {
-        handle_publication_failure();
+        (void)handle_publication_failure(now);
         return;
     }
 
     // uORB 回调的 ScheduleNow 会替换周期调度，每次运行后恢复 20 ms 检查。
     if (!ScheduleOnInterval(kCheckIntervalUs)) {
-        handle_publication_failure();
+        handle_scheduling_failure(now);
     }
 }
 
@@ -292,12 +288,27 @@ bool Commander::execute_action(const action_request_s &request,
         return disarm(reason);
 
     case action_request_s::ACTION_ARM:
+        if (!action_request_fresh(request, now)) {
+            PX4_WARN("Commander rejected stale Arm request");
+            return false;
+        }
         return arm(reason, now);
 
     case action_request_s::ACTION_TOGGLE_ARMING:
-        return actuator_armed_.armed ? disarm(reason) : arm(reason, now);
+        if (actuator_armed_.armed) {
+            return disarm(reason);
+        }
+        if (!action_request_fresh(request, now)) {
+            PX4_WARN("Commander rejected stale Toggle-Arm request");
+            return false;
+        }
+        return arm(reason, now);
 
     case action_request_s::ACTION_UNKILL:
+        if (!action_request_fresh(request, now)) {
+            PX4_WARN("Commander rejected stale Unkill request");
+            return false;
+        }
         if (actuator_armed_.kill) {
             actuator_armed_.kill = false;
             PX4_INFO("Kill disengaged");
@@ -325,6 +336,10 @@ bool Commander::execute_action(const action_request_s &request,
         return false;
 
     case action_request_s::ACTION_SWITCH_MODE:
+        if (!action_request_fresh(request, now)) {
+            PX4_WARN("Commander rejected stale mode request");
+            return false;
+        }
         return switch_mode(request.mode, now);
 
     default:
@@ -426,6 +441,13 @@ bool Commander::preflight_checks_pass(std::uint64_t now) const noexcept
            !actuator_armed_.kill && !termination_latched_;
 }
 
+bool Commander::action_request_fresh(const action_request_s &request,
+                                     std::uint64_t now) const noexcept
+{
+    return request.timestamp != 0U && request.timestamp <= now &&
+           now - request.timestamp <= kActionRequestMaxAgeUs;
+}
+
 bool Commander::publish_state(std::uint64_t now) noexcept
 {
     actuator_armed_.timestamp = now;
@@ -480,16 +502,58 @@ void Commander::initialize_public_state(std::uint64_t now) noexcept
     last_publish_time_ = 0U;
 }
 
-void Commander::handle_publication_failure() noexcept
+void Commander::initialize_disarmed_snapshot(std::uint64_t now) noexcept
 {
+    const bool kill_latched = actuator_armed_.kill;
+    armed_snapshot_.store(false);
+    dima_arming_flash_disarm();
+
+    initialize_public_state(now);
     actuator_armed_.armed = false;
+    actuator_armed_.ready_to_arm = false;
+    actuator_armed_.kill = kill_latched;
     vehicle_control_mode_.flag_armed = false;
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
+    vehicle_status_.latest_disarming_reason =
+        vehicle_status_s::ARM_DISARM_REASON_FAILURE_DETECTOR;
+    vehicle_status_.armed_time = 0U;
+    vehicle_status_.takeoff_time = 0U;
+    vehicle_status_.pre_flight_checks_pass = false;
+}
+
+bool Commander::handle_publication_failure(std::uint64_t now) noexcept
+{
+    initialize_disarmed_snapshot(now);
+    if (!publish_state(now)) {
+        enter_error("Commander DISARMED state publication failed");
+        return false;
+    }
+
+    PX4_WARN("Commander publication recovered with DISARMED snapshot");
+    if (!ScheduleOnInterval(kCheckIntervalUs)) {
+        handle_scheduling_failure(now);
+        return false;
+    }
+    return true;
+}
+
+void Commander::handle_scheduling_failure(std::uint64_t now) noexcept
+{
+    initialize_disarmed_snapshot(now);
+    (void)publish_state(now);
+    enter_error("Commander scheduling failed");
+}
+
+void Commander::enter_error(const char *reason) noexcept
+{
     armed_snapshot_.store(false);
     dima_arming_flash_disarm();
     ScheduleClear();
+    parameter_update_subscription_.unregisterCallback();
+    manual_control_subscription_.unregisterCallback();
+    action_request_subscription_.unregisterCallback();
     state_ = dima::middleware::lifecycle::ModuleState::Error;
-    PX4_ERR("Commander state publication or scheduling failed");
+    PX4_ERR("%s", reason);
 }
 
 std::uint8_t Commander::reason_from_source(std::uint8_t source) noexcept

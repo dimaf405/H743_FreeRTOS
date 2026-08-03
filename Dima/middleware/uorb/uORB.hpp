@@ -103,8 +103,12 @@ public:
         if (advertise() && orb_publish(metadata_, instance_, &data)) {
             return true;
         }
-        advertised_ = false;
-        return advertise() && orb_publish(metadata_, instance_, &data);
+        release();
+        if (advertise() && orb_publish(metadata_, instance_, &data)) {
+            return true;
+        }
+        release();
+        return false;
     }
 
     bool advertise() noexcept
@@ -116,6 +120,14 @@ public:
     }
 
 private:
+    void release() noexcept
+    {
+        if (advertised_) {
+            orb_unadvertise(metadata_, instance_);
+            advertised_ = false;
+        }
+    }
+
     const orb_metadata *metadata_;
     uint8_t instance_;
     bool advertised_{false};
@@ -154,14 +166,26 @@ public:
             orb_publish(metadata_, static_cast<uint8_t>(instance_), &data)) {
             return true;
         }
-        instance_ = orb_advertise_multi(metadata_);
-        return instance_ >= 0 &&
-               orb_publish(metadata_, static_cast<uint8_t>(instance_), &data);
+        release();
+        if (advertise() &&
+            orb_publish(metadata_, static_cast<uint8_t>(instance_), &data)) {
+            return true;
+        }
+        release();
+        return false;
     }
 
     int8_t instance() const noexcept { return instance_; }
 
 private:
+    void release() noexcept
+    {
+        if (instance_ >= 0) {
+            orb_unadvertise(metadata_, static_cast<uint8_t>(instance_));
+            instance_ = -1;
+        }
+    }
+
     const orb_metadata *metadata_;
     int8_t instance_{-1};
 };

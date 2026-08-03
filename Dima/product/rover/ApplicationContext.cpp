@@ -25,6 +25,7 @@ ApplicationContext g_application_context;
 ApplicationContext::ApplicationContext() noexcept
     : sbus_rc_(dima::platform::sbus_uart_backend())
 {
+    boot_health_.bind_commander(commander_);
 }
 
 bool ApplicationContext::init() noexcept
