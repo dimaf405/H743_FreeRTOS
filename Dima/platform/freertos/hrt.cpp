@@ -68,6 +68,11 @@ bool hrt_init() noexcept
     return true;
 }
 
+bool hrt_is_initialized() noexcept
+{
+    return g_initialized;
+}
+
 hrt_abstime hrt_absolute_time() noexcept
 {
     if (!g_initialized) {

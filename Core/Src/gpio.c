@@ -18,6 +18,12 @@ void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
+  /* Keep asynchronous IMU edges from reaching the CPU during early startup,
+     including when entering from a loader that left peripheral state behind. */
+  HAL_NVIC_DisableIRQ(EXTI15_10_IRQn);
+  __HAL_GPIO_EXTI_CLEAR_IT(ICM42688_INT1_Pin|ICM42688_INT2_Pin);
+  HAL_NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
+
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
@@ -71,13 +77,12 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 6, 0);
+  /* GPIO configuration can latch a pending edge.  Clear it while the shared
+     NVIC line remains disabled; consumer registration owns the later enable. */
+  __HAL_GPIO_EXTI_CLEAR_IT(ICM42688_INT1_Pin|ICM42688_INT2_Pin);
   HAL_NVIC_ClearPendingIRQ(EXTI15_10_IRQn);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 }
 
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
-
