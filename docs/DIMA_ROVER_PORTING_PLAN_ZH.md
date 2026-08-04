@@ -58,10 +58,10 @@ Dima/
 ├── adapters/                       USB Console、MCUboot 适配
 ├── platform/freertos/              libc、platform_time 与 FreeRTOS 平台适配
 ├── middleware/                     lifecycle、parameters、uORB、WorkQueue
-├── modules/                        boot_health、hello_world、RC、安全、Rover、EKF2
+├── modules/                        Parameter、Log、boot_health、hello_world、RC、安全、Rover、EKF2
 ├── lib/                            motor、rover_control 与公共算法库
 ├── messages/
-└── product/rover/
+└── rover/                          Rover 配置与 ApplicationContext 组合根
 
 Boards/H743/  Core/  Drivers/  Middlewares/  USB_DEVICE/  Bootloader/
 ```

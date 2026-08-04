@@ -47,7 +47,7 @@ C_DEFS += -DH743_APPLICATION_IMAGE \
 	-DAPP_HELLO_WORLD_INTERVAL_MS=$(APP_HELLO_WORLD_INTERVAL_VALIDATED)
 PROJECT_HEADER_DIRS := \
 	Dima/application \
-	Dima/product \
+	Dima/rover \
 	Dima/modules \
 	Dima/platform \
 	Dima/middleware \
@@ -133,9 +133,9 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/platform/freertos/icm42688_interrupt.cpp \
 	Dima/platform/freertos/parameter_flash.cpp \
 	Dima/platform/freertos/sbus_uart_backend.cpp \
-	Dima/product/rover/ApplicationContext.cpp \
-	Dima/product/rover/LogService.cpp \
-	Dima/product/rover/ParameterService.cpp \
+	Dima/rover/ApplicationContext.cpp \
+	Dima/modules/logging/LogService.cpp \
+	Dima/modules/parameters/ParameterService.cpp \
 	Dima/application/app_main.cpp \
 	Dima/lib/motor/speed_to_pwm.cpp \
 	Dima/lib/rover_control/rover_control.cpp \

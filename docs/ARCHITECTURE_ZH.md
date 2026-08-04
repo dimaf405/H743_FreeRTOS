@@ -17,10 +17,10 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── platform/freertos/        FreeRTOS 平台适配（libc、platform_time）
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
-├── modules/                  boot_health、hello_world、RC、安全、Rover、EKF2
+├── modules/                  Parameter、Log、boot_health、hello_world、RC、安全、Rover、EKF2
 ├── lib/                      motor、rover_control 与公共算法库
 ├── messages/                 共享消息契约
-└── product/rover/            产品配置、模式和装配
+└── rover/                    Rover 产品配置、模式和组合根
 
 Boards/H743/                  板级初始化、Flash 布局和外设适配
 Core/                         CubeMX/HAL 应用生成层
@@ -36,7 +36,8 @@ docs/                         计划、架构、ADR、来源和维护文档
 
 ## 3. 依赖规则
 
-- `Dima/product/rover` 是最终产品装配层，只装配所需的 Dima 和上游兼容模块。
+- `Dima/rover` 是最终产品装配层，只保留 Rover 配置与 `ApplicationContext`，并装配所需的 Dima 和上游兼容模块。
+- `Dima/modules` 承载具有独立生命周期和运行状态的功能块；Parameter、Log 等系统功能与 RC、Commander 一样实现统一的 ModuleBase 契约。
 - `Dima/modules` 可依赖 Dima middleware、messages、lib 和明确的平台适配接口，不直接包含 STM32 HAL 全局句柄。
 - `Dima/lib` 保持算法属性，不依赖 HAL、USB、MCUboot 或具体板卡。
 - `Dima/middleware` 直接拥有 lifecycle、Parameter、uORB、WorkQueue、Event、Perf 和 Logging，不再依赖顶层 `App`。
@@ -55,7 +56,7 @@ docs/                         计划、架构、ADR、来源和维护文档
 3. 系统和外设时钟初始化；
 4. `board_init()`；
 5. `osKernelInitialize()` → `Dima/application/app_bootstrap.cpp` 中的 `app_bootstrap_create()` → `osKernelStart()`；
-6. `Dima/application/app_main.cpp` 进入 `Dima/product/rover/ApplicationContext`，由产品装配根初始化 USB、运行时服务和产品模块。
+6. `Dima/application/app_main.cpp` 进入 `Dima/rover/ApplicationContext`，由 Rover 装配根初始化 USB 和运行模块。
 
 ### 4.1 双时基与调度边界
 

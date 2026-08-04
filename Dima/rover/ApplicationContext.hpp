@@ -1,20 +1,20 @@
 #pragma once
 
 #include "boot_health/boot_health.hpp"
+#include "logging/LogService.hpp"
+#include "parameters/ParameterService.hpp"
 #include "rc/ManualControl.hpp"
 #include "rc/RCUpdate.hpp"
 #include "rc/SbusRc.hpp"
 #include "safety/Commander.hpp"
 #include "freertos/sbus_uart_backend.hpp"
 #include "lifecycle/module_manager.hpp"
-#include "LogService.hpp"
-#include "ParameterService.hpp"
 
 #if APP_HELLO_WORLD_ENABLED
 #include "hello_world/hello_world.hpp"
 #endif
 
-namespace dima::product::rover {
+namespace dima::rover {
 
 class ApplicationContext {
 public:
@@ -31,8 +31,8 @@ private:
 
     dima::middleware::lifecycle::ModuleManager module_manager_{};
     dima::modules::boot_health::BootHealthService boot_health_;
-    LogService log_service_{};
-    ParameterService parameter_service_{};
+    dima::modules::logging::LogService log_service_{};
+    dima::modules::parameters::ParameterService parameter_service_{};
     dima::modules::safety::Commander commander_{};
     dima::modules::rc::SbusRc sbus_rc_;
     dima::modules::rc::RCUpdate rc_update_{};
@@ -55,4 +55,4 @@ private:
 
 ApplicationContext &application_context() noexcept;
 
-} // namespace dima::product::rover
+} // namespace dima::rover

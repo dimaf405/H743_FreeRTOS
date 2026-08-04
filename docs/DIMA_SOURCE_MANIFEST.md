@@ -106,7 +106,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `msg/InputRc.msg`、`RcChannels.msg`、`ManualControlSetpoint.msg`、`ManualControlSwitches.msg`、`ActionRequest.msg` | `Dima/messages/` | 保留 PX4 字段、枚举和 Topic 契约；`action_request` Queue Depth 为 8 | ADAPTED |
 | `msg/versioned/VehicleStatus.msg`、`msg/versioned/VehicleControlMode.msg`、`msg/ActuatorArmed.msg` | `Dima/messages/` | 完整保留三个公开消息的字段、枚举和版本号；本地三个 Topic 均为单深度 | ADAPTED |
 | PX4 RC/Commander 参数定义与生成元数据 | `Dima/middleware/parameters/definitions/rc_params.c`、`commander_params.c` | 保留 RC 失联参数；增加 Dima Rover 公开参数 `COM_ARM_STICK_DZ`，避免复用单位为 m/s 的 `RO_SPEED_TH`；阶段 4 后总参数数为 136 | ADAPTED / DIMA PARAMETER |
-| Dima 产品生命周期与 Parameter Autosave 写门控 | `Dima/product/rover/ApplicationContext.*`、`ParameterService.*` | 启动顺序固定为 Parameter、Log、Commander、RC；ARMED 时禁止 Flash 保存/擦除，Autosave 保持 pending 并在 Disarm 后重试 | DIMA INTEGRATION |
+| Dima Rover 生命周期与 Parameter Autosave 写门控 | `Dima/rover/ApplicationContext.*`、`Dima/modules/parameters/ParameterService.*` | Parameter 与 Log 遵循统一 ModuleBase 契约；启动顺序固定为 Parameter、Log、Commander、RC；ARMED 时禁止 Flash 保存/擦除，Autosave 保持 pending 并在 Disarm 后重试 | DIMA INTEGRATION |
 
 许可证状态仅记录为 `PENDING`；延后处理项记录为 `DEFERRED`。该状态不阻塞当前内部移植、编译和板级调试工作。
 

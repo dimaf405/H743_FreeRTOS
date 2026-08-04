@@ -3,7 +3,7 @@
 #include "usb_console/usb_console.h"
 #include "logging/logging.hpp"
 
-namespace dima::product::rover {
+namespace dima::modules::logging {
 namespace {
 
 std::size_t usb_service_write(void *, const std::uint8_t *data,
@@ -22,27 +22,38 @@ LogService::LogService() noexcept
 
 bool LogService::start() noexcept
 {
-    if (started_) {
+    if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
     if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
-    started_ = ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs);
-    if (!started_) {
+    if (!ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs)) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        return false;
     }
-    return started_;
+    state_ = dima::middleware::lifecycle::ModuleState::Running;
+    return true;
 }
 
 void LogService::stop() noexcept
 {
-    started_ = false;
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
+}
+
+dima::middleware::lifecycle::ModuleState LogService::state() const noexcept
+{
+    return state_;
 }
 
 void LogService::Run()
 {
+    if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
+        return;
+    }
     // USB 未连接时保留环形内容；生产者仍保持非阻塞，满后覆盖最旧数据。
     if (!usb_console_ready()) {
         return;
@@ -51,4 +62,4 @@ void LogService::Run()
     (void)dima::logging::service_flush(writer, 256U);
 }
 
-} // namespace dima::product::rover
+} // namespace dima::modules::logging

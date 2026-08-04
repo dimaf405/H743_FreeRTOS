@@ -1,6 +1,7 @@
 #define MODULE_NAME "param"
 #include "ParameterService.hpp"
 
+#include "mcuboot/mcuboot_app.h"
 #include "usb_console/usb_console.h"
 #include "logging/logging.hpp"
 #include "parameters/param.h"
@@ -22,11 +23,14 @@ extern "C" {
 #include "task.h"
 }
 
-namespace dima::product::rover {
+namespace dima::modules::parameters {
 namespace {
 constexpr uint32_t kPollUs = 10000U;
 constexpr size_t kLineCapacity = 192U;
 constexpr size_t kPayloadCapacity = px4::parameter_storage_max_bytes;
+constexpr char kIdentifyResponse[] = "DIMA_ROVER_APP_V1\n";
+constexpr char kRebootResponse[] = "DIMA_REBOOTING_BOOTLOADER\n";
+constexpr char kRebootDeniedResponse[] = "DIMA_REBOOT_DENIED_ARMED\n";
 StaticSemaphore_t g_param_mutex_storage{};
 SemaphoreHandle_t g_param_mutex{};
 StaticSemaphore_t g_storage_mutex_storage{};
@@ -147,10 +151,55 @@ bool parse_value(param_t param, const char *text, param_value_u &value)
     value.i = static_cast<int32_t>(parsed); return true;
 }
 
+void write_control_response(const char *response)
+{
+    if (response == nullptr) { return; }
+    (void)usb_console_write(reinterpret_cast<const uint8_t *>(response),
+                            std::strlen(response), 250U);
+}
+
+void reboot_to_bootloader()
+{
+    if (!flash_write_allowed()) {
+        write_control_response(kRebootDeniedResponse);
+        PX4_ERR("bootloader reboot is not allowed while armed");
+        return;
+    }
+
+    /* usb_console_write waits for the IN transfer completion, so the host sees
+     * the acknowledgement before USB disappears during the software reset. */
+    write_control_response(kRebootResponse);
+    mcuboot_reboot_to_recovery();
+}
+
 void execute_command(char *line)
 {
     char *save{}; char *cmd = ::strtok_r(line, " \t", &save);
-    if (!cmd || std::strcmp(cmd, "param") != 0) { PX4_ERR("unknown command"); return; }
+    if (!cmd) { return; }
+
+    if (std::strcmp(cmd, "dima") == 0) {
+        char *op = ::strtok_r(nullptr, " \t", &save);
+        char *extra = ::strtok_r(nullptr, " \t", &save);
+        if (op && std::strcmp(op, "identify") == 0 && extra == nullptr) {
+            write_control_response(kIdentifyResponse);
+        } else {
+            PX4_ERR("usage: dima identify");
+        }
+        return;
+    }
+
+    if (std::strcmp(cmd, "reboot") == 0) {
+        char *op = ::strtok_r(nullptr, " \t", &save);
+        char *extra = ::strtok_r(nullptr, " \t", &save);
+        if (op && std::strcmp(op, "-b") == 0 && extra == nullptr) {
+            reboot_to_bootloader();
+        } else {
+            PX4_ERR("usage: reboot -b");
+        }
+        return;
+    }
+
+    if (std::strcmp(cmd, "param") != 0) { PX4_ERR("unknown command"); return; }
     char *op = ::strtok_r(nullptr, " \t", &save);
     if (!op) { PX4_ERR("missing subcommand"); return; }
     if (std::strcmp(op, "show") == 0) {
@@ -244,30 +293,49 @@ bool ParameterService::init() noexcept
     if (initialized_) { return true; }
     g_param_mutex = xSemaphoreCreateRecursiveMutexStatic(&g_param_mutex_storage);
     g_storage_mutex = xSemaphoreCreateRecursiveMutexStatic(&g_storage_mutex_storage);
-    if (!g_param_mutex || !g_storage_mutex || !dima::platform::parameter_flash_init()) { return false; }
+    if (!g_param_mutex || !g_storage_mutex || !dima::platform::parameter_flash_init()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
     param_register_lock_callbacks(lock_params, unlock_params, nullptr);
     g_autosave = &autosave_;
     autosave_.setWriteAllowedCallback(autosave_write_allowed);
     param_register_notify_callback(notify_params, nullptr);
-    if (param_register_storage_backend(&g_storage_backend, nullptr) != 0) { return false; }
+    if (param_register_storage_backend(&g_storage_backend, nullptr) != 0) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
     param_init();
     if (!param_is_ready()) {
         param_register_notify_callback(nullptr, nullptr);
         g_autosave = nullptr;
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
     g_loading = true;
     const int load_ret = param_load_default();
     g_loading = false;
     if (load_ret != 0 && load_ret != -ENOENT) { PX4_ERR("load failed: %d", load_ret); }
-    initialized_ = true; return true;
+    initialized_ = true;
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    return true;
 }
 bool ParameterService::start() noexcept
 {
-    if (!initialized_ || started_) { return initialized_ && started_; }
-    if (!ScheduleEnable()) { return false; }
+    if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
+        return true;
+    }
+    if (!initialized_) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
+    if (!ScheduleEnable()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return false;
+    }
     autosave_.enable(true);
     if (!autosave_.enabled()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
         return false;
     }
@@ -278,20 +346,22 @@ bool ParameterService::start() noexcept
             break;
         }
     }
-    started_ = ScheduleOnInterval(kPollUs);
-    if (!started_) {
+    if (!ScheduleOnInterval(kPollUs)) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
         param_register_notify_callback(nullptr, nullptr);
         autosave_.stop();
         ScheduleCancelAndDrain();
+        return false;
     }
-    return started_;
+    state_ = dima::middleware::lifecycle::ModuleState::Running;
+    return true;
 }
 
 void ParameterService::stop() noexcept
 {
     param_register_notify_callback(nullptr, nullptr);
     autosave_.stop();
-    started_ = false;
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
     taskENTER_CRITICAL();
     g_update_pending = false;
@@ -299,8 +369,16 @@ void ParameterService::stop() noexcept
     taskEXIT_CRITICAL();
 }
 
+dima::middleware::lifecycle::ModuleState ParameterService::state() const noexcept
+{
+    return state_;
+}
+
 void ParameterService::Run()
 {
+    if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
+        return;
+    }
     usb_console_service();
     parameter_update_s update{};
     bool publish_update = false;
@@ -324,4 +402,4 @@ void ParameterService::Run()
     (void)consume_line();
 }
 
-} // namespace dima::product::rover
+} // namespace dima::modules::parameters

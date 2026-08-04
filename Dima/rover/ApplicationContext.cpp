@@ -1,12 +1,13 @@
 #include "ApplicationContext.hpp"
 
+#include "boot_diagnostics.h"
 #include "logging/logging.hpp"
 #include "uorb/uORB.hpp"
 #include "work_queue/WorkQueue.hpp"
 #include "freertos/dima_platform.hpp"
 #include "usb_device.h"
 
-namespace dima::product::rover {
+namespace dima::rover {
 namespace {
 
 void *uorb_allocate(size_t size, size_t alignment) noexcept
@@ -34,21 +35,29 @@ bool ApplicationContext::init() noexcept
         return true;
     }
 
+    dima_boot_stage_set(DIMA_BOOT_STAGE_USB_INIT);
     MX_USB_DEVICE_Init();
+    dima_boot_stage_set(DIMA_BOOT_STAGE_USB_READY);
+    dima_boot_stage_set(DIMA_BOOT_STAGE_WORK_QUEUE_INIT);
     if (!px4::work_queue_init()) {
         return false;
     }
+    dima_boot_stage_set(DIMA_BOOT_STAGE_UORB_INIT);
     const uORB::Allocator allocator{&uorb_allocate, &dima::platform::deallocate};
     if (!uORB::initialize(allocator)) {
         px4::work_queue_shutdown();
         return false;
     }
+    dima_boot_stage_set(DIMA_BOOT_STAGE_PARAMETER_INIT);
     if (!parameter_service_.init()) {
         uORB::shutdown();
         px4::work_queue_shutdown();
         return false;
     }
-    if (!module_manager_.register_module(boot_health_)) {
+    dima_boot_stage_set(DIMA_BOOT_STAGE_MODULE_REGISTER);
+    if (!module_manager_.register_module(boot_health_) ||
+        !module_manager_.register_module(parameter_service_) ||
+        !module_manager_.register_module(log_service_)) {
         module_manager_.reset();
         uORB::shutdown();
         px4::work_queue_shutdown();
@@ -73,6 +82,7 @@ bool ApplicationContext::init() noexcept
     }
 
     initialized_ = true;
+    dima_boot_stage_set(DIMA_BOOT_STAGE_APPLICATION_INITIALIZED);
     return true;
 }
 
@@ -82,9 +92,11 @@ bool ApplicationContext::start() noexcept
         return initialized_ && boot_started_;
     }
 
+    dima_boot_stage_set(DIMA_BOOT_STAGE_BOOT_HEALTH_START);
     boot_started_ = module_manager_.start(boot_health_);
     if (!boot_started_) return false;
 #if APP_HELLO_WORLD_ENABLED
+    dima_boot_stage_set(DIMA_BOOT_STAGE_HELLO_START);
     hello_started_ = module_manager_.start(hello_world_);
     if (!hello_started_) {
         (void)module_manager_.stop(boot_health_);
@@ -92,7 +104,8 @@ bool ApplicationContext::start() noexcept
         return false;
     }
 #endif
-    parameter_started_ = parameter_service_.start();
+    dima_boot_stage_set(DIMA_BOOT_STAGE_PARAMETER_START);
+    parameter_started_ = module_manager_.start(parameter_service_);
     if (!parameter_started_) {
 #if APP_HELLO_WORLD_ENABLED
         (void)module_manager_.stop(hello_world_);
@@ -103,9 +116,10 @@ bool ApplicationContext::start() noexcept
         return false;
     }
 
-    log_started_ = log_service_.start();
+    dima_boot_stage_set(DIMA_BOOT_STAGE_LOG_START);
+    log_started_ = module_manager_.start(log_service_);
     if (!log_started_) {
-        parameter_service_.stop();
+        (void)module_manager_.stop(parameter_service_);
         parameter_started_ = false;
 #if APP_HELLO_WORLD_ENABLED
         (void)module_manager_.stop(hello_world_);
@@ -116,13 +130,14 @@ bool ApplicationContext::start() noexcept
         return false;
     }
 
+    dima_boot_stage_set(DIMA_BOOT_STAGE_COMMANDER_START);
     commander_started_ = module_manager_.start(commander_);
     if (!commander_started_) {
         stop_rc_chain();
-        set_flash_write_allowed_hook(nullptr);
-        log_service_.stop();
+        dima::modules::parameters::set_flash_write_allowed_hook(nullptr);
+        (void)module_manager_.stop(log_service_);
         log_started_ = false;
-        parameter_service_.stop();
+        (void)module_manager_.stop(parameter_service_);
         parameter_started_ = false;
 #if APP_HELLO_WORLD_ENABLED
         (void)module_manager_.stop(hello_world_);
@@ -132,9 +147,11 @@ bool ApplicationContext::start() noexcept
         boot_started_ = false;
         return false;
     }
-    set_flash_write_allowed_hook(&ApplicationContext::commander_allows_flash_write);
+    dima::modules::parameters::set_flash_write_allowed_hook(
+        &ApplicationContext::commander_allows_flash_write);
 
     // RC 链故障只降级手动输入，不能拖垮参数、日志和恢复服务。
+    dima_boot_stage_set(DIMA_BOOT_STAGE_RC_START);
     if (!start_rc_chain()) {
         PX4_WARN("Dima RC chain unavailable; actuator output remains disabled");
     }
@@ -192,13 +209,13 @@ void ApplicationContext::stop() noexcept
         (void)module_manager_.stop(commander_);
         commander_started_ = false;
     }
-    set_flash_write_allowed_hook(nullptr);
+    dima::modules::parameters::set_flash_write_allowed_hook(nullptr);
     if (log_started_) {
-        log_service_.stop();
+        (void)module_manager_.stop(log_service_);
         log_started_ = false;
     }
     if (parameter_started_) {
-        parameter_service_.stop();
+        (void)module_manager_.stop(parameter_service_);
         parameter_started_ = false;
     }
 #if APP_HELLO_WORLD_ENABLED
@@ -224,4 +241,4 @@ ApplicationContext &application_context() noexcept
     return g_application_context;
 }
 
-} // namespace dima::product::rover
+} // namespace dima::rover
