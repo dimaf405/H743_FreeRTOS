@@ -20,6 +20,13 @@ endif
 endif
 
 PYTHON ?= python3
+BUILD_PROGRESS_TOOL ?= tools/build_progress.py
+DIMA_PROGRESS_STATE ?=
+DIMA_PROGRESS_VERBOSE_FLAG = $(if $(filter 1,$(V)),--verbose,)
+DIMA_PROGRESS_NO_COLOR_FLAG = $(if $(strip $(NO_COLOR)),--no-color,)
+DIMA_PROGRESS_RUN = $(PYTHON) $(BUILD_PROGRESS_TOOL) run \
+	--state "$(DIMA_PROGRESS_STATE)" --plan-token DIMA_PROGRESS_STEP_V1 \
+	$(DIMA_PROGRESS_VERBOSE_FLAG) $(DIMA_PROGRESS_NO_COLOR_FLAG)
 APP_HELLO_WORLD_INTERVAL_MS ?= 1000
 APP_HELLO_WORLD_INTERVAL_RAW := $(value APP_HELLO_WORLD_INTERVAL_MS)
 unexport APP_HELLO_WORLD_INTERVAL_MS
@@ -80,12 +87,14 @@ PARAMETER_GENERATED_OUTPUTS := \
 	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/module_params.h \
 	$(PARAMETER_INCLUDE_DIR)/parameters/px4_parameters.hpp
 
-$(PARAMETER_GENERATED_STAMP): $(PARAMETER_GENERATOR_DEPS) $(PARAMETER_DEFINITIONS)
-	$(PYTHON) $(PARAMETER_GENERATOR) \
+$(PARAMETER_GENERATED_STAMP): make/project.mk $(PARAMETER_GENERATOR_DEPS) $(PARAMETER_DEFINITIONS)
+	$(DIMA_PROGRESS_RUN) --label PARAM --target "$@" \
+		--display "$(PARAMETER_GENERATED_DIR)" -- \
+		$(PYTHON) $(PARAMETER_GENERATOR) \
 		$(foreach source,$(PARAMETER_DEFINITIONS),--source $(source)) \
 		--output $(PARAMETER_GENERATED_DIR) \
 		--include-output $(PARAMETER_INCLUDE_DIR)
-	@touch $@
+	@touch -r "$(firstword $(PARAMETER_GENERATED_OUTPUTS))" "$@"
 
 $(PARAMETER_GENERATED_OUTPUTS): $(PARAMETER_GENERATED_STAMP)
 	@test -f $@
@@ -179,10 +188,25 @@ ifneq ($(strip $(CUBEMX_OBJECTS)),)
 $(CUBEMX_OBJECTS): GNUmakefile make/project.mk
 endif
 
+DIMA_REAL_CC := $(CC)
+DIMA_REAL_AS := $(AS)
+DIMA_REAL_CP := $(CP)
+DIMA_REAL_SZ := $(SZ)
+
 ifdef GCC_PATH
 CXX = $(GCC_PATH)/$(PREFIX)g++
 else
 CXX = $(PREFIX)g++
+endif
+DIMA_REAL_CXX := $(CXX)
+
+ifneq ($(strip $(DIMA_PROGRESS_STATE)),)
+override CC = $(DIMA_PROGRESS_RUN) --kind cc --target "$@" --source "$<" -- $(DIMA_REAL_CC)
+override AS = $(DIMA_PROGRESS_RUN) --kind as --target "$@" --source "$<" -- $(DIMA_REAL_AS)
+override CXX = $(DIMA_PROGRESS_RUN) --kind cxx --target "$@" --source "$<" -- $(DIMA_REAL_CXX)
+override CP = $(DIMA_PROGRESS_RUN) --kind objcopy --target "$@" --source "$<" -- $(DIMA_REAL_CP)
+override SZ = $(DIMA_PROGRESS_RUN) --kind size --target "$@" --source "$<" -- $(DIMA_REAL_SZ)
+.SILENT:
 endif
 
 CXXFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections
@@ -226,17 +250,35 @@ FACTORY_HEX = $(BUILD_DIR)/$(TARGET)_factory.hex
 IMAGE_VERSION_STAMP = $(BUILD_DIR)/.image-version-$(subst /,_,$(IMAGE_VERSION))
 KEY_ID_STAMP ?= $(BUILD_DIR)/.key-identity
 KEY_ID_TOOL = tools/update_key_identity.py
+# A forced no-op recipe looks updated to `make -n` even when the real helper
+# preserves the stamp mtime.  Resolve that condition read-only while parsing
+# so the dry-run and real dependency graph agree.
+KEY_IDENTITY_STATUS := $(shell $(PYTHON) "$(KEY_ID_TOOL)" \
+	--key "$(KEY_FILE)" --stamp "$(KEY_ID_STAMP)" --status)
+KEY_IDENTITY_WILL_CHANGE := $(if $(filter current,$(KEY_IDENTITY_STATUS)),0,1)
+KEY_ID_FORCE_PREREQUISITE := $(if $(filter 1,$(KEY_IDENTITY_WILL_CHANGE)),FORCE_KEY_IDENTITY_CHECK,)
 MCUMGR ?= mcumgr
 MCUMGR_PORT ?=
+MCUMGR_BAUD ?= 921600
+MCUMGR_MTU ?= 512
+MCUMGR_MAX_WINDOW ?= 2
 UPLOAD_WAIT_SECONDS ?= 60
 UPLOAD_IMAGE ?= $(SIGNED_BIN)
 UPLOAD_TOOL = tools/mcumgr_upload.py
+MCUMGR_BOOTSTRAP_TOOL = tools/bootstrap_mcumgr.py
 
 .PHONY: firmware mcuboot host-tools verify dima_rover upload \
-        FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
+	__dima_clean_progress __dima_summary \
+	FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
 firmware: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
           $(BUILD_DIR)/$(TARGET).bin $(SIGNED_BIN) \
           $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(FACTORY_HEX)
+
+clean: __dima_clean_progress
+
+__dima_clean_progress:
+	$(DIMA_PROGRESS_RUN) --label CLEAN --target "$(BUILD_DIR)" \
+		--display "$(BUILD_DIR)" -- rm -fR "$(BUILD_DIR)"
 
 $(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt
 	@set -eu; \
@@ -258,6 +300,9 @@ $(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt
 			exit "$$status"; \
 		}; \
 		trap cleanup EXIT HUP INT TERM; \
+		if test "$(V)" = "1"; then \
+			printf '%s\n' '+ $(PYTHON) -m pip install --disable-pip-version-check --target $(HOST_PYTHON_DIR) -r $<'; \
+		fi; \
 		$(PYTHON) -m pip install --disable-pip-version-check \
 			--target "$$tmp" -r "$<"; \
 		if test -e "$(HOST_PYTHON_DIR)"; then \
@@ -271,22 +316,26 @@ $(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt
 			exit 1; \
 		fi; \
 		rm -rf "$$old"; \
-		trap - EXIT HUP INT TERM
+		trap - EXIT HUP INT TERM; \
+		$(DIMA_PROGRESS_RUN) --label HOST --target "$@" \
+			--display "$(HOST_PYTHON_DIR)" --quiet-command -- true
 
 host-tools: $(HOST_TOOLS_STAMP)
 
 $(DEVELOPMENT_KEY): | $(HOST_TOOLS_STAMP)
 	@mkdir -p $(dir $@)
-	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) keygen \
-		-k "$@" -t ecdsa-p256
+	$(DIMA_PROGRESS_RUN) --label KEY --target "$@" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
+		keygen -k "$@" -t ecdsa-p256
 	@chmod 600 $@
 
 FORCE_MCUBOOT_BUILD:
 
 FORCE_KEY_IDENTITY_CHECK:
 
-$(KEY_ID_STAMP): FORCE_KEY_IDENTITY_CHECK $(KEY_ID_TOOL) | $(BUILD_DIR)
-	$(PYTHON) "$(KEY_ID_TOOL)" --key "$(KEY_FILE)" --stamp "$@"
+$(KEY_ID_STAMP): $(KEY_ID_FORCE_PREREQUISITE) | $(KEY_ID_TOOL) $(BUILD_DIR)
+	$(DIMA_PROGRESS_RUN) --label KEY --target "$@" -- \
+		$(PYTHON) "$(KEY_ID_TOOL)" --key "$(KEY_FILE)" --stamp "$@"
 
 ifeq ($(KEY_FILE),$(DEVELOPMENT_KEY))
 $(KEY_ID_STAMP): | $(DEVELOPMENT_KEY)
@@ -297,7 +346,11 @@ $(MCUBOOT_BUILD_DIR)/mcuboot.hex: FORCE_MCUBOOT_BUILD \
 	$(MAKE) -f Bootloader/Makefile \
 		GCC_PATH=$(GCC_PATH) BUILD_DIR=$(MCUBOOT_BUILD_DIR) \
 		KEY_FILE="$(KEY_FILE)" KEY_ID_STAMP="$(KEY_ID_STAMP)" \
-		IMGTOOL_PYTHONPATH=$(HOST_PYTHON_DIR) all
+		IMGTOOL_PYTHONPATH=$(HOST_PYTHON_DIR) PYTHON="$(PYTHON)" \
+		DIMA_PROGRESS_STATE="$(DIMA_PROGRESS_STATE)" \
+		KEY_IDENTITY_CHECKED_BY_PARENT=1 \
+		KEY_IDENTITY_WILL_CHANGE=$(KEY_IDENTITY_WILL_CHANGE) \
+		V="$(V)" NO_COLOR="$(NO_COLOR)" all
 
 $(IMAGE_VERSION_STAMP): | $(BUILD_DIR)
 	@rm -f $(BUILD_DIR)/.image-version-*
@@ -306,26 +359,29 @@ $(IMAGE_VERSION_STAMP): | $(BUILD_DIR)
 $(SIGNED_BIN): $(BUILD_DIR)/$(TARGET).bin $(KEY_ID_STAMP) \
                $(HOST_TOOLS_STAMP) $(IMGTOOL) \
                GNUmakefile make/project.mk $(IMAGE_VERSION_STAMP) | $(BUILD_DIR)
-	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) sign \
-		-k "$(KEY_FILE)" --align 32 --max-align 32 \
-		-v $(IMAGE_VERSION) -H 0x400 --pad-header -S 0xC0000 \
-		$< $@
+	$(DIMA_PROGRESS_RUN) --label SIGN --target "$@" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
+		sign -k "$(KEY_FILE)" --align 32 --max-align 32 \
+		-v $(IMAGE_VERSION) -H 0x400 --pad-header -S 0xC0000 $< $@
 
 $(SIGNED_HEX): $(SIGNED_BIN) | $(BUILD_DIR)
 	$(CP) -I binary -O ihex --change-addresses 0x08040000 $< $@
 
 $(FACTORY_HEX): $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(SIGNED_HEX) \
                 tools/merge_hex.py $(HOST_TOOLS_STAMP) | $(BUILD_DIR)
-	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) tools/merge_hex.py \
+	$(DIMA_PROGRESS_RUN) --label MERGE --target "$@" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) tools/merge_hex.py \
 		--output $@ $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(SIGNED_HEX)
 
 mcuboot: $(MCUBOOT_BUILD_DIR)/mcuboot.hex
 
 
 verify: firmware
-	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) verify \
-		-k "$(KEY_FILE)" $(SIGNED_BIN)
-	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) tools/verify_mcuboot_images.py \
+	$(DIMA_PROGRESS_RUN) --label VERIFY --target "$(SIGNED_BIN)" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
+		verify -k "$(KEY_FILE)" $(SIGNED_BIN)
+	$(DIMA_PROGRESS_RUN) --label VERIFY --target "$(FACTORY_HEX)" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) tools/verify_mcuboot_images.py \
 		--app-elf $(BUILD_DIR)/$(TARGET).elf \
 		--boot-elf $(MCUBOOT_BUILD_DIR)/mcuboot.elf \
 		--signed $(SIGNED_BIN) --factory $(FACTORY_HEX) \
@@ -336,11 +392,23 @@ verify: firmware
 # exact signed image before touching the board.
 dima_rover: verify
 
-upload: dima_rover $(UPLOAD_TOOL)
-	PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
+upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL)
+	$(DIMA_PROGRESS_RUN) --label UPLOAD --target "$(UPLOAD_IMAGE)" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
 		--image "$(UPLOAD_IMAGE)" --imgtool "$(IMGTOOL)" \
-		--mcumgr "$(MCUMGR)" \
+		--mcumgr "$(MCUMGR)" --tools-cache "$(HOST_TOOLS_CACHE_ROOT)" \
 		$(if $(strip $(MCUMGR_PORT)),--port "$(MCUMGR_PORT)",) \
+		--baud "$(MCUMGR_BAUD)" --mtu "$(MCUMGR_MTU)" \
+		--max-window "$(MCUMGR_MAX_WINDOW)" \
 		--wait-seconds "$(UPLOAD_WAIT_SECONDS)"
+
+__dima_summary:
+	$(PYTHON) $(BUILD_PROGRESS_TOOL) summary \
+		--goals "$(DIMA_SUMMARY_GOALS)" --version "$(IMAGE_VERSION)" \
+		--app-elf "$(BUILD_DIR)/$(TARGET).elf" \
+		--boot-bin "$(MCUBOOT_BUILD_DIR)/mcuboot.bin" \
+		--signed "$(SIGNED_BIN)" --factory "$(FACTORY_HEX)" \
+		--layout "Boards/H743/Inc/boot_layout.h" \
+		$(DIMA_PROGRESS_NO_COLOR_FLAG)
 
 -include $(PROJECT_OBJECTS:.o=.d)

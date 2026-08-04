@@ -63,13 +63,29 @@ make \
 
 ## 3. MCUboot USB CDC + mcumgr 升级
 
-### 3.1 连接和 3 秒恢复窗口
+### 3.1 应用串口自动切换到 Recovery
 
-BOOT0 保持低电平，连接 USB FS 口并复位设备。MCUboot 枚举为 CDC 串口后等待有效 SMP 请求 3 秒：
+一键烧写不检查 BOOT0，不要求重新上下电，也不要求短按 RESET。上传器枚举当前可用串口，不先
+按 VID/PID 或产品名排除端口，并按以下顺序进行协议识别：
 
-- 3 秒内收到任意有效 `mcumgr` 请求后，设备会持续停留在 MCUboot recovery，直到执行 `mcumgr reset`。
-- 3 秒内没有收到请求且 Primary 镜像有效时，MCUboot 启动应用。
-- Primary 镜像缺失、签名无效或向量表无效时，MCUboot 会永久停留在 recovery，此时没有 3 秒限制。
+1. 先用短超时 `image list` 判断端口是否已经运行 MCUboot SMP；若是，立即开始烧写。
+2. 若不是 Recovery，则发送 `dima identify`。只有收到精确标识 `DIMA_ROVER_APP_V1`，才向该应用
+   串口发送与 PX4/APM 上传器一致的 `reboot -b`。
+3. 应用确认当前未 armed 后，在 RTC 备份寄存器写入一次性 Recovery 请求并执行
+   `NVIC_SystemReset()`。
+4. MCUboot 读取该请求后持续运行 USB Recovery，不受普通 3 秒窗口限制；USB 初始化成功后请求被
+   清除，因此上传结束时的 `mcumgr reset` 会正常启动应用。
+
+普通上电且没有软件 Recovery 请求时仍保留原有 3 秒 SMP 窗口。Primary 镜像缺失、签名无效或
+向量表无效时，MCUboot 也会持续停留在 Recovery。正在运行且不返回 `DIMA_ROVER_APP_V1` 的旧应用
+不可能执行尚未包含在该固件中的软件复位命令；首次迁移必须通过现有工厂/调试通道写入
+`build/H743_FreeRTOS_factory.hex`。普通 `mcumgr` 只更新应用槽，不能更新 MCUboot 本身。从完整
+Factory 镜像部署完成后，后续升级不再需要断电或按键操作。
+
+MCUboot 完成 swap 和 Primary 校验后不会携带当前 USB、PLL、SysTick 或 NVIC 状态热跳转应用。
+它写入一次性应用桥接标记并执行系统复位；复位后的 Bootloader 清除标记，只读复验 Primary 的
+header、哈希、ECDSA 签名和 `0x08040400` 向量后再进入应用。该复验不处理 swap trailer，因此
+pending/test 镜像能获得首次启动机会；桥接失败则停留在 Recovery，不会形成复位循环。
 
 Linux 一般为 `/dev/ttyACM0`，Windows 一般为 `COMx`。下面所有命令中的端口必须替换为实际端口：
 
@@ -87,42 +103,49 @@ mcumgr --conntype serial `
   image list
 ```
 
-`baud=115200` 是 CDC line-coding 参数，实际链路仍是 USB FS。若端口只在复位后短暂出现，先准备好命令，复位后立即执行 `image list`；首次有效响应会锁定 recovery 会话。
+`baud=115200` 是 CDC line-coding 参数，实际链路仍是 USB FS。手工命令要求设备已经处于
+Recovery；日常升级应直接使用下一节的一键命令，由上传器自动完成应用识别和软件切换。
 
 ### 3.2 一条命令完成构建与上传
 
-一次性安装固定版本的 Apache `mcumgr`，并确保生成目录位于 PATH：
-
-```bash
-go install github.com/apache/mynewt-mcumgr-cli/mcumgr@v0.0.0-20221004073047-5c56bd24066c
-```
-
-Linux 默认生成到 `$(go env GOPATH)/bin/mcumgr`；Windows 默认生成到
-`%USERPROFILE%\go\bin\mcumgr.exe`，本工程在 WSL 中也会自动寻找后者。编译环境还需要 GNU
-Make、Python 3 + pip，以及 PATH 中的 `arm-none-eabi-gcc` 工具链；也可继续通过 `GCC_PATH`
-显式指定工具链目录。依赖准备好后，在工程根目录只需执行：
+工程会自动准备固定提交的 Apache `mcumgr`。首次上传时，Python 脚本优先复用 PATH 中可用的
+Go；如果没有，则下载经过 SHA-256 固定校验的 Go 工具链，并把编译后的 `mcumgr` 放入
+`~/.cache/dima-rover/host-tools` 统一缓存。它不会写入仓库、系统工具目录或个人 Go `bin`
+目录。工具链默认优先从阿里云 Go 镜像下载，并以 `golang.google.cn`、`go.dev` 为回退；无论
+使用哪个镜像，都必须同时通过官方固定文件大小和 SHA-256 校验。后续上传直接命中缓存。
+编译环境只需 GNU Make、Python 3 + pip，以及 PATH 中的
+`arm-none-eabi-gcc` 工具链；也可继续通过 `GCC_PATH` 显式指定工具链目录。在工程根目录执行：
 
 ```bash
 make dima_rover upload
 ```
 
 该命令会依次完成应用与 MCUboot 编译、签名和布局校验，默认选择当前构建目录中的
-`build/H743_FreeRTOS_signed.bin`，等待 `H743 MCUboot Recovery` USB CDC 端口出现，随后自动执行
-Secondary 上传、读取本地签名镜像 SHA-256、设置测试启动和复位。命令提示等待设备时保持 BOOT0
-为低并按下 RESET；首次有效请求会使 Bootloader 保持在 recovery。
+`build/H743_FreeRTOS_signed.bin`，扫描并识别应用或 Recovery 串口。若识别到应用，会自动发送
+`reboot -b` 并等待 USB 重新枚举；随后执行 Secondary 上传、读取本地签名镜像 SHA-256、设置测试
+启动和软件复位。仓库自举的是带 Dima USB CDC 快速通道的固定版本 `mcumgr`：在虚拟
+921600 波特率下取消 Apache 串口传输原有的 20 ms 分片间延时、将 NLIP 帧扩展到配置的
+512 字节 MTU，并把非末尾固件块对齐到 STM32H743 的 32 字节 Flash 写入粒度。默认最多两个
+在途分片；两帧可安全容纳在 Bootloader 的 2048 字节 CDC RX 环形缓冲中，避免原始五分片窗口
+造成溢出，同时消除代码中会把单窗口传输压低到约 2 KiB/s 的主机限速路径。实际整包速率以
+上传结束时打印的字节数、耗时和 KiB/s 为准。
 
-Linux 只会自动选择 USB 标识为 VID `0483`、PID `5740`、产品名
-`H743 MCUboot Recovery` 的 CDC 端口，并优先显示稳定的 `/dev/serial/by-id/` 路径。在 WSL
-中，如果 Windows PATH 或 `%USERPROFILE%\go\bin` 中存在 `mcumgr.exe`，命令会查找相同
-VID/PID 的 `COMx` 并通过短超时 `image list` 确认 Recovery；VID/PID 本身不能区分应用 CDC
-和 Bootloader。检测到多个候选设备时命令会拒绝猜测目标，此时必须覆盖端口：
+Linux 会枚举 `/dev/serial/by-id/`、`/dev/ttyACM*` 和 `/dev/ttyUSB*`，并优先显示稳定的
+`by-id` 路径；WSL 使用 Windows .NET 串口 API 枚举当前 `COMx`，通过 PowerShell 访问应用，
+再使用自动缓存的 Windows `mcumgr.exe` 完成 Recovery 传输。VID/PID、COM 号和设备名称都不作为
+烧写授权，只有精确的 `DIMA_ROVER_APP_V1` 或 MCUboot `image list` 协议响应才确认身份。普通端口
+打开失败或协议不匹配只会被跳过；若识别到多个 Dima 协议端点，命令会拒绝猜测目标，此时必须
+覆盖端口：
 
 ```bash
 make dima_rover upload MCUMGR_PORT=/dev/ttyACM1
 make dima_rover upload MCUMGR=/absolute/path/to/mcumgr
 ```
 
-`UPLOAD_IMAGE` 可覆盖默认上传包，`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间。无论使用
+`UPLOAD_IMAGE` 可覆盖默认上传包，`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间；
+`MCUMGR_BAUD`、`MCUMGR_MTU` 和 `MCUMGR_MAX_WINDOW` 分别覆盖虚拟波特率、串行 MTU 和窗口，
+`HOST_TOOLS_CACHE_ROOT` 可覆盖统一工具缓存目录。受限网络可通过 `DIMA_GOPROXY` 指定 Go
+模块代理；离线环境也可用 `MCUMGR=/absolute/path/to/mcumgr` 显式指定已审核的 CLI。无论使用
 哪个入口，上传包都必须由板上 MCUboot 已内置公钥对应的私钥签名。
 
 ### 3.3 手工升级流程

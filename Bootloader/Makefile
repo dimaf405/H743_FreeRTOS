@@ -1,4 +1,12 @@
 PROJECT_ROOT := .
+DIMA_WINDOWS_MAKE_HOST := $(strip $(or \
+	$(findstring cygwin,$(MAKE_HOST)), \
+	$(findstring mingw,$(MAKE_HOST)), \
+	$(findstring msys,$(MAKE_HOST))))
+ifeq ($(DIMA_WINDOWS_MAKE_HOST),)
+$(error Windows-native GNU Make is required (MAKE_HOST=$(MAKE_HOST)); WSL/Linux builds are disabled)
+endif
+
 TARGET ?= mcuboot
 BUILD_DIR ?= build/mcuboot
 KEY_FILE ?= .keys/development-ecdsa-p256.pem
@@ -6,6 +14,14 @@ KEY_ID_STAMP ?= $(BUILD_DIR)/.key-identity
 KEY_ID_TOOL ?= tools/update_key_identity.py
 PYTHON ?= python3
 IMGTOOL_PYTHONPATH ?= build/host-python
+BUILD_PROGRESS_TOOL ?= tools/build_progress.py
+DIMA_PROGRESS_STATE ?=
+KEY_IDENTITY_CHECKED_BY_PARENT ?= 0
+DIMA_PROGRESS_VERBOSE_FLAG = $(if $(filter 1,$(V)),--verbose,)
+DIMA_PROGRESS_NO_COLOR_FLAG = $(if $(strip $(NO_COLOR)),--no-color,)
+DIMA_PROGRESS_RUN = $(PYTHON) $(BUILD_PROGRESS_TOOL) run \
+	--state "$(DIMA_PROGRESS_STATE)" --plan-token DIMA_PROGRESS_STEP_V1 \
+	$(DIMA_PROGRESS_VERBOSE_FLAG) $(DIMA_PROGRESS_NO_COLOR_FLAG)
 
 PREFIX ?= arm-none-eabi-
 ifdef GCC_PATH
@@ -18,6 +34,19 @@ CC := $(PREFIX)gcc
 AS := $(PREFIX)gcc -x assembler-with-cpp
 CP := $(PREFIX)objcopy
 SZ := $(PREFIX)size
+endif
+
+DIMA_REAL_CC := $(CC)
+DIMA_REAL_AS := $(AS)
+DIMA_REAL_CP := $(CP)
+DIMA_REAL_SZ := $(SZ)
+
+ifneq ($(strip $(DIMA_PROGRESS_STATE)),)
+override CC = $(DIMA_PROGRESS_RUN) --kind cc --target "$@" --source "$<" -- $(DIMA_REAL_CC)
+override AS = $(DIMA_PROGRESS_RUN) --kind as --target "$@" --source "$<" -- $(DIMA_REAL_AS)
+override CP = $(DIMA_PROGRESS_RUN) --kind objcopy --target "$@" --source "$<" -- $(DIMA_REAL_CP)
+override SZ = $(DIMA_PROGRESS_RUN) --kind size --target "$@" --source "$<" -- $(DIMA_REAL_SZ)
+.SILENT:
 endif
 
 MCUBOOT_ROOT := Middlewares/Third_Party/MCUboot
@@ -115,17 +144,36 @@ OBJECTS += $(addprefix $(BUILD_DIR)/obj/,$(notdir $(ASM_SOURCES:.s=.o)))
 vpath %.c $(sort $(dir $(C_SOURCES)))
 vpath %.s $(sort $(dir $(ASM_SOURCES)))
 
+ifeq ($(KEY_IDENTITY_CHECKED_BY_PARENT),1)
+KEY_ID_FORCE_PREREQUISITE :=
+else
+KEY_IDENTITY_STATUS := $(shell $(PYTHON) "$(KEY_ID_TOOL)" \
+	--key "$(KEY_FILE)" --stamp "$(KEY_ID_STAMP)" --status)
+KEY_IDENTITY_WILL_CHANGE := $(if $(filter current,$(KEY_IDENTITY_STATUS)),0,1)
+KEY_ID_FORCE_PREREQUISITE := $(if $(filter 1,$(KEY_IDENTITY_WILL_CHANGE)),FORCE_KEY_IDENTITY_CHECK,)
+endif
+PUBLIC_KEY_FORCE_PREREQUISITE := $(if $(filter 1,$(KEY_IDENTITY_WILL_CHANGE)),FORCE_KEY_IDENTITY_CHECK,)
+
 .PHONY: all clean FORCE_KEY_IDENTITY_CHECK
 all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
 
 FORCE_KEY_IDENTITY_CHECK:
 
-$(KEY_ID_STAMP): FORCE_KEY_IDENTITY_CHECK $(KEY_ID_TOOL)
-	$(PYTHON) "$(KEY_ID_TOOL)" --key "$(KEY_FILE)" --stamp "$@"
+ifeq ($(KEY_IDENTITY_CHECKED_BY_PARENT),1)
+# The parent makes this stamp before entering the real sub-Make.  During a
+# dry-run it intentionally does not create the file, so use an empty rule here
+# instead of planning the same KEY action a second time.
+$(KEY_ID_STAMP): ;
+else
+$(KEY_ID_STAMP): $(KEY_ID_FORCE_PREREQUISITE) | $(KEY_ID_TOOL)
+	$(DIMA_PROGRESS_RUN) --label KEY --target "$@" -- \
+		$(PYTHON) "$(KEY_ID_TOOL)" --key "$(KEY_FILE)" --stamp "$@"
+endif
 
-$(PUBLIC_KEY_C): $(KEY_ID_STAMP) $(IMGTOOL)
+$(PUBLIC_KEY_C): $(PUBLIC_KEY_FORCE_PREREQUISITE) $(KEY_ID_STAMP) $(IMGTOOL)
 	@mkdir -p $(dir $@)
-	PYTHONPATH=$(IMGTOOL_PYTHONPATH) $(PYTHON) \
+	$(DIMA_PROGRESS_RUN) --label PUBKEY --target "$@" -- \
+		env PYTHONPATH=$(IMGTOOL_PYTHONPATH) $(PYTHON) \
 		"$(IMGTOOL)" getpub -k "$(KEY_FILE)" -o "$@"
 
 $(BUILD_DIR)/obj/ecdsa_pub_key.o: $(PUBLIC_KEY_C) | $(BUILD_DIR)/obj
