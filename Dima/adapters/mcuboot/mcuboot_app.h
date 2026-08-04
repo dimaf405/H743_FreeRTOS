@@ -14,6 +14,7 @@ enum mcuboot_confirm_result {
 };
 
 int mcuboot_confirm_running_image(void);
+void mcuboot_reboot_to_recovery(void);
 
 #ifdef __cplusplus
 }

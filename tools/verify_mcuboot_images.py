@@ -10,7 +10,9 @@ from intelhex import IntelHex
 
 
 BOOT_BASE = 0x08000000
-BOOT_SIZE = 0x00040000
+BOOT_SIZE = 0x00020000
+BOOT_DIAGNOSTICS_BASE = 0x08020000
+BOOT_DIAGNOSTICS_SIZE = 0x00020000
 PRIMARY_BASE = 0x08040000
 SLOT_SIZE = 0x000C0000
 HEADER_SIZE = 0x400
@@ -88,7 +90,7 @@ def main() -> None:
 
     boot_bin = args.boot_elf.with_suffix(".bin").read_bytes()
     if len(boot_bin) > BOOT_SIZE:
-        raise RuntimeError("MCUboot binary exceeds its 256 KiB partition")
+        raise RuntimeError("MCUboot binary exceeds its 128 KiB code sector")
     signed = verify_signed_image(args.signed)
 
     factory = IntelHex(str(args.factory))
@@ -105,6 +107,10 @@ def main() -> None:
         raise RuntimeError("factory HEX does not preserve the MCUboot start address")
     if app_from_hex != signed:
         raise RuntimeError("factory HEX signed application content mismatch")
+    diagnostics_end = BOOT_DIAGNOSTICS_BASE + BOOT_DIAGNOSTICS_SIZE
+    for start, end in boot_hex.segments():
+        if start < diagnostics_end and end > BOOT_DIAGNOSTICS_BASE:
+            raise RuntimeError("MCUboot HEX overlaps the boot diagnostics sector")
     for start, end in factory.segments():
         in_boot = BOOT_BASE <= start and end <= BOOT_BASE + BOOT_SIZE
         in_primary = PRIMARY_BASE <= start and end <= PRIMARY_BASE + SLOT_SIZE
@@ -118,6 +124,10 @@ def main() -> None:
 
     print("MCUboot image verification passed")
     print(f"  bootloader: {len(boot_bin)} bytes @ 0x{BOOT_BASE:08x}")
+    print(
+        f"  boot diagnostics: 0x{BOOT_DIAGNOSTICS_BASE:08x}-"
+        f"0x{diagnostics_end - 1:08x}"
+    )
     print(f"  signed app: {len(signed)} bytes @ 0x{PRIMARY_BASE:08x}")
     print(f"  app vector: 0x{app_vector:08x}")
 

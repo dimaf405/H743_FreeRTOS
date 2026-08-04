@@ -24,6 +24,8 @@
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
 #include "board_init.h"
+#include "boot_diagnostics.h"
+#include "boot_diagnostics_store.h"
 
 extern bool dima_platform_early_init(void);
 /* USER CODE END Includes */
@@ -68,12 +70,14 @@ void PeriphCommonClock_Config(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
+  dima_boot_stage_set(DIMA_BOOT_STAGE_MAIN_ENTER);
   board_vector_table_init();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  dima_boot_stage_set(DIMA_BOOT_STAGE_HAL_INIT);
   HAL_Init();
 
   /* USER CODE BEGIN Init */
@@ -81,13 +85,17 @@ int main(void)
   /* USER CODE END Init */
 
   /* Configure the system clock */
+  dima_boot_stage_set(DIMA_BOOT_STAGE_SYSTEM_CLOCK);
   SystemClock_Config();
+  dima_boot_diagnostics_store_enable();
 
 /* Configure the peripherals common clocks */
+  dima_boot_stage_set(DIMA_BOOT_STAGE_PERIPHERAL_CLOCK);
   PeriphCommonClock_Config();
 
   /* USER CODE BEGIN SysInit */
   board_init();
+  dima_boot_stage_set(DIMA_BOOT_STAGE_PLATFORM_EARLY);
   if (!dima_platform_early_init())
   {
     Error_Handler();
@@ -100,6 +108,7 @@ int main(void)
   /* USER CODE END 2 */
 
   /* Init scheduler */
+  dima_boot_stage_set(DIMA_BOOT_STAGE_KERNEL_INIT);
   osKernelInitialize();
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -119,6 +128,7 @@ int main(void)
   /* USER CODE END RTOS_QUEUES */
 
   /* USER CODE BEGIN RTOS_THREADS */
+  dima_boot_stage_set(DIMA_BOOT_STAGE_APP_TASK_CREATE);
   if (!app_bootstrap_create())
   {
     Error_Handler();
@@ -130,7 +140,12 @@ int main(void)
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
+  dima_boot_stage_set(DIMA_BOOT_STAGE_SCHEDULER_START);
   osKernelStart();
+
+  dima_boot_diagnostics_panic(
+      DIMA_BOOT_FAILURE_ERROR_HANDLER,
+      (uint32_t)(uintptr_t)__builtin_return_address(0), 0U);
 
   /* We should never get here as control is now taken by the scheduler */
   /* Infinite loop */
@@ -248,11 +263,9 @@ void PeriphCommonClock_Config(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+  dima_boot_diagnostics_panic(
+      DIMA_BOOT_FAILURE_ERROR_HANDLER,
+      (uint32_t)(uintptr_t)__builtin_return_address(0), 0U);
   /* USER CODE END Error_Handler_Debug */
 }
 
@@ -267,8 +280,9 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  dima_boot_diagnostics_panic(
+      DIMA_BOOT_FAILURE_ERROR_HANDLER, line,
+      (uint32_t)(uintptr_t)file);
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

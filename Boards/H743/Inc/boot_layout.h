@@ -11,7 +11,9 @@
 #define H743_FLASH_WRITE_SIZE       32UL
 
 #define H743_MCUBOOT_BASE           0x08000000UL
-#define H743_MCUBOOT_SIZE           0x00040000UL
+#define H743_MCUBOOT_SIZE           0x00020000UL
+#define H743_BOOT_DIAGNOSTICS_BASE  0x08020000UL
+#define H743_BOOT_DIAGNOSTICS_SIZE  0x00020000UL
 
 #define H743_PRIMARY_SLOT_BASE      0x08040000UL
 #define H743_PRIMARY_SLOT_SIZE      0x000C0000UL
@@ -26,8 +28,11 @@
 #define H743_MCUBOOT_HEADER_SIZE    0x00000400UL
 #define H743_APP_VECTOR_BASE        (H743_PRIMARY_SLOT_BASE + H743_MCUBOOT_HEADER_SIZE)
 
-#if (H743_MCUBOOT_BASE + H743_MCUBOOT_SIZE) != H743_PRIMARY_SLOT_BASE
-#error "MCUboot and primary slot layout is not contiguous"
+#if (H743_MCUBOOT_BASE + H743_MCUBOOT_SIZE) != H743_BOOT_DIAGNOSTICS_BASE
+#error "MCUboot and boot diagnostics layout is not contiguous"
+#endif
+#if (H743_BOOT_DIAGNOSTICS_BASE + H743_BOOT_DIAGNOSTICS_SIZE) != H743_PRIMARY_SLOT_BASE
+#error "Boot diagnostics and primary slot layout is not contiguous"
 #endif
 #if (H743_PRIMARY_SLOT_BASE + H743_PRIMARY_SLOT_SIZE) != H743_FLASH_BANK2_BASE
 #error "Primary slot must end at the Bank 1 boundary"

@@ -56,7 +56,9 @@ PUBLIC_KEY_C := $(BUILD_DIR)/generated/ecdsa_pub_key.c
 C_SOURCES := \
 Bootloader/Src/main.c \
 Bootloader/Src/boot_compat.c \
+Boards/H743/Src/boot_diagnostics_store.c \
 Bootloader/Src/boot_platform.c \
+Bootloader/Src/boot_primary.c \
 Bootloader/Src/boot_usb.c \
 Bootloader/Src/flash_map_backend.c \
 Bootloader/Src/keys.c \

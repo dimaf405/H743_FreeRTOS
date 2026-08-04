@@ -130,6 +130,8 @@ PROJECT_C_SOURCES ?= \
 	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c \
 	Dima/adapters/mcuboot/mcuboot_app.c \
 	Boards/H743/Src/board_init.c \
+	Boards/H743/Src/boot_diagnostics.c \
+	Boards/H743/Src/boot_diagnostics_store.c \
 	Boards/H743/Src/motor_pwm.c \
 	Dima/adapters/usb_console/usb_console.c \
 	Dima/platform/freertos/libc/cpp_runtime.c \

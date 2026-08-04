@@ -134,14 +134,24 @@ SECTIONS
     PROVIDE_HIDDEN (__fini_array_end = .);
   } >FLASH
 
-  /* used by the startup to initialize data */
-  _sidata = LOADADDR(.data);
+  /* Flash programming code runs from DTCM. It is copied together with .data
+     by the existing startup loop, but retains executable-only permissions. */
+  .dima_ramfunc :
+  {
+    . = ALIGN(4);
+    _sdata = .;
+    KEEP(*(.dima_ramfunc))
+    KEEP(*(.dima_ramfunc*))
+    . = ALIGN(32);
+  } >DTCMRAM AT> FLASH
+
+  /* used by the startup to initialize DTCM code and data */
+  _sidata = LOADADDR(.dima_ramfunc);
 
   /* Initialized data sections goes into RAM, load LMA copy after code */
   .data :
   {
     . = ALIGN(4);
-    _sdata = .;        /* create a global symbol at data start */
     *(.data)           /* .data sections */
     *(.data*)          /* .data* sections */
 
@@ -202,6 +212,16 @@ SECTIONS
     . = ALIGN(32);
   } >RAM_D1
 
+  /* SRAM capture is persisted to 0x08020000 for ROM USB DFU readback. */
+  .dima_boot_diag (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_boot_diag_start__ = .;
+    KEEP(*(.dima_boot_diag))
+    __dima_boot_diag_end__ = .;
+    . = ALIGN(32);
+  } >RAM_D3
+
   /* Remove information from the standard libraries */
   /DISCARD/ :
   {
@@ -214,4 +234,11 @@ SECTIONS
 
   ASSERT(ADDR(.isr_vector) == 0x08040400,
          "Application vector table must follow the 0x400-byte MCUboot header")
+  ASSERT(ADDR(.dima_boot_diag) == 0x38000000,
+         "Boot diagnostics must stay at the documented fixed address")
+  ASSERT(SIZEOF(.dima_boot_diag) <= 0x200,
+         "Boot diagnostics record exceeds its fixed 512-byte budget")
+  ASSERT((ADDR(.data) - ADDR(.dima_ramfunc)) ==
+         (LOADADDR(.data) - LOADADDR(.dima_ramfunc)),
+         "Startup DTCM copy span must have identical load and run gaps")
 }

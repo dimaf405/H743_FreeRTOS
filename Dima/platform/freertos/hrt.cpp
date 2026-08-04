@@ -1,5 +1,6 @@
 #include "hrt.hpp"
 
+#include "boot_diagnostics.h"
 #include "FreeRTOS.h"
 #include "stm32h7xx_hal.h"
 
@@ -33,6 +34,7 @@ bool hrt_init() noexcept
     }
 
     const std::uint32_t timer_clock = tim2_input_clock_hz();
+    dima_boot_detail_set(timer_clock);
     if (timer_clock != kExpectedTimerInputClockHz ||
         timer_clock < kTimerFrequencyHz ||
         (timer_clock % kTimerFrequencyHz) != 0U) {

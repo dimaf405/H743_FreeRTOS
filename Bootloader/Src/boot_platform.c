@@ -62,6 +62,9 @@ void boot_jump_to_application(uint32_t vector_address)
     __asm volatile(
         "msr msp, %0\n"
         "movs r0, #0\n"
+        "msr psp, r0\n"
+        "msr basepri, r0\n"
+        "msr faultmask, r0\n"
         "msr control, r0\n"
         "isb\n"
         "cpsie i\n"

@@ -22,6 +22,7 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "boot_diagnostics.h"
 #include "FreeRTOS.h"
 #include "task.h"
 /* USER CODE END Includes */
@@ -49,7 +50,15 @@ static volatile uint32_t g_hal_tick_suspended;
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
 __attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacked_frame);
-void BusFault_Handler_C(uint32_t *stacked_frame);
+__attribute__((noreturn)) void NMI_Handler_C(uint32_t *stacked_frame,
+                                             uint32_t exception_return);
+__attribute__((noreturn)) void HardFault_Handler_C(uint32_t *stacked_frame,
+                                                   uint32_t exception_return);
+__attribute__((noreturn)) void MemManage_Handler_C(uint32_t *stacked_frame,
+                                                   uint32_t exception_return);
+void BusFault_Handler_C(uint32_t *stacked_frame, uint32_t exception_return);
+__attribute__((noreturn)) void UsageFault_Handler_C(uint32_t *stacked_frame,
+                                                    uint32_t exception_return);
 void dima_hrt_overflow_isr(void);
 void dima_icm42688_exti_isr(uint16_t pending_pins);
 void xPortSysTickHandler(void);
@@ -86,46 +95,73 @@ extern TIM_HandleTypeDef htim8;
 /**
   * @brief This function handles Non maskable interrupt.
   */
-void NMI_Handler(void)
+__attribute__((naked)) void NMI_Handler(void)
 {
-  /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
+  __asm volatile (
+      "mov r1, lr\n"
+      "tst r1, #4\n"
+      "ite eq\n"
+      "mrseq r0, msp\n"
+      "mrsne r0, psp\n"
+      "tst r1, #0x10\n"
+      "it eq\n"
+      "addeq r0, r0, #72\n"
+      "b NMI_Handler_C\n");
+}
 
-  /* USER CODE END NonMaskableInt_IRQn 0 */
-  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
-  while (1)
-  {
-  }
-  /* USER CODE END NonMaskableInt_IRQn 1 */
+__attribute__((noreturn)) void NMI_Handler_C(uint32_t *stacked_frame,
+                                             uint32_t exception_return)
+{
+  dima_boot_diagnostics_capture_fault(
+      DIMA_BOOT_FAILURE_NMI, stacked_frame, exception_return);
 }
 
 /**
   * @brief This function handles Hard fault interrupt.
   */
-void HardFault_Handler(void)
+__attribute__((naked)) void HardFault_Handler(void)
 {
-  /* USER CODE BEGIN HardFault_IRQn 0 */
+  __asm volatile (
+      "mov r1, lr\n"
+      "tst r1, #4\n"
+      "ite eq\n"
+      "mrseq r0, msp\n"
+      "mrsne r0, psp\n"
+      "tst r1, #0x10\n"
+      "it eq\n"
+      "addeq r0, r0, #72\n"
+      "b HardFault_Handler_C\n");
+}
 
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
+__attribute__((noreturn)) void HardFault_Handler_C(
+    uint32_t *stacked_frame, uint32_t exception_return)
+{
+  dima_boot_diagnostics_capture_fault(
+      DIMA_BOOT_FAILURE_HARDFAULT, stacked_frame, exception_return);
 }
 
 /**
   * @brief This function handles Memory management fault.
   */
-void MemManage_Handler(void)
+__attribute__((naked)) void MemManage_Handler(void)
 {
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
+  __asm volatile (
+      "mov r1, lr\n"
+      "tst r1, #4\n"
+      "ite eq\n"
+      "mrseq r0, msp\n"
+      "mrsne r0, psp\n"
+      "tst r1, #0x10\n"
+      "it eq\n"
+      "addeq r0, r0, #72\n"
+      "b MemManage_Handler_C\n");
+}
 
-  /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
+__attribute__((noreturn)) void MemManage_Handler_C(
+    uint32_t *stacked_frame, uint32_t exception_return)
+{
+  dima_boot_diagnostics_capture_fault(
+      DIMA_BOOT_FAILURE_MEMMANAGE, stacked_frame, exception_return);
 }
 
 /**
@@ -135,11 +171,12 @@ __attribute__((naked)) void BusFault_Handler(void)
 {
   /* 仅参数 Flash 安全读允许恢复；其他 BusFault 仍保持 fail-closed。 */
   __asm volatile (
-      "tst lr, #4\n"
+      "mov r1, lr\n"
+      "tst r1, #4\n"
       "ite eq\n"
       "mrseq r0, msp\n"
       "mrsne r0, psp\n"
-      "tst lr, #0x10\n"
+      "tst r1, #0x10\n"
       "it eq\n"
       "addeq r0, r0, #72\n"
       "b BusFault_Handler_C\n");
@@ -151,30 +188,38 @@ __attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacke
   return 0;
 }
 
-void BusFault_Handler_C(uint32_t *stacked_frame)
+void BusFault_Handler_C(uint32_t *stacked_frame, uint32_t exception_return)
 {
   if (dima_parameter_flash_recover_busfault(stacked_frame) != 0)
   {
     return;
   }
-  while (1)
-  {
-  }
+  dima_boot_diagnostics_capture_fault(
+      DIMA_BOOT_FAILURE_BUSFAULT, stacked_frame, exception_return);
 }
 
 /**
   * @brief This function handles Undefined instruction or illegal state.
   */
-void UsageFault_Handler(void)
+__attribute__((naked)) void UsageFault_Handler(void)
 {
-  /* USER CODE BEGIN UsageFault_IRQn 0 */
+  __asm volatile (
+      "mov r1, lr\n"
+      "tst r1, #4\n"
+      "ite eq\n"
+      "mrseq r0, msp\n"
+      "mrsne r0, psp\n"
+      "tst r1, #0x10\n"
+      "it eq\n"
+      "addeq r0, r0, #72\n"
+      "b UsageFault_Handler_C\n");
+}
 
-  /* USER CODE END UsageFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
+__attribute__((noreturn)) void UsageFault_Handler_C(
+    uint32_t *stacked_frame, uint32_t exception_return)
+{
+  dima_boot_diagnostics_capture_fault(
+      DIMA_BOOT_FAILURE_USAGEFAULT, stacked_frame, exception_return);
 }
 
 /**

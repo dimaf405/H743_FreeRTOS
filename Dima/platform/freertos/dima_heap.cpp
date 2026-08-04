@@ -1,6 +1,7 @@
 #include "dima_platform.hpp"
 #include "hrt.hpp"
 #include "events/events.hpp"
+#include "boot_diagnostics.h"
 
 #include <atomic>
 #include <new>
@@ -159,7 +160,16 @@ void record_allocation_failure() noexcept
 
 extern "C" bool dima_platform_early_init(void)
 {
-    return dima::platform::heap_init() && hrt_init();
+    dima_boot_stage_set(DIMA_BOOT_STAGE_HEAP_INIT);
+    if (!dima::platform::heap_init()) {
+        return false;
+    }
+    dima_boot_stage_set(DIMA_BOOT_STAGE_HRT_INIT);
+    if (!hrt_init()) {
+        return false;
+    }
+    dima_boot_stage_set(DIMA_BOOT_STAGE_PLATFORM_READY);
+    return true;
 }
 
 extern "C" void vApplicationMallocFailedHook(void)

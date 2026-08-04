@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "boot_layout.h"
+#include "dima_boot_request.h"
 #include "freertos/flash_operation_lock.h"
 #include "safety/ArmingFlashInterlock.h"
 #include "stm32h7xx_hal.h"
@@ -79,4 +80,10 @@ out:
     }
     dima_flash_operation_unlock();
     return result;
+}
+
+void mcuboot_reboot_to_recovery(void)
+{
+    dima_boot_request_set_recovery();
+    NVIC_SystemReset();
 }

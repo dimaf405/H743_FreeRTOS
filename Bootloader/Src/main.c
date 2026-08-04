@@ -2,10 +2,14 @@
 
 #include <stdint.h>
 
+#include "boot_diagnostics_store.h"
+#include "boot_layout.h"
 #include "boot_platform.h"
+#include "boot_primary.h"
 #include "boot_serial/boot_serial.h"
 #include "boot_usb.h"
 #include "bootutil/bootutil.h"
+#include "dima_boot_request.h"
 
 #define USB_RECOVERY_WINDOW_MS 3000
 
@@ -22,15 +26,55 @@ int main(void)
 {
     struct boot_rsp response;
     FIH_DECLARE(boot_result, FIH_FAILURE);
+    uint32_t boot_request = dima_boot_request_read();
+    const int captured_failure = dima_boot_diagnostics_capture_pending();
+
+    /* Never carry the live USB/PLL state across the application boundary.
+     * boot_go() sets this one-shot marker only after it has selected and
+     * validated Primary.  The software reset gives this path reset-like
+     * clocks and peripherals.  Primary is verified again without processing
+     * the trailer, because a second boot_go() would immediately revert an
+     * unconfirmed test image. */
+    if (!captured_failure &&
+        boot_request == DIMA_BOOT_REQUEST_APPLICATION_MAGIC) {
+        uint32_t vector_address = 0U;
+        if (dima_boot_request_clear() &&
+            boot_primary_image_validate(&vector_address)) {
+            boot_jump_to_application(vector_address);
+        }
+    }
 
     HAL_Init();
     SystemClock_Config();
+    dima_boot_diagnostics_store_enable();
     USBClock_Config();
 
+    if (captured_failure) {
+        (void)dima_boot_request_clear();
+        boot_request = 0U;
+        (void)dima_boot_diagnostics_store_pending(1);
+
+        /* A captured application failure must not be followed by another
+         * automatic application jump. Keep USB recovery stable; the same
+         * record is readable from 0x08020000 through STM32 ROM DFU. */
+        if (boot_usb_init() == 0) {
+            boot_serial_start(&usb_console);
+        }
+        for (;;) {
+        }
+    }
+
     if (boot_usb_init() == 0) {
-        /* Any valid SMP request during this window keeps the device in
-         * MCUboot recovery until mcumgr issues a reset. */
-        boot_serial_check_start(&usb_console, USB_RECOVERY_WINDOW_MS);
+        if (boot_request == DIMA_BOOT_REQUEST_RECOVERY_MAGIC) {
+            /* Consume the request only after USB is ready.  mcumgr reset then
+             * takes the ordinary boot path instead of re-entering recovery. */
+            dima_boot_request_clear();
+            boot_serial_start(&usb_console);
+        } else {
+            /* Any valid SMP request during this window keeps the device in
+             * MCUboot recovery until mcumgr issues a reset. */
+            boot_serial_check_start(&usb_console, USB_RECOVERY_WINDOW_MS);
+        }
         boot_usb_deinit();
     }
 
@@ -38,8 +82,20 @@ int main(void)
     if (FIH_EQ(boot_result, FIH_SUCCESS)) {
         const uint32_t vector_address = response.br_image_off +
                                         response.br_hdr->ih_hdr_size;
-        if (boot_vector_is_valid(vector_address)) {
-            boot_jump_to_application(vector_address);
+        /* A failed bridge attempt must stop in Recovery instead of creating
+         * an endless reset loop.  Only images using this board's fixed header
+         * and vector contract may request a new bridge reset. */
+        if (boot_request != DIMA_BOOT_REQUEST_APPLICATION_MAGIC &&
+            vector_address == H743_APP_VECTOR_BASE &&
+            boot_vector_is_valid(vector_address)) {
+            if (dima_boot_request_set_application()) {
+                NVIC_SystemReset();
+            }
+
+            /* Never fall back to a hot jump.  If the backup-domain marker
+             * cannot be stored, keeping Recovery available is safer than
+             * handing live USB/PLL/NVIC state to the application. */
+            (void)dima_boot_request_clear();
         }
     }
 

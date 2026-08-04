@@ -7,7 +7,8 @@
 **  Author		: STM32CubeMX
 **
 **  Abstract    : MCUboot linker script for STM32H743VITx.
-**                The bootloader is restricted to the first two 128 KiB sectors.
+**                The bootloader is restricted to the first 128 KiB sector.
+**                The second sector is reserved for USB-DFU-readable diagnostics.
 **
 **                Set heap size, stack size and stack location according
 **                to application requirements.
@@ -66,7 +67,7 @@ RAM_D1 (xrw)      : ORIGIN = 0x24000000, LENGTH = 512K
 RAM_D2 (xrw)      : ORIGIN = 0x30000000, LENGTH = 288K
 RAM_D3 (xrw)      : ORIGIN = 0x38000000, LENGTH = 64K
 ITCMRAM (xrw)      : ORIGIN = 0x00000000, LENGTH = 64K
-FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 256K
+FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 128K
 }
 
 /* Define output sections */
@@ -134,14 +135,24 @@ SECTIONS
     PROVIDE_HIDDEN (__fini_array_end = .);
   } >FLASH
 
-  /* used by the startup to initialize data */
-  _sidata = LOADADDR(.data);
-
-  /* Initialized data sections goes into RAM, load LMA copy after code */
-  .data : 
+  /* Flash programming code runs from DTCM. It is copied together with .data
+     by the existing startup loop, but retains executable-only permissions. */
+  .dima_ramfunc :
   {
     . = ALIGN(4);
-    _sdata = .;        /* create a global symbol at data start */
+    _sdata = .;
+    KEEP(*(.dima_ramfunc))
+    KEEP(*(.dima_ramfunc*))
+    . = ALIGN(32);
+  } >DTCMRAM AT> FLASH
+
+  /* used by the startup to initialize DTCM code and data */
+  _sidata = LOADADDR(.dima_ramfunc);
+
+  /* Initialized data sections goes into RAM, load LMA copy after code */
+  .data :
+  {
+    . = ALIGN(4);
     *(.data)           /* .data sections */
     *(.data*)          /* .data* sections */
 
@@ -182,7 +193,10 @@ SECTIONS
   .ARM.attributes 0 : { *(.ARM.attributes) }
 
   ASSERT(_etext <= ORIGIN(FLASH) + LENGTH(FLASH),
-         "MCUboot exceeds the reserved 256 KiB bootloader region")
+         "MCUboot exceeds its 128 KiB code sector")
+  ASSERT((ADDR(.data) - ADDR(.dima_ramfunc)) ==
+         (LOADADDR(.data) - LOADADDR(.dima_ramfunc)),
+         "Startup DTCM copy span must have identical load and run gaps")
 }
 
 
