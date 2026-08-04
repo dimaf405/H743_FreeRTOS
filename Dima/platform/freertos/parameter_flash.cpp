@@ -217,7 +217,11 @@ bool flash_crc32(uintptr_t address, size_t length, uint32_t &result) noexcept
 
 void invalidate_flash(uintptr_t address, size_t length) noexcept
 {
-    if (length == 0U) {
+    // MCUboot disables D-cache before handing control to the application and
+    // the current application does not enable it again.  Cache maintenance is
+    // unnecessary in that state and repeatedly writing DCIMVAC for the whole
+    // parameter sector has been observed to raise an imprecise BusFault.
+    if (length == 0U || (SCB->CCR & SCB_CCR_DC_Msk) == 0U) {
         return;
     }
     SCB_InvalidateDCache_by_Addr(reinterpret_cast<void *>(address),
