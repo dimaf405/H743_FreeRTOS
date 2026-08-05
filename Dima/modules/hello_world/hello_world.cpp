@@ -30,6 +30,8 @@ bool HelloWorld::start()
         return false;
     }
 
+    sequence_ = 0U;
+
     const bool scheduled = ScheduleOnInterval(
         static_cast<uint32_t>(APP_HELLO_WORLD_INTERVAL_MS) * 1000U);
     if (!scheduled) {
@@ -46,6 +48,7 @@ void HelloWorld::stop()
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
+    sequence_ = 0U;
 }
 
 dima::middleware::lifecycle::ModuleState HelloWorld::state() const

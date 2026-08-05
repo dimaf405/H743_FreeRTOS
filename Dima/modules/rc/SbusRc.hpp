@@ -39,6 +39,7 @@ private:
     static constexpr std::size_t kReadBufferSize = 64U;
     void Run() override;
     static void notify_from_isr(void *context) noexcept;
+    void reset_runtime_state() noexcept;
     void schedule_retry() noexcept;
     void allocate_perf_counters() noexcept;
     void free_perf_counters() noexcept;

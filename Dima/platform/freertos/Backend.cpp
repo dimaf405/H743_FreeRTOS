@@ -1,0 +1,771 @@
+#include "Backend.hpp"
+
+#include "platform/api/platform_config.h"
+
+#include <atomic>
+#include <cstring>
+#include <new>
+
+extern "C" {
+#include "FreeRTOS.h"
+#include "portable.h"
+#include "semphr.h"
+#include "task.h"
+}
+
+namespace dima::platform::freertos {
+namespace {
+
+constexpr std::size_t kHeapBytes = 256U * 1024U;
+constexpr std::size_t kMutexCount = 12U;
+constexpr std::size_t kSignalCount = 16U;
+constexpr std::size_t kTaskCount = 16U;
+constexpr std::size_t kTaskStackPoolBytes = 48U * 1024U;
+constexpr std::size_t kTaskStackBlockBytes = 256U;
+constexpr std::size_t kTaskStackBlocks =
+    kTaskStackPoolBytes / kTaskStackBlockBytes;
+constexpr std::size_t kTaskBitmapWords = (kTaskStackBlocks + 31U) / 32U;
+constexpr std::uint64_t kMicrosecondsPerSecond = 1000000ULL;
+
+extern "C" std::uint8_t __dima_heap_start__;
+extern "C" std::uint8_t __dima_heap_end__;
+
+alignas(32) std::uint8_t g_task_stack_pool[kTaskStackPoolBytes]
+    __attribute__((section(".dima_task_pool")));
+
+TickType_t timeout_to_ticks(Timeout timeout) noexcept
+{
+    if (timeout.infinite) {
+        return portMAX_DELAY;
+    }
+    if (timeout.microseconds == 0U) {
+        return 0U;
+    }
+
+    constexpr TickType_t kMaximumFiniteTicks = portMAX_DELAY - 1U;
+    constexpr std::uint64_t kMaximumFiniteUs =
+        (static_cast<std::uint64_t>(kMaximumFiniteTicks) *
+         kMicrosecondsPerSecond) /
+        DIMA_KERNEL_TICK_HZ;
+    if (timeout.microseconds >= kMaximumFiniteUs) {
+        return kMaximumFiniteTicks;
+    }
+
+    std::uint64_t ticks =
+        (timeout.microseconds * DIMA_KERNEL_TICK_HZ +
+         kMicrosecondsPerSecond - 1U) /
+        kMicrosecondsPerSecond;
+    if (ticks == 0U) {
+        ticks = 1U;
+    }
+    return static_cast<TickType_t>(ticks);
+}
+
+bool pointer_in_range(std::uintptr_t pointer, std::uintptr_t begin,
+                      std::uintptr_t end, std::size_t stride) noexcept
+{
+    return pointer >= begin && pointer < end &&
+           ((pointer - begin) % stride) == 0U;
+}
+
+class Backend final : public ExecutionContext,
+                      public CriticalSection,
+                      public Synchronization,
+                      public TaskRuntime,
+                      public Heap,
+                      public FlashTransactionManager {
+public:
+    bool initialize_backend() noexcept
+    {
+        if (initialized_) {
+            return true;
+        }
+        if (!initialize()) {
+            return false;
+        }
+        flash_mutex_ = create_mutex(MutexKind::Recursive);
+        initialized_ = static_cast<bool>(flash_mutex_);
+        return initialized_;
+    }
+
+    bool in_interrupt() const noexcept override
+    {
+        return xPortIsInsideInterrupt() != pdFALSE;
+    }
+
+    bool scheduler_running() const noexcept override
+    {
+        return xTaskGetSchedulerState() == taskSCHEDULER_RUNNING;
+    }
+
+    bool in_realtime_task() const noexcept override
+    {
+        if (in_interrupt()) {
+            return true;
+        }
+        if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+            return false;
+        }
+        const TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+        auto &mutable_backend = const_cast<Backend &>(*this);
+        const CriticalToken token = mutable_backend.enter();
+        bool realtime = false;
+        for (const auto &slot : task_slots_) {
+            if (slot.in_use && slot.realtime && slot.native == current_task) {
+                realtime = true;
+                break;
+            }
+        }
+        mutable_backend.leave(token);
+        return realtime;
+    }
+
+    CriticalToken enter() noexcept override
+    {
+        CriticalToken token{};
+        token.from_interrupt = in_interrupt();
+        if (token.from_interrupt) {
+            token.state = taskENTER_CRITICAL_FROM_ISR();
+        } else {
+            taskENTER_CRITICAL();
+        }
+        return token;
+    }
+
+    void leave(CriticalToken token) noexcept override
+    {
+        if (token.from_interrupt) {
+            taskEXIT_CRITICAL_FROM_ISR(
+                static_cast<UBaseType_t>(token.state));
+        } else {
+            taskEXIT_CRITICAL();
+        }
+    }
+
+    MutexHandle create_mutex(MutexKind kind) noexcept override
+    {
+        if (in_interrupt()) {
+            return {};
+        }
+        CriticalToken token = enter();
+        for (auto &slot : mutex_slots_) {
+            if (slot.in_use) {
+                continue;
+            }
+            slot.in_use = true;
+            slot.recursive = kind == MutexKind::Recursive;
+            slot.native = slot.recursive
+                              ? xSemaphoreCreateRecursiveMutexStatic(
+                                    &slot.storage)
+                              : xSemaphoreCreateMutexStatic(&slot.storage);
+            if (slot.native == nullptr) {
+                slot.in_use = false;
+                slot.recursive = false;
+                leave(token);
+                return {};
+            }
+            leave(token);
+            return MutexHandle{reinterpret_cast<std::uintptr_t>(&slot)};
+        }
+        leave(token);
+        return {};
+    }
+
+    void destroy_mutex(MutexHandle handle) noexcept override
+    {
+        if (in_interrupt()) {
+            return;
+        }
+        MutexSlot *const slot = mutex_slot(handle);
+        if (slot == nullptr) {
+            return;
+        }
+        CriticalToken token = enter();
+        if (slot->in_use && slot->native != nullptr) {
+            vSemaphoreDelete(slot->native);
+            slot->native = nullptr;
+            slot->recursive = false;
+            slot->in_use = false;
+            std::memset(&slot->storage, 0, sizeof(slot->storage));
+        }
+        leave(token);
+    }
+
+    bool lock(MutexHandle handle, Timeout timeout) noexcept override
+    {
+        if (in_interrupt()) {
+            return false;
+        }
+        MutexSlot *const slot = mutex_slot(handle);
+        if (slot == nullptr || !slot->in_use || slot->native == nullptr) {
+            return false;
+        }
+        const TickType_t ticks = timeout_to_ticks(timeout);
+        return slot->recursive
+                   ? xSemaphoreTakeRecursive(slot->native, ticks) == pdTRUE
+                   : xSemaphoreTake(slot->native, ticks) == pdTRUE;
+    }
+
+    void unlock(MutexHandle handle) noexcept override
+    {
+        if (in_interrupt()) {
+            return;
+        }
+        MutexSlot *const slot = mutex_slot(handle);
+        if (slot == nullptr || !slot->in_use || slot->native == nullptr) {
+            return;
+        }
+        if (slot->recursive) {
+            (void)xSemaphoreGiveRecursive(slot->native);
+        } else {
+            (void)xSemaphoreGive(slot->native);
+        }
+    }
+
+    SignalHandle create_signal() noexcept override
+    {
+        if (in_interrupt()) {
+            return {};
+        }
+        CriticalToken token = enter();
+        for (auto &slot : signal_slots_) {
+            if (slot.in_use) {
+                continue;
+            }
+            slot.in_use = true;
+            slot.native = xSemaphoreCreateBinaryStatic(&slot.storage);
+            if (slot.native == nullptr) {
+                slot.in_use = false;
+                leave(token);
+                return {};
+            }
+            leave(token);
+            return SignalHandle{reinterpret_cast<std::uintptr_t>(&slot)};
+        }
+        leave(token);
+        return {};
+    }
+
+    void destroy_signal(SignalHandle handle) noexcept override
+    {
+        if (in_interrupt()) {
+            return;
+        }
+        SignalSlot *const slot = signal_slot(handle);
+        if (slot == nullptr) {
+            return;
+        }
+        CriticalToken token = enter();
+        if (slot->in_use && slot->native != nullptr) {
+            vSemaphoreDelete(slot->native);
+            slot->native = nullptr;
+            slot->in_use = false;
+            std::memset(&slot->storage, 0, sizeof(slot->storage));
+        }
+        leave(token);
+    }
+
+    bool wait(SignalHandle handle, Timeout timeout) noexcept override
+    {
+        if (in_interrupt()) {
+            return false;
+        }
+        SignalSlot *const slot = signal_slot(handle);
+        return slot != nullptr && slot->in_use && slot->native != nullptr &&
+               xSemaphoreTake(slot->native, timeout_to_ticks(timeout)) ==
+                   pdTRUE;
+    }
+
+    void notify(SignalHandle handle) noexcept override
+    {
+        if (in_interrupt()) {
+            notify_from_isr(handle);
+            return;
+        }
+        SignalSlot *const slot = signal_slot(handle);
+        if (slot != nullptr && slot->in_use && slot->native != nullptr) {
+            (void)xSemaphoreGive(slot->native);
+        }
+    }
+
+    void notify_from_isr(SignalHandle handle) noexcept override
+    {
+        SignalSlot *const slot = signal_slot(handle);
+        if (slot == nullptr || !slot->in_use || slot->native == nullptr) {
+            return;
+        }
+        BaseType_t higher_priority_task_woken = pdFALSE;
+        (void)xSemaphoreGiveFromISR(slot->native,
+                                    &higher_priority_task_woken);
+        portYIELD_FROM_ISR(higher_priority_task_woken);
+    }
+
+    TaskHandle create(const TaskConfig &config, TaskEntry entry,
+                      void *argument) noexcept override
+    {
+        if (in_interrupt() || config.name == nullptr || entry == nullptr ||
+            config.stack_bytes == 0U || config.priority >= configMAX_PRIORITIES ||
+            ::strnlen(config.name, DIMA_TASK_NAME_CAPACITY) >=
+                DIMA_TASK_NAME_CAPACITY) {
+            return {};
+        }
+
+        const std::size_t requested_blocks =
+            (config.stack_bytes + kTaskStackBlockBytes - 1U) /
+            kTaskStackBlockBytes;
+        if (requested_blocks == 0U || requested_blocks > kTaskStackBlocks) {
+            return {};
+        }
+
+        CriticalToken token = enter();
+        TaskSlot *slot = nullptr;
+        for (auto &candidate : task_slots_) {
+            if (!candidate.in_use) {
+                slot = &candidate;
+                break;
+            }
+        }
+        const std::size_t first_block = find_free_blocks(requested_blocks);
+        if (slot == nullptr || first_block == kTaskStackBlocks) {
+            leave(token);
+            return {};
+        }
+        mark_blocks(first_block, requested_blocks, true);
+        slot->in_use = true;
+        slot->realtime = config.realtime;
+        slot->first_block = first_block;
+        slot->block_count = requested_blocks;
+        leave(token);
+
+        auto *const stack = reinterpret_cast<StackType_t *>(
+            &g_task_stack_pool[first_block * kTaskStackBlockBytes]);
+        const std::size_t stack_bytes = requested_blocks * kTaskStackBlockBytes;
+        std::memset(stack, 0, stack_bytes);
+
+        /* Keep the scheduler excluded until the native handle is published.
+         * xTaskCreateStatic() may make a higher-priority task ready immediately;
+         * the outer critical section defers that context switch until the slot
+         * is complete. */
+        token = enter();
+        slot->native = xTaskCreateStatic(
+            entry, config.name,
+            static_cast<std::uint32_t>(stack_bytes / sizeof(StackType_t)),
+            argument, config.priority, stack, &slot->storage);
+        if (slot->native == nullptr) {
+            release_task_slot(*slot);
+            leave(token);
+            return {};
+        }
+        const TaskHandle handle{reinterpret_cast<std::uintptr_t>(slot)};
+        leave(token);
+        return handle;
+    }
+
+    bool destroy(TaskHandle handle) noexcept override
+    {
+        if (in_interrupt()) {
+            return false;
+        }
+        TaskSlot *const slot = task_slot(handle);
+        CriticalToken token = enter();
+        if (slot == nullptr || !slot->in_use || slot->native == nullptr) {
+            leave(token);
+            return false;
+        }
+        const TaskHandle_t native = slot->native;
+        if (native == xTaskGetCurrentTaskHandle()) {
+            leave(token);
+            return false;
+        }
+        vTaskDelete(native);
+        release_task_slot(*slot);
+        leave(token);
+        return true;
+    }
+
+    TaskHandle current() const noexcept override
+    {
+        if (in_interrupt() ||
+            xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
+            return {};
+        }
+        const TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+        auto &mutable_backend = const_cast<Backend &>(*this);
+        const CriticalToken token = mutable_backend.enter();
+        TaskHandle handle{};
+        for (const auto &slot : task_slots_) {
+            if (slot.in_use && slot.native == current_task) {
+                handle = TaskHandle{
+                    reinterpret_cast<std::uintptr_t>(&slot)};
+                break;
+            }
+        }
+        mutable_backend.leave(token);
+        return handle;
+    }
+
+    void suspend_current() noexcept override
+    {
+        if (!in_interrupt()) {
+            vTaskSuspend(nullptr);
+        }
+    }
+
+    void delay(Timeout duration) noexcept override
+    {
+        if (in_interrupt() || duration.infinite) {
+            return;
+        }
+        vTaskDelay(timeout_to_ticks(duration));
+    }
+
+    bool initialize() noexcept override
+    {
+        if (heap_initialized_) {
+            return true;
+        }
+        auto *const begin = &__dima_heap_start__;
+        auto *const end = &__dima_heap_end__;
+        if ((reinterpret_cast<std::uintptr_t>(begin) & 31U) != 0U ||
+            static_cast<std::size_t>(end - begin) != kHeapBytes) {
+            return false;
+        }
+        const HeapRegion_t regions[] = {
+            {begin, kHeapBytes},
+            {nullptr, 0U},
+        };
+        vPortDefineHeapRegions(regions);
+        heap_initialized_ = true;
+        return true;
+    }
+
+    void *allocate(std::size_t size,
+                   AllocationDomain domain) noexcept override
+    {
+        if (!heap_initialized_ || size == 0U ||
+            domain == AllocationDomain::RealtimeForbidden ||
+            in_realtime_task()) {
+            record_failure();
+            return nullptr;
+        }
+        void *const memory = pvPortMalloc(size);
+        if (memory == nullptr) {
+            record_failure();
+        }
+        return memory;
+    }
+
+    void deallocate(void *pointer) noexcept override
+    {
+        if (pointer != nullptr) {
+            vPortFree(pointer);
+        }
+    }
+
+    HeapStats stats() const noexcept override
+    {
+        HeapStats_t native{};
+        if (heap_initialized_) {
+            vPortGetHeapStats(&native);
+        }
+        return HeapStats{
+            kHeapBytes,
+            native.xAvailableHeapSpaceInBytes,
+            native.xMinimumEverFreeBytesRemaining,
+            native.xSizeOfLargestFreeBlockInBytes,
+            allocation_failures_.load(std::memory_order_relaxed),
+        };
+    }
+
+    std::size_t alignment() const noexcept override
+    {
+        return portBYTE_ALIGNMENT;
+    }
+
+    void record_failure() noexcept override
+    {
+        allocation_failures_.fetch_add(1U, std::memory_order_relaxed);
+    }
+
+    bool acquire(Timeout timeout) noexcept override
+    {
+        return flash_mutex_ && lock(flash_mutex_, timeout);
+    }
+
+    void release() noexcept override
+    {
+        if (flash_mutex_) {
+            unlock(flash_mutex_);
+        }
+    }
+
+private:
+    struct MutexSlot {
+        StaticSemaphore_t storage{};
+        SemaphoreHandle_t native{nullptr};
+        bool recursive{false};
+        bool in_use{false};
+    };
+
+    struct SignalSlot {
+        StaticSemaphore_t storage{};
+        SemaphoreHandle_t native{nullptr};
+        bool in_use{false};
+    };
+
+    struct TaskSlot {
+        StaticTask_t storage{};
+        TaskHandle_t native{nullptr};
+        std::size_t first_block{0U};
+        std::size_t block_count{0U};
+        bool realtime{false};
+        bool in_use{false};
+    };
+
+    MutexSlot *mutex_slot(MutexHandle handle) noexcept
+    {
+        const std::uintptr_t begin =
+            reinterpret_cast<std::uintptr_t>(&mutex_slots_[0]);
+        const std::uintptr_t end =
+            reinterpret_cast<std::uintptr_t>(&mutex_slots_[kMutexCount]);
+        return pointer_in_range(handle.value, begin, end, sizeof(MutexSlot))
+                   ? reinterpret_cast<MutexSlot *>(handle.value)
+                   : nullptr;
+    }
+
+    SignalSlot *signal_slot(SignalHandle handle) noexcept
+    {
+        const std::uintptr_t begin =
+            reinterpret_cast<std::uintptr_t>(&signal_slots_[0]);
+        const std::uintptr_t end =
+            reinterpret_cast<std::uintptr_t>(&signal_slots_[kSignalCount]);
+        return pointer_in_range(handle.value, begin, end, sizeof(SignalSlot))
+                   ? reinterpret_cast<SignalSlot *>(handle.value)
+                   : nullptr;
+    }
+
+    TaskSlot *task_slot(TaskHandle handle) noexcept
+    {
+        const std::uintptr_t begin =
+            reinterpret_cast<std::uintptr_t>(&task_slots_[0]);
+        const std::uintptr_t end =
+            reinterpret_cast<std::uintptr_t>(&task_slots_[kTaskCount]);
+        return pointer_in_range(handle.value, begin, end, sizeof(TaskSlot))
+                   ? reinterpret_cast<TaskSlot *>(handle.value)
+                   : nullptr;
+    }
+
+    bool block_used(std::size_t block) const noexcept
+    {
+        return (task_stack_bitmap_[block / 32U] &
+                (1UL << (block % 32U))) != 0U;
+    }
+
+    std::size_t find_free_blocks(std::size_t count) const noexcept
+    {
+        std::size_t run = 0U;
+        for (std::size_t block = 0U; block < kTaskStackBlocks; ++block) {
+            run = block_used(block) ? 0U : run + 1U;
+            if (run == count) {
+                return block + 1U - count;
+            }
+        }
+        return kTaskStackBlocks;
+    }
+
+    void mark_blocks(std::size_t first, std::size_t count,
+                     bool used) noexcept
+    {
+        for (std::size_t block = first; block < first + count; ++block) {
+            const std::uint32_t mask = 1UL << (block % 32U);
+            if (used) {
+                task_stack_bitmap_[block / 32U] |= mask;
+            } else {
+                task_stack_bitmap_[block / 32U] &= ~mask;
+            }
+        }
+    }
+
+    void release_task_slot(TaskSlot &slot) noexcept
+    {
+        mark_blocks(slot.first_block, slot.block_count, false);
+        slot.native = nullptr;
+        slot.first_block = 0U;
+        slot.block_count = 0U;
+        slot.realtime = false;
+        slot.in_use = false;
+        std::memset(&slot.storage, 0, sizeof(slot.storage));
+    }
+
+    MutexSlot mutex_slots_[kMutexCount]{};
+    SignalSlot signal_slots_[kSignalCount]{};
+    TaskSlot task_slots_[kTaskCount]{};
+    std::uint32_t task_stack_bitmap_[kTaskBitmapWords]{};
+    std::atomic<std::uint32_t> allocation_failures_{0U};
+    MutexHandle flash_mutex_{};
+    bool heap_initialized_{false};
+    bool initialized_{false};
+};
+
+Backend &backend() noexcept
+{
+    static Backend instance;
+    return instance;
+}
+
+} // namespace
+
+bool initialize() noexcept { return backend().initialize_backend(); }
+ExecutionContext &execution_context() noexcept { return backend(); }
+CriticalSection &critical_section() noexcept { return backend(); }
+Synchronization &synchronization() noexcept { return backend(); }
+TaskRuntime &task_runtime() noexcept { return backend(); }
+Heap &heap() noexcept { return backend(); }
+FlashTransactionManager &flash_transactions() noexcept { return backend(); }
+
+} // namespace dima::platform::freertos
+
+extern "C" void vApplicationMallocFailedHook(void)
+{
+    dima::platform::freertos::heap().record_failure();
+}
+
+namespace {
+
+void *allocate_aligned(std::size_t size, std::align_val_t requested) noexcept
+{
+    std::size_t alignment = static_cast<std::size_t>(requested);
+    if (alignment < alignof(void *)) {
+        alignment = alignof(void *);
+    }
+    if ((alignment & (alignment - 1U)) != 0U ||
+        size > SIZE_MAX - (alignment - 1U) - sizeof(void *)) {
+        dima::platform::freertos::heap().record_failure();
+        return nullptr;
+    }
+
+    void *const raw = dima::platform::freertos::heap().allocate(
+        size + alignment - 1U + sizeof(void *),
+        dima::platform::AllocationDomain::Service);
+    if (raw == nullptr) {
+        return nullptr;
+    }
+    const std::uintptr_t first =
+        reinterpret_cast<std::uintptr_t>(raw) + sizeof(void *);
+    const std::uintptr_t aligned =
+        (first + alignment - 1U) & ~(alignment - 1U);
+    auto **const header = reinterpret_cast<void **>(aligned);
+    header[-1] = raw;
+    return reinterpret_cast<void *>(aligned);
+}
+
+void deallocate_aligned(void *pointer) noexcept
+{
+    if (pointer == nullptr) {
+        return;
+    }
+    auto **const header = reinterpret_cast<void **>(pointer);
+    dima::platform::freertos::heap().deallocate(header[-1]);
+}
+
+} // namespace
+
+void *operator new(std::size_t size, const std::nothrow_t &) noexcept
+{
+    return dima::platform::freertos::heap().allocate(
+        size, dima::platform::AllocationDomain::Service);
+}
+
+void *operator new[](std::size_t size, const std::nothrow_t &) noexcept
+{
+    return dima::platform::freertos::heap().allocate(
+        size, dima::platform::AllocationDomain::Service);
+}
+
+void *operator new(std::size_t size)
+{
+    return dima::platform::freertos::heap().allocate(
+        size, dima::platform::AllocationDomain::Service);
+}
+
+void *operator new[](std::size_t size)
+{
+    return dima::platform::freertos::heap().allocate(
+        size, dima::platform::AllocationDomain::Service);
+}
+
+void *operator new(std::size_t size, std::align_val_t alignment)
+{
+    return allocate_aligned(size, alignment);
+}
+
+void *operator new[](std::size_t size, std::align_val_t alignment)
+{
+    return allocate_aligned(size, alignment);
+}
+
+void *operator new(std::size_t size, std::align_val_t alignment,
+                   const std::nothrow_t &) noexcept
+{
+    return allocate_aligned(size, alignment);
+}
+
+void *operator new[](std::size_t size, std::align_val_t alignment,
+                     const std::nothrow_t &) noexcept
+{
+    return allocate_aligned(size, alignment);
+}
+
+void operator delete(void *pointer) noexcept
+{
+    dima::platform::freertos::heap().deallocate(pointer);
+}
+
+void operator delete[](void *pointer) noexcept
+{
+    dima::platform::freertos::heap().deallocate(pointer);
+}
+
+void operator delete(void *pointer, std::size_t) noexcept
+{
+    dima::platform::freertos::heap().deallocate(pointer);
+}
+
+void operator delete[](void *pointer, std::size_t) noexcept
+{
+    dima::platform::freertos::heap().deallocate(pointer);
+}
+
+void operator delete(void *pointer, std::align_val_t) noexcept
+{
+    deallocate_aligned(pointer);
+}
+
+void operator delete[](void *pointer, std::align_val_t) noexcept
+{
+    deallocate_aligned(pointer);
+}
+
+void operator delete(void *pointer, std::size_t,
+                     std::align_val_t) noexcept
+{
+    deallocate_aligned(pointer);
+}
+
+void operator delete[](void *pointer, std::size_t,
+                       std::align_val_t) noexcept
+{
+    deallocate_aligned(pointer);
+}
+
+void operator delete(void *pointer, std::align_val_t,
+                     const std::nothrow_t &) noexcept
+{
+    deallocate_aligned(pointer);
+}
+
+void operator delete[](void *pointer, std::align_val_t,
+                       const std::nothrow_t &) noexcept
+{
+    deallocate_aligned(pointer);
+}

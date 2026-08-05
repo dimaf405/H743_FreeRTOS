@@ -58,6 +58,7 @@ private:
     };
 
     void Run() override;
+    void reset_runtime_state() noexcept;
     bool initialize_parameter_handles() noexcept;
     bool load_parameters() noexcept;
     bool validate_mapping(std::int32_t value) const noexcept;

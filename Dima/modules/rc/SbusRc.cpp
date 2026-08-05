@@ -45,6 +45,7 @@ bool SbusRc::start()
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
+    reset_runtime_state();
     if (!rc_port_.bind() || !rc_protocol_.bind() ||
         !sbus_inverted_.bind()) {
         rc_port_.invalidate();
@@ -64,15 +65,6 @@ bool SbusRc::start()
         (void)dima::events::report(kEventConfigInvalid, dima::events::Severity::Error);
         return false;
     }
-    parser_.reset();
-    timestamp_last_signal_us_ = 0U;
-    backend_started_ = false;
-    signal_locked_ = false;
-    signal_seen_ = false;
-    failsafe_active_ = false;
-    backend_fault_reported_ = false;
-    last_invalid_frames_ = 0U;
-    last_uart_errors_ = 0U;
     allocate_perf_counters();
     state_ = dima::middleware::lifecycle::ModuleState::Running;
     PX4_INFO("SBUS port=%ld inverted=%d", static_cast<long>(rc_port_.get()), sbus_inverted_.get() ? 1 : 0);
@@ -90,17 +82,11 @@ void SbusRc::stop()
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
     backend_.stop();
-    backend_started_ = false;
-    signal_locked_ = false;
-    signal_seen_ = false;
-    failsafe_active_ = false;
-    backend_fault_reported_ = false;
-    parser_.reset();
     free_perf_counters();
-    timestamp_last_signal_us_ = 0U;
     rc_port_.invalidate();
     rc_protocol_.invalidate();
     sbus_inverted_.invalidate();
+    reset_runtime_state();
 }
 
 dima::middleware::lifecycle::ModuleState SbusRc::state() const { return state_; }
@@ -177,6 +163,20 @@ void SbusRc::Run()
                     last_invalid_frames_);
     }
     if (received) ++stats_.read_wakeups;
+}
+
+void SbusRc::reset_runtime_state() noexcept
+{
+    parser_.reset();
+    timestamp_last_signal_us_ = 0U;
+    backend_started_ = false;
+    signal_locked_ = false;
+    signal_seen_ = false;
+    failsafe_active_ = false;
+    backend_fault_reported_ = false;
+    last_invalid_frames_ = 0U;
+    last_uart_errors_ = 0U;
+    stats_ = Stats{};
 }
 
 void SbusRc::allocate_perf_counters() noexcept

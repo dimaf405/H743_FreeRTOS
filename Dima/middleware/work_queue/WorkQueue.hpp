@@ -3,9 +3,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "platform/api/Platform.hpp"
+
 namespace px4 {
 
-using hrt_abstime = uint64_t;
+using hrt_abstime = dima::platform::TimeUs;
 
 struct wq_config_t {
     const char *name;
@@ -71,7 +73,7 @@ public:
 };
 
 bool work_queue_init() noexcept;
-void work_queue_shutdown() noexcept;
+bool work_queue_shutdown() noexcept;
 hrt_abstime work_queue_time_us() noexcept;
 
 } // namespace px4

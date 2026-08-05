@@ -1,11 +1,6 @@
 #include "uORB.hpp"
 
-extern "C" {
-#include "FreeRTOS.h"
-#include "task.h"
-}
-
-#include "stm32h743xx.h"
+#include "platform/api/Platform.hpp"
 
 namespace uORB {
 namespace {
@@ -13,10 +8,11 @@ namespace {
 orb_metadata *g_metadata_head{nullptr};
 Allocator g_allocator{nullptr, nullptr};
 bool g_initialized{false};
+uint64_t g_lifecycle_epoch{0U};
 
 bool in_isr() noexcept
 {
-    return __get_IPSR() != 0U;
+    return dima::platform::in_interrupt_context();
 }
 
 orb_runtime_instance *runtime_for(const orb_metadata *metadata,
@@ -76,7 +72,14 @@ bool initialize(const Allocator &allocator) noexcept
             }
         }
     }
-    g_initialized = true;
+    {
+        dima::platform::CriticalGuard guard;
+        ++g_lifecycle_epoch;
+        if (g_lifecycle_epoch == 0U) {
+            ++g_lifecycle_epoch;
+        }
+        g_initialized = true;
+    }
     return true;
 }
 
@@ -106,6 +109,12 @@ bool initialized() noexcept
     return g_initialized;
 }
 
+uint64_t lifecycle_epoch() noexcept
+{
+    dima::platform::CriticalGuard guard;
+    return g_lifecycle_epoch;
+}
+
 bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
                  const void *data) noexcept
 {
@@ -120,17 +129,19 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
     }
 
     px4::WorkItem *callbacks[kMaximumCallbacksPerInstance]{};
-    taskENTER_CRITICAL();
-    const uint64_t next_generation = instance->generation + 1U;
-    const size_t slot = static_cast<size_t>((next_generation - 1U) %
-                                            metadata->queue_size);
-    memcpy(instance->buffer + slot * metadata->object_size, data,
-           metadata->object_size);
-    instance->generation = next_generation;
-    for (uint8_t index = 0U; index < kMaximumCallbacksPerInstance; ++index) {
-        callbacks[index] = instance->callbacks[index];
+    {
+        dima::platform::CriticalGuard guard;
+        const uint64_t next_generation = instance->generation + 1U;
+        const size_t slot = static_cast<size_t>((next_generation - 1U) %
+                                                metadata->queue_size);
+        memcpy(instance->buffer + slot * metadata->object_size, data,
+               metadata->object_size);
+        instance->generation = next_generation;
+        for (uint8_t index = 0U; index < kMaximumCallbacksPerInstance;
+             ++index) {
+            callbacks[index] = instance->callbacks[index];
+        }
     }
-    taskEXIT_CRITICAL();
 
     // 回调只触发 WorkItem 调度，不在发布者上下文执行模块 Run()。
     for (auto *callback : callbacks) {
@@ -153,17 +164,23 @@ bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
     }
 
     bool copied = false;
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     const uint64_t newest = instance->generation;
+    if (newest == 0U) {
+        generation = 0U;
+        return false;
+    }
     if (newest != generation) {
         uint64_t target = newest;
         if (metadata->queue_size > 1U) {
             const uint64_t oldest = newest > metadata->queue_size
                                         ? newest - metadata->queue_size + 1U
                                         : 1U;
-            target = generation + 1U;
-            if (target < oldest || generation == 0U) {
+            if (generation == 0U || generation > newest ||
+                generation < oldest - 1U) {
                 target = oldest;
+            } else {
+                target = generation + 1U;
             }
         }
         const size_t slot = static_cast<size_t>((target - 1U) %
@@ -173,7 +190,6 @@ bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
         generation = target;
         copied = true;
     }
-    taskEXIT_CRITICAL();
     return copied;
 }
 
@@ -187,9 +203,8 @@ bool orb_updated(const orb_metadata *metadata, uint8_t instance_index,
     if (instance == nullptr) {
         return false;
     }
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     const bool result = instance->generation != generation;
-    taskEXIT_CRITICAL();
     return result;
 }
 
@@ -203,12 +218,11 @@ bool orb_advertise(const orb_metadata *metadata, uint8_t instance_index) noexcep
         return false;
     }
     bool accepted = false;
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     if (!instance->advertised) {
         instance->advertised = true;
         accepted = true;
     }
-    taskEXIT_CRITICAL();
     return accepted;
 }
 
@@ -221,9 +235,8 @@ void orb_unadvertise(const orb_metadata *metadata, uint8_t instance_index) noexc
     if (instance == nullptr) {
         return;
     }
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     instance->advertised = false;
-    taskEXIT_CRITICAL();
 }
 
 int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept
@@ -232,7 +245,7 @@ int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept
         return -1;
     }
     int8_t result = -1;
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
         auto &instance = metadata->instances[index];
         if (!instance.advertised) {
@@ -241,22 +254,36 @@ int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept
             break;
         }
     }
-    taskEXIT_CRITICAL();
     return result;
 }
 
 bool Subscription::updated() const noexcept
 {
+    (void)synchronize_epoch();
     return orb_updated(metadata_, instance_, generation_);
 }
 
 bool Subscription::copy(void *destination) noexcept
 {
+    (void)synchronize_epoch();
     return orb_copy(metadata_, instance_, generation_, destination);
+}
+
+bool Subscription::synchronize_epoch() const noexcept
+{
+    const uint64_t current = lifecycle_epoch();
+    if (epoch_ == current) {
+        return false;
+    }
+    generation_ = 0U;
+    callback_ = nullptr;
+    epoch_ = current;
+    return true;
 }
 
 bool Subscription::registerCallback(px4::WorkItem &work_item) noexcept
 {
+    (void)synchronize_epoch();
     if (!g_initialized || in_isr()) {
         return false;
     }
@@ -266,7 +293,7 @@ bool Subscription::registerCallback(px4::WorkItem &work_item) noexcept
     }
 
     bool registered = false;
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     for (auto *entry : instance->callbacks) {
         if (entry == &work_item) {
             callback_ = &work_item;
@@ -284,12 +311,14 @@ bool Subscription::registerCallback(px4::WorkItem &work_item) noexcept
             }
         }
     }
-    taskEXIT_CRITICAL();
     return registered;
 }
 
 void Subscription::unregisterCallback() noexcept
 {
+    if (synchronize_epoch()) {
+        return;
+    }
     if (callback_ == nullptr || in_isr()) {
         return;
     }
@@ -298,14 +327,13 @@ void Subscription::unregisterCallback() noexcept
         callback_ = nullptr;
         return;
     }
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     for (auto &entry : instance->callbacks) {
         if (entry == callback_) {
             entry = nullptr;
         }
     }
     callback_ = nullptr;
-    taskEXIT_CRITICAL();
 }
 
 } // namespace uORB

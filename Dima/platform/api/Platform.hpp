@@ -198,7 +198,7 @@ public:
     virtual ~TaskRuntime() = default;
     virtual TaskHandle create(const TaskConfig &config, TaskEntry entry,
                               void *argument) noexcept = 0;
-    virtual void destroy(TaskHandle handle) noexcept = 0;
+    virtual bool destroy(TaskHandle handle) noexcept = 0;
     virtual TaskHandle current() const noexcept = 0;
     virtual void suspend_current() noexcept = 0;
     virtual void delay(Timeout duration) noexcept = 0;

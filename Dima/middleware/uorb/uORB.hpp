@@ -39,6 +39,7 @@ void register_metadata(orb_metadata *metadata) noexcept;
 bool initialize(const Allocator &allocator) noexcept;
 void shutdown() noexcept;
 bool initialized() noexcept;
+uint64_t lifecycle_epoch() noexcept;
 
 bool orb_publish(const orb_metadata *metadata, uint8_t instance,
                  const void *data) noexcept;
@@ -72,10 +73,12 @@ public:
     void unregisterCallback() noexcept;
 
 protected:
+    bool synchronize_epoch() const noexcept;
     const orb_metadata *metadata_;
     uint8_t instance_;
-    uint64_t generation_{0U};
-    px4::WorkItem *callback_{nullptr};
+    mutable uint64_t generation_{0U};
+    mutable uint64_t epoch_{0U};
+    mutable px4::WorkItem *callback_{nullptr};
 };
 
 template<typename T>
@@ -91,6 +94,7 @@ public:
 
     ~Publication()
     {
+        synchronize_epoch();
         if (advertised_) {
             orb_unadvertise(metadata_, instance_);
         }
@@ -113,6 +117,7 @@ public:
 
     bool advertise() noexcept
     {
+        synchronize_epoch();
         if (!advertised_) {
             advertised_ = orb_advertise(metadata_, instance_);
         }
@@ -120,8 +125,18 @@ public:
     }
 
 private:
+    void synchronize_epoch() noexcept
+    {
+        const uint64_t current = lifecycle_epoch();
+        if (epoch_ != current) {
+            advertised_ = false;
+            epoch_ = current;
+        }
+    }
+
     void release() noexcept
     {
+        synchronize_epoch();
         if (advertised_) {
             orb_unadvertise(metadata_, instance_);
             advertised_ = false;
@@ -131,6 +146,7 @@ private:
     const orb_metadata *metadata_;
     uint8_t instance_;
     bool advertised_{false};
+    uint64_t epoch_{0U};
 };
 
 template<typename T>
@@ -145,6 +161,7 @@ public:
 
     ~PublicationMulti()
     {
+        synchronize_epoch();
         if (instance_ >= 0) {
             orb_unadvertise(metadata_, static_cast<uint8_t>(instance_));
         }
@@ -154,6 +171,7 @@ public:
 
     bool advertise() noexcept
     {
+        synchronize_epoch();
         if (instance_ < 0) {
             instance_ = orb_advertise_multi(metadata_);
         }
@@ -175,11 +193,25 @@ public:
         return false;
     }
 
-    int8_t instance() const noexcept { return instance_; }
+    int8_t instance() const noexcept
+    {
+        synchronize_epoch();
+        return instance_;
+    }
 
 private:
+    void synchronize_epoch() const noexcept
+    {
+        const uint64_t current = lifecycle_epoch();
+        if (epoch_ != current) {
+            instance_ = -1;
+            epoch_ = current;
+        }
+    }
+
     void release() noexcept
     {
+        synchronize_epoch();
         if (instance_ >= 0) {
             orb_unadvertise(metadata_, static_cast<uint8_t>(instance_));
             instance_ = -1;
@@ -187,7 +219,8 @@ private:
     }
 
     const orb_metadata *metadata_;
-    int8_t instance_{-1};
+    mutable int8_t instance_{-1};
+    mutable uint64_t epoch_{0U};
 };
 
 template<typename T>
@@ -201,12 +234,24 @@ public:
                       "uORB 消息必须可按字节复制");
     }
 
-    bool update() noexcept { return copy(&data_); }
-    const T &get() const noexcept { return data_; }
-    const T *operator->() const noexcept { return &data_; }
+    bool update() noexcept
+    {
+        if (synchronize_epoch()) {
+            data_ = T{};
+        }
+        return copy(&data_);
+    }
+    const T &get() const noexcept
+    {
+        if (synchronize_epoch()) {
+            data_ = T{};
+        }
+        return data_;
+    }
+    const T *operator->() const noexcept { return &get(); }
 
 private:
-    T data_{};
+    mutable T data_{};
 };
 
 class SubscriptionCallbackWorkItem : public Subscription {

@@ -88,7 +88,9 @@ bool ApplicationContext::release_runtime_resources() noexcept
         uorb_initialized_ = false;
     }
     if (work_queue_initialized_) {
-        px4::work_queue_shutdown();
+        if (!px4::work_queue_shutdown()) {
+            return false;
+        }
         work_queue_initialized_ = false;
     }
     if (console_initialized_) {
@@ -122,36 +124,36 @@ bool ApplicationContext::init() noexcept
 
     runtime_state_ = RuntimeState::Initializing;
     services_.diagnostics.set_stage(dima::platform::StartupStage::UsbInit);
+    console_initialized_ = true;
     if (!services_.console.initialize()) {
         (void)rollback_initialization();
         return false;
     }
-    console_initialized_ = true;
     services_.diagnostics.set_stage(dima::platform::StartupStage::UsbReady);
 
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::WorkQueueInit);
+    work_queue_initialized_ = true;
     if (!px4::work_queue_init()) {
         (void)rollback_initialization();
         return false;
     }
-    work_queue_initialized_ = true;
 
     services_.diagnostics.set_stage(dima::platform::StartupStage::UorbInit);
     const uORB::Allocator allocator{&uorb_allocate, &dima::platform::deallocate};
+    uorb_initialized_ = true;
     if (!uORB::initialize(allocator)) {
         (void)rollback_initialization();
         return false;
     }
-    uorb_initialized_ = true;
 
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::ParameterInit);
+    parameter_initialized_ = true;
     if (!parameter_service_.init()) {
         (void)rollback_initialization();
         return false;
     }
-    parameter_initialized_ = true;
 
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::ModuleRegister);

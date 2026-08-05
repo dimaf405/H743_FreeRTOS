@@ -1,14 +1,9 @@
 #include "WorkQueue.hpp"
 
-#include "freertos/platform_time.hpp"
-#include "freertos/dima_platform.hpp"
+#include "platform/api/Platform.hpp"
 
-extern "C" {
-#include "FreeRTOS.h"
-#include "task.h"
-}
-
-#include "stm32h743xx.h"
+#include <cstddef>
+#include <cstdint>
 
 namespace px4 {
 
@@ -22,60 +17,32 @@ public:
 
 namespace {
 
-constexpr size_t kMaximumItemsPerQueue = 32U;
-constexpr size_t kQueueCount = 7U;
-constexpr hrt_abstime kMicrosecondsPerSecond = 1000000ULL;
+constexpr std::size_t kMaximumItemsPerQueue = 32U;
+constexpr std::size_t kQueueCount = 7U;
 
 struct QueueRuntime {
-    const wq_config_t *config;
-    WorkItem *items[kMaximumItemsPerQueue];
-    StaticTask_t task_buffer;
-    StackType_t *stack;
-    TaskHandle_t task;
-    bool started;
+    const wq_config_t *config{nullptr};
+    WorkItem *items[kMaximumItemsPerQueue]{};
+    dima::platform::Signal signal{};
+    dima::platform::TaskHandle task{};
+    bool started{false};
 };
 
-// 栈空间全部静态保留；stack_size 使用字节表示并在编译期换算。
-StackType_t g_estimator_stack[8192U / sizeof(StackType_t)]{};
-StackType_t g_rate_ctrl_stack[4096U / sizeof(StackType_t)]{};
-StackType_t g_sensors_stack[4096U / sizeof(StackType_t)]{};
-StackType_t g_io_stack[4096U / sizeof(StackType_t)]{};
-StackType_t g_nav_stack[4096U / sizeof(StackType_t)]{};
-StackType_t g_hp_stack[2048U / sizeof(StackType_t)]{};
-StackType_t g_lp_stack[2048U / sizeof(StackType_t)]{};
-
 QueueRuntime g_queues[kQueueCount]{};
-bool g_initialized{false};
+
+enum class ManagerState : std::uint8_t {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+};
+
+ManagerState g_state{ManagerState::Stopped};
+dima::platform::TaskHandle g_owner_task{};
 
 bool in_isr() noexcept
 {
-    return __get_IPSR() != 0U;
-}
-
-TickType_t duration_to_ticks(hrt_abstime duration_us) noexcept
-{
-    if (duration_us == 0U) {
-        return 0U;
-    }
-
-    constexpr TickType_t maximum_wait_ticks = portMAX_DELAY - 1U;
-    constexpr uint64_t maximum_finite_duration_us =
-        (static_cast<uint64_t>(maximum_wait_ticks) * kMicrosecondsPerSecond) /
-        configTICK_RATE_HZ;
-    if (duration_us >= maximum_finite_duration_us) {
-        return maximum_wait_ticks;
-    }
-
-    uint64_t ticks = (duration_us * configTICK_RATE_HZ +
-                      kMicrosecondsPerSecond - 1U) /
-                     kMicrosecondsPerSecond;
-    if (ticks == 0U) {
-        ticks = 1U;
-    }
-    if (ticks > static_cast<uint64_t>(maximum_wait_ticks)) {
-        ticks = static_cast<uint64_t>(maximum_wait_ticks);
-    }
-    return static_cast<TickType_t>(ticks);
+    return dima::platform::in_interrupt_context();
 }
 
 QueueRuntime *find_queue(const wq_config_t &config) noexcept
@@ -114,61 +81,70 @@ void detach_item(QueueRuntime &queue, WorkItem &item) noexcept
     }
 }
 
+void configure_runtime() noexcept
+{
+    const wq_config_t *configs[kQueueCount] = {
+        &wq_configurations::estimator, &wq_configurations::rate_ctrl,
+        &wq_configurations::sensors,   &wq_configurations::io,
+        &wq_configurations::nav,       &wq_configurations::hp_default,
+        &wq_configurations::lp_default,
+    };
+    for (std::size_t index = 0U; index < kQueueCount; ++index) {
+        g_queues[index].config = configs[index];
+    }
+}
+
 } // namespace
 
 bool WorkQueueManager::schedule(WorkItem &item, hrt_abstime deadline,
-              hrt_abstime interval) noexcept
+                                hrt_abstime interval) noexcept
 {
-    if (!g_initialized || in_isr()) {
+    if (in_isr()) {
         return false;
     }
 
+    dima::platform::CriticalGuard guard;
+    if (g_state != ManagerState::Running) {
+        return false;
+    }
     QueueRuntime *const queue = find_queue(*item.config_);
-    if (queue == nullptr) {
+    if (queue == nullptr || !queue->started || !queue->task ||
+        !queue->signal.valid() || !item.accepting_schedules_ ||
+        !attach_item(*queue, item)) {
         return false;
     }
 
-    bool accepted = false;
-    taskENTER_CRITICAL();
-    if (item.accepting_schedules_ && attach_item(*queue, item)) {
-        ++item.schedule_revision_;
-        item.deadline_ = deadline;
-        item.interval_ = interval;
-        item.scheduled_ = true;
-        accepted = true;
-    }
-    taskEXIT_CRITICAL();
-
-    if (accepted && queue->task != nullptr) {
-        xTaskNotifyGive(queue->task);
-    }
-    return accepted;
+    ++item.schedule_revision_;
+    item.deadline_ = deadline;
+    item.interval_ = interval;
+    item.scheduled_ = true;
+    queue->signal.notify();
+    return true;
 }
 
 bool WorkQueueManager::schedule_from_isr(WorkItem &item) noexcept
 {
-    if (!g_initialized || !in_isr()) {
+    if (!in_isr()) {
+        return false;
+    }
+
+    dima::platform::CriticalGuard guard;
+    if (g_state != ManagerState::Running) {
         return false;
     }
     QueueRuntime *const queue = find_queue(*item.config_);
-    if (queue == nullptr || queue->task == nullptr) {
+    if (queue == nullptr || !queue->started || !queue->task ||
+        !queue->signal.valid() || !item.accepting_schedules_ ||
+        !attach_item(*queue, item)) {
         return false;
     }
-    BaseType_t higher_priority_task_woken = pdFALSE;
-    const UBaseType_t saved = taskENTER_CRITICAL_FROM_ISR();
-    const bool accepted = item.accepting_schedules_ && attach_item(*queue, item);
-    if (accepted) {
-        ++item.schedule_revision_;
-        item.deadline_ = work_queue_time_us();
-        item.interval_ = 0U;
-        item.scheduled_ = true;
-    }
-    taskEXIT_CRITICAL_FROM_ISR(saved);
-    if (accepted) {
-        vTaskNotifyGiveFromISR(queue->task, &higher_priority_task_woken);
-        portYIELD_FROM_ISR(higher_priority_task_woken);
-    }
-    return accepted;
+
+    ++item.schedule_revision_;
+    item.deadline_ = work_queue_time_us();
+    item.interval_ = 0U;
+    item.scheduled_ = true;
+    queue->signal.notify_from_isr();
+    return true;
 }
 
 void WorkQueueManager::worker(void *argument)
@@ -177,36 +153,38 @@ void WorkQueueManager::worker(void *argument)
 
     for (;;) {
         WorkItem *ready = nullptr;
-        uint32_t revision = 0U;
+        std::uint32_t revision = 0U;
         hrt_abstime deadline = 0U;
         hrt_abstime wait_us = UINT64_MAX;
         const hrt_abstime now = work_queue_time_us();
 
-        taskENTER_CRITICAL();
-        for (auto *item : queue.items) {
-            if (item == nullptr || !item->scheduled_ || item->running_) {
-                continue;
-            }
-            if (item->deadline_ <= now) {
-                ready = item;
-                revision = item->schedule_revision_;
-                deadline = item->deadline_;
-                item->scheduled_ = false;
-                item->running_ = true;
-                break;
-            }
-            const hrt_abstime remaining = item->deadline_ - now;
-            if (remaining < wait_us) {
-                wait_us = remaining;
+        {
+            dima::platform::CriticalGuard guard;
+            for (auto *item : queue.items) {
+                if (item == nullptr || !item->scheduled_ || item->running_) {
+                    continue;
+                }
+                if (item->deadline_ <= now) {
+                    ready = item;
+                    revision = item->schedule_revision_;
+                    deadline = item->deadline_;
+                    item->scheduled_ = false;
+                    item->running_ = true;
+                    break;
+                }
+                const hrt_abstime remaining = item->deadline_ - now;
+                if (remaining < wait_us) {
+                    wait_us = remaining;
+                }
             }
         }
-        taskEXIT_CRITICAL();
 
         if (ready == nullptr) {
-            const TickType_t ticks = wait_us == UINT64_MAX
-                                         ? portMAX_DELAY
-                                         : duration_to_ticks(wait_us);
-            (void)ulTaskNotifyTake(pdTRUE, ticks);
+            const auto timeout =
+                wait_us == UINT64_MAX
+                    ? dima::platform::Timeout::forever()
+                    : dima::platform::Timeout::from_us(wait_us);
+            (void)queue.signal.wait(timeout);
             continue;
         }
 
@@ -218,54 +196,35 @@ void WorkQueueManager::worker(void *argument)
         const hrt_abstime finished = work_queue_time_us();
         const hrt_abstime elapsed = finished - started;
 
-        taskENTER_CRITICAL();
-        ++ready->statistics_.executions;
-        ready->statistics_.last_execution_time = elapsed;
-        if (elapsed > ready->statistics_.maximum_execution_time) {
-            ready->statistics_.maximum_execution_time = elapsed;
-        }
-        ready->running_ = false;
-        // Run() 内若重新调度或清除，revision 会变化，此处不得覆盖新请求。
-        if (!ready->accepting_schedules_) {
-            detach_item(queue, *ready);
-        } else if (ready->schedule_revision_ == revision && ready->interval_ != 0U) {
-            const hrt_abstime elapsed_periods =
-                (finished - deadline) / ready->interval_;
-            const hrt_abstime maximum_periods =
-                (UINT64_MAX - deadline) / ready->interval_;
-            if (elapsed_periods < maximum_periods) {
-                // Keep the original phase and skip missed periods without bursts.
-                ready->deadline_ =
-                    deadline + (elapsed_periods + 1U) * ready->interval_;
-                ready->scheduled_ = true;
-            } else {
-                ready->interval_ = 0U;
+        {
+            dima::platform::CriticalGuard guard;
+            ++ready->statistics_.executions;
+            ready->statistics_.last_execution_time = elapsed;
+            if (elapsed > ready->statistics_.maximum_execution_time) {
+                ready->statistics_.maximum_execution_time = elapsed;
+            }
+            ready->running_ = false;
+            /* Run() may reschedule or clear the item.  A changed revision owns
+             * the new request and must not be overwritten here. */
+            if (!ready->accepting_schedules_) {
+                detach_item(queue, *ready);
+            } else if (ready->schedule_revision_ == revision &&
+                       ready->interval_ != 0U) {
+                const hrt_abstime elapsed_periods =
+                    (finished - deadline) / ready->interval_;
+                const hrt_abstime maximum_periods =
+                    (UINT64_MAX - deadline) / ready->interval_;
+                if (elapsed_periods < maximum_periods) {
+                    ready->deadline_ =
+                        deadline + (elapsed_periods + 1U) * ready->interval_;
+                    ready->scheduled_ = true;
+                } else {
+                    ready->interval_ = 0U;
+                }
             }
         }
-        taskEXIT_CRITICAL();
     }
 }
-
-namespace {
-
-void configure_runtime() noexcept
-{
-    const wq_config_t *configs[kQueueCount] = {
-        &wq_configurations::estimator, &wq_configurations::rate_ctrl,
-        &wq_configurations::sensors,   &wq_configurations::io,
-        &wq_configurations::nav,       &wq_configurations::hp_default,
-        &wq_configurations::lp_default};
-    StackType_t *stacks[kQueueCount] = {
-        g_estimator_stack, g_rate_ctrl_stack, g_sensors_stack, g_io_stack,
-        g_nav_stack, g_hp_stack, g_lp_stack};
-
-    for (size_t index = 0U; index < kQueueCount; ++index) {
-        g_queues[index].config = configs[index];
-        g_queues[index].stack = stacks[index];
-    }
-}
-
-} // namespace
 
 namespace wq_configurations {
 const wq_config_t estimator{"wq:estimator", 8U, 8192U, true};
@@ -277,8 +236,7 @@ const wq_config_t hp_default{"wq:hp_default", 3U, 2048U, false};
 const wq_config_t lp_default{"wq:lp_default", 2U, 2048U, false};
 } // namespace wq_configurations
 
-// HRT 阶段可提供同名强符号覆盖该弱实现，调用方无需修改。
-__attribute__((weak)) hrt_abstime work_queue_time_us() noexcept
+hrt_abstime work_queue_time_us() noexcept
 {
     return dima::platform::platform_time_us();
 }
@@ -303,14 +261,21 @@ bool WorkItem::ScheduleEnable() noexcept
     if (in_isr()) {
         return false;
     }
-
     bool enabled = false;
-    taskENTER_CRITICAL();
-    if (accepting_schedules_ || !running_) {
-        accepting_schedules_ = true;
-        enabled = true;
+    {
+        dima::platform::CriticalGuard guard;
+        if (accepting_schedules_ || !running_) {
+            if (!accepting_schedules_) {
+                ++schedule_revision_;
+                deadline_ = 0U;
+                interval_ = 0U;
+                scheduled_ = false;
+                statistics_ = {};
+            }
+            accepting_schedules_ = true;
+            enabled = true;
+        }
     }
-    taskEXIT_CRITICAL();
     return enabled;
 }
 
@@ -319,11 +284,10 @@ void WorkItem::ScheduleClear() noexcept
     if (in_isr()) {
         return;
     }
-    taskENTER_CRITICAL();
+    dima::platform::CriticalGuard guard;
     ++schedule_revision_;
     scheduled_ = false;
     interval_ = 0U;
-    taskEXIT_CRITICAL();
 }
 
 void WorkItem::ScheduleCancelAndDrain() noexcept
@@ -333,52 +297,55 @@ void WorkItem::ScheduleCancelAndDrain() noexcept
     }
 
     QueueRuntime *const queue = find_queue(*config_);
-    const TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+    const dima::platform::TaskHandle current =
+        dima::platform::services().tasks.current();
     bool running = false;
     bool called_from_run = false;
-
-    taskENTER_CRITICAL();
-    ++schedule_revision_;
-    scheduled_ = false;
-    interval_ = 0U;
-    accepting_schedules_ = false;
-    running = running_;
-    called_from_run = running && queue != nullptr
-                      && queue->task == current_task;
-    if (!running && queue != nullptr) {
-        detach_item(*queue, *this);
+    {
+        dima::platform::CriticalGuard guard;
+        ++schedule_revision_;
+        scheduled_ = false;
+        interval_ = 0U;
+        accepting_schedules_ = false;
+        running = running_;
+        called_from_run = running && queue != nullptr &&
+                          queue->task == current;
+        if (!running && queue != nullptr) {
+            detach_item(*queue, *this);
+        }
     }
-    taskEXIT_CRITICAL();
 
     if (called_from_run) {
         return;
     }
 
     while (running) {
-        // The caller must block so even a lower-priority WorkQueue can finish.
-        vTaskDelay(1U);
-        taskENTER_CRITICAL();
+        dima::platform::services().tasks.delay(
+            dima::platform::Timeout::from_ms(1U));
+        dima::platform::CriticalGuard guard;
         running = running_;
         if (!running && queue != nullptr) {
             detach_item(*queue, *this);
         }
-        taskEXIT_CRITICAL();
     }
 }
 
-bool ScheduledWorkItem::ScheduleDelayed(uint32_t delay_us) noexcept
+bool ScheduledWorkItem::ScheduleDelayed(std::uint32_t delay_us) noexcept
 {
-    return WorkQueueManager::schedule(*this, work_queue_time_us() + delay_us, 0U);
+    return WorkQueueManager::schedule(
+        *this, work_queue_time_us() + delay_us, 0U);
 }
 
-bool ScheduledWorkItem::ScheduleOnInterval(uint32_t interval_us,
-                                           uint32_t delay_us) noexcept
+bool ScheduledWorkItem::ScheduleOnInterval(std::uint32_t interval_us,
+                                           std::uint32_t delay_us) noexcept
 {
     if (interval_us == 0U) {
         return false;
     }
-    const uint32_t first_delay = delay_us == 0U ? interval_us : delay_us;
-    return WorkQueueManager::schedule(*this, work_queue_time_us() + first_delay, interval_us);
+    const std::uint32_t first_delay =
+        delay_us == 0U ? interval_us : delay_us;
+    return WorkQueueManager::schedule(
+        *this, work_queue_time_us() + first_delay, interval_us);
 }
 
 bool ScheduledWorkItem::ScheduleAt(hrt_abstime time_us) noexcept
@@ -388,74 +355,130 @@ bool ScheduledWorkItem::ScheduleAt(hrt_abstime time_us) noexcept
 
 bool work_queue_init() noexcept
 {
-    if (g_initialized || in_isr()) {
-        return g_initialized;
+    if (in_isr() || !dima::platform::services_installed()) {
+        return false;
     }
 
-    configure_runtime();
+    auto &services = dima::platform::services();
+    const dima::platform::TaskHandle current = services.tasks.current();
+    if (!current) {
+        return false;
+    }
+    {
+        dima::platform::CriticalGuard guard;
+        if (g_state == ManagerState::Running) {
+            return g_owner_task == current;
+        }
+        if (g_state != ManagerState::Stopped) {
+            return false;
+        }
+        g_owner_task = current;
+        g_state = ManagerState::Starting;
+        configure_runtime();
+    }
+
     for (auto &queue : g_queues) {
-        const uint32_t stack_depth = queue.config->stack_size /
-                                     sizeof(StackType_t);
-        queue.task = xTaskCreateStatic(WorkQueueManager::worker, queue.config->name, stack_depth,
-                                       &queue, queue.config->priority,
-                                       queue.stack, &queue.task_buffer);
-        if (queue.task == nullptr) {
-            work_queue_shutdown();
+        if (!queue.signal.initialize(services.synchronization)) {
+            (void)work_queue_shutdown();
+            return false;
+        }
+        const dima::platform::TaskConfig config{
+            queue.config->name,
+            queue.config->priority,
+            queue.config->stack_size,
+            queue.config->realtime,
+        };
+        queue.task = services.tasks.create(
+            config, &WorkQueueManager::worker, &queue);
+        if (!queue.task) {
+            (void)work_queue_shutdown();
             return false;
         }
         queue.started = true;
-        if (queue.config->realtime &&
-            !dima::platform::register_realtime_task(queue.task)) {
-            work_queue_shutdown();
-            return false;
-        }
     }
-    g_initialized = true;
+
+    {
+        dima::platform::CriticalGuard guard;
+        g_state = ManagerState::Running;
+    }
     return true;
 }
 
-void work_queue_shutdown() noexcept
+bool work_queue_shutdown() noexcept
 {
-    if (in_isr()) {
-        return;
+    if (in_isr() || !dima::platform::services_installed()) {
+        return false;
     }
-    if (g_initialized) {
-        for (auto &queue : g_queues) {
-            for (;;) {
-                WorkItem *item = nullptr;
-                taskENTER_CRITICAL();
+
+    auto &tasks = dima::platform::services().tasks;
+    const dima::platform::TaskHandle current = tasks.current();
+    if (!current) {
+        return false;
+    }
+
+    {
+        dima::platform::CriticalGuard guard;
+        if (g_state == ManagerState::Stopped) {
+            g_owner_task = {};
+            return true;
+        }
+        if (g_owner_task != current) {
+            return false;
+        }
+        for (const auto &queue : g_queues) {
+            if (queue.task && queue.task == current) {
+                return false;
+            }
+        }
+        g_state = ManagerState::Stopping;
+    }
+
+    for (auto &queue : g_queues) {
+        for (;;) {
+            WorkItem *item = nullptr;
+            {
+                dima::platform::CriticalGuard guard;
                 for (auto *entry : queue.items) {
                     if (entry != nullptr) {
                         item = entry;
                         break;
                     }
                 }
-                taskEXIT_CRITICAL();
-                if (item == nullptr) {
-                    break;
-                }
-                item->ScheduleCancelAndDrain();
             }
+            if (item == nullptr) {
+                break;
+            }
+            item->ScheduleCancelAndDrain();
         }
     }
+
+    bool destroyed = true;
     for (auto &queue : g_queues) {
-        if (queue.started && queue.task != nullptr) {
-            if (queue.config != nullptr && queue.config->realtime) {
-                (void)dima::platform::unregister_realtime_task(queue.task);
+        if (queue.started && queue.task) {
+            if (!tasks.destroy(queue.task)) {
+                destroyed = false;
+                continue;
             }
-            vTaskDelete(queue.task);
         }
-        queue.task = nullptr;
+        queue.task = {};
         queue.started = false;
-        for (auto &item : queue.items) {
-            item = nullptr;
-        }
+        queue.signal.reset();
     }
-    g_initialized = false;
+    if (!destroyed) {
+        return false;
+    }
+
+    {
+        dima::platform::CriticalGuard guard;
+        for (auto &queue : g_queues) {
+            for (auto &item : queue.items) {
+                item = nullptr;
+            }
+        }
+        g_state = ManagerState::Stopped;
+        g_owner_task = {};
+    }
+    return true;
 }
 
 } // namespace px4
-
-
-
-

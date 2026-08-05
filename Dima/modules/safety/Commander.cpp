@@ -49,6 +49,7 @@ bool Commander::start()
         return false;
     }
 
+    reset_runtime_state();
     parameter_handles_ready_ = initialize_parameter_handles();
     if (!parameter_handles_ready_) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -105,9 +106,7 @@ void Commander::stop()
 {
     armed_snapshot_.store(false);
     dima_arming_flash_disarm();
-    if (state_ != dima::middleware::lifecycle::ModuleState::Error) {
-        state_ = dima::middleware::lifecycle::ModuleState::Stopped;
-    }
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();
@@ -119,6 +118,7 @@ void Commander::stop()
     dima_arming_flash_disarm();
     have_manual_control_ = false;
     recoverable_failsafe_causes_ = FailsafeNone;
+    reset_runtime_state();
 }
 
 dima::middleware::lifecycle::ModuleState Commander::state() const
@@ -478,6 +478,23 @@ bool Commander::publish_state(std::uint64_t now) noexcept
         return true;
     }
     return false;
+}
+
+void Commander::reset_runtime_state() noexcept
+{
+    actuator_armed_ = actuator_armed_s{};
+    vehicle_control_mode_ = vehicle_control_mode_s{};
+    vehicle_status_ = vehicle_status_s{};
+    manual_control_setpoint_ = manual_control_setpoint_s{};
+    rc_loss_timeout_handle_ = PARAM_INVALID;
+    arm_stick_deadzone_handle_ = PARAM_INVALID;
+    rc_loss_timeout_s_ = 0.5F;
+    arm_stick_deadzone_ = 0.1F;
+    last_publish_time_ = 0U;
+    recoverable_failsafe_causes_ = FailsafeNone;
+    parameter_handles_ready_ = false;
+    parameters_valid_ = false;
+    have_manual_control_ = false;
 }
 
 void Commander::initialize_public_state(std::uint64_t now) noexcept

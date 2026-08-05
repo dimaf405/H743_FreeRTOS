@@ -29,6 +29,7 @@ bool LogService::start() noexcept
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
+    dima::logging::reset();
     if (!ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
@@ -42,6 +43,7 @@ void LogService::stop() noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
+    dima::logging::reset();
 }
 
 dima::middleware::lifecycle::ModuleState LogService::state() const noexcept

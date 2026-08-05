@@ -44,8 +44,7 @@ float constrain(float value, float minimum, float maximum) noexcept
 RCUpdate::RCUpdate() noexcept
     : px4::ScheduledWorkItem("rc_update", px4::wq_configurations::io)
 {
-    for (float &channel : rc_.channels) channel = std::numeric_limits<float>::quiet_NaN();
-    for (std::int8_t &function : rc_.function) function = -1;
+    reset_runtime_state();
 }
 
 bool RCUpdate::start()
@@ -56,6 +55,7 @@ bool RCUpdate::start()
         return false;
     }
 
+    reset_runtime_state();
     parameter_handles_ready_ = initialize_parameter_handles();
     parameters_valid_ = parameter_handles_ready_ && load_parameters();
     publish_interval_ = perf_alloc(PC_INTERVAL, "rc_update:rc_channels_interval");
@@ -106,8 +106,7 @@ void RCUpdate::stop()
     ScheduleCancelAndDrain();
     perf_free(publish_interval_);
     publish_interval_ = nullptr;
-    have_input_ = false;
-    switches_initialized_ = false;
+    reset_runtime_state();
 }
 
 dima::middleware::lifecycle::ModuleState RCUpdate::state() const { return state_; }
@@ -169,6 +168,45 @@ void RCUpdate::Run()
         publish_current(now_us);
     }
     (void)ScheduleOnInterval(kPollIntervalUs);
+}
+
+void RCUpdate::reset_runtime_state() noexcept
+{
+    for (auto &channel : calibration_handles_) {
+        channel.fill(PARAM_INVALID);
+    }
+    mapping_handles_.fill(PARAM_INVALID);
+    channel_count_handle_ = PARAM_INVALID;
+    arm_threshold_handle_ = PARAM_INVALID;
+    kill_threshold_handle_ = PARAM_INVALID;
+    loss_timeout_handle_ = PARAM_INVALID;
+
+    calibration_.fill(Calibration{});
+    calibration_valid_.fill(false);
+    mappings_.fill(0);
+    mapping_runtime_invalid_reported_.fill(false);
+    latest_input_ = input_rc_s{};
+    rc_ = rc_channels_s{};
+    for (float &channel : rc_.channels) {
+        channel = std::numeric_limits<float>::quiet_NaN();
+    }
+    for (std::int8_t &function : rc_.function) {
+        function = -1;
+    }
+    last_switches_ = manual_control_switches_s{};
+
+    configured_channel_count_ = 0;
+    arm_threshold_ = 0.75F;
+    kill_threshold_ = 0.75F;
+    loss_timeout_s_ = 0.5F;
+    last_input_time_us_ = 0U;
+    last_valid_time_us_ = 0U;
+    parameter_handles_ready_ = false;
+    parameters_valid_ = false;
+    have_input_ = false;
+    output_published_ = false;
+    signal_lost_ = true;
+    switches_initialized_ = false;
 }
 
 bool RCUpdate::initialize_parameter_handles() noexcept
