@@ -38,12 +38,13 @@ Dima Product Rover
   RoverDifferential / EKF2 / Position Control
   FunctionMotors / MixingOutput
                     ↓
-Dima FreeRTOS 兼容层
+Dima 公共系统层
   Parameter / ModuleParams / uORB / WorkQueue
-  hrt / events / perf / logging / allocator
+  capability / events / perf / logging / allocator
                     ↓
-STM32H743 板级适配
-  UART DMA / SPI / I2C / PWM / Flash / USB
+独立平台后端
+  FreeRTOS: Task / Mutex / Signal / Heap
+  STM32H7: MPU / cache / DMA / Flash / UART / USB
                     ↓
 FreeRTOS + STM32 HAL
                     ↓
@@ -55,8 +56,10 @@ MCUboot
 ```text
 Dima/
 ├── application/                    启动壳、C ABI 入口和 appMainTask
-├── adapters/                       USB Console、MCUboot 适配
-├── platform/freertos/              libc、platform_time 与 FreeRTOS 平台适配
+├── adapters/                       只依赖 capability 的外部协议适配
+├── platform/api/                   OS/MCU 无关公共契约
+├── platform/freertos/              Task、同步、Heap 与 transaction 后端
+├── platform/stm32h7/               MPU/cache/DMA/Flash/时钟/USB/串口后端
 ├── middleware/                     lifecycle、parameters、uORB、WorkQueue
 ├── modules/                        Parameter、Log、boot_health、hello_world、RC、安全、EKF2
 ├── lib/                            motor、rover_control 与公共算法库
@@ -66,7 +69,7 @@ Dima/
 Boards/H743/  Core/  Drivers/  Middlewares/  USB_DEVICE/  Bootloader/
 ```
 
-已退役的顶层 `App/` 已完成目录归并：原启动入口进入 `Dima/application`，BootHealth/HelloWorld 进入 `Dima/modules/{boot_health,hello_world}`，Adapter 进入 `Dima/adapters`，生命周期进入 `Dima/middleware/lifecycle`，C/C++ Runtime 与时间接口进入 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor/Rover Control 进入 `Dima/lib/{motor,rover_control}`。`Core/Boards/Drivers/Middlewares/USB_DEVICE/Bootloader` 保持独立；项目自有测试子系统已移除；目标构建、签名镜像和目标板行为以本次验证及后续板测为准。
+已退役的顶层 `App/` 已完成目录归并。C/C++ Runtime 留在 FreeRTOS 后端，公共时间接口进入 `platform/api`，TIM2、Flash、DMA、USB 与中断实现进入 STM32H7 后端；`ApplicationContext` 只装配 capability。`Core/Boards/Drivers/Middlewares/USB_DEVICE/Bootloader` 保持独立；项目自有测试子系统已移除；目标构建、签名镜像和目标板行为以本次验证及后续板测为准。
 
 ## 4. 阶段 0：保存计划并建立重构基线
 
@@ -118,8 +121,8 @@ Storage       128 KiB
 阶段 1 已采用受监控的 FreeRTOS `heap_5`：
 
 - 通用 Heap 首版位于 D1 AXI SRAM。
-- D2 SRAM 保留给静态、对齐的 DMA Buffer。
-- DTCM 默认不加入通用 Heap。
+- D2 SRAM3 固定 32 KiB `.dima_dma` 由 MPU 配置为 non-cacheable，只接受 `DmaBufferView` 或平台 bounce buffer。
+- 48 KiB 固定任务栈池位于 D1 且与 256 KiB Heap 分离；DTCM 不加入通用 Heap，并承载同 Bank Flash 编程例程。
 - 启动期允许为模块对象、uORB Subscription、Parameter 稀疏值和 EKF2 缓冲分配内存。
 - USB 命令、参数保存、日志和通信等非实时服务可受控分配。
 - ISR、实时控制、Estimator 更新和执行器安全路径不得分配。
@@ -129,7 +132,7 @@ Storage       128 KiB
 
 ### 阶段 1：Dima FreeRTOS 平台兼容层（目标构建已通过，板测待完成）
 
-已建立受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。生产 heartbeat 已迁移到 uORB；BootHealth、HelloWorld 和日志服务已迁移到 Dima WorkQueue。目录迁移后的目标固件、签名镜像和 Factory HEX 已通过 Windows 本地 `make verify`；板上 HRT Overflow、栈高水位和运行期 Heap 余量仍待目标板验证。
+已建立窄 `platform/api` capability、独立 FreeRTOS/STM32H7 后端、受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。公共对象由独立 include 集编译，并由 `check-architecture` 禁止底层依赖回流。板上 HRT Overflow、栈高水位和运行期 Heap 余量仍待目标板验证。
 
 ### 阶段 2：Parameter 与 ModuleParams（目标构建已通过，板测待完成）
 
@@ -140,7 +143,8 @@ Storage       128 KiB
 - TinyBSON 纯 Buffer 子集与 flashparams enumerator/visitor 适配，编码和解码热路径不动态分配。
 - 300 ms debounce、至少 2 s 保存限频、最多 3 次失败重试的 Autosave 策略。
 - USB CDC 固定 1024-byte SPSC RX Ring；ISR 只复制字节并立即恢复接收，命令处理位于任务/LP service 路径。
-- `0x081E0000～0x08200000` 单个 128 KiB Storage 扇区的追加 Journal，包含 Sequence、长度、CRC32 和最终 Commit Marker；扫描使用 ECC 安全读与受限 BusFault 恢复，空间满返回 ENOSPC，不自动擦除。
+- `0x081E0000～0x08200000` 单个 128 KiB Storage 扇区的追加 Journal，保持 v1 字节格式；平台无关 Journal 与 STM32H7 raw Flash device 分离，扫描不再整段 invalidate cache，空间满返回 ENOSPC且不自动擦除。
+- 通用 Flash BusFault hook 仅在活动安全读窗口、地址属于参数分区且 Bank 2 DBECC 标志匹配时恢复；其他 BusFault 记录 CFSR/ABFSR 并复位。
 - 24 项 PX4 差速 Rover 参数：20 项 `RO_*` 与 4 项 `RD_*`；参数数量由官方生成目录确定，无固定 64 项上限。
 
 2026-07-30 目录迁移后的 Windows 本地 `make verify` 已通过：`.text=112720`、`.data=2068`、`.bss=326672` bytes，Signed BIN 为 `116008` bytes；应用向量地址为 `0x08040400`。
@@ -164,7 +168,7 @@ Storage       128 KiB
 ```
 
 - `RC_PORT_CONFIG` 支持 0 禁用、1 UART4/PB8、2 UART7/PE7、3 UART8/PE0、4 USART2/PD6；默认 UART4/PB8。
-- 原始反相 SBUS 使用 100000 bit/s、8E2、UART RXINV、D2 SRAM 64-byte 循环 DMA Buffer；ISR 仅更新时间和唤醒 `wq:io`。
+- 原始反相 SBUS 使用 100000 bit/s、8E2、UART RXINV、SRAM3 non-cacheable 64-byte 循环 DMA Buffer；ISR 仅更新时间并经 ISR-safe callback 唤醒 `wq:io`，业务层不执行 cache maintenance。
 - RC 参数由生成器扩展到 135 项总量，其中阶段 3 新增 111 项 RC 配置、18 通道校准、映射和失联参数。
 - `RC_CHAN_CNT=0` 时按实际接收通道数工作，仍可通过在线参数显式限制通道数；校准与映射在 `parameter_update` 后在线刷新。
 - SBUS 单帧丢失只累计丢帧统计，不误判为整条链路失联；Failsafe、显式 `rc_lost` 或 `COM_RC_LOSS_T` 超时才发布失联状态。
@@ -185,6 +189,7 @@ Storage       128 KiB
 - 启动顺序为基础服务、Parameter、Log、Commander、RC；停止顺序为 RC、Commander、Log、Parameter。RC 链失败不停止 Commander，Commander 启动失败则回滚应用服务。
 - 最终目标构建为 Application `136956/7660/331912` bytes、Signed BIN `145830` bytes，签名、Factory HEX、MCUboot 和 `0x08040400` 向量检查通过；详见 [阶段 4 资源与验收基线](DIMA_PHASE4_RESOURCE_BASELINE_ZH.md)。
 - 2026-08-03 全量回归修复后，应用收敛为 SysTick + TIM2 双时基，补齐 Flash/Arming 原子互锁、Commander 发布失效安全、真实 RC DMA 到达时间、ICM42688 板级接口、参数快照回退和 WorkQueue cancel-and-drain。增量目标构建为 Application `141428/7668/332584` bytes、Signed BIN `150311` bytes；实板时序、电气和并发验收仍待完成。
+- 2026-08-04 平台隔离重构把 FreeRTOS、HAL/CMSIS、cache/DMA/Flash 所有权收敛到独立后端；WorkQueue、uORB、Parameter、Console、Commander、RC 和启动任务只使用公共 capability。最终 clean 构建与实板压力验收以本次交付证据为准。
 - 2026-08-05 生命周期收敛建立唯一 `Dima/rover`，补齐 Parameter cache、uORB epoch、WorkQueue owner/drain、Console、BootHealth、Fault 冷启动持久化和 SBUS DMA/CPU Ring 所有权。源码架构门禁已通过；Windows 原生 clean build、最终 ELF 门禁和同上电 Runtime restart 板测仍待完成，历史尺寸不得作为当前结果。
 - 本阶段未接 PWM、Mixer、RoverDifferential 或 HAL 执行器输出，因此车辆仍不能运动；目标板行为尚未验收。
 

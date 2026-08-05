@@ -17,7 +17,8 @@ PX4 PARAM_DEFINE_* 参数定义
 → px4::Param<T> / ModuleParams / parameter_update
 → Autosave / USB Parameter Command Service
 → TinyBSON flashparams Buffer
-→ 单扇区 Flash Journal
+→ 平台无关 ParameterJournal
+→ STM32H7 FlashPartition
 ```
 
 ## 当前实现
@@ -30,7 +31,10 @@ PX4 PARAM_DEFINE_* 参数定义
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
 - Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，失败最多重试 3 次。
 - USB CDC RX 使用固定 1024-byte SPSC Ring；ISR 不解析命令、不访问参数或 Flash、不格式化日志、不分配内存。
-- 参数持久化使用 `0x081E0000～0x08200000` 单个 128 KiB 扇区追加 Journal；记录包含 Sequence、Payload Length、CRC32 和最终 Commit Marker；Bank 2 扫描使用 ECC 安全读，DBECC 仅在参数区受控恢复并跳过不可读记录；空间不足返回 ENOSPC且不自动擦除。
+- 参数持久化使用 `0x081E0000～0x08200000` 单个 128 KiB 扇区追加 Journal；`ParameterJournal` 只负责 Sequence、Payload Length、CRC32、Commit Marker、扫描和回退，STM32H7 `FlashPartition` 负责 ECC 安全读、32-byte program、sector erase、回读和 cache 一致性。
+- 扫描不执行整段 cache invalidate；program/erase 成功后仅由 STM32 cache helper 失效实际修改范围，D-cache 关闭时 helper 防御性 no-op。
+- DBECC 只有在活动安全读窗口、地址属于参数分区且 Bank 2 标志匹配时才允许 BusFault 恢复；其他 BusFault 一律进入启动诊断和复位。
+- Journal v1 字节格式、分区地址和公开返回语义保持兼容；空间不足返回 ENOSPC且不自动擦除。
 - 每次 load 都重新读取并验证 Header CRC、最终 Commit Marker 和 payload CRC；缓存的最新记录失效时重新扫描整个 Journal，回退到上一条有效快照后再次复验。
 
 ## Application Runtime 生命周期

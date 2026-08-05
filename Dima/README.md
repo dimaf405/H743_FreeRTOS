@@ -7,18 +7,22 @@
 - `application/`：应用任务入口和启动胶水。
 - `rover/`：唯一 Rover 产品域，包含产品装配以及后续 `control/`、`navigation/` 专属功能。
 - `modules/`：Parameter、Log、BootHealth、HelloWorld、RC、安全和 Estimator 等可复用运行模块。
-- `adapters/`：USB Console、MCUboot 等外部接口适配。
+- `adapters/`：只依赖公共 capability 的 USB Console 等外部协议适配。
 - `middleware/`：生命周期、uORB、WorkQueue、Parameter、Event、Perf 和 Logging。
-- `platform/freertos/`：FreeRTOS、时间、内存、Flash 和 libc 适配。
+- `platform/api/`：不暴露 OS、MCU 或厂商类型的公共 capability 契约。
+- `platform/freertos/`：Task、Mutex、Signal、Heap 和 Flash transaction 的 FreeRTOS 后端。
+- `platform/stm32h7/`：启动内存契约、时钟、cache、DMA、Flash、USB、SBUS 和传感器中断后端。
 - `messages/`：共享消息数据结构与 uORB 声明。
 - `lib/`：平台无关的算法、容器和移植库。
 
 ## 边界规则
 
 - `Boards/`、`Core/`、`Drivers/`、`Middlewares/`、`USB_DEVICE/` 和 `Bootloader/` 保持独立，不归入产品目录。
-- `Dima/modules` 不直接持有 STM32 HAL 全局句柄；硬件接线通过 Board 或 Adapter 暴露。
-- `Dima/lib` 不依赖 HAL、FreeRTOS、USB 或 MCUboot。
+- `application/`、`rover/`、`modules/`、`middleware/`、`messages/`、`lib/` 和 `adapters/` 只能依赖标准库、内部公共契约和 `platform/api`，不得包含 FreeRTOS、HAL、CMSIS、SCB/NVIC、Core、Board 或 USB 生成头。
+- `platform/freertos` 不依赖 STM32/HAL/CMSIS；`platform/stm32h7` 不依赖 FreeRTOS 或业务模块。
+- `Boards/H743/Src/platform_composition.cpp` 是具体后端与产品 capability 的唯一组合根。
 - CubeMX 生成区只保留初始化和胶水，不承载产品业务逻辑。
+- `make check-architecture` 强制检查源码标识、硬件操作所有权和各层私有 include 集；`firmware`、`verify`、`dima_rover` 均以该门禁为前置条件。
 - 新增自研应用代码不得恢复顶层 `App/` 目录。
 
 ## 头文件引用

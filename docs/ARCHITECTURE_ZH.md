@@ -13,8 +13,10 @@ Estimator 固定采用 PX4 EKF2。此前涉及 ArduPilot EKF3 的阶段计划均
 ```text
 Dima/                         唯一自研应用根、兼容层和产品装配
 ├── application/              启动壳、C ABI 入口和 appMainTask
-├── adapters/                 USB Console、MCUboot 等外部适配
-├── platform/freertos/        FreeRTOS 平台适配（libc、platform_time）
+├── adapters/                 仅依赖公共 capability 的外部协议适配
+├── platform/api/             OS/MCU 无关 capability 与 opaque handle
+├── platform/freertos/        Task、同步、Heap 和 transaction 后端
+├── platform/stm32h7/         MPU/cache/DMA/Flash/时钟/USB/串口后端
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
 ├── modules/                  Parameter、Log、boot_health、hello_world、RC、安全、EKF2
@@ -32,32 +34,32 @@ Linker/、make/、tools/        链接、构建、签名和升级工具
 docs/                         计划、架构、ADR、来源和维护文档
 ```
 
-已退役的顶层 `App/` 已迁入 `Dima/`：启动壳位于 `Dima/application`，功能模块位于 `Dima/modules/{boot_health,hello_world}`，外部适配位于 `Dima/adapters`，生命周期位于 `Dima/middleware/lifecycle`，C/C++ Runtime 与平台时间位于 `Dima/platform/freertos/libc` 和 `Dima/platform/freertos/platform_time.*`，Motor 与 Rover Control 位于 `Dima/lib/{motor,rover_control}`。已退役的顶层 `App/` 不再是当前架构根；目录迁移已完成；Windows ARM 工具链已配置，构建和运行结果以本次目标编译为准。
+已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/Clock.cpp`。参数 Journal 与 STM32H7 raw Flash、USB Console 与 STM32 USB transport、SBUS 模块与 STM32 UART/DMA 驱动均已拆分，不再保留混合后端。
 
 ## 3. 依赖规则
 
-- `Dima/rover` 是唯一 Rover 产品域，保留 `ApplicationContext` 产品装配根，并在 `control/`、`navigation/` 承载 Rover 专属功能。
+- `Dima/rover` 是唯一 Rover 产品域，可依赖 modules、middleware、messages、lib 和 `platform/api`，但不包含具体后端类型；`Boards/H743/Src/platform_composition.cpp` 是后端组合根。
 - `Dima/modules` 承载具有独立生命周期和运行状态的功能块；Parameter、Log 等系统功能与 RC、Commander 一样实现统一的 ModuleBase 契约。
 - `Dima/modules` 和 `Dima/middleware` 禁止反向依赖 `Dima/rover`。
-- `Dima/modules` 可依赖 Dima middleware、messages、lib 和明确的平台适配接口，不直接包含 STM32 HAL 全局句柄。
-- `Dima/lib` 保持算法属性，不依赖 HAL、USB、MCUboot 或具体板卡。
-- `Dima/middleware` 直接拥有 lifecycle、Parameter、uORB、WorkQueue、Event、Perf 和 Logging，不再依赖顶层 `App`。
-- `Dima/platform/freertos` 连接 FreeRTOS、时间、内存和同步原语，不承载 Rover 业务逻辑。
+- `application/rover/modules/middleware/messages/lib/adapters` 只允许依赖标准库、内部公共契约和 `Dima/platform/api`，禁止 FreeRTOS、HAL、CMSIS、SCB/NVIC、Core、Board 与 USB 生成头。
+- `Dima/platform/api` 只定义整数、尺寸、opaque handle、callback 和窄 capability，不暴露 OS/MCU/厂商类型。
+- `Dima/platform/freertos` 只连接 `platform/api` 与 FreeRTOS；`Dima/platform/stm32h7` 只连接 `platform/api`、HAL/CMSIS 和板级定义，二者禁止互相包含。
 - `Boards/H743` 负责 MCU、引脚、DMA、PWM、Flash 和总线接线，不依赖上层控制模块。
 - `Core/` 与 `USB_DEVICE/` 的生成区只保留必要接线，禁止写入业务逻辑。
+- `make check-architecture` 检查底层 include/API、cache/DMA/Flash 操作所有权、依赖方向和私有 include 集，并是 `firmware/verify/dima_rover` 的强制前置条件。
 - 上游移植文件必须保留原始版权头，并在 Source Manifest 中记录原始路径、版本和本地修改。
 - 项目内不新建名称包含大小写不敏感 `px4` 的目录；该规则不适用于源码符号、许可证和来源说明。
 
 ## 4. 启动与运行链
 
-当前启动链保持不变：
+当前启动链为：
 
-1. `board_vector_table_init()` 设置应用向量表；
-2. `HAL_Init()`；
-3. 系统和外设时钟初始化；
-4. `board_init()`；
-5. `osKernelInitialize()` → `Dima/application/app_bootstrap.cpp` 中的 `app_bootstrap_create()` → `osKernelStart()`；
-6. `Dima/application/app_main.cpp` 进入 `Dima/rover/ApplicationContext`，由 Rover 装配根初始化 USB 和运行模块。
+1. CRT 复制 data/清零 bss 之前，`SystemInit()` 调用无全局状态的 early-memory hook，规范化已有 cache/MPU 状态，配置 MPU Region 6/7，再依次启用 I-cache、D-cache；
+2. `main()` 在 HAL 与调度器之前验证 `SCB->CCR`、`MPU->CTRL` 和 Region 6/7，失败则写启动诊断并 fail-closed；
+3. `board_vector_table_init()`、`HAL_Init()`、系统/外设时钟和 `board_init()`；
+4. H743 组合根建立 FreeRTOS 与 STM32H7 后端并安装 `platform::Services`；
+5. `osKernelInitialize()` → `TaskRuntime::create(appMainTask)` → `osKernelStart()`；
+6. `app_main` 进入 `ApplicationContext`，所有模块只通过 capability 运行。
 
 ### 4.1 双时基与调度边界
 
@@ -107,8 +109,9 @@ Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter J
 - 启动期和非实时服务允许使用位于 D1 AXI SRAM 的受监控 FreeRTOS `heap_5`。
 - ISR、控制循环、EKF2 更新、Arming/Failsafe、Mixer 和 PWM 输出禁止分配。
 - 通用 Heap 已固定为 D1 AXI SRAM 中 256 KiB 的 `.dima_heap`。
-- D2 SRAM 保留给显式 DMA Buffer；DMA Buffer 不从通用 Heap 获取。
-- DTCM 默认用于快速非 DMA 状态和任务栈，不加入通用 Heap。
+- D2 普通内存与 SRAM3 固定 32 KiB `.dima_dma` 分离；MPU 将 `0x30040000～0x30047FFF` 配置为 Normal、Shareable、Non-cacheable、XN，DMA 只接受 `DmaBufferView` 或平台 bounce buffer。
+- 48 KiB 固定任务栈池位于 D1 的 `.dima_task_pool`，与 256 KiB `.dima_heap` 分离；DTCM 用于普通 data/bss 与同 Bank Flash 编程例程，不加入通用 Heap。
+- D3 `0x38000000～0x3800FFFF` 为 non-cacheable 跨复位诊断区。
 - 已启用 malloc failed hook、Heap 统计和内存故障 Event；任务栈高水位待目标板采集。
 - C++ exceptions 和 RTTI 继续关闭。
 
@@ -119,7 +122,9 @@ Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter J
 - 生产消息接口统一采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 使用生产 uORB 链。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
 - 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。
-- 参数 Journal 每次 load 都重新验证 Header、Commit Marker 和 payload CRC；最新记录损坏时重扫并回退上一条有效快照。
+- 参数核心只依赖公共 execution/memory/synchronization 接口；`ParameterJournal` 与 STM32H7 raw Flash device 分离，保持 `0x081E0000/128 KiB`、Journal v1 字节格式和 ENOSPC 语义不变。
+- 参数扫描不执行整段 cache invalidate；raw Flash 仅在 program/erase 成功后处理实际修改范围，D-cache 关闭时中央 helper no-op。
+- 每次 load 都重新验证 Header、Commit Marker 和 payload CRC；最新记录损坏时重扫并回退上一条有效快照。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。
 - Estimator 采用 EKF2，首版即保留多实例与 Estimator Selector，至少支持两个 EKF 实例；实际激活数量由可用 IMU/Mag 组合和参数决定。控制器只消费 `vehicle_attitude`、`vehicle_local_position`、`vehicle_global_position` 和健康状态，不直接访问 EKF 内部对象。
 - Wheel Encoder 先通过 Dima Odometry Adapter 转为受支持的速度或里程计观测，不直接修改 EKF Core。
 - Arming 状态与 PWM 外设是否启动分离，最终输出必须经过统一 Failsafe 和 Actuator Gate。
@@ -142,8 +147,11 @@ Storage       128 KiB
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源。
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
 - `tools/check_architecture.py` 在源码阶段拒绝重复 Rover 根、逆向依赖、越权硬件访问、生命周期契约缺失和非零 PWM compare；`tools/verify_application_elf.py` 在最终应用 ELF 上检查向量、ISR 强弱绑定、section 地址/容量、SBUS DMA/CPU Ring、生命周期符号、初始化数组白名单以及无执行器消费者。源码扫描通过不等于 ELF、目标构建或板测通过。
+- VS Code 的 Microsoft C/C++ 插件只使用 `make intellisense` 从真实 Make 配方生成的主机本地 `compile_commands.json`。数据库同时覆盖 Application、MCUboot 和各层私有 include/define；源码清单或编译参数变化后必须重新生成。可移植的 `.vscode` 配置纳入源码，包含绝对路径的数据库和符号索引继续忽略。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。
-- Arm 与应用 Flash 操作由同一原子互锁协调；模块停止先关闭新调度并 drain 正在执行的 `Run()`，再释放订阅、DMA、Perf、Flash 或日志资源。
+- 参数存储与 MCUboot confirm 共用 Flash transaction 和 Armed/Flash coordinator；锁顺序固定为存储/Journal → transaction → interlock，confirm 使用非阻塞 transaction 并保留 `DEFERRED`。
+- MCUboot 可在跳转前关闭 cache，每个应用镜像必须自行且幂等地重建 MPU/cache 契约。
+- 启动诊断 v2 增加 ABFSR、SCB CCR、MPU CTRL 和上一故障 ABFSR；Flash record 仍为 256 bytes，读取工具兼容 v1/v2。
 
 目录迁移已完成。2026-07-30 已在 Windows 本地使用 GNU Make 4.4.1、Arm GNU Toolchain 16.1.0 和 binutils 2.47 执行正式项目入口，目标编译、链接、签名、MCUboot 地址一致性和 Factory HEX 验证通过；目标板运行行为仍需板测。项目不新增 Host Test、SITL 或仿真入口：
 

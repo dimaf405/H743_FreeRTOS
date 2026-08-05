@@ -108,27 +108,36 @@ Recovery；日常升级应直接使用下一节的一键命令，由上传器自
 
 ### 3.2 一条命令完成构建与上传
 
-工程会自动准备固定提交的 Apache `mcumgr`。首次上传时，Python 脚本优先复用 PATH 中可用的
-Go；如果没有，则下载经过 SHA-256 固定校验的 Go 工具链，并把编译后的 `mcumgr` 放入
-`~/.cache/dima-rover/host-tools` 统一缓存。它不会写入仓库、系统工具目录或个人 Go `bin`
-目录。工具链默认优先从阿里云 Go 镜像下载，并以 `golang.google.cn`、`go.dev` 为回退；无论
-使用哪个镜像，都必须同时通过官方固定文件大小和 SHA-256 校验。后续上传直接命中缓存。
-编译环境只需 GNU Make、Python 3 + pip，以及 PATH 中的
-`arm-none-eabi-gcc` 工具链；也可继续通过 `GCC_PATH` 显式指定工具链目录。在工程根目录执行：
+工程的正式构建和上传入口必须运行在 Windows 原生 GNU Make、Windows 路径和 Windows Python
+中；WSL 只可作为调用 Windows 进程的控制终端，不能直接执行本工程的 Make 构建。根 Makefile
+优先选择 `%USERPROFILE%\.platformio\penv\Scripts\python.exe`，并在访问板卡和开始耗时构建前
+执行只读 USB 端点预检。主机只需预先具备 Windows GNU Make 与 Python 3 + pip；如果没有显式
+提供 `GCC_PATH`、Go 或 `mcumgr`，脚本会自动准备固定版本的 xPack Arm GNU 10.3.1、Go 和带
+Dima USB CDC 修补的 Apache `mcumgr`。
+
+所有自举工具均进入 `Path.home()/.cache/dima-rover/host-tools` 共享缓存，不写入仓库、系统工具
+目录或个人 Go `bin` 目录。下载必须同时通过固定版本、文件大小和 SHA-256 校验：Go 优先使用
+国内镜像并保留官方回退，Arm GNU 优先使用国内 GitHub 代理并保留 GitHub 回退。后续构建直接
+命中缓存。在工程根目录执行：
 
 ```bash
 make dima_rover upload
 ```
 
-该命令会依次完成应用与 MCUboot 编译、签名和布局校验，默认选择当前构建目录中的
-`build/H743_FreeRTOS_signed.bin`，扫描并识别应用或 Recovery 串口。若识别到应用，会自动发送
-`reboot -b` 并等待 USB 重新枚举；随后执行 Secondary 上传、读取本地签名镜像 SHA-256、设置测试
-启动和软件复位。仓库自举的是带 Dima USB CDC 快速通道的固定版本 `mcumgr`：在虚拟
-921600 波特率下取消 Apache 串口传输原有的 20 ms 分片间延时、将 NLIP 帧扩展到配置的
-512 字节 MTU，并把非末尾固件块对齐到 STM32H743 的 32 字节 Flash 写入粒度。默认最多两个
-在途分片；两帧可安全容纳在 Bootloader 的 2048 字节 CDC RX 环形缓冲中，避免原始五分片窗口
-造成溢出，同时消除代码中会把单窗口传输压低到约 2 KiB/s 的主机限速路径。实际整包速率以
-上传结束时打印的字节数、耗时和 KiB/s 为准。
+该命令会依次完成 `HOST_PREFLIGHT`、架构门禁、应用与 MCUboot 编译、签名和布局校验，再处理
+实板。上传器默认选择 `build/H743_FreeRTOS_signed.bin`，解析本地签名镜像 SHA-256，扫描并识别
+应用或 Recovery 串口；若识别到应用，会自动发送 `reboot -b` 并等待 USB 重新枚举。`upload`
+默认每次都将镜像写入 Secondary，并显示连续的字节数、百分比、速度和剩余时间进度，即使板上
+已经运行相同 hash 也不会用“无需做任何事”代替烧写。
+
+需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、Secondary hash 校验、`TEST`、pending 状态
+校验、`RESET`、`APPLICATION_RUNNING`、`HEALTH_CONFIRM`、`active confirmed` 校验，最后再次
+复位并确认应用已经恢复运行。任何阶段不满足契约都会使命令返回非零，不会把只完成传输误报为
+烧写成功。仓库自举的是带 Dima USB CDC 快速通道的固定版本 `mcumgr`：在虚拟 921600 波特率下
+取消 Apache 串口传输原有的 20 ms 分片间延时、将 NLIP 帧扩展到 512 字节 MTU，并把非末尾固件
+块对齐到 STM32H743 的 32 字节 Flash 写入粒度。生产默认使用 `--maxwinsize 1` 的 stop-and-wait；
+它规避 Bootloader 2048 字节 CDC RX 环形缓冲的窗口溢出，并已取消原来把单窗口传输压低到约
+2 KiB/s 的主机限速路径。实际整包速率以结束时打印的字节数、耗时和 KiB/s 为准。
 
 Linux 会枚举 `/dev/serial/by-id/`、`/dev/ttyACM*` 和 `/dev/ttyUSB*`，并优先显示稳定的
 `by-id` 路径；WSL 使用 Windows .NET 串口 API 枚举当前 `COMx`，通过 PowerShell 访问应用，
@@ -143,10 +152,15 @@ make dima_rover upload MCUMGR=/absolute/path/to/mcumgr
 ```
 
 `UPLOAD_IMAGE` 可覆盖默认上传包，`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间；
-`MCUMGR_BAUD`、`MCUMGR_MTU` 和 `MCUMGR_MAX_WINDOW` 分别覆盖虚拟波特率、串行 MTU 和窗口，
-`HOST_TOOLS_CACHE_ROOT` 可覆盖统一工具缓存目录。受限网络可通过 `DIMA_GOPROXY` 指定 Go
-模块代理；离线环境也可用 `MCUMGR=/absolute/path/to/mcumgr` 显式指定已审核的 CLI。无论使用
-哪个入口，上传包都必须由板上 MCUboot 已内置公钥对应的私钥签名。
+`UPLOAD_CONFIRM_WAIT_SECONDS` 默认等待 8 秒再验收应用健康确认。`UPLOAD_FORCE=1` 是默认值，
+保证每次 `upload` 都真正写入；只有明确希望相同 active/confirmed hash 跳过写入时才设置
+`UPLOAD_FORCE=0`。`UPLOAD_VERIFY_CONFIRM=0` 只用于明确接受跳过最终确认探测的诊断场景，不能
+作为正式烧写验收。`MCUMGR_BAUD`、`MCUMGR_MTU` 和 `MCUMGR_MAX_WINDOW` 分别覆盖虚拟波特率、
+串行 MTU 和窗口；窗口默认值为 1，在完成持续实板压力验收前不应调大。`HOST_TOOLS_CACHE_ROOT`
+可覆盖包括 Arm GNU、Go、`mcumgr` 和 Python 依赖在内的统一工具缓存目录。受限网络可通过
+`DIMA_GOPROXY` 指定 Go 模块代理；离线环境也可用 `GCC_PATH` 和
+`MCUMGR=/absolute/path/to/mcumgr` 显式指定已审核工具。无论使用哪个入口，上传包都必须由板上
+MCUboot 已内置公钥对应的私钥签名。
 
 ### 3.3 手工升级流程
 
@@ -167,7 +181,7 @@ Secondary；Bootloader 会拒绝 `-n 1`，从实现层禁止 USB 擦写正在运
    ```bash
    mcumgr --conntype serial \
      --connstring "dev=/dev/ttyACM0,baud=115200" \
-     image upload -n 2 build/H743_FreeRTOS_signed.bin
+     image upload -n 2 --maxwinsize 1 build/H743_FreeRTOS_signed.bin
    ```
 
 3. 再次列出镜像，复制 Secondary 镜像显示的完整 SHA-256 hash：
@@ -281,4 +295,4 @@ ROM Bootloader 的 USB FS DFU 使用 HSI48 + CRS，不依赖外部 HSE；芯片�
 
 - ST AN2606 Rev 70，STM32H74xxx/75xxx System Memory Bootloader、Pattern 10、USB DFU 引脚/供电和 ROM 版本限制。
 - ST DS12110 Rev 11，STM32H743VI LQFP100 pinout 与 USB OTG FS 电气要求。
-- 本工程 `Bootloader/Src/main.c`、`Bootloader/Src/flash_map_backend.c`、`Dima/adapters/mcuboot/mcuboot_app.c`、`Dima/modules/boot_health/boot_health.cpp`、`Dima/messages/app_heartbeat.hpp`、`Boards/H743/Inc/boot_layout.h` 和根 Makefile。
+- 本工程 `Bootloader/Src/main.c`、`Bootloader/Src/flash_map_backend.c`、`Dima/platform/stm32h7/BootControl.cpp`、`Dima/platform/stm32h7/flash_bank1.c`、`Dima/modules/boot_health/boot_health.cpp`、`Dima/messages/app_heartbeat.hpp`、`Boards/H743/Inc/boot_layout.h` 和根 Makefile。

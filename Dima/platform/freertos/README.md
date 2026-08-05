@@ -1,8 +1,8 @@
 # FreeRTOS 平台适配
 
-- **职责：** 承载任务、时间、内存、同步原语以及 STM32H743 FreeRTOS 平台兼容实现。
-- **禁止事项：** 不放置车辆控制算法，不在 ISR 或实时控制路径引入无界阻塞和未受控动态分配。
-- **上游 API 保留：** 适配上游平台接口时保留其公开类型、函数、宏和调用语义，仅替换操作系统及板级实现。
-- **双时基：** SysTick 固定 1 kHz 并统一 HAL/FreeRTOS tick；TIM2 固定 1 MHz、32 位并扩展为 64 位 HRT。TIM12 不再承担 HAL timebase。
-- **资源保留：** TIM2 和 CH1 专用于 HRT/未来 compare；当前禁止 tickless、STOP 补偿和运行期动态改频，不再增加第三套系统时基。
-- **传感器中断：** ICM42688 的 EXTI 在启动阶段保持关闭，只有 HRT 和调度器就绪后的首个任务消费者可以启用；ISR 只记录 TIM2 HRT 时间戳、事件位和计数，并通过 `ScheduleNowFromISR()` 通知任务，SPI 事务只允许在任务上下文执行。
+- **职责：** 只实现 `platform/api` 的 TaskRuntime、Synchronization、CriticalSection、ExecutionContext、Heap 和 FlashTransactionManager，不拥有任何 MCU 外设。
+- **依赖边界：** 仅允许包含 `platform/api` 与 FreeRTOS；禁止 HAL、CMSIS、STM32 寄存器、Board/Core/USB 生成头和业务模块。
+- **固定资源：** 16 个 task slot、12 个 mutex slot、16 个 signal slot；任务栈来自 D1 中独立的 48 KiB `.dima_task_pool`，通用 `heap_5` 固定为 D1 中 256 KiB `.dima_heap`。
+- **时间与超时：** 公共层只传微秒/毫秒和 `Timeout`；本后端向上取整到 1 kHz tick，不向调用者暴露 `TickType_t`、`TaskHandle_t` 或 `portMAX_DELAY`。
+- **实时约束：** ISR 和标记为 realtime 的 WorkQueue 禁止动态分配；中间件与业务不得直接调用 FreeRTOS API。
+- **硬件归属：** TIM2 HRT、cache、MPU、DMA、Flash、USB、SBUS 和 EXTI 均位于 `platform/stm32h7`，通过公共 capability 使用。
