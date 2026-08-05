@@ -14,5 +14,6 @@ BootControl &boot_control(FlashTransactionManager &transactions,
                           ArmedFlashCoordinator &armed_flash) noexcept;
 SbusInput &sbus_input() noexcept;
 SensorInterrupts &sensor_interrupts() noexcept;
+ActuatorPwm &actuator_pwm() noexcept;
 
 } // namespace dima::platform::stm32h7

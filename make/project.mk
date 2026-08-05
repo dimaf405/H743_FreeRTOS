@@ -160,6 +160,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/rover/ApplicationContext.cpp \
 	Dima/rover/control/DifferentialDrive.cpp \
 	Dima/rover/control/ManualMotionAdapter.cpp \
+	Dima/rover/control/MotorOutput.cpp \
 	Dima/rover/control/RoverDifferential.cpp \
 	Dima/modules/logging/LogService.cpp \
 	Dima/modules/parameters/ParameterService.cpp \
@@ -198,6 +199,7 @@ DIMA_COMMON_CXX_SOURCES := \
 DIMA_FREERTOS_CXX_SOURCES := \
 	Dima/platform/freertos/Backend.cpp
 DIMA_STM32_CXX_SOURCES := \
+	Dima/platform/stm32h7/ActuatorPwm.cpp \
 	Dima/platform/stm32h7/BootControl.cpp \
 	Dima/platform/stm32h7/Clock.cpp \
 	Dima/platform/stm32h7/DmaMemory.cpp \

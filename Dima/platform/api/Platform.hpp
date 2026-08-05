@@ -467,6 +467,28 @@ public:
     virtual Icm42688InterruptSnapshot consume_icm42688() noexcept = 0;
 };
 
+constexpr std::size_t kActuatorPwmChannelCount = 6U;
+
+enum class ActuatorPwmResult : std::uint8_t {
+    Applied,
+    Retry,
+    Fault,
+};
+
+struct ActuatorPwmFrame {
+    std::uint16_t pulse_us[kActuatorPwmChannelCount]{};
+    std::uint8_t enabled_mask{0U};
+};
+
+class ActuatorPwm {
+public:
+    virtual ~ActuatorPwm() = default;
+    virtual ActuatorPwmResult start() noexcept = 0;
+    virtual ActuatorPwmResult stop() noexcept = 0;
+    virtual ActuatorPwmResult write(const ActuatorPwmFrame &frame) noexcept = 0;
+    virtual bool started() const noexcept = 0;
+};
+
 struct Services {
     MonotonicClock &clock;
     ExecutionContext &execution;
@@ -483,6 +505,7 @@ struct Services {
     DmaMemory &dma;
     SbusInput &sbus;
     SensorInterrupts &sensor_interrupts;
+    ActuatorPwm *actuator_pwm;
 };
 
 bool install_services(Services &services) noexcept;

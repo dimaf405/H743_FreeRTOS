@@ -18,18 +18,24 @@ enum {
     BOARD_MOTOR_PWM_COUNT
 };
 
-/* Starts the six physical outputs with compare values held at zero. */
-bool board_motor_pwm_start(void);
+typedef enum board_motor_pwm_result_e {
+    BOARD_MOTOR_PWM_APPLIED = 0,
+    BOARD_MOTOR_PWM_RETRY = 1,
+    BOARD_MOTOR_PWM_FAULT = 2
+} board_motor_pwm_result_t;
 
-/* Stops every PWM output and clears all compare registers. */
-void board_motor_pwm_stop(void);
+/* Starts all six physical outputs with compare values held at zero. */
+board_motor_pwm_result_t board_motor_pwm_start(void);
+
+/* Stops both timers, clears all compares, and drives every pin low. */
+board_motor_pwm_result_t board_motor_pwm_stop(void);
 
 /*
  * Writes one transactional six-channel frame. Bits clear in valid_mask are
  * disabled by writing a zero compare value. Call board_motor_pwm_start first.
  */
-bool board_motor_pwm_write(const uint16_t pulse_us[BOARD_MOTOR_PWM_COUNT],
-                           uint8_t valid_mask);
+board_motor_pwm_result_t board_motor_pwm_write(
+    const uint16_t pulse_us[BOARD_MOTOR_PWM_COUNT], uint8_t valid_mask);
 
 bool board_motor_pwm_started(void);
 

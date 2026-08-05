@@ -89,6 +89,7 @@ extern "C" bool dima_platform_early_init(void)
         stm32h7::dma_memory(),
         stm32h7::sbus_input(),
         stm32h7::sensor_interrupts(),
+        nullptr,
     };
 
     if (!install_services(services)) {

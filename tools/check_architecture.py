@@ -719,12 +719,20 @@ def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
     allowed_motor_owners = {
         "Boards/H743/Inc/motor_pwm.h",
         "Boards/H743/Src/motor_pwm.c",
+        "Dima/platform/stm32h7/ActuatorPwm.cpp",
     }
     allowed_rover_differential_owners = {
         "Dima/rover/ApplicationContext.cpp",
         "Dima/rover/ApplicationContext.hpp",
         "Dima/rover/control/RoverDifferential.cpp",
         "Dima/rover/control/RoverDifferential.hpp",
+    }
+    allowed_actuator_pwm_owners = {
+        "Dima/platform/api/Platform.hpp",
+        "Dima/platform/stm32h7/ActuatorPwm.cpp",
+        "Dima/platform/stm32h7/Backend.hpp",
+        "Dima/rover/control/MotorOutput.cpp",
+        "Dima/rover/control/MotorOutput.hpp",
     }
     for path in first_party_sources():
         relative = path.relative_to(ROOT).as_posix()
@@ -757,12 +765,30 @@ def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
                     path, line_number, "R122",
                     "RoverDifferential escaped the Rover control boundary",
                 ))
+            if (path.is_relative_to(ROOT / "Dima") and
+                    "ActuatorPwm" in line and
+                    relative not in allowed_actuator_pwm_owners):
+                violations.append(Violation(
+                    path, line_number, "R126",
+                    "six-channel PWM capability escaped its platform and "
+                    "Rover output owners",
+                ))
 
     timer_source = ROOT / "Core/Src/tim.c"
     require_literals(
         timer_source,
-        (("sConfigOC.Pulse = 0;", "R123",
-          "CubeMX PWM compare defaults must remain zero"),),
+        (
+            ("sConfigOC.Pulse = 0;", "R123",
+             "CubeMX PWM compare defaults must remain zero"),
+            ("sSlaveConfig.SlaveMode = TIM_SLAVEMODE_RESET;", "R127",
+             "TIM5 must remain a reset-mode slave"),
+            ("sSlaveConfig.InputTrigger = TIM_TS_ITR3;", "R128",
+             "TIM5 must remain connected to TIM8 TRGO"),
+            ("sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;", "R129",
+             "TIM8 must publish its update event as TRGO"),
+            ("sConfigOC.OCNPolarity = TIM_OCNPOLARITY_LOW;", "R138",
+             "TIM8 complementary outputs must map zero compare to low"),
+        ),
         violations,
     )
     if timer_source.is_file():
@@ -775,6 +801,22 @@ def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
                 ))
 
     ioc = ROOT / "H743_FreeRTOS.ioc"
+    require_literals(
+        ioc,
+        (
+            ("TIM5.TIM_SlaveMode=TIM_SLAVEMODE_RESET", "R139",
+             "CubeMX TIM5 reset-slave contract is missing"),
+            ("VP_TIM5_VS_ClockSourceITR.Mode=TriggerSource_ITR3", "R157",
+             "CubeMX TIM5 ITR3 virtual connection is missing"),
+            ("TIM8.OCNPolarity_2=TIM_OCNPOLARITY_LOW", "R158",
+             "CubeMX TIM8 CH2N polarity is not safe at zero compare"),
+            ("TIM8.OCNPolarity_3=TIM_OCNPOLARITY_LOW", "R159",
+             "CubeMX TIM8 CH3N polarity is not safe at zero compare"),
+            ("TIM8.TIM_MasterOutputTrigger=TIM_TRGO_UPDATE", "R160",
+             "CubeMX TIM8 update TRGO contract is missing"),
+        ),
+        violations,
+    )
     if ioc.is_file():
         for line_number, line in enumerate(
                 ioc.read_text(encoding="utf-8").splitlines(), 1):
