@@ -23,7 +23,7 @@ constexpr std::size_t kQueueCount = 7U;
 struct QueueRuntime {
     const wq_config_t *config{nullptr};
     WorkItem *items[kMaximumItemsPerQueue]{};
-    dima::platform::Signal signal{};
+    dima::platform::SignalHandle signal{};
     dima::platform::TaskHandle task{};
     bool started{false};
 };
@@ -109,7 +109,7 @@ bool WorkQueueManager::schedule(WorkItem &item, hrt_abstime deadline,
     }
     QueueRuntime *const queue = find_queue(*item.config_);
     if (queue == nullptr || !queue->started || !queue->task ||
-        !queue->signal.valid() || !item.accepting_schedules_ ||
+        !queue->signal || !item.accepting_schedules_ ||
         !attach_item(*queue, item)) {
         return false;
     }
@@ -118,7 +118,7 @@ bool WorkQueueManager::schedule(WorkItem &item, hrt_abstime deadline,
     item.deadline_ = deadline;
     item.interval_ = interval;
     item.scheduled_ = true;
-    queue->signal.notify();
+    dima::platform::services().synchronization.notify(queue->signal);
     return true;
 }
 
@@ -134,7 +134,7 @@ bool WorkQueueManager::schedule_from_isr(WorkItem &item) noexcept
     }
     QueueRuntime *const queue = find_queue(*item.config_);
     if (queue == nullptr || !queue->started || !queue->task ||
-        !queue->signal.valid() || !item.accepting_schedules_ ||
+        !queue->signal || !item.accepting_schedules_ ||
         !attach_item(*queue, item)) {
         return false;
     }
@@ -143,7 +143,8 @@ bool WorkQueueManager::schedule_from_isr(WorkItem &item) noexcept
     item.deadline_ = work_queue_time_us();
     item.interval_ = 0U;
     item.scheduled_ = true;
-    queue->signal.notify_from_isr();
+    dima::platform::services().synchronization.notify_from_isr(
+        queue->signal);
     return true;
 }
 
@@ -184,7 +185,8 @@ void WorkQueueManager::worker(void *argument)
                 wait_us == UINT64_MAX
                     ? dima::platform::Timeout::forever()
                     : dima::platform::Timeout::from_us(wait_us);
-            (void)queue.signal.wait(timeout);
+            (void)dima::platform::services().synchronization.wait(
+                queue.signal, timeout);
             continue;
         }
 
@@ -378,7 +380,8 @@ bool work_queue_init() noexcept
     }
 
     for (auto &queue : g_queues) {
-        if (!queue.signal.initialize(services.synchronization)) {
+        queue.signal = services.synchronization.create_signal();
+        if (!queue.signal) {
             (void)work_queue_shutdown();
             return false;
         }
@@ -410,7 +413,8 @@ bool work_queue_shutdown() noexcept
         return false;
     }
 
-    auto &tasks = dima::platform::services().tasks;
+    auto &services = dima::platform::services();
+    auto &tasks = services.tasks;
     const dima::platform::TaskHandle current = tasks.current();
     if (!current) {
         return false;
@@ -462,7 +466,10 @@ bool work_queue_shutdown() noexcept
         }
         queue.task = {};
         queue.started = false;
-        queue.signal.reset();
+        if (queue.signal) {
+            services.synchronization.destroy_signal(queue.signal);
+            queue.signal = {};
+        }
     }
     if (!destroyed) {
         return false;

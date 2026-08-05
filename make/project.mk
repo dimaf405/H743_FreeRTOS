@@ -68,6 +68,7 @@ C_INCLUDES += -I. \
 	-I$(BUILD_DIR)/generated/parameters
 
 PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
+APPLICATION_ELF_CHECK_TOOL := tools/verify_application_elf.py
 PARAMETER_GENERATOR_DEPS := $(wildcard tools/parameters/*.py tools/parameters/dima_params/*.py)
 PARAMETER_DEFINITIONS := \
 	Dima/middleware/parameters/definitions/commander_params.c \
@@ -378,6 +379,9 @@ mcuboot: $(MCUBOOT_BUILD_DIR)/mcuboot.hex
 
 
 verify: firmware
+	$(DIMA_PROGRESS_RUN) --label ELF --target "$(BUILD_DIR)/$(TARGET).elf" -- \
+		$(PYTHON) $(APPLICATION_ELF_CHECK_TOOL) \
+		--elf $(BUILD_DIR)/$(TARGET).elf
 	$(DIMA_PROGRESS_RUN) --label VERIFY --target "$(SIGNED_BIN)" -- \
 		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
 		verify -k "$(KEY_FILE)" $(SIGNED_BIN)
