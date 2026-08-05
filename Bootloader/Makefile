@@ -1,18 +1,18 @@
 PROJECT_ROOT := .
-DIMA_WINDOWS_MAKE_HOST := $(strip $(or \
-	$(findstring cygwin,$(MAKE_HOST)), \
-	$(findstring mingw,$(MAKE_HOST)), \
-	$(findstring msys,$(MAKE_HOST))))
-ifeq ($(DIMA_WINDOWS_MAKE_HOST),)
-$(error Windows-native GNU Make is required (MAKE_HOST=$(MAKE_HOST)); WSL/Linux builds are disabled)
+DIMA_WINDOWS_NATIVE := $(filter Windows_NT,$(OS))
+ifeq ($(DIMA_WINDOWS_NATIVE),)
+$(error Windows-native GNU Make is required (OS=$(OS)); WSL/Linux builds are disabled)
 endif
+
+DIMA_USERPROFILE_POSIX := $(subst \,/,$(USERPROFILE))
+DIMA_PLATFORMIO_PYTHON := $(DIMA_USERPROFILE_POSIX)/.platformio/penv/Scripts/python.exe
 
 TARGET ?= mcuboot
 BUILD_DIR ?= build/mcuboot
 KEY_FILE ?= .keys/development-ecdsa-p256.pem
 KEY_ID_STAMP ?= $(BUILD_DIR)/.key-identity
 KEY_ID_TOOL ?= tools/update_key_identity.py
-PYTHON ?= python3
+PYTHON ?= $(if $(wildcard $(DIMA_PLATFORMIO_PYTHON)),$(DIMA_PLATFORMIO_PYTHON),python.exe)
 IMGTOOL_PYTHONPATH ?= build/host-python
 BUILD_PROGRESS_TOOL ?= tools/build_progress.py
 DIMA_PROGRESS_STATE ?=

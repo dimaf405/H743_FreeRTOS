@@ -19,14 +19,11 @@ FLASH_BASE = 0x08020000
 FLASH_SIZE = 0x00020000
 RECORD_SIZE = 256
 RECORD_MAGIC = 0x44424652
-RECORD_VERSION = 1
 RECORD_COMMIT = 0x434D4954
-DIAGNOSTICS_SIZE = 192
 DIAGNOSTICS_MAGIC = 0x44424447
-DIAGNOSTICS_VERSION = 1
 DIAGNOSTICS_CAPTURE_VALID = 0x43505452
 
-DIAGNOSTIC_FIELDS = (
+DIAGNOSTIC_FIELDS_V1 = (
     "magic", "version", "size", "boot_count", "reset_flags", "stage",
     "detail", "failure_kind", "capture_valid", "previous_stage",
     "previous_failure_kind", "previous_pc", "previous_cfsr",
@@ -39,9 +36,17 @@ DIAGNOSTIC_FIELDS = (
     "systick_load", "systick_value", "tim2_psc", "tim2_arr",
     "tim2_cnt", "tim2_sr",
 )
+DIAGNOSTIC_FIELDS_V2 = DIAGNOSTIC_FIELDS_V1 + (
+    "abfsr", "scb_ccr", "mpu_ctrl", "previous_abfsr",
+)
+RECORD_FORMATS = {
+    1: (1, 192, DIAGNOSTIC_FIELDS_V1),
+    2: (2, 208, DIAGNOSTIC_FIELDS_V2),
+}
 
 STAGES = {
-    0x0100: "SYSTEM_INIT", 0x0200: "MAIN_ENTER", 0x0210: "HAL_INIT",
+    0x0100: "SYSTEM_INIT", 0x0200: "MAIN_ENTER",
+    0x0208: "MEMORY_CONTRACT", 0x0210: "HAL_INIT",
     0x0220: "SYSTEM_CLOCK", 0x0230: "PERIPHERAL_CLOCK",
     0x0301: "GPIO", 0x0302: "DMA", 0x0303: "FDCAN1",
     0x0304: "I2C2", 0x0305: "SPI4", 0x0306: "UART4",
@@ -66,6 +71,7 @@ FAILURES = {
     0: "NONE", 1: "NMI", 2: "HARDFAULT", 3: "MEMMANAGE",
     4: "BUSFAULT", 5: "USAGEFAULT", 6: "ERROR_HANDLER",
     7: "FREERTOS_ASSERT", 8: "STACK_OVERFLOW",
+    9: "PLATFORM_CONTRACT",
 }
 
 
@@ -155,31 +161,36 @@ def valid_records(data: bytes) -> list[tuple[int, dict[str, int]]]:
     for offset in range(0, len(data), RECORD_SIZE):
         record = data[offset:offset + RECORD_SIZE]
         magic, version, size, sequence = struct.unpack_from("<IIII", record)
+        format_spec = RECORD_FORMATS.get(version)
+        if format_spec is None:
+            continue
+        diagnostics_version, diagnostics_size, fields = format_spec
         commit = struct.unpack_from("<I", record, RECORD_SIZE - 4)[0]
         stored_crc = struct.unpack_from(
-            "<I", record, 16 + DIAGNOSTICS_SIZE
+            "<I", record, 16 + diagnostics_size
         )[0]
         actual_crc = zlib.crc32(
-            record[:16 + DIAGNOSTICS_SIZE]
+            record[:16 + diagnostics_size]
         ) & 0xFFFFFFFF
         if (
-            magic != RECORD_MAGIC or version != RECORD_VERSION
-            or size != RECORD_SIZE or commit != RECORD_COMMIT
+            magic != RECORD_MAGIC or size != RECORD_SIZE
+            or commit != RECORD_COMMIT
             or stored_crc != actual_crc
         ):
             continue
         values = struct.unpack_from(
-            "<" + "I" * len(DIAGNOSTIC_FIELDS), record, 16
+            "<" + "I" * len(fields), record, 16
         )
-        diagnostics = dict(zip(DIAGNOSTIC_FIELDS, values))
+        diagnostics = dict(zip(fields, values))
         if (
             diagnostics["magic"] != DIAGNOSTICS_MAGIC
-            or diagnostics["version"] != DIAGNOSTICS_VERSION
-            or diagnostics["size"] != DIAGNOSTICS_SIZE
+            or diagnostics["version"] != diagnostics_version
+            or diagnostics["size"] != diagnostics_size
             or diagnostics["capture_valid"] != DIAGNOSTICS_CAPTURE_VALID
             or diagnostics["failure_kind"] == 0
         ):
             continue
+        diagnostics["record_version"] = version
         records.append((sequence, diagnostics))
     return records
 
@@ -192,6 +203,8 @@ def print_record(sequence: int, record: dict[str, int]) -> None:
     stage = record["stage"]
     failure = record["failure_kind"]
     print(f"record_sequence: {sequence}")
+    print(f"record_version: {record['record_version']}")
+    print(f"diagnostics_version: {record['version']}")
     print(f"boot_count: {record['boot_count']}")
     print(f"stage: {hex_value(stage)} ({STAGES.get(stage, 'UNKNOWN')})")
     print(f"detail: {hex_value(record['detail'])} ({record['detail']})")
@@ -204,6 +217,9 @@ def print_record(sequence: int, record: dict[str, int]) -> None:
         "systick_value", "tim2_psc", "tim2_arr", "tim2_cnt", "tim2_sr",
     ):
         print(f"{name}: {hex_value(record[name])}")
+    for name in ("abfsr", "scb_ccr", "mpu_ctrl", "previous_abfsr"):
+        if name in record:
+            print(f"{name}: {hex_value(record[name])}")
 
 
 def main() -> int:

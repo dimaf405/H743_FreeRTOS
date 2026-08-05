@@ -47,8 +47,11 @@ htmlcov/
 .venv/
 venv/
 
-# Local editor and IDE state
-.vscode/
+# Local editor and IDE state. Keep only the portable Microsoft C/C++ project
+# configuration; host-native indexes and extracted compiler headers stay local.
+.vscode/*
+!.vscode/c_cpp_properties.json
+!.vscode/settings.json
 .vs/
 .idea/
 *.code-workspace
@@ -81,3 +84,6 @@ NUL
 .DS_Store
 Thumbs.db
 Desktop.ini
+tools/analyze_flash.py
+.vscode/settings.json
+.vscode/c_cpp_properties.json

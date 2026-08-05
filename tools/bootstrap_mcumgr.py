@@ -382,7 +382,11 @@ def prepare_mcumgr_sources(
     return mcumgr_build
 
 
-def ensure_mcumgr(cache_root: pathlib.Path, target_windows: bool) -> pathlib.Path:
+def ensure_mcumgr(
+    cache_root: pathlib.Path,
+    target_windows: bool,
+    announce_cache_hit: bool = True,
+) -> pathlib.Path:
     host_os, host_arch = host_platform()
     target_os = "windows" if target_windows else host_os
     executable_name = "mcumgr.exe" if target_os == "windows" else "mcumgr"
@@ -394,7 +398,8 @@ def ensure_mcumgr(cache_root: pathlib.Path, target_windows: bool) -> pathlib.Pat
         / executable_name
     )
     if destination.is_file() and mcumgr_works(destination):
-        print(f"Using cached Apache mcumgr: {destination}", flush=True)
+        if announce_cache_hit:
+            print(f"Using cached Apache mcumgr: {destination}", flush=True)
         return destination
 
     go = provision_go(cache_root, host_os, host_arch)

@@ -101,7 +101,10 @@ DIMA_BOARD_INCLUDES := \
 	$(DIMA_STM32_INCLUDES)
 
 PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
+ARCHITECTURE_CHECK_TOOL := tools/check_architecture.py
 APPLICATION_ELF_CHECK_TOOL := tools/verify_application_elf.py
+COMPILE_COMMANDS_TOOL := tools/generate_compile_commands.py
+COMPILE_COMMANDS_OUTPUT ?= compile_commands.json
 PARAMETER_GENERATOR_DEPS := $(wildcard tools/parameters/*.py tools/parameters/dima_params/*.py)
 PARAMETER_DEFINITIONS := \
 	Dima/middleware/parameters/definitions/commander_params.c \
@@ -252,7 +255,7 @@ DIMA_BOARD_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_C_SOURCES:.c=.o)) \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_CXX_SOURCES:.cpp=.o))
 PROJECT_OBJECTS := $(PROJECT_C_OBJECTS) $(PROJECT_CXX_OBJECTS)
-$(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP)
+$(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) check-architecture
 override OBJECTS += $(PROJECT_OBJECTS)
 
 $(DIMA_COMMON_OBJECTS): DIMA_PRIVATE_DEFS := $(DIMA_PRODUCT_DEFS)
@@ -265,7 +268,7 @@ $(DIMA_BOARD_OBJECTS): DIMA_PRIVATE_DEFS := $(C_DEFS)
 $(DIMA_BOARD_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_BOARD_INCLUDES)
 
 ifneq ($(strip $(CUBEMX_OBJECTS)),)
-$(CUBEMX_OBJECTS): GNUmakefile make/project.mk
+$(CUBEMX_OBJECTS): GNUmakefile make/project.mk | check-architecture
 endif
 
 DIMA_REAL_CC := $(CC)
@@ -322,7 +325,7 @@ IMAGE_VERSION ?= 0.1.0+0
 DEVELOPMENT_KEY = .keys/development-ecdsa-p256.pem
 KEY_FILE ?= $(DEVELOPMENT_KEY)
 MCUBOOT_ROOT = Middlewares/Third_Party/MCUboot
-HOST_TOOLS_CACHE_ROOT ?= $(HOME)/.cache/dima-rover/host-tools
+HOST_TOOLS_CACHE_ROOT ?= $(shell $(PYTHON) -c "import pathlib; print((pathlib.Path.home() / '.cache' / 'dima-rover' / 'host-tools').as_posix())")
 HOST_PYTHON_DIR = $(HOST_TOOLS_CACHE_ROOT)/host-python
 HOST_TOOLS_STAMP = $(HOST_TOOLS_CACHE_ROOT)/.host-tools-installed
 IMGTOOL = $(MCUBOOT_ROOT)/scripts/imgtool.py
@@ -344,16 +347,52 @@ MCUMGR ?= mcumgr
 MCUMGR_PORT ?=
 MCUMGR_BAUD ?= 921600
 MCUMGR_MTU ?= 512
-MCUMGR_MAX_WINDOW ?= 2
+MCUMGR_MAX_WINDOW ?= 1
 UPLOAD_WAIT_SECONDS ?= 60
+UPLOAD_CONFIRM_WAIT_SECONDS ?= 8
+UPLOAD_FORCE ?= 1
+UPLOAD_VERIFY_CONFIRM ?= 1
 UPLOAD_IMAGE ?= $(SIGNED_BIN)
 UPLOAD_TOOL = tools/mcumgr_upload.py
 MCUMGR_BOOTSTRAP_TOOL = tools/bootstrap_mcumgr.py
+UPLOAD_FORCE_FLAG = $(if $(filter 1,$(UPLOAD_FORCE)),--force,)
+UPLOAD_CONFIRM_FLAG = $(if $(filter 0,$(UPLOAD_VERIFY_CONFIRM)),--skip-confirm-verification,)
 
-.PHONY: firmware mcuboot host-tools verify dima_rover upload \
+ifneq ($(filter-out 0 1,$(UPLOAD_FORCE)),)
+$(error UPLOAD_FORCE must be 0 or 1)
+endif
+ifneq ($(filter-out 0 1,$(UPLOAD_VERIFY_CONFIRM)),)
+$(error UPLOAD_VERIFY_CONFIRM must be 0 or 1)
+endif
+
+.PHONY: check-architecture app-check intellisense firmware mcuboot host-tools verify dima_rover \
+	upload-preflight upload \
 	__dima_clean_progress __dima_summary \
 	FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
-firmware: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
+check-architecture: $(ARCHITECTURE_CHECK_TOOL)
+	$(DIMA_PROGRESS_RUN) --label ARCH --target "$@" -- \
+		$(PYTHON) $(ARCHITECTURE_CHECK_TOOL)
+
+# Fast application-only gate for local iterations.  It deliberately excludes
+# image signing, MCUboot and Factory HEX generation; `verify` remains the full
+# incremental image gate.
+app-check: check-architecture $(BUILD_DIR)/$(TARGET).elf
+	$(DIMA_PROGRESS_RUN) --label ELF --target "$(BUILD_DIR)/$(TARGET).elf" -- \
+		$(PYTHON) $(APPLICATION_ELF_CHECK_TOOL) \
+		--elf $(BUILD_DIR)/$(TARGET).elf
+
+intellisense: $(COMPILE_COMMANDS_TOOL)
+	$(DIMA_PROGRESS_RUN) --label COMPDB --target "$(COMPILE_COMMANDS_OUTPUT)" -- \
+		$(PYTHON) $(COMPILE_COMMANDS_TOOL) \
+		--output "$(COMPILE_COMMANDS_OUTPUT)" \
+		$(if $(strip $(GCC_PATH)),--gcc-path "$(GCC_PATH)",) \
+		--make-variable "BOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT)" \
+		--make-variable "APP_HELLO_WORLD_ENABLED=$(APP_HELLO_WORLD_ENABLED)" \
+		--make-variable "APP_HELLO_WORLD_INTERVAL_MS=$(APP_HELLO_WORLD_INTERVAL_VALIDATED)" \
+		--make-variable "DEBUG=$(DEBUG)"
+
+firmware: check-architecture \
+          $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
           $(BUILD_DIR)/$(TARGET).bin $(SIGNED_BIN) \
           $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(FACTORY_HEX)
 
@@ -459,7 +498,7 @@ $(FACTORY_HEX): $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(SIGNED_HEX) \
 mcuboot: $(MCUBOOT_BUILD_DIR)/mcuboot.hex
 
 
-verify: firmware
+verify: check-architecture firmware
 	$(DIMA_PROGRESS_RUN) --label ELF --target "$(BUILD_DIR)/$(TARGET).elf" -- \
 		$(PYTHON) $(APPLICATION_ELF_CHECK_TOOL) \
 		--elf $(BUILD_DIR)/$(TARGET).elf
@@ -476,7 +515,15 @@ verify: firmware
 # Product-facing entry points.  `upload` depends on `dima_rover`, so both
 # `make upload` and the requested `make dima_rover upload` build and verify the
 # exact signed image before touching the board.
-dima_rover: verify
+dima_rover: check-architecture verify
+
+upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL)
+	@env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
+		--preflight-only --mcumgr "$(MCUMGR)" \
+		--tools-cache "$(HOST_TOOLS_CACHE_ROOT)" \
+		$(if $(strip $(MCUMGR_PORT)),--port "$(MCUMGR_PORT)",) \
+		--baud "$(MCUMGR_BAUD)" --mtu "$(MCUMGR_MTU)" \
+		--wait-seconds "$(UPLOAD_WAIT_SECONDS)"
 
 upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL)
 	$(DIMA_PROGRESS_RUN) --label UPLOAD --target "$(UPLOAD_IMAGE)" -- \
@@ -486,7 +533,9 @@ upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL)
 		$(if $(strip $(MCUMGR_PORT)),--port "$(MCUMGR_PORT)",) \
 		--baud "$(MCUMGR_BAUD)" --mtu "$(MCUMGR_MTU)" \
 		--max-window "$(MCUMGR_MAX_WINDOW)" \
-		--wait-seconds "$(UPLOAD_WAIT_SECONDS)"
+		--wait-seconds "$(UPLOAD_WAIT_SECONDS)" \
+		--confirm-wait-seconds "$(UPLOAD_CONFIRM_WAIT_SECONDS)" \
+		$(UPLOAD_FORCE_FLAG) $(UPLOAD_CONFIRM_FLAG)
 
 __dima_summary:
 	$(PYTHON) $(BUILD_PROGRESS_TOOL) summary \
@@ -495,6 +544,7 @@ __dima_summary:
 		--boot-bin "$(MCUBOOT_BUILD_DIR)/mcuboot.bin" \
 		--signed "$(SIGNED_BIN)" --factory "$(FACTORY_HEX)" \
 		--layout "Boards/H743/Inc/boot_layout.h" \
+		--size-tool "$(DIMA_REAL_SZ)" \
 		$(DIMA_PROGRESS_NO_COLOR_FLAG)
 
 -include $(PROJECT_OBJECTS:.o=.d)
