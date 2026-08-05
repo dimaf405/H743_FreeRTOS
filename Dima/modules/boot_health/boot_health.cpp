@@ -1,30 +1,14 @@
 #include "boot_health.hpp"
 
-#include "mcuboot/mcuboot_app.h"
-#include "freertos/platform_time.hpp"
 #include "parameters/param.h"
 
 namespace dima::modules::boot_health {
 
-namespace {
-
-uint64_t production_time_ms(void *)
-{
-    return dima::platform::platform_time_ms();
-}
-
-int production_confirm_running_image(void *)
-{
-    return mcuboot_confirm_running_image();
-}
-
-} // namespace
-
-BootHealthService::BootHealthService() noexcept
+BootHealthService::BootHealthService(
+    dima::platform::BootControl &boot_control,
+    dima::platform::MonotonicClock &clock) noexcept
     : px4::ScheduledWorkItem("boot_health", px4::wq_configurations::hp_default),
-      heartbeat_subscription_(ORB_ID(app_heartbeat)),
-      time_ms_(&production_time_ms),
-      confirm_running_image_(&production_confirm_running_image)
+      boot_control_(boot_control), clock_(clock)
 {
 }
 
@@ -36,9 +20,6 @@ void BootHealthService::bind_commander(
 
 bool BootHealthService::start()
 {
-    if (state_ == dima::middleware::lifecycle::ModuleState::Error) {
-        return false;
-    }
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
@@ -55,13 +36,12 @@ bool BootHealthService::start()
         return false;
     }
 
-    stable_window_start_ms_ = time_ms_(dependency_context_);
-    heartbeat_observed_ = false;
+    stable_window_start_ms_ = clock_.now_ms();
+    safety_snapshot_observed_ = false;
     stable_window_active_ = false;
-    last_heartbeat_progress_ms_ = 0U;
-    last_heartbeat_timestamp_us_ = 0U;
-    last_heartbeat_sequence_ = 0U;
-    (void)heartbeat_subscription_.update();
+    last_safety_timestamp_us_ = 0U;
+    // 丢弃 Commander 启动时的静态快照；必须观察下一组严格前进的
+    // 三 Topic 快照后，连续健康窗口才允许开始。
     (void)actuator_armed_subscription_.update();
     (void)vehicle_control_mode_subscription_.update();
     (void)vehicle_status_subscription_.update();
@@ -78,11 +58,12 @@ bool BootHealthService::start()
 
 void BootHealthService::stop()
 {
-    if (state_ != dima::middleware::lifecycle::ModuleState::Error) {
-        state_ = dima::middleware::lifecycle::ModuleState::Stopped;
-    }
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
     stable_window_active_ = false;
+    stable_window_start_ms_ = 0U;
+    safety_snapshot_observed_ = false;
+    last_safety_timestamp_us_ = 0U;
 }
 
 dima::middleware::lifecycle::ModuleState BootHealthService::state() const
@@ -97,17 +78,13 @@ void BootHealthService::Run()
         return;
     }
 
-    const uint64_t now_us = dima::platform::platform_time_us();
-    const uint64_t now_ms = time_ms_(dependency_context_);
-    (void)actuator_armed_subscription_.update();
-    (void)vehicle_control_mode_subscription_.update();
-    (void)vehicle_status_subscription_.update();
+    const uint64_t now_us = clock_.now_us();
+    const uint64_t now_ms = clock_.now_ms();
 
     const bool healthy = param_is_ready() && commander_ != nullptr &&
                          commander_->state() ==
                              dima::middleware::lifecycle::ModuleState::Running &&
-                         update_heartbeat_health(now_ms, now_us) &&
-                         safety_topics_consistent(now_us);
+                         update_safety_health(now_us);
     if (!healthy) {
         reset_stable_window(now_ms);
         return;
@@ -124,17 +101,18 @@ void BootHealthService::Run()
         return;
     }
 
-    const int result = confirm_running_image_(dependency_context_);
+    const dima::platform::BootConfirmResult result =
+        boot_control_.confirm_running_image();
     switch (result) {
-    case MCUBOOT_CONFIRM_OK:
-    case MCUBOOT_CONFIRM_ALREADY_CONFIRMED:
-    case MCUBOOT_CONFIRM_NOT_A_TEST_IMAGE:
+    case dima::platform::BootConfirmResult::Ok:
+    case dima::platform::BootConfirmResult::AlreadyConfirmed:
+    case dima::platform::BootConfirmResult::NotTestImage:
         confirmation_attempted_ = true;
         ScheduleCancelAndDrain();
         break;
-    case MCUBOOT_CONFIRM_DEFERRED:
+    case dima::platform::BootConfirmResult::Deferred:
         break;
-    case MCUBOOT_CONFIRM_FLASH_ERROR:
+    case dima::platform::BootConfirmResult::FlashError:
     default:
         confirmation_attempted_ = true;
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -143,38 +121,34 @@ void BootHealthService::Run()
     }
 }
 
-bool BootHealthService::update_heartbeat_health(uint64_t now_ms,
-                                                uint64_t now_us) noexcept
+bool BootHealthService::update_safety_health(uint64_t now_us) noexcept
 {
-    if (heartbeat_subscription_.update()) {
-        const app_heartbeat_s &heartbeat = heartbeat_subscription_.get();
-        const bool timestamp_valid = heartbeat.timestamp_us != 0U &&
-                                     heartbeat.timestamp_us <= now_us &&
-                                     now_us - heartbeat.timestamp_us <=
-                                         kHeartbeatTimeoutMs * 1000ULL;
-        const bool sequence_valid =
-            !heartbeat_observed_ ||
-            (heartbeat.sequence == last_heartbeat_sequence_ + 1U &&
-             heartbeat.timestamp_us > last_heartbeat_timestamp_us_);
-        if (!timestamp_valid || !sequence_valid) {
-            heartbeat_observed_ = false;
-            last_heartbeat_progress_ms_ = 0U;
-            last_heartbeat_timestamp_us_ = 0U;
-            last_heartbeat_sequence_ = 0U;
-            return false;
-        }
+    const bool armed_updated = actuator_armed_subscription_.update();
+    const bool control_updated = vehicle_control_mode_subscription_.update();
+    const bool status_updated = vehicle_status_subscription_.update();
+    const bool any_updated = armed_updated || control_updated || status_updated;
+    const bool all_updated = armed_updated && control_updated && status_updated;
 
-        heartbeat_observed_ = true;
-        last_heartbeat_progress_ms_ = now_ms;
-        last_heartbeat_timestamp_us_ = heartbeat.timestamp_us;
-        last_heartbeat_sequence_ = heartbeat.sequence;
+    if (!safety_topics_consistent(now_us)) {
+        safety_snapshot_observed_ = false;
+        return false;
     }
 
-    return heartbeat_observed_ && last_heartbeat_progress_ms_ <= now_ms &&
-           now_ms - last_heartbeat_progress_ms_ <= kHeartbeatTimeoutMs &&
-           last_heartbeat_timestamp_us_ <= now_us &&
-           now_us - last_heartbeat_timestamp_us_ <=
-               kHeartbeatTimeoutMs * 1000ULL;
+    const uint64_t timestamp = actuator_armed_subscription_.get().timestamp;
+    if (any_updated) {
+        if (!all_updated ||
+            (last_safety_timestamp_us_ != 0U &&
+             timestamp <= last_safety_timestamp_us_)) {
+            safety_snapshot_observed_ = false;
+            return false;
+        }
+        last_safety_timestamp_us_ = timestamp;
+        safety_snapshot_observed_ = true;
+    }
+
+    return safety_snapshot_observed_ &&
+           last_safety_timestamp_us_ <= now_us &&
+           now_us - last_safety_timestamp_us_ <= kSafetyTopicTimeoutUs;
 }
 
 bool BootHealthService::safety_topics_consistent(uint64_t now_us) const noexcept
