@@ -5,6 +5,7 @@
 
 #include "events/events.hpp"
 #include "logging/logging.hpp"
+#include "platform/api/Time.hpp"
 
 #include <cmath>
 
@@ -110,21 +111,39 @@ void SbusRc::Run()
         }
         backend_started_ = true;
         backend_fault_reported_ = false;
+        const auto backend_stats = backend_.stats();
+        last_backend_faults_ = backend_stats.receive_errors +
+                               backend_stats.overwritten_bytes;
     }
     if (!backend_.service() || !backend_.running()) {
         ++stats_.service_failures;
         const auto backend_stats = backend_.stats();
-        count_delta(uart_error_count_, backend_stats.receive_errors, last_uart_errors_);
+        count_delta(uart_error_count_,
+                    backend_stats.receive_errors +
+                        backend_stats.overwritten_bytes,
+                    last_backend_faults_);
+        const bool loss_published = publish_backend_loss(
+            hrt_absolute_time());
+        parser_.reset();
         backend_.stop();
         backend_started_ = false;
         if (signal_locked_) PX4_WARN("SBUS signal lost after UART/DMA error");
         signal_locked_ = false;
         if (!backend_fault_reported_) {
-            const std::uint32_t arguments[2]{backend_stats.receive_errors,
-                                             backend_stats.recovery_failures};
+            const std::uint32_t arguments[3]{
+                backend_stats.receive_errors,
+                backend_stats.overwritten_bytes,
+                backend_stats.recovery_failures,
+            };
             (void)dima::events::report(kEventBackendFailure,
-                                       dima::events::Severity::Error, arguments, 2U);
+                                       dima::events::Severity::Error,
+                                       arguments, 3U);
             backend_fault_reported_ = true;
+        }
+        if (!loss_published) {
+            state_ = dima::middleware::lifecycle::ModuleState::Error;
+            PX4_ERR("SBUS stopped: RC loss publication failed");
+            return;
         }
         schedule_retry();
         return;
@@ -175,7 +194,7 @@ void SbusRc::reset_runtime_state() noexcept
     failsafe_active_ = false;
     backend_fault_reported_ = false;
     last_invalid_frames_ = 0U;
-    last_uart_errors_ = 0U;
+    last_backend_faults_ = 0U;
     stats_ = Stats{};
 }
 
@@ -204,6 +223,30 @@ void SbusRc::free_perf_counters() noexcept
 void SbusRc::schedule_retry() noexcept
 {
     if (!ScheduleDelayed(kRetryDelayUs)) state_ = dima::middleware::lifecycle::ModuleState::Error;
+}
+
+bool SbusRc::publish_backend_loss(std::uint64_t now) noexcept
+{
+    input_rc_s message{};
+    message.timestamp = now;
+    message.timestamp_last_signal = timestamp_last_signal_us_;
+    message.rssi = -1;
+    message.rc_lost = true;
+    message.rc_lost_frame_count = static_cast<std::uint16_t>(
+        parser_.stats().frame_lost_flags);
+    message.rc_total_frame_count = static_cast<std::uint16_t>(
+        parser_.stats().valid_frames);
+    message.input_source = input_rc_s::RC_INPUT_SOURCE_PX4FMU_SBUS;
+    message.link_quality = -1;
+    message.rssi_dbm = NAN;
+
+    if (input_rc_pub_.publish(message)) {
+        ++stats_.publications;
+        return true;
+    }
+    (void)dima::events::report(kEventPublishFailure,
+                               dima::events::Severity::Warning);
+    return false;
 }
 
 void SbusRc::publish(const dima::rc::SbusParser::Frame &frame,

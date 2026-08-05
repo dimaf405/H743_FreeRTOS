@@ -1,5 +1,4 @@
 #include "boot_diagnostics.h"
-#include "boot_diagnostics_store.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -147,9 +146,6 @@ static void capture_common(uint32_t failure_kind,
     __DMB();
     dima_boot_diagnostics.capture_valid =
         DIMA_BOOT_DIAGNOSTICS_CAPTURE_VALID;
-    SCB_CleanDCache_by_Addr(
-        (uint32_t *)(void *)&dima_boot_diagnostics,
-        (int32_t)sizeof(dima_boot_diagnostics));
     __DSB();
     __ISB();
 }
@@ -159,7 +155,6 @@ __attribute__((noreturn)) void dima_boot_diagnostics_capture_fault(
     uint32_t exception_return)
 {
     capture_common(failure_kind, stacked_frame, exception_return, 0U, 0U);
-    (void)dima_boot_diagnostics_store_pending(0);
     NVIC_SystemReset();
     for (;;) {
         __NOP();
@@ -170,7 +165,6 @@ __attribute__((noreturn)) void dima_boot_diagnostics_panic(
     uint32_t failure_kind, uint32_t detail, uint32_t auxiliary)
 {
     capture_common(failure_kind, NULL, 0U, detail, auxiliary);
-    (void)dima_boot_diagnostics_store_pending(0);
     NVIC_SystemReset();
     for (;;) {
         __NOP();

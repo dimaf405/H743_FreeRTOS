@@ -25,7 +25,6 @@
 #include "app_main.h"
 #include "board_init.h"
 #include "boot_diagnostics.h"
-#include "boot_diagnostics_store.h"
 
 extern bool dima_platform_early_init(void);
 /* USER CODE END Includes */
@@ -87,7 +86,6 @@ int main(void)
   /* Configure the system clock */
   dima_boot_stage_set(DIMA_BOOT_STAGE_SYSTEM_CLOCK);
   SystemClock_Config();
-  dima_boot_diagnostics_store_enable();
 
 /* Configure the peripherals common clocks */
   dima_boot_stage_set(DIMA_BOOT_STAGE_PERIPHERAL_CLOCK);

@@ -41,6 +41,7 @@ private:
     static void notify_from_isr(void *context) noexcept;
     void reset_runtime_state() noexcept;
     void schedule_retry() noexcept;
+    bool publish_backend_loss(std::uint64_t now) noexcept;
     void allocate_perf_counters() noexcept;
     void free_perf_counters() noexcept;
     void publish(const dima::rc::SbusParser::Frame &frame,
@@ -60,7 +61,7 @@ private:
     bool failsafe_active_{false};
     bool backend_fault_reported_{false};
     std::uint32_t last_invalid_frames_{0U};
-    std::uint32_t last_uart_errors_{0U};
+    std::uint32_t last_backend_faults_{0U};
     perf_counter_t byte_count_{nullptr};
     perf_counter_t frame_count_{nullptr};
     perf_counter_t invalid_frame_count_{nullptr};
