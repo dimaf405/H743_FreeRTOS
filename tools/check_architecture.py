@@ -451,6 +451,59 @@ def scan_debug_console_contract(violations: list[Violation]) -> None:
     )
 
 
+def scan_phase5_message_contracts(violations: list[Violation]) -> None:
+    requirements = {
+        ROOT / "Dima/messages/actuator_motors.hpp": (
+            ("MESSAGE_VERSION = 0U", "R140",
+             "actuator_motors version contract changed"),
+            ("NUM_CONTROLS = 12U", "R141",
+             "actuator_motors must retain 12 public controls"),
+            ("std::uint16_t reversible_flags", "R142",
+             "actuator_motors reversible flags are missing"),
+            ("float control[NUM_CONTROLS]", "R143",
+             "actuator_motors control array is missing"),
+        ),
+        ROOT / "Dima/messages/rover_motion_request.hpp": (
+            ("SOURCE_MANUAL = 0U", "R144",
+             "Manual motion source contract changed"),
+            ("SOURCE_NAVIGATION = 1U", "R145",
+             "Navigation motion source reservation changed"),
+            ("MODE_NORMALIZED_AXES = 0U", "R146",
+             "normalized two-axis mode contract changed"),
+            ("MODE_SPEED_YAW_RATE = 1U", "R147",
+             "navigation speed/yaw-rate mode reservation changed"),
+            ("float normalized_longitudinal", "R148",
+             "longitudinal motion axis is missing"),
+            ("float normalized_steering", "R149",
+             "steering motion axis is missing"),
+        ),
+        ROOT / "Dima/messages/actuator_output_status.hpp": (
+            ("NUM_OUTPUTS = 6U", "R150",
+             "actuator output status must remain six-channel"),
+            ("STATE_SAFE_OFF = 1U", "R151",
+             "safe-off output state is missing"),
+            ("STATE_FAULT = 4U", "R152",
+             "fault output state is missing"),
+            ("std::uint16_t pwm_us[NUM_OUTPUTS]", "R153",
+             "per-channel applied PWM status is missing"),
+        ),
+        ROOT / "Dima/messages/actuator_motors.cpp": (
+            ("ORB_DEFINE(actuator_motors, actuator_motors_s, 1U)", "R154",
+             "actuator_motors must remain a latest-value Topic"),
+        ),
+        ROOT / "Dima/messages/rover_motion_request.cpp": (
+            ("ORB_DEFINE(rover_motion_request, rover_motion_request_s, 8U)",
+             "R155", "motion request queue depth must remain eight"),
+        ),
+        ROOT / "Dima/messages/actuator_output_status.cpp": (
+            ("ORB_DEFINE(actuator_output_status, actuator_output_status_s, 8U)",
+             "R156", "output status queue depth must remain eight"),
+        ),
+    }
+    for path, required in requirements.items():
+        require_literals(path, required, violations)
+
+
 def scan_runtime_contracts(violations: list[Violation]) -> None:
     requirements = {
         ROOT / "Dima/middleware/parameters/param.h": (
@@ -803,6 +856,7 @@ def main() -> int:
     scan_build_isolation(violations)
     scan_rover_root_contract(violations)
     scan_debug_console_contract(violations)
+    scan_phase5_message_contracts(violations)
     scan_runtime_contracts(violations)
     scan_fault_ownership(violations)
     scan_clock_contract(violations)

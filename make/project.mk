@@ -185,6 +185,9 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/messages/vehicle_status.cpp \
 	Dima/messages/vehicle_control_mode.cpp \
 	Dima/messages/actuator_armed.cpp \
+	Dima/messages/actuator_motors.cpp \
+	Dima/messages/rover_motion_request.cpp \
+	Dima/messages/actuator_output_status.cpp \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
