@@ -25,8 +25,8 @@
 #include "app_main.h"
 #include "board_init.h"
 #include "boot_diagnostics.h"
-
-extern bool dima_platform_early_init(void);
+#include "platform_composition.h"
+#include "platform/stm32h7/early_memory.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,6 +70,14 @@ int main(void)
 {
   /* USER CODE BEGIN 1 */
   dima_boot_stage_set(DIMA_BOOT_STAGE_MAIN_ENTER);
+  dima_boot_stage_set(DIMA_BOOT_STAGE_MEMORY_CONTRACT);
+  uint32_t memory_contract_failures = 0U;
+  if (!dima_stm32_memory_contract_verify(&memory_contract_failures))
+  {
+    dima_boot_diagnostics_panic(
+        DIMA_BOOT_FAILURE_PLATFORM_CONTRACT,
+        memory_contract_failures, 0U);
+  }
   board_vector_table_init();
   /* USER CODE END 1 */
 

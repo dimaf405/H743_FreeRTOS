@@ -1,6 +1,7 @@
 #include "boot_platform.h"
 
 #include "boot_layout.h"
+#include "cache.h"
 #include "stm32h7xx_hal.h"
 
 static int stack_pointer_is_valid(uint32_t stack_pointer)
@@ -47,13 +48,7 @@ void boot_jump_to_application(uint32_t vector_address)
     __DSB();
     __ISB();
 
-    if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U) {
-        SCB_CleanDCache();
-        SCB_DisableDCache();
-    }
-    if ((SCB->CCR & SCB_CCR_IC_Msk) != 0U) {
-        SCB_DisableICache();
-    }
+    dima_stm32_cache_disable_for_handoff();
 
     SCB->VTOR = vector_address;
     __DSB();

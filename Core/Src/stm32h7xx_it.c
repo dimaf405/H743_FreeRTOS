@@ -49,7 +49,7 @@ static volatile uint32_t g_hal_tick_suspended;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
-__attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacked_frame);
+__attribute__((weak)) int dima_flash_busfault_recover(uint32_t *stacked_frame);
 __attribute__((noreturn)) void NMI_Handler_C(uint32_t *stacked_frame,
                                              uint32_t exception_return);
 __attribute__((noreturn)) void HardFault_Handler_C(uint32_t *stacked_frame,
@@ -169,7 +169,8 @@ __attribute__((noreturn)) void MemManage_Handler_C(
   */
 __attribute__((naked)) void BusFault_Handler(void)
 {
-  /* 仅参数 Flash 安全读允许恢复；其他 BusFault 仍保持 fail-closed。 */
+  /* Only an active, partition-bounded Flash safe-read window may recover.
+   * Every other BusFault remains fail-closed. */
   __asm volatile (
       "mov r1, lr\n"
       "tst r1, #4\n"
@@ -182,7 +183,7 @@ __attribute__((naked)) void BusFault_Handler(void)
       "b BusFault_Handler_C\n");
 }
 
-__attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacked_frame)
+__attribute__((weak)) int dima_flash_busfault_recover(uint32_t *stacked_frame)
 {
   (void)stacked_frame;
   return 0;
@@ -190,7 +191,7 @@ __attribute__((weak)) int dima_parameter_flash_recover_busfault(uint32_t *stacke
 
 void BusFault_Handler_C(uint32_t *stacked_frame, uint32_t exception_return)
 {
-  if (dima_parameter_flash_recover_busfault(stacked_frame) != 0)
+  if (dima_flash_busfault_recover(stacked_frame) != 0)
   {
     return;
   }

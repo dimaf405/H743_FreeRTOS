@@ -48,24 +48,57 @@ ifeq ($(strip $(APP_HELLO_WORLD_INTERVAL_VALIDATED)),)
 $(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
 endif
 
-C_DEFS += -DH743_APPLICATION_IMAGE \
-	-DBOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT) \
+DIMA_PRODUCT_DEFS := \
 	-DAPP_HELLO_WORLD_ENABLED=$(APP_HELLO_WORLD_ENABLED) \
 	-DAPP_HELLO_WORLD_INTERVAL_MS=$(APP_HELLO_WORLD_INTERVAL_VALIDATED)
-PROJECT_HEADER_DIRS := \
+C_DEFS += -DH743_APPLICATION_IMAGE \
+	-DBOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT) \
+	$(DIMA_PRODUCT_DEFS)
+DIMA_COMMON_HEADER_DIRS := \
+	Dima \
 	Dima/application \
 	Dima/rover \
 	Dima/modules \
-	Dima/platform \
 	Dima/middleware \
 	Dima/messages \
 	Dima/lib \
-	Dima/adapters \
-	Boards/H743/Inc
+	Dima/adapters
+# CubeMX/board objects retain the generated include surface. Project-owned
+# objects below use target-private include sets and never inherit this list.
 C_INCLUDES += -I. \
-	$(addprefix -I,$(PROJECT_HEADER_DIRS)) \
+	$(addprefix -I,$(DIMA_COMMON_HEADER_DIRS)) \
+	-IBoards/H743/Inc \
 	-I$(BUILD_DIR)/generated_include \
 	-I$(BUILD_DIR)/generated/parameters
+
+DIMA_GENERATED_INCLUDES := \
+	-I$(BUILD_DIR)/generated_include \
+	-I$(BUILD_DIR)/generated/parameters
+DIMA_COMMON_INCLUDES := \
+	$(addprefix -I,$(DIMA_COMMON_HEADER_DIRS)) \
+	$(DIMA_GENERATED_INCLUDES)
+DIMA_FREERTOS_INCLUDES := \
+	-IDima \
+	-IDima/platform/freertos \
+	-IMiddlewares/Third_Party/FreeRTOS/Source/include \
+	-IMiddlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F
+DIMA_STM32_INCLUDES := \
+	-IDima \
+	-IDima/platform/stm32h7 \
+	-IBoards/H743/Inc \
+	-ICore/Inc \
+	-IUSB_DEVICE/App \
+	-IUSB_DEVICE/Target \
+	-IDrivers/STM32H7xx_HAL_Driver/Inc \
+	-IDrivers/STM32H7xx_HAL_Driver/Inc/Legacy \
+	-IMiddlewares/ST/STM32_USB_Device_Library/Core/Inc \
+	-IMiddlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc \
+	-IDrivers/CMSIS/Device/ST/STM32H7xx/Include \
+	-IDrivers/CMSIS/Include
+DIMA_BOARD_INCLUDES := \
+	$(DIMA_COMMON_INCLUDES) \
+	$(DIMA_FREERTOS_INCLUDES) \
+	$(DIMA_STM32_INCLUDES)
 
 PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
 APPLICATION_ELF_CHECK_TOOL := tools/verify_application_elf.py
@@ -104,14 +137,15 @@ $(PARAMETER_GENERATED_OUTPUTS): $(PARAMETER_GENERATED_STAMP)
 parameter-generated: $(PARAMETER_GENERATED_OUTPUTS)
 
 # newlib-nano lazily allocates its three standard FILE objects on the first
-# setvbuf/printf call.  This application has no runtime heap, so link the full
-# newlib variant whose _reent embeds stdin/stdout/stderr statically.  Keep the
-# generated root Makefile and the independent MCUboot build untouched.
+# setvbuf/printf call.  Keep standard-stream setup independent of the shared
+# platform heap by linking the full newlib variant whose _reent embeds
+# stdin/stdout/stderr statically.  Keep the generated root Makefile and the
+# independent MCUboot build untouched.
 override LDFLAGS := $(filter-out -specs=nano.specs,$(LDFLAGS))
 
-# CubeMX may restore heap_4.c when regenerating its Makefile even though the
-# kernel has dynamic allocation disabled.  Remove both the regenerated source
-# and its current flat-object name before preserving the CubeMX object set.
+# CubeMX may restore heap_4.c when regenerating its Makefile.  The platform owns
+# one explicit heap_5 region, so remove both the regenerated heap_4 source and
+# its current flat-object name before preserving the CubeMX object set.
 FREERTOS_DYNAMIC_HEAP_SOURCE := Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
 FREERTOS_DYNAMIC_HEAP_OBJECT := $(BUILD_DIR)/heap_4.o
 override C_SOURCES := $(filter-out $(FREERTOS_DYNAMIC_HEAP_SOURCE),$(C_SOURCES))
@@ -127,23 +161,30 @@ $(FREERTOS_DYNAMIC_HEAP_OBJECT):
 # so sources with identical basenames in different Dima modules cannot collide.
 CUBEMX_OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(OBJECTS))
 override OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(CUBEMX_OBJECTS))
-PROJECT_C_SOURCES ?= \
-	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c \
-	Dima/adapters/mcuboot/mcuboot_app.c \
-	Boards/H743/Src/board_init.c \
-	Boards/H743/Src/boot_diagnostics.c \
-	Boards/H743/Src/motor_pwm.c \
-	Dima/adapters/usb_console/usb_console.c \
+DIMA_COMMON_C_SOURCES := \
+	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c
+DIMA_FREERTOS_C_SOURCES := \
 	Dima/platform/freertos/libc/cpp_runtime.c \
 	Dima/platform/freertos/libc/no_heap.c \
 	Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_5.c
-PROJECT_CXX_SOURCES ?= \
+DIMA_STM32_C_SOURCES := \
+	Dima/platform/stm32h7/cache.c \
+	Dima/platform/stm32h7/early_memory.c \
+	Dima/platform/stm32h7/flash_bank1.c
+DIMA_BOARD_C_SOURCES := \
+	Boards/H743/Src/board_init.c \
+	Boards/H743/Src/boot_diagnostics.c \
+	Boards/H743/Src/motor_pwm.c
+PROJECT_C_SOURCES := \
+	$(DIMA_COMMON_C_SOURCES) \
+	$(DIMA_FREERTOS_C_SOURCES) \
+	$(DIMA_STM32_C_SOURCES) \
+	$(DIMA_BOARD_C_SOURCES)
+
+DIMA_COMMON_CXX_SOURCES := \
+	Dima/platform/api/Platform.cpp \
+	Dima/adapters/usb_console/UsbConsole.cpp \
 	Dima/application/app_bootstrap.cpp \
-	Dima/platform/freertos/dima_heap.cpp \
-	Dima/platform/freertos/hrt.cpp \
-	Dima/platform/freertos/icm42688_interrupt.cpp \
-	Dima/platform/freertos/parameter_flash.cpp \
-	Dima/platform/freertos/sbus_uart_backend.cpp \
 	Dima/rover/ApplicationContext.cpp \
 	Dima/modules/logging/LogService.cpp \
 	Dima/modules/parameters/ParameterService.cpp \
@@ -154,14 +195,13 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/modules/rc/SbusRc.cpp \
 	Dima/modules/rc/RCUpdate.cpp \
 	Dima/modules/rc/ManualControl.cpp \
-	Dima/modules/safety/ArmingFlashInterlock.cpp \
 	Dima/modules/safety/Commander.cpp \
 	Dima/modules/hello_world/hello_world.cpp \
 	Dima/modules/boot_health/boot_health.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
-	Dima/platform/freertos/platform_time.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uorb/uORB.cpp \
+	Dima/middleware/parameters/ParameterJournal.cpp \
 	Dima/middleware/parameters/param.cpp \
 	Dima/middleware/parameters/autosave.cpp \
 	Dima/lib/tinybson/tinybson.cpp \
@@ -179,12 +219,50 @@ PROJECT_CXX_SOURCES ?= \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
+DIMA_FREERTOS_CXX_SOURCES := \
+	Dima/platform/freertos/Backend.cpp
+DIMA_STM32_CXX_SOURCES := \
+	Dima/platform/stm32h7/BootControl.cpp \
+	Dima/platform/stm32h7/Clock.cpp \
+	Dima/platform/stm32h7/DmaMemory.cpp \
+	Dima/platform/stm32h7/FlashDevice.cpp \
+	Dima/platform/stm32h7/SbusUart.cpp \
+	Dima/platform/stm32h7/SensorInterrupts.cpp \
+	Dima/platform/stm32h7/UsbCdcTransport.cpp
+DIMA_BOARD_CXX_SOURCES := \
+	Boards/H743/Src/platform_composition.cpp
+PROJECT_CXX_SOURCES := \
+	$(DIMA_COMMON_CXX_SOURCES) \
+	$(DIMA_FREERTOS_CXX_SOURCES) \
+	$(DIMA_STM32_CXX_SOURCES) \
+	$(DIMA_BOARD_CXX_SOURCES)
 
 PROJECT_C_OBJECTS := $(addprefix $(BUILD_DIR)/,$(PROJECT_C_SOURCES:.c=.o))
 PROJECT_CXX_OBJECTS := $(addprefix $(BUILD_DIR)/,$(PROJECT_CXX_SOURCES:.cpp=.o))
+DIMA_COMMON_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_COMMON_C_SOURCES:.c=.o)) \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_COMMON_CXX_SOURCES:.cpp=.o))
+DIMA_FREERTOS_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_FREERTOS_C_SOURCES:.c=.o)) \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_FREERTOS_CXX_SOURCES:.cpp=.o))
+DIMA_STM32_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_STM32_C_SOURCES:.c=.o)) \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_STM32_CXX_SOURCES:.cpp=.o))
+DIMA_BOARD_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_C_SOURCES:.c=.o)) \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_CXX_SOURCES:.cpp=.o))
 PROJECT_OBJECTS := $(PROJECT_C_OBJECTS) $(PROJECT_CXX_OBJECTS)
 $(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP)
 override OBJECTS += $(PROJECT_OBJECTS)
+
+$(DIMA_COMMON_OBJECTS): DIMA_PRIVATE_DEFS := $(DIMA_PRODUCT_DEFS)
+$(DIMA_COMMON_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_COMMON_INCLUDES)
+$(DIMA_FREERTOS_OBJECTS): DIMA_PRIVATE_DEFS :=
+$(DIMA_FREERTOS_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_FREERTOS_INCLUDES)
+$(DIMA_STM32_OBJECTS): DIMA_PRIVATE_DEFS := $(C_DEFS)
+$(DIMA_STM32_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_STM32_INCLUDES)
+$(DIMA_BOARD_OBJECTS): DIMA_PRIVATE_DEFS := $(C_DEFS)
+$(DIMA_BOARD_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_BOARD_INCLUDES)
 
 ifneq ($(strip $(CUBEMX_OBJECTS)),)
 $(CUBEMX_OBJECTS): GNUmakefile make/project.mk
@@ -211,23 +289,26 @@ override SZ = $(DIMA_PROGRESS_RUN) --kind size --target "$@" --source "$<" -- $(
 .SILENT:
 endif
 
-CXXFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) -Wall -fdata-sections -ffunction-sections
-CXXFLAGS += -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
+DIMA_PROJECT_CFLAGS = $(MCU) $(DIMA_PRIVATE_DEFS) $(DIMA_PRIVATE_INCLUDES) \
+	$(OPT) -Wall -fdata-sections -ffunction-sections
+DIMA_PROJECT_CXXFLAGS = $(DIMA_PROJECT_CFLAGS) \
+	-std=gnu++17 -fno-exceptions -fno-rtti \
+	-fno-threadsafe-statics -fno-use-cxa-atexit
 ifeq ($(DEBUG), 1)
-CXXFLAGS += -g -gdwarf-2
+DIMA_PROJECT_CFLAGS += -g -gdwarf-2
 endif
-CXXFLAGS += -MMD -MP -MF"$(@:%.o=%.d)"
+DIMA_PROJECT_CFLAGS += -MMD -MP -MF"$(@:%.o=%.d)"
 
 ifneq ($(strip $(PROJECT_C_OBJECTS)),)
 $(PROJECT_C_OBJECTS): $(BUILD_DIR)/%.o: %.c GNUmakefile Makefile make/project.mk
 	@mkdir -p $(@D)
-	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(@:.o=.lst) $< -o $@
+	$(CC) -c $(DIMA_PROJECT_CFLAGS) -Wa,-a,-ad,-alms=$(@:.o=.lst) $< -o $@
 endif
 
 ifneq ($(strip $(PROJECT_CXX_OBJECTS)),)
 $(PROJECT_CXX_OBJECTS): $(BUILD_DIR)/%.o: %.cpp GNUmakefile Makefile make/project.mk
 	@mkdir -p $(@D)
-	$(CXX) -c $(CXXFLAGS) $< -o $@
+	$(CXX) -c $(DIMA_PROJECT_CXXFLAGS) $< -o $@
 endif
 
 # Add project objects as prerequisites without replacing CubeMX's ELF recipe.

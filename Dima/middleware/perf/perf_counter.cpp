@@ -3,12 +3,8 @@
 #include <cstdint>
 #include <limits>
 
-extern "C" {
-#include "FreeRTOS.h"
-#include "task.h"
-}
-
-#include "freertos/hrt.hpp"
+#include "platform/api/Platform.hpp"
+#include "platform/api/Time.hpp"
 
 namespace {
 
@@ -16,34 +12,7 @@ constexpr std::size_t kMaxCounters = 64U;
 constexpr std::uint64_t kUnsetMinimum =
     std::numeric_limits<std::uint64_t>::max();
 
-class CriticalSection final {
-public:
-    CriticalSection() noexcept
-        : from_isr_(xPortIsInsideInterrupt() != pdFALSE)
-    {
-        if (from_isr_) {
-            saved_mask_ = taskENTER_CRITICAL_FROM_ISR();
-        } else {
-            taskENTER_CRITICAL();
-        }
-    }
-
-    ~CriticalSection()
-    {
-        if (from_isr_) {
-            taskEXIT_CRITICAL_FROM_ISR(saved_mask_);
-        } else {
-            taskEXIT_CRITICAL();
-        }
-    }
-
-    CriticalSection(const CriticalSection &) = delete;
-    CriticalSection &operator=(const CriticalSection &) = delete;
-
-private:
-    bool from_isr_{false};
-    UBaseType_t saved_mask_{0U};
-};
+using CriticalSection = dima::platform::CriticalGuard;
 
 void update_measurement(struct perf_ctr_header &counter,
                         std::uint64_t value) noexcept;

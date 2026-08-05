@@ -4,12 +4,8 @@
 #include <cstring>
 #include <limits>
 
-extern "C" {
-#include "FreeRTOS.h"
-#include "task.h"
-}
-
-#include "freertos/hrt.hpp"
+#include "platform/api/Platform.hpp"
+#include "platform/api/Time.hpp"
 
 namespace dima::events {
 namespace {
@@ -26,35 +22,6 @@ struct EventState {
 };
 
 EventState g_state{};
-
-class CriticalSection final {
-public:
-    CriticalSection() noexcept
-        : from_isr_(xPortIsInsideInterrupt() != pdFALSE)
-    {
-        if (from_isr_) {
-            saved_mask_ = taskENTER_CRITICAL_FROM_ISR();
-        } else {
-            taskENTER_CRITICAL();
-        }
-    }
-
-    ~CriticalSection()
-    {
-        if (from_isr_) {
-            taskEXIT_CRITICAL_FROM_ISR(saved_mask_);
-        } else {
-            taskEXIT_CRITICAL();
-        }
-    }
-
-    CriticalSection(const CriticalSection &) = delete;
-    CriticalSection &operator=(const CriticalSection &) = delete;
-
-private:
-    bool from_isr_{false};
-    UBaseType_t saved_mask_{0U};
-};
 
 constexpr bool is_critical(const DimaEvent &event) noexcept
 {
@@ -145,7 +112,7 @@ bool report(std::uint32_t id,
         std::copy_n(arguments, event.argument_count, event.arguments);
     }
 
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     update_critical_latch(event);
 
     if (!make_room_for(event)) {
@@ -161,7 +128,7 @@ bool report(std::uint32_t id,
 
 bool pop(DimaEvent &event) noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     if (g_state.count == 0U) {
         return false;
     }
@@ -175,7 +142,7 @@ bool pop(DimaEvent &event) noexcept
 
 EventStats stats() noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     return EventStats{
         g_state.published,
         g_state.consumed,
@@ -187,13 +154,13 @@ EventStats stats() noexcept
 
 CriticalFaultLatch critical_fault_latch() noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     return g_state.critical;
 }
 
 bool clear_critical_fault(std::uint32_t id) noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     if (!g_state.critical.active) {
         return true;
     }
@@ -208,7 +175,7 @@ bool clear_critical_fault(std::uint32_t id) noexcept
 
 void reset() noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     g_state = EventState{};
 }
 

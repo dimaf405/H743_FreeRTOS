@@ -55,7 +55,7 @@ ENTRY(Reset_Handler)
 /* Highest address of the user mode stack */
 _estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);    /* end of RAM */
 /* Generate a link error if heap and stack don't fit into RAM */
-_Min_Heap_Size = 0x0;        /* dynamic allocation is disabled */
+_Min_Heap_Size = 0x0;        /* CubeMX/newlib heap disabled; platform heap is in RAM_D1 */
 _Min_Stack_Size = 0x400; /* required amount of stack */
 
 /* Specify the memory areas */
@@ -63,7 +63,8 @@ MEMORY
 {
 DTCMRAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 128K
 RAM_D1 (xrw)       : ORIGIN = 0x24000000, LENGTH = 512K
-RAM_D2 (xrw)       : ORIGIN = 0x30000000, LENGTH = 288K
+RAM_D2 (xrw)       : ORIGIN = 0x30000000, LENGTH = 256K
+RAM_DMA (xrw)      : ORIGIN = 0x30040000, LENGTH = 32K
 RAM_D3 (xrw)       : ORIGIN = 0x38000000, LENGTH = 64K
 ITCMRAM (xrw)      : ORIGIN = 0x00000000, LENGTH = 64K
 FLASH (rx)         : ORIGIN = 0x08040400, LENGTH = 0x000BF000
@@ -192,15 +193,17 @@ SECTIONS
   } >DTCMRAM
 
   /* DMA buffers are isolated in D2 SRAM and aligned to cache lines. */
-  .dima_dma (NOLOAD) :
+  .dima_dma ORIGIN(RAM_DMA) (NOLOAD) :
   {
     . = ALIGN(32);
+    __dima_dma_region_start__ = .;
     __dima_dma_start__ = .;
     KEEP(*(.dima_dma))
     KEEP(*(.dima_dma*))
     __dima_dma_end__ = .;
     . = ALIGN(32);
-  } >RAM_D2
+  } >RAM_DMA
+  __dima_dma_region_end__ = ORIGIN(RAM_DMA) + LENGTH(RAM_DMA);
 
   /* Dima general heap lives in D1 AXI SRAM; DTCM and DMA-oriented D2 stay isolated. */
   .dima_heap (NOLOAD) :
@@ -209,6 +212,17 @@ SECTIONS
     __dima_heap_start__ = .;
     . = . + 256K;
     __dima_heap_end__ = .;
+    . = ALIGN(32);
+  } >RAM_D1
+
+  /* FreeRTOS task stacks come from a fixed platform pool outside the heap. */
+  .dima_task_pool (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_task_pool_start__ = .;
+    KEEP(*(.dima_task_pool))
+    KEEP(*(.dima_task_pool*))
+    __dima_task_pool_end__ = .;
     . = ALIGN(32);
   } >RAM_D1
 
@@ -241,4 +255,14 @@ SECTIONS
   ASSERT((ADDR(.data) - ADDR(.dima_ramfunc)) ==
          (LOADADDR(.data) - LOADADDR(.dima_ramfunc)),
          "Startup DTCM copy span must have identical load and run gaps")
+  ASSERT(ADDR(.dima_dma) == 0x30040000,
+         "DMA region must start at D2 SRAM3 base")
+  ASSERT((ADDR(.dima_dma) & 31) == 0,
+         "DMA region must be cache-line aligned")
+  ASSERT(SIZEOF(.dima_dma) <= 32K,
+         "DMA buffers exceed the fixed 32 KiB SRAM3 region")
+  ASSERT(ADDR(.dima_task_pool) >= 0x24040000,
+         "Task pool must not overlap the 256 KiB D1 heap")
+  ASSERT(SIZEOF(.dima_task_pool) <= 48K,
+         "Task pool exceeds its fixed platform budget")
 }

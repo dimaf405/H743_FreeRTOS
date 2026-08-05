@@ -14,6 +14,10 @@ volatile dima_boot_diagnostics_t dima_boot_diagnostics
 
 _Static_assert(sizeof(dima_boot_diagnostics_t) <= 512U,
                "boot diagnostics must remain a small fixed SRAM record");
+_Static_assert(sizeof(dima_boot_diagnostics_v1_t) == 192U,
+               "boot diagnostics v1 layout is a persistent ABI");
+_Static_assert(sizeof(dima_boot_diagnostics_t) == 208U,
+               "boot diagnostics v2 layout is a persistent ABI");
 
 static int frame_is_readable(const uint32_t *frame)
 {
@@ -42,10 +46,14 @@ void dima_boot_diagnostics_early_init(void)
 {
     /* STM32H743 SRAM4 has no run-mode clock gate in RCC_AHB4ENR. */
 
+    const uint32_t previous_version = dima_boot_diagnostics.version;
+    const uint32_t previous_size = dima_boot_diagnostics.size;
     const int previous_valid =
         dima_boot_diagnostics.magic == DIMA_BOOT_DIAGNOSTICS_MAGIC &&
-        dima_boot_diagnostics.version == DIMA_BOOT_DIAGNOSTICS_VERSION &&
-        dima_boot_diagnostics.size == sizeof(dima_boot_diagnostics_t);
+        ((previous_version == DIMA_BOOT_DIAGNOSTICS_VERSION_V1 &&
+          previous_size == sizeof(dima_boot_diagnostics_v1_t)) ||
+         (previous_version == DIMA_BOOT_DIAGNOSTICS_VERSION &&
+          previous_size == sizeof(dima_boot_diagnostics_t)));
     const uint32_t previous_boot_count =
         previous_valid ? dima_boot_diagnostics.boot_count : 0U;
     const uint32_t previous_stage =
@@ -56,6 +64,11 @@ void dima_boot_diagnostics_early_init(void)
         previous_valid ? dima_boot_diagnostics.stacked_pc : 0U;
     const uint32_t previous_cfsr =
         previous_valid ? dima_boot_diagnostics.cfsr : 0U;
+    const uint32_t previous_abfsr =
+        previous_valid &&
+                previous_version == DIMA_BOOT_DIAGNOSTICS_VERSION
+            ? dima_boot_diagnostics.abfsr
+            : 0U;
 
     clear_record(&dima_boot_diagnostics);
     dima_boot_diagnostics.version = DIMA_BOOT_DIAGNOSTICS_VERSION;
@@ -67,6 +80,10 @@ void dima_boot_diagnostics_early_init(void)
     dima_boot_diagnostics.previous_failure_kind = previous_failure;
     dima_boot_diagnostics.previous_pc = previous_pc;
     dima_boot_diagnostics.previous_cfsr = previous_cfsr;
+    dima_boot_diagnostics.abfsr = SCB->ABFSR;
+    dima_boot_diagnostics.scb_ccr = SCB->CCR;
+    dima_boot_diagnostics.mpu_ctrl = MPU->CTRL;
+    dima_boot_diagnostics.previous_abfsr = previous_abfsr;
     __DMB();
     dima_boot_diagnostics.magic = DIMA_BOOT_DIAGNOSTICS_MAGIC;
     __DSB();
@@ -126,6 +143,9 @@ static void capture_common(uint32_t failure_kind,
     dima_boot_diagnostics.bfar = SCB->BFAR;
     dima_boot_diagnostics.icsr = SCB->ICSR;
     dima_boot_diagnostics.shcsr = SCB->SHCSR;
+    dima_boot_diagnostics.abfsr = SCB->ABFSR;
+    dima_boot_diagnostics.scb_ccr = SCB->CCR;
+    dima_boot_diagnostics.mpu_ctrl = MPU->CTRL;
 
     dima_boot_diagnostics.system_core_clock = SystemCoreClock;
     dima_boot_diagnostics.system_d2_clock = SystemD2Clock;

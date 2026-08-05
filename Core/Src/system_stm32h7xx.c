@@ -49,6 +49,7 @@
 
 #if defined(H743_APPLICATION_IMAGE)
 #include "boot_diagnostics.h"
+#include "platform/stm32h7/early_memory.h"
 #endif
 
 #if !defined  (HSE_VALUE)
@@ -183,6 +184,12 @@ void SystemInit (void)
 #if defined (DATA_IN_D2_SRAM)
  __IO uint32_t tmpreg;
 #endif /* DATA_IN_D2_SRAM */
+
+#if defined(H743_APPLICATION_IMAGE)
+  /* This hook is deliberately free of initialized global state: startup calls
+   * SystemInit before copying data or clearing bss. */
+  dima_stm32_early_memory_init();
+#endif
 
   /* FPU settings ------------------------------------------------------------*/
   #if (__FPU_PRESENT == 1) && (__FPU_USED == 1)

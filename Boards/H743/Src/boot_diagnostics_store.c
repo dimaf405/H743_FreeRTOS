@@ -5,35 +5,50 @@
 
 #include "boot_diagnostics.h"
 #include "boot_layout.h"
+#include "flash_bank1.h"
 #include "stm32h7xx_hal.h"
 
 #define RECORD_COUNT \
     (H743_BOOT_DIAGNOSTICS_SIZE / DIMA_BOOT_FLASH_RECORD_SIZE)
-#define FLASH_PROGRAM_WORD_COUNT \
-    (DIMA_BOOT_FLASH_RECORD_SIZE / H743_FLASH_WRITE_SIZE)
-#define FLASH_WORD_U32_COUNT \
-    (H743_FLASH_WRITE_SIZE / sizeof(uint32_t))
-
 #define STORE_STATE_ENABLED UINT32_C(0x53544F52)
 #define STORE_STATE_BUSY    UINT32_C(0x42555359)
 #define FLASH_BUSY_MASK \
     (FLASH_FLAG_QW_BANK1 | FLASH_FLAG_BSY_BANK1 | FLASH_FLAG_WBNE_BANK1)
-#define FLASH_CLEAR_MASK \
-    (FLASH_FLAG_ALL_ERRORS_BANK1 | FLASH_FLAG_EOP_BANK1)
-#define FLASH_PROGRAM_POLL_LIMIT UINT32_C(10000000)
 
-static dima_boot_flash_record_t staging_record
+typedef union {
+    dima_boot_flash_record_v1_t v1;
+    dima_boot_flash_record_t v2;
+    uint32_t words[DIMA_BOOT_FLASH_RECORD_SIZE / sizeof(uint32_t)];
+    uint8_t bytes[DIMA_BOOT_FLASH_RECORD_SIZE];
+} dima_boot_flash_record_any_t;
+
+static dima_boot_flash_record_any_t staging_record
     __attribute__((aligned(H743_FLASH_WRITE_SIZE)));
 static volatile uint32_t store_state;
 
-_Static_assert(sizeof(dima_boot_diagnostics_t) == 192U,
-               "Update the DFU parser when boot diagnostics changes");
+_Static_assert(sizeof(dima_boot_diagnostics_v1_t) == 192U,
+               "Boot diagnostics v1 layout is a persistent ABI");
+_Static_assert(sizeof(dima_boot_diagnostics_t) == 208U,
+               "Boot diagnostics v2 layout is a persistent ABI");
+_Static_assert(sizeof(dima_boot_flash_record_v1_t) ==
+                   DIMA_BOOT_FLASH_RECORD_SIZE,
+               "Boot diagnostics v1 Flash record must occupy one slot");
 _Static_assert(sizeof(dima_boot_flash_record_t) ==
                    DIMA_BOOT_FLASH_RECORD_SIZE,
-               "Boot diagnostics Flash record must occupy one slot");
+               "Boot diagnostics v2 Flash record must occupy one slot");
+_Static_assert(sizeof(dima_boot_flash_record_any_t) ==
+                   DIMA_BOOT_FLASH_RECORD_SIZE,
+               "Boot diagnostics union must occupy one slot");
+_Static_assert(offsetof(dima_boot_flash_record_v1_t, crc32) == 208U,
+               "Boot diagnostics v1 CRC offset is a persistent ABI");
+_Static_assert(offsetof(dima_boot_flash_record_t, crc32) == 224U,
+               "Boot diagnostics v2 CRC offset is a persistent ABI");
+_Static_assert(offsetof(dima_boot_flash_record_v1_t, commit) ==
+                   DIMA_BOOT_FLASH_RECORD_SIZE - sizeof(uint32_t),
+               "V1 commit marker must be in the final Flash word");
 _Static_assert(offsetof(dima_boot_flash_record_t, commit) ==
                    DIMA_BOOT_FLASH_RECORD_SIZE - sizeof(uint32_t),
-               "Commit marker must be in the final Flash word");
+               "V2 commit marker must be in the final Flash word");
 _Static_assert((H743_BOOT_DIAGNOSTICS_SIZE %
                 DIMA_BOOT_FLASH_RECORD_SIZE) == 0U,
                "Boot diagnostics sector must contain whole records");
@@ -41,10 +56,9 @@ _Static_assert((DIMA_BOOT_FLASH_RECORD_SIZE %
                 H743_FLASH_WRITE_SIZE) == 0U,
                "Boot diagnostics records must contain whole Flash words");
 
-static const volatile dima_boot_diagnostics_t *capture_record(void)
+static const volatile void *capture_record(void)
 {
-    return (const volatile dima_boot_diagnostics_t *)(uintptr_t)
-        DIMA_BOOT_DIAGNOSTICS_ADDRESS;
+    return (const volatile void *)(uintptr_t)DIMA_BOOT_DIAGNOSTICS_ADDRESS;
 }
 
 static uint32_t crc32_bytes(const void *data, size_t length)
@@ -61,71 +75,119 @@ static uint32_t crc32_bytes(const void *data, size_t length)
     return ~crc;
 }
 
-static int capture_is_valid(const volatile dima_boot_diagnostics_t *capture)
+static uint32_t diagnostics_size_for_version(uint32_t version)
 {
-    return capture->magic == DIMA_BOOT_DIAGNOSTICS_MAGIC &&
-           capture->version == DIMA_BOOT_DIAGNOSTICS_VERSION &&
-           capture->size == sizeof(dima_boot_diagnostics_t) &&
-           capture->capture_valid == DIMA_BOOT_DIAGNOSTICS_CAPTURE_VALID &&
-           capture->failure_kind != DIMA_BOOT_FAILURE_NONE;
+    if (version == DIMA_BOOT_DIAGNOSTICS_VERSION_V1) {
+        return sizeof(dima_boot_diagnostics_v1_t);
+    }
+    if (version == DIMA_BOOT_DIAGNOSTICS_VERSION) {
+        return sizeof(dima_boot_diagnostics_t);
+    }
+    return 0U;
 }
 
-static const dima_boot_flash_record_t *flash_record(uint32_t index)
+static uint32_t record_crc_offset(uint32_t version)
 {
-    return (const dima_boot_flash_record_t *)(uintptr_t)
+    if (version == DIMA_BOOT_FLASH_RECORD_VERSION_V1) {
+        return offsetof(dima_boot_flash_record_v1_t, crc32);
+    }
+    if (version == DIMA_BOOT_FLASH_RECORD_VERSION) {
+        return offsetof(dima_boot_flash_record_t, crc32);
+    }
+    return 0U;
+}
+
+static int capture_is_valid(const volatile void *capture)
+{
+    const volatile uint32_t *words =
+        (const volatile uint32_t *)capture;
+    const uint32_t expected_size = diagnostics_size_for_version(words[1]);
+    return words[0] == DIMA_BOOT_DIAGNOSTICS_MAGIC &&
+           expected_size != 0U && words[2] == expected_size &&
+           words[8] == DIMA_BOOT_DIAGNOSTICS_CAPTURE_VALID &&
+           words[7] != DIMA_BOOT_FAILURE_NONE;
+}
+
+static const dima_boot_flash_record_any_t *flash_record(uint32_t index)
+{
+    return (const dima_boot_flash_record_any_t *)(uintptr_t)
         (H743_BOOT_DIAGNOSTICS_BASE +
          index * DIMA_BOOT_FLASH_RECORD_SIZE);
 }
 
-static int record_is_erased(const dima_boot_flash_record_t *record)
+static int record_is_erased(const dima_boot_flash_record_any_t *record)
 {
-    const uint32_t *words = (const uint32_t *)(const void *)record;
     for (size_t index = 0U;
-         index < sizeof(*record) / sizeof(words[0]); ++index) {
-        if (words[index] != UINT32_MAX) {
+         index < sizeof(record->words) / sizeof(record->words[0]); ++index) {
+        if (record->words[index] != UINT32_MAX) {
             return 0;
         }
     }
     return 1;
 }
 
-static int record_is_valid(const dima_boot_flash_record_t *record)
+static const volatile void *record_diagnostics(
+    const dima_boot_flash_record_any_t *record)
 {
-    if (record->magic != DIMA_BOOT_FLASH_RECORD_MAGIC ||
-        record->version != DIMA_BOOT_FLASH_RECORD_VERSION ||
-        record->size != sizeof(*record) ||
-        record->commit != DIMA_BOOT_FLASH_RECORD_COMMIT ||
-        !capture_is_valid(&record->diagnostics)) {
+    return (const volatile void *)&record->bytes[4U * sizeof(uint32_t)];
+}
+
+static int record_is_valid(const dima_boot_flash_record_any_t *record)
+{
+    const uint32_t version = record->words[1];
+    const uint32_t crc_offset = record_crc_offset(version);
+    if (record->words[0] != DIMA_BOOT_FLASH_RECORD_MAGIC ||
+        crc_offset == 0U || record->words[2] != sizeof(*record) ||
+        record->words[(DIMA_BOOT_FLASH_RECORD_SIZE / sizeof(uint32_t)) - 1U] !=
+            DIMA_BOOT_FLASH_RECORD_COMMIT ||
+        !capture_is_valid(record_diagnostics(record))) {
         return 0;
     }
-    return record->crc32 ==
-        crc32_bytes(record, offsetof(dima_boot_flash_record_t, crc32));
+
+    const volatile uint32_t *diagnostics =
+        (const volatile uint32_t *)record_diagnostics(record);
+    const uint32_t expected_diagnostics_version =
+        version == DIMA_BOOT_FLASH_RECORD_VERSION_V1
+            ? DIMA_BOOT_DIAGNOSTICS_VERSION_V1
+            : DIMA_BOOT_DIAGNOSTICS_VERSION;
+    return diagnostics[1] == expected_diagnostics_version &&
+           record->words[crc_offset / sizeof(uint32_t)] ==
+               crc32_bytes(record, crc_offset);
 }
 
-static void copy_capture(dima_boot_diagnostics_t *destination,
-                         const volatile dima_boot_diagnostics_t *source)
+static int diagnostics_equal(const volatile void *left,
+                             const volatile void *right)
 {
-    uint32_t *output = (uint32_t *)(void *)destination;
-    const volatile uint32_t *input =
-        (const volatile uint32_t *)(const volatile void *)source;
-    for (size_t index = 0U;
-         index < sizeof(*destination) / sizeof(output[0]); ++index) {
-        output[index] = input[index];
+    if (!capture_is_valid(left) || !capture_is_valid(right)) {
+        return 0;
     }
-}
-
-static int diagnostics_equal(const dima_boot_diagnostics_t *left,
-                             const dima_boot_diagnostics_t *right)
-{
-    const uint32_t *left_words = (const uint32_t *)(const void *)left;
-    const uint32_t *right_words = (const uint32_t *)(const void *)right;
+    const volatile uint32_t *left_words =
+        (const volatile uint32_t *)left;
+    const volatile uint32_t *right_words =
+        (const volatile uint32_t *)right;
+    if (left_words[1] != right_words[1] ||
+        left_words[2] != right_words[2]) {
+        return 0;
+    }
     for (size_t index = 0U;
-         index < sizeof(*left) / sizeof(left_words[0]); ++index) {
+         index < left_words[2] / sizeof(left_words[0]); ++index) {
         if (left_words[index] != right_words[index]) {
             return 0;
         }
     }
     return 1;
+}
+
+static void copy_capture(dima_boot_flash_record_any_t *destination,
+                         const volatile void *source)
+{
+    const volatile uint32_t *input =
+        (const volatile uint32_t *)source;
+    uint32_t *output = &destination->words[4];
+    const size_t count = input[2] / sizeof(input[0]);
+    for (size_t index = 0U; index < count; ++index) {
+        output[index] = input[index];
+    }
 }
 
 static void fill_erased(void *destination, size_t length)
@@ -136,114 +198,27 @@ static void fill_erased(void *destination, size_t length)
     }
 }
 
-/* Both the application and the diagnostic sector execute from Flash Bank 1.
- * Keep the complete program operation in DTCM so no Bank 1 instruction fetch
- * is required while a Flash word is being committed. */
-__attribute__((noinline, section(".dima_ramfunc")))
-static int program_record_from_ram(
-    uint32_t address, const uint32_t *source_words)
-{
-    if ((FLASH->SR1 & FLASH_BUSY_MASK) != 0U) {
-        return 0;
-    }
-
-    if ((FLASH->CR1 & FLASH_CR_LOCK) != 0U) {
-        FLASH->KEYR1 = FLASH_KEY1;
-        FLASH->KEYR1 = FLASH_KEY2;
-        if ((FLASH->CR1 & FLASH_CR_LOCK) != 0U) {
-            return 0;
-        }
-    }
-
-    FLASH->CCR1 = FLASH_CLEAR_MASK;
-    int success = 1;
-    for (uint32_t flash_word = 0U;
-         flash_word < FLASH_PROGRAM_WORD_COUNT; ++flash_word) {
-        if ((FLASH->SR1 & FLASH_BUSY_MASK) != 0U) {
-            success = 0;
-            break;
-        }
-
-        FLASH->CR1 |= FLASH_CR_PG;
-        __ISB();
-        __DSB();
-
-        volatile uint32_t *destination =
-            (volatile uint32_t *)(uintptr_t)
-                (address + flash_word * H743_FLASH_WRITE_SIZE);
-        const uint32_t *source =
-            source_words + flash_word * FLASH_WORD_U32_COUNT;
-        for (uint32_t word = 0U; word < FLASH_WORD_U32_COUNT; ++word) {
-            destination[word] = source[word];
-        }
-
-        __ISB();
-        __DSB();
-
-        uint32_t polls_remaining = FLASH_PROGRAM_POLL_LIMIT;
-        while ((FLASH->SR1 & FLASH_BUSY_MASK) != 0U &&
-               polls_remaining != 0U) {
-            --polls_remaining;
-        }
-
-        const uint32_t status = FLASH->SR1;
-        FLASH->CR1 &= ~FLASH_CR_PG;
-        if (polls_remaining == 0U ||
-            (status & FLASH_FLAG_ALL_ERRORS_BANK1) != 0U) {
-            success = 0;
-        }
-        FLASH->CCR1 = status & FLASH_CLEAR_MASK;
-        if (!success) {
-            break;
-        }
-    }
-
-    FLASH->CR1 |= FLASH_CR_LOCK;
-    __DSB();
-    __ISB();
-    return success;
-}
-
 static int program_record(uint32_t address,
-                          const dima_boot_flash_record_t *record)
+                          const dima_boot_flash_record_any_t *record)
 {
-    if ((FLASH->SR1 & FLASH_BUSY_MASK) != 0U) {
+    if (!dima_stm32_flash_bank1_program(address, record, sizeof(*record))) {
         return 0;
     }
-
-    const uint32_t saved_primask = __get_PRIMASK();
-    __disable_irq();
-    const int programmed = program_record_from_ram(
-        address, (const uint32_t *)(const void *)record);
-    __DSB();
-    __ISB();
-    if (saved_primask == 0U) {
-        __enable_irq();
-    }
-    if (!programmed) {
-        return 0;
-    }
-
-    SCB_InvalidateDCache_by_Addr(
-        (uint32_t *)(uintptr_t)address, (int32_t)sizeof(*record));
-    __DSB();
-    __ISB();
-    return record_is_valid(
-        (const dima_boot_flash_record_t *)(uintptr_t)address) &&
-        diagnostics_equal(
-            &((const dima_boot_flash_record_t *)(uintptr_t)address)->diagnostics,
-            &record->diagnostics);
+    const dima_boot_flash_record_any_t *stored =
+        (const dima_boot_flash_record_any_t *)(uintptr_t)address;
+    return record_is_valid(stored) &&
+           diagnostics_equal(record_diagnostics(stored),
+                             record_diagnostics(record));
 }
 
-static void clear_capture_if_requested(
-    volatile dima_boot_diagnostics_t *capture, int clear_capture)
+static void clear_capture_if_requested(volatile void *capture,
+                                       int clear_capture)
 {
     if (!clear_capture) {
         return;
     }
-    capture->capture_valid = 0U;
-    SCB_CleanDCache_by_Addr(
-        (uint32_t *)(void *)capture, (int32_t)sizeof(*capture));
+    volatile uint32_t *words = (volatile uint32_t *)capture;
+    words[8] = 0U;
     __DSB();
 }
 
@@ -271,9 +246,8 @@ int dima_boot_diagnostics_capture_pending(void)
 dima_boot_diagnostics_store_result_t
 dima_boot_diagnostics_store_pending(int clear_capture)
 {
-    volatile dima_boot_diagnostics_t *capture =
-        (volatile dima_boot_diagnostics_t *)(uintptr_t)
-            DIMA_BOOT_DIAGNOSTICS_ADDRESS;
+    volatile void *capture =
+        (volatile void *)(uintptr_t)DIMA_BOOT_DIAGNOSTICS_ADDRESS;
     if (!capture_is_valid(capture)) {
         return DIMA_BOOT_DIAGNOSTICS_STORE_NONE;
     }
@@ -290,23 +264,23 @@ dima_boot_diagnostics_store_pending(int clear_capture)
     __DMB();
 
     fill_erased(&staging_record, sizeof(staging_record));
-    copy_capture(&staging_record.diagnostics, capture);
-    if (!capture_is_valid(&staging_record.diagnostics)) {
+    copy_capture(&staging_record, capture);
+    if (!capture_is_valid(record_diagnostics(&staging_record))) {
         return finish_store(DIMA_BOOT_DIAGNOSTICS_STORE_ERROR);
     }
 
     uint32_t next_sequence = 1U;
     uint32_t free_index = RECORD_COUNT;
     for (uint32_t index = 0U; index < RECORD_COUNT; ++index) {
-        const dima_boot_flash_record_t *record = flash_record(index);
+        const dima_boot_flash_record_any_t *record = flash_record(index);
         if (record_is_valid(record)) {
-            if (diagnostics_equal(&record->diagnostics,
-                                  &staging_record.diagnostics)) {
+            if (diagnostics_equal(record_diagnostics(record),
+                                  record_diagnostics(&staging_record))) {
                 clear_capture_if_requested(capture, clear_capture);
                 return finish_store(DIMA_BOOT_DIAGNOSTICS_STORE_EXISTING);
             }
-            if (record->sequence >= next_sequence) {
-                next_sequence = record->sequence + 1U;
+            if (record->words[3] >= next_sequence) {
+                next_sequence = record->words[3] + 1U;
                 if (next_sequence == 0U) {
                     next_sequence = 1U;
                 }
@@ -320,17 +294,27 @@ dima_boot_diagnostics_store_pending(int clear_capture)
         return finish_store(DIMA_BOOT_DIAGNOSTICS_STORE_FULL);
     }
 
-    staging_record.magic = DIMA_BOOT_FLASH_RECORD_MAGIC;
-    staging_record.version = DIMA_BOOT_FLASH_RECORD_VERSION;
-    staging_record.size = sizeof(staging_record);
-    staging_record.sequence = next_sequence;
-    staging_record.crc32 = crc32_bytes(
-        &staging_record, offsetof(dima_boot_flash_record_t, crc32));
-    staging_record.commit = DIMA_BOOT_FLASH_RECORD_COMMIT;
+    const volatile uint32_t *diagnostics =
+        (const volatile uint32_t *)record_diagnostics(&staging_record);
+    const uint32_t record_version =
+        diagnostics[1] == DIMA_BOOT_DIAGNOSTICS_VERSION_V1
+            ? DIMA_BOOT_FLASH_RECORD_VERSION_V1
+            : DIMA_BOOT_FLASH_RECORD_VERSION;
+    const uint32_t crc_offset = record_crc_offset(record_version);
+    staging_record.words[0] = DIMA_BOOT_FLASH_RECORD_MAGIC;
+    staging_record.words[1] = record_version;
+    staging_record.words[2] = sizeof(staging_record);
+    staging_record.words[3] = next_sequence;
+    staging_record.words[crc_offset / sizeof(uint32_t)] =
+        crc32_bytes(&staging_record, crc_offset);
+    staging_record.words[
+        (DIMA_BOOT_FLASH_RECORD_SIZE / sizeof(uint32_t)) - 1U] =
+        DIMA_BOOT_FLASH_RECORD_COMMIT;
 
     const uint32_t address = H743_BOOT_DIAGNOSTICS_BASE +
                              free_index * DIMA_BOOT_FLASH_RECORD_SIZE;
-    if (!record_is_erased((const dima_boot_flash_record_t *)(uintptr_t)address) ||
+    if (!record_is_erased(
+            (const dima_boot_flash_record_any_t *)(uintptr_t)address) ||
         !program_record(address, &staging_record)) {
         return finish_store(DIMA_BOOT_DIAGNOSTICS_STORE_ERROR);
     }

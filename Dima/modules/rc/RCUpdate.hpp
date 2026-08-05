@@ -1,5 +1,5 @@
 /****************************************************************************
- * PX4-Autopilot v1.17.0 RCUpdate Rover subset adapted to Dima FreeRTOS.
+ * PX4-Autopilot v1.17.0 RCUpdate Rover subset adapted to the Dima platform.
  ****************************************************************************/
 #pragma once
 

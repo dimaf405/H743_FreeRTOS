@@ -39,9 +39,9 @@
 #include "parameter_update.hpp"
 #include "vehicle_control_mode.hpp"
 #include "vehicle_status.hpp"
-#include "containers/atomic.h"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
+#include "platform/api/Platform.hpp"
 #include "uorb/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"
 
@@ -57,7 +57,8 @@ namespace dima::modules::safety {
 class Commander final : public dima::middleware::lifecycle::ModuleBase,
                         public px4::ScheduledWorkItem {
 public:
-    Commander() noexcept;
+    explicit Commander(
+        dima::platform::ArmedFlashCoordinator &armed_flash) noexcept;
     ~Commander() override;
 
     bool start() override;
@@ -65,7 +66,7 @@ public:
     dima::middleware::lifecycle::ModuleState state() const override;
 
     /** 供非 Commander WorkQueue 的存储门控读取。 */
-    bool armed() const noexcept { return armed_snapshot_.load(); }
+    bool armed() const noexcept { return armed_flash_.armed(); }
 
 private:
     static constexpr std::uint32_t kCheckIntervalUs = 20000U;
@@ -104,6 +105,7 @@ private:
     void enter_error(const char *reason) noexcept;
     static std::uint8_t reason_from_source(std::uint8_t source) noexcept;
 
+    dima::platform::ArmedFlashCoordinator &armed_flash_;
     uORB::SubscriptionCallbackWorkItem action_request_subscription_{
         ORB_ID(action_request), *this};
     uORB::SubscriptionCallbackWorkItem manual_control_subscription_{
@@ -129,7 +131,6 @@ private:
     std::uint8_t recoverable_failsafe_causes_{FailsafeNone};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
-    px4::atomic_bool armed_snapshot_{false};
     bool parameter_handles_ready_{false};
     bool parameters_valid_{false};
     bool have_manual_control_{false};

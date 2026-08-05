@@ -1,6 +1,6 @@
 #include "logging.hpp"
 
-#include "freertos/dima_platform.hpp"
+#include "platform/api/Platform.hpp"
 
 #include <algorithm>
 #include <cstdarg>
@@ -11,11 +11,6 @@
 extern "C" {
 const char *__px4_log_level_str[_PX4_LOG_LEVEL_PANIC + 1] = {
     "DEBUG", "INFO", "WARN", "ERROR", "PANIC"};
-}
-
-extern "C" {
-#include "FreeRTOS.h"
-#include "task.h"
 }
 
 namespace dima::logging {
@@ -37,35 +32,6 @@ struct LogState {
 
 LogState g_state{};
 
-class CriticalSection final {
-public:
-    CriticalSection() noexcept
-        : from_isr_(xPortIsInsideInterrupt() != pdFALSE)
-    {
-        if (from_isr_) {
-            saved_mask_ = taskENTER_CRITICAL_FROM_ISR();
-        } else {
-            taskENTER_CRITICAL();
-        }
-    }
-
-    ~CriticalSection()
-    {
-        if (from_isr_) {
-            taskEXIT_CRITICAL_FROM_ISR(saved_mask_);
-        } else {
-            taskEXIT_CRITICAL();
-        }
-    }
-
-    CriticalSection(const CriticalSection &) = delete;
-    CriticalSection &operator=(const CriticalSection &) = delete;
-
-private:
-    bool from_isr_{false};
-    UBaseType_t saved_mask_{0U};
-};
-
 void increment_saturated(std::uint32_t &value,
                          std::uint32_t amount = 1U) noexcept
 {
@@ -76,7 +42,7 @@ void increment_saturated(std::uint32_t &value,
 
 bool formatting_allowed() noexcept
 {
-    if (xPortIsInsideInterrupt() != pdFALSE) {
+    if (dima::platform::in_interrupt_context()) {
         return false;
     }
 
@@ -120,7 +86,7 @@ void push_bytes_locked(const std::uint8_t *data, std::size_t length) noexcept
 std::size_t pop_bytes(std::uint8_t *destination,
                       std::size_t capacity) noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     const std::size_t length = std::min(capacity, g_state.count);
     if (length == 0U) {
         return 0U;
@@ -149,7 +115,7 @@ WriteResult write_v(Level level, const char *module_name, bool raw,
         return WriteResult::InvalidArgument;
     }
     if (!formatting_allowed()) {
-        CriticalSection lock;
+        dima::platform::CriticalGuard lock;
         increment_saturated(g_state.formatting_rejections);
         return WriteResult::RejectedRealtime;
     }
@@ -192,7 +158,7 @@ WriteResult write_v(Level level, const char *module_name, bool raw,
         }
     }
 
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     push_bytes_locked(reinterpret_cast<const std::uint8_t *>(buffer), length);
     increment_saturated(g_state.records_written);
     if (truncated) {
@@ -222,7 +188,7 @@ WriteResult write_literal(const char *text, std::size_t length) noexcept
         return WriteResult::Ok;
     }
 
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     push_bytes_locked(reinterpret_cast<const std::uint8_t *>(text), length);
     increment_saturated(g_state.records_written);
     return WriteResult::Ok;
@@ -232,7 +198,7 @@ std::size_t service_flush(const ServiceWriter &writer,
                           std::size_t max_bytes) noexcept
 {
     if ((writer.write == nullptr) || (max_bytes == 0U) ||
-        (xPortIsInsideInterrupt() != pdFALSE) ||
+        dima::platform::in_interrupt_context() ||
         dima::platform::in_realtime_context()) {
         return 0U;
     }
@@ -253,7 +219,7 @@ std::size_t service_flush(const ServiceWriter &writer,
         total_written += accepted;
 
         if (accepted < popped) {
-            CriticalSection lock;
+            dima::platform::CriticalGuard lock;
             increment_saturated(
                 g_state.service_dropped_bytes,
                 static_cast<std::uint32_t>(popped - accepted));
@@ -266,7 +232,7 @@ std::size_t service_flush(const ServiceWriter &writer,
 
 LogStats stats() noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     return LogStats{
         g_state.records_written,
         g_state.records_truncated,
@@ -279,7 +245,7 @@ LogStats stats() noexcept
 
 void reset() noexcept
 {
-    CriticalSection lock;
+    dima::platform::CriticalGuard lock;
     g_state = LogState{};
 }
 

@@ -8,12 +8,14 @@ extern "C" {
 #endif
 
 #define DIMA_BOOT_DIAGNOSTICS_MAGIC          0x44424447UL
-#define DIMA_BOOT_DIAGNOSTICS_VERSION        1UL
+#define DIMA_BOOT_DIAGNOSTICS_VERSION_V1     1UL
+#define DIMA_BOOT_DIAGNOSTICS_VERSION        2UL
 #define DIMA_BOOT_DIAGNOSTICS_CAPTURE_VALID  0x43505452UL
 #define DIMA_BOOT_DIAGNOSTICS_ADDRESS        0x38000000UL
 
 #define DIMA_BOOT_FLASH_RECORD_MAGIC         0x44424652UL
-#define DIMA_BOOT_FLASH_RECORD_VERSION       1UL
+#define DIMA_BOOT_FLASH_RECORD_VERSION_V1    1UL
+#define DIMA_BOOT_FLASH_RECORD_VERSION       2UL
 #define DIMA_BOOT_FLASH_RECORD_COMMIT        0x434D4954UL
 #define DIMA_BOOT_FLASH_RECORD_SIZE          256UL
 
@@ -26,10 +28,12 @@ extern "C" {
 #define DIMA_BOOT_FAILURE_ERROR_HANDLER      6UL
 #define DIMA_BOOT_FAILURE_FREERTOS_ASSERT    7UL
 #define DIMA_BOOT_FAILURE_STACK_OVERFLOW     8UL
+#define DIMA_BOOT_FAILURE_PLATFORM_CONTRACT  9UL
 
 typedef enum {
     DIMA_BOOT_STAGE_SYSTEM_INIT = 0x0100U,
     DIMA_BOOT_STAGE_MAIN_ENTER = 0x0200U,
+    DIMA_BOOT_STAGE_MEMORY_CONTRACT = 0x0208U,
     DIMA_BOOT_STAGE_HAL_INIT = 0x0210U,
     DIMA_BOOT_STAGE_SYSTEM_CLOCK = 0x0220U,
     DIMA_BOOT_STAGE_PERIPHERAL_CLOCK = 0x0230U,
@@ -79,61 +83,80 @@ typedef enum {
     DIMA_BOOT_STAGE_APPLICATION_FAILED = 0x0F00U
 } dima_boot_stage_t;
 
+#define DIMA_BOOT_DIAGNOSTICS_V1_FIELDS \
+    uint32_t magic; \
+    uint32_t version; \
+    uint32_t size; \
+    uint32_t boot_count; \
+    uint32_t reset_flags; \
+    uint32_t stage; \
+    uint32_t detail; \
+    uint32_t failure_kind; \
+    uint32_t capture_valid; \
+    uint32_t previous_stage; \
+    uint32_t previous_failure_kind; \
+    uint32_t previous_pc; \
+    uint32_t previous_cfsr; \
+    uint32_t exception_return; \
+    uint32_t stacked_r0; \
+    uint32_t stacked_r1; \
+    uint32_t stacked_r2; \
+    uint32_t stacked_r3; \
+    uint32_t stacked_r12; \
+    uint32_t stacked_lr; \
+    uint32_t stacked_pc; \
+    uint32_t stacked_xpsr; \
+    uint32_t msp; \
+    uint32_t psp; \
+    uint32_t primask; \
+    uint32_t basepri; \
+    uint32_t faultmask; \
+    uint32_t control; \
+    uint32_t cfsr; \
+    uint32_t hfsr; \
+    uint32_t dfsr; \
+    uint32_t afsr; \
+    uint32_t mmfar; \
+    uint32_t bfar; \
+    uint32_t icsr; \
+    uint32_t shcsr; \
+    uint32_t system_core_clock; \
+    uint32_t system_d2_clock; \
+    uint32_t rcc_cfgr; \
+    uint32_t rcc_d1cfgr; \
+    uint32_t rcc_d2cfgr; \
+    uint32_t systick_ctrl; \
+    uint32_t systick_load; \
+    uint32_t systick_value; \
+    uint32_t tim2_psc; \
+    uint32_t tim2_arr; \
+    uint32_t tim2_cnt; \
+    uint32_t tim2_sr
+
+typedef struct {
+    DIMA_BOOT_DIAGNOSTICS_V1_FIELDS;
+} dima_boot_diagnostics_v1_t;
+
+typedef struct {
+    DIMA_BOOT_DIAGNOSTICS_V1_FIELDS;
+    uint32_t abfsr;
+    uint32_t scb_ccr;
+    uint32_t mpu_ctrl;
+    uint32_t previous_abfsr;
+} dima_boot_diagnostics_t;
+
+#undef DIMA_BOOT_DIAGNOSTICS_V1_FIELDS
+
 typedef struct {
     uint32_t magic;
     uint32_t version;
     uint32_t size;
-    uint32_t boot_count;
-    uint32_t reset_flags;
-    uint32_t stage;
-    uint32_t detail;
-    uint32_t failure_kind;
-    uint32_t capture_valid;
-
-    uint32_t previous_stage;
-    uint32_t previous_failure_kind;
-    uint32_t previous_pc;
-    uint32_t previous_cfsr;
-
-    uint32_t exception_return;
-    uint32_t stacked_r0;
-    uint32_t stacked_r1;
-    uint32_t stacked_r2;
-    uint32_t stacked_r3;
-    uint32_t stacked_r12;
-    uint32_t stacked_lr;
-    uint32_t stacked_pc;
-    uint32_t stacked_xpsr;
-
-    uint32_t msp;
-    uint32_t psp;
-    uint32_t primask;
-    uint32_t basepri;
-    uint32_t faultmask;
-    uint32_t control;
-
-    uint32_t cfsr;
-    uint32_t hfsr;
-    uint32_t dfsr;
-    uint32_t afsr;
-    uint32_t mmfar;
-    uint32_t bfar;
-    uint32_t icsr;
-    uint32_t shcsr;
-
-    uint32_t system_core_clock;
-    uint32_t system_d2_clock;
-    uint32_t rcc_cfgr;
-    uint32_t rcc_d1cfgr;
-    uint32_t rcc_d2cfgr;
-    uint32_t systick_ctrl;
-    uint32_t systick_load;
-    uint32_t systick_value;
-    uint32_t tim2_psc;
-    uint32_t tim2_arr;
-    uint32_t tim2_cnt;
-    uint32_t tim2_sr;
-} dima_boot_diagnostics_t;
+    uint32_t sequence;
+    dima_boot_diagnostics_v1_t diagnostics;
+    uint32_t crc32;
+    uint32_t reserved[10];
+    uint32_t commit;
+} dima_boot_flash_record_v1_t;
 
 typedef struct {
     uint32_t magic;
@@ -142,7 +165,7 @@ typedef struct {
     uint32_t sequence;
     dima_boot_diagnostics_t diagnostics;
     uint32_t crc32;
-    uint32_t reserved[10];
+    uint32_t reserved[6];
     uint32_t commit;
 } dima_boot_flash_record_t;
 

@@ -1,6 +1,6 @@
 #include "hello_world.hpp"
 
-#include "freertos/platform_time.hpp"
+#include "platform/api/Platform.hpp"
 
 #include <stdio.h>
 

@@ -1,12 +1,11 @@
 /****************************************************************************
- * PX4-Autopilot v1.17.0 Commander Rover subset adapted to Dima FreeRTOS.
+ * PX4-Autopilot v1.17.0 Commander Rover subset adapted to the Dima platform.
  ****************************************************************************/
 #define MODULE_NAME "commander"
 #include "Commander.hpp"
 
-#include "ArmingFlashInterlock.h"
 #include "logging/logging.hpp"
-#include "freertos/hrt.hpp"
+#include "platform/api/Time.hpp"
 
 #include <cmath>
 
@@ -28,8 +27,10 @@ bool normalized_axis(float value) noexcept
 
 } // namespace
 
-Commander::Commander() noexcept
-    : px4::ScheduledWorkItem("commander", px4::wq_configurations::hp_default)
+Commander::Commander(
+    dima::platform::ArmedFlashCoordinator &armed_flash) noexcept
+    : px4::ScheduledWorkItem("commander", px4::wq_configurations::hp_default),
+      armed_flash_(armed_flash)
 {
 }
 
@@ -50,6 +51,7 @@ bool Commander::start()
     }
 
     reset_runtime_state();
+    armed_flash_.disarm();
     parameter_handles_ready_ = initialize_parameter_handles();
     if (!parameter_handles_ready_) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -59,11 +61,6 @@ bool Commander::start()
     }
 
     (void)refresh_parameters();
-    have_manual_control_ = false;
-    manual_control_setpoint_ = manual_control_setpoint_s{};
-    recoverable_failsafe_causes_ = FailsafeNone;
-    armed_snapshot_.store(false);
-    dima_arming_flash_disarm();
 
     if (!action_request_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -104,20 +101,13 @@ bool Commander::start()
 
 void Commander::stop()
 {
-    armed_snapshot_.store(false);
-    dima_arming_flash_disarm();
+    armed_flash_.disarm();
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();
     ScheduleCancelAndDrain();
-    actuator_armed_.armed = false;
-    vehicle_control_mode_.flag_armed = false;
-    vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
-    armed_snapshot_.store(false);
-    dima_arming_flash_disarm();
-    have_manual_control_ = false;
-    recoverable_failsafe_causes_ = FailsafeNone;
+    armed_flash_.disarm();
     reset_runtime_state();
 }
 
@@ -368,7 +358,7 @@ bool Commander::arm(std::uint8_t reason, std::uint64_t now) noexcept
         PX4_WARN("Arming denied: safety checks failed");
         return false;
     }
-    if (!dima_arming_flash_try_arm()) {
+    if (!armed_flash_.try_arm()) {
         PX4_WARN("Arming denied: Flash operation in progress");
         return false;
     }
@@ -377,7 +367,6 @@ bool Commander::arm(std::uint8_t reason, std::uint64_t now) noexcept
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_ARMED;
     vehicle_status_.latest_arming_reason = reason;
     vehicle_status_.armed_time = now;
-    armed_snapshot_.store(true);
     PX4_INFO("Rover armed");
     return true;
 }
@@ -393,8 +382,7 @@ bool Commander::disarm(std::uint8_t reason) noexcept
     vehicle_status_.latest_disarming_reason = reason;
     vehicle_status_.armed_time = 0U;
     vehicle_status_.takeoff_time = 0U;
-    armed_snapshot_.store(false);
-    dima_arming_flash_disarm();
+    armed_flash_.disarm();
     PX4_INFO("Rover disarmed");
     return true;
 }
@@ -533,8 +521,7 @@ void Commander::initialize_public_state(std::uint64_t now) noexcept
 void Commander::initialize_disarmed_snapshot(std::uint64_t now) noexcept
 {
     const bool kill_latched = actuator_armed_.kill;
-    armed_snapshot_.store(false);
-    dima_arming_flash_disarm();
+    armed_flash_.disarm();
 
     initialize_public_state(now);
     actuator_armed_.armed = false;
@@ -575,8 +562,7 @@ void Commander::handle_scheduling_failure(std::uint64_t now) noexcept
 void Commander::enter_error(const char *reason) noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Error;
-    armed_snapshot_.store(false);
-    dima_arming_flash_disarm();
+    armed_flash_.disarm();
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();
@@ -584,8 +570,7 @@ void Commander::enter_error(const char *reason) noexcept
     actuator_armed_.armed = false;
     vehicle_control_mode_.flag_armed = false;
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;
-    armed_snapshot_.store(false);
-    dima_arming_flash_disarm();
+    armed_flash_.disarm();
     PX4_ERR("%s", reason);
 }
 

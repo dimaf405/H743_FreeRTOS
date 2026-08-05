@@ -24,7 +24,6 @@
 /* USER CODE BEGIN INCLUDE */
 #include "FreeRTOS.h"
 #include "task.h"
-#include "usb_console/usb_console.h"
 #include "usb_console/usb_console_internal.h"
 
 /* USER CODE END INCLUDE */
