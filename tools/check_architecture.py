@@ -720,6 +720,12 @@ def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
         "Boards/H743/Inc/motor_pwm.h",
         "Boards/H743/Src/motor_pwm.c",
     }
+    allowed_rover_differential_owners = {
+        "Dima/rover/ApplicationContext.cpp",
+        "Dima/rover/ApplicationContext.hpp",
+        "Dima/rover/control/RoverDifferential.cpp",
+        "Dima/rover/control/RoverDifferential.hpp",
+    }
     for path in first_party_sources():
         relative = path.relative_to(ROOT).as_posix()
         for line_number, line in enumerate(
@@ -738,12 +744,18 @@ def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
                 ))
             if (path.is_relative_to(ROOT / "Dima") and any(
                     token in line for token in (
-                        "RoverDifferential", "MixingOutput",
-                        "FunctionMotors", "ActuatorOutput",
+                        "MixingOutput", "FunctionMotors", "ActuatorOutput",
                     ))):
                 violations.append(Violation(
                     path, line_number, "R122",
                     "actuator consumer exists before the authorized stage",
+                ))
+            if (path.is_relative_to(ROOT / "Dima") and
+                    "RoverDifferential" in line and
+                    relative not in allowed_rover_differential_owners):
+                violations.append(Violation(
+                    path, line_number, "R122",
+                    "RoverDifferential escaped the Rover control boundary",
                 ))
 
     timer_source = ROOT / "Core/Src/tim.c"

@@ -5,6 +5,8 @@
 #include "parameters/ParameterService.hpp"
 #include "parameters/ParameterJournal.hpp"
 #include "platform/api/Platform.hpp"
+#include "control/ManualMotionAdapter.hpp"
+#include "control/RoverDifferential.hpp"
 #include "rc/ManualControl.hpp"
 #include "rc/RCUpdate.hpp"
 #include "rc/SbusRc.hpp"
@@ -40,6 +42,8 @@ private:
     bool stop_started_modules() noexcept;
     bool start_rc_chain() noexcept;
     bool stop_rc_chain() noexcept;
+    bool start_control_chain() noexcept;
+    bool stop_control_chain() noexcept;
 
     dima::platform::Services &services_;
     dima::parameters::ParameterJournal journal_;
@@ -51,6 +55,8 @@ private:
     dima::modules::rc::SbusRc sbus_rc_;
     dima::modules::rc::RCUpdate rc_update_{};
     dima::modules::rc::ManualControl manual_control_{};
+    dima::rover::control::ManualMotionAdapter manual_motion_adapter_{};
+    dima::rover::control::RoverDifferential rover_differential_{};
     dima::platform::TaskHandle owner_task_{};
     RuntimeState runtime_state_{RuntimeState::Stopped};
     bool console_initialized_{false};
@@ -65,6 +71,8 @@ private:
     bool sbus_started_{false};
     bool rc_update_started_{false};
     bool manual_control_started_{false};
+    bool manual_motion_started_{false};
+    bool rover_differential_started_{false};
 };
 
 ApplicationContext &application_context() noexcept;

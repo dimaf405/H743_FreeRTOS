@@ -78,6 +78,7 @@ PARAMETER_DEFINITIONS := \
 	Dima/middleware/parameters/definitions/commander_params.c \
 	Dima/middleware/parameters/definitions/rover_control_params.c \
 	Dima/middleware/parameters/definitions/rover_differential_params.c \
+	Dima/middleware/parameters/definitions/rover_actuator_params.c \
 	Dima/middleware/parameters/definitions/rc_params.c
 PARAMETER_GENERATED_DIR := $(BUILD_DIR)/generated/parameters
 PARAMETER_INCLUDE_DIR := $(BUILD_DIR)/generated_include
@@ -157,6 +158,9 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/adapters/usb_console/UsbConsole.cpp \
 	Dima/application/app_bootstrap.cpp \
 	Dima/rover/ApplicationContext.cpp \
+	Dima/rover/control/DifferentialDrive.cpp \
+	Dima/rover/control/ManualMotionAdapter.cpp \
+	Dima/rover/control/RoverDifferential.cpp \
 	Dima/modules/logging/LogService.cpp \
 	Dima/modules/parameters/ParameterService.cpp \
 	Dima/application/app_main.cpp \

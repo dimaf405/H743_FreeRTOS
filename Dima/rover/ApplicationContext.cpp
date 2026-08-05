@@ -54,7 +54,9 @@ bool ApplicationContext::register_modules() noexcept
         !module_manager_.register_module(commander_) ||
         !module_manager_.register_module(sbus_rc_) ||
         !module_manager_.register_module(rc_update_) ||
-        !module_manager_.register_module(manual_control_)) {
+        !module_manager_.register_module(manual_control_) ||
+        !module_manager_.register_module(manual_motion_adapter_) ||
+        !module_manager_.register_module(rover_differential_)) {
         module_manager_.reset();
         return false;
     }
@@ -225,6 +227,12 @@ bool ApplicationContext::start() noexcept
         PX4_INFO("RC input chain started");
     }
 
+    if (!start_control_chain()) {
+        (void)rollback_start();
+        return false;
+    }
+    PX4_INFO("Rover Manual differential control started");
+
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::BootHealthStart);
     boot_started_ = module_manager_.start(boot_health_);
@@ -282,6 +290,38 @@ bool ApplicationContext::stop_rc_chain() noexcept
     return stopped;
 }
 
+bool ApplicationContext::start_control_chain() noexcept
+{
+    manual_motion_started_ = module_manager_.start(manual_motion_adapter_);
+    if (!manual_motion_started_) {
+        return false;
+    }
+
+    rover_differential_started_ = module_manager_.start(rover_differential_);
+    if (!rover_differential_started_) {
+        (void)module_manager_.stop(manual_motion_adapter_);
+        manual_motion_started_ = false;
+        return false;
+    }
+    return true;
+}
+
+bool ApplicationContext::stop_control_chain() noexcept
+{
+    bool stopped = true;
+    if (rover_differential_started_) {
+        const bool result = module_manager_.stop(rover_differential_);
+        rover_differential_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (manual_motion_started_) {
+        const bool result = module_manager_.stop(manual_motion_adapter_);
+        manual_motion_started_ = !result;
+        stopped = result && stopped;
+    }
+    return stopped;
+}
+
 bool ApplicationContext::stop_started_modules() noexcept
 {
     bool stopped = true;
@@ -290,6 +330,7 @@ bool ApplicationContext::stop_started_modules() noexcept
         boot_started_ = !result;
         stopped = result && stopped;
     }
+    stopped = stop_control_chain() && stopped;
     stopped = stop_rc_chain() && stopped;
     if (commander_started_) {
         const bool result = module_manager_.stop(commander_);

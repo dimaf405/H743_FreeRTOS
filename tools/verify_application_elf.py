@@ -85,7 +85,6 @@ FORBIDDEN_ACTUATOR_FRAGMENTS = {
     "FunctionMotors",
     "Mixer",
     "MixingOutput",
-    "RoverDifferential",
 }
 
 
@@ -531,6 +530,16 @@ def verify_lifecycle_symbols(elf: Elf32) -> None:
         lambda symbol: "16ParameterService8shutdownEv" in symbol.name and
         symbol.symbol_type == STT_FUNC,
     )
+    require_symbol_match(
+        elf, "ManualMotionAdapter::start()",
+        lambda symbol: "ManualMotionAdapter5startEv" in symbol.name and
+        symbol.symbol_type == STT_FUNC,
+    )
+    require_symbol_match(
+        elf, "RoverDifferential::start()",
+        lambda symbol: "RoverDifferential5startEv" in symbol.name and
+        symbol.symbol_type == STT_FUNC,
+    )
 
 
 def verify_forbidden_symbols(elf: Elf32) -> None:
@@ -567,7 +576,7 @@ def verify(elf_path: pathlib.Path) -> None:
     print(f"  vector: 0x{APP_VECTOR:08x}")
     print(f"  init array: {len(INIT_ARRAY_ALLOWLIST)} allowed entries")
     print(f"  DMA region: 0x{DMA_BASE:08x}, {DMA_SIZE} bytes maximum")
-    print("  actuator consumers: absent")
+    print("  hardware actuator consumers: absent")
 
 
 def parse_args(arguments: Iterable[str] | None = None) -> argparse.Namespace:

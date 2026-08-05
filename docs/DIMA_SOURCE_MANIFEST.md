@@ -1,7 +1,7 @@
 # Dima 上游源码与许可证清单
 
-- 日期：2026-08-04
-- 文档状态：阶段 1～4 已迁入强制分层的公共 capability、FreeRTOS 后端和 STM32H7 后端；正式构建证据与目标板待验项见本次交付
+- 日期：2026-08-05
+- 文档状态：阶段 1～4 已迁入强制分层的公共 capability、FreeRTOS 后端和 STM32H7 后端；阶段 5 两轴消息与 Manual 差速控制生产者正在分批接入，正式构建证据与目标板待验项见本次交付
 - 许可证决策：`PENDING`
 
 ## 1. 管理规则
@@ -22,7 +22,7 @@
 | 用途 | Parameter、ModuleParams、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl、Commander Rover 子集、RoverDifferential、执行器链和 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
 | 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
-| 当前状态 | 阶段 1～4 基础链已按 v1.17.0 接口和行为适配；阶段 4 已通过目标构建、签名和镜像校验，板测待完成 |
+| 当前状态 | 阶段 1～4 基础链已按 v1.17.0 接口和行为适配；阶段 5 已导入两轴消息并开始接入 Manual 差速控制生产者，PWM 电气验证仍待完成 |
 | 许可证状态 | `PENDING`；逐文件保留原始许可证 |
 | 本地目录规则 | 产品目录使用 Dima；上游符号和许可证文字保持原样 |
 
@@ -66,7 +66,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | FreeRTOS Task/同步/Heap 后端与 C/C++ Runtime | `Dima/platform/freertos/` | DIMA BACKEND / PLATFORM ISOLATED |
 | STM32H7 时钟、MPU/cache、DMA、Flash、USB、SBUS 与中断后端 | `Dima/platform/stm32h7/` | DIMA BACKEND / PLATFORM ISOLATED / BOARD PENDING |
 | H743 capability 组合根 | `Boards/H743/Src/platform_composition.cpp` | DIMA COMPOSITION |
-| Rover 产品装配、专属控制与导航 | `Dima/rover/`、`Dima/rover/control/`、`Dima/rover/navigation/` | UNIQUE PRODUCT ROOT / CONTROL+NAV PLANNED |
+| Rover 产品装配、专属控制与导航 | `Dima/rover/`、`Dima/rover/control/`、`Dima/rover/navigation/` | UNIQUE PRODUCT ROOT / MANUAL CONTROL ADAPTED / NAV PLANNED |
 | Motor、Rover Control | `Dima/lib/motor/`、`Dima/lib/rover_control/` | RELOCATED / TARGET VERIFY PASS |
 | Commander Rover 安全子集 | `Dima/modules/safety/` | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | Commander 状态消息 | `Dima/messages/` | ADAPTED / TARGET VERIFY PASS |
@@ -81,13 +81,13 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | Parameter、ModuleParams | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / TARGET VERIFY PASS |
 | SBUS、SbusRc、RCUpdate、ManualControl | PX4 v1.17.0 | `Dima/lib/rc/`、`Dima/modules/rc/`、`Dima/platform/stm32h7/SbusUart.cpp` | 3 | ADAPTED / PLATFORM ISOLATED / BOARD PENDING |
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
-| RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/rover/control/` | 5 | PLANNED |
+| RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/rover/control/` | 5 | MANUAL CONTROL PRODUCER ADAPTED / PWM PENDING |
 | EKF2 与 Estimator 支撑库 | PX4 v1.17.0 | `Dima/modules/estimator/ekf2/`、`Dima/lib/estimator/` | 7 | PLANNED |
 | Position、Waypoint、Reverse、PivotTurn | PX4 v1.17.0；APM 行为参考 | `Dima/rover/navigation/` | 9 | PLANNED |
 
 ## 7. 文件级映射
 
-阶段 2～4 的唯一 PX4 直接代码来源基线为 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`；ArduPilot commit `3f2e4763accb` 在阶段 4 仅作 Rover 安全行为参考，不直接导入代码。
+阶段 2～5 的唯一 PX4 直接代码来源基线为 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`；ArduPilot commit `3f2e4763accb` 仅作 Rover 安全、倒车和油门输出行为参考，不直接导入代码。
 
 | 上游原始路径/功能 | 本地映射 | 适配方式 | 状态 |
 |---|---|---|---|
@@ -111,6 +111,9 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `msg/versioned/VehicleStatus.msg`、`msg/versioned/VehicleControlMode.msg`、`msg/ActuatorArmed.msg` | `Dima/messages/` | 完整保留三个公开消息的字段、枚举和版本号；本地三个 Topic 均为单深度 | ADAPTED |
 | `msg/versioned/ActuatorMotors.msg` | `Dima/messages/actuator_motors.*` | 完整保留 version 0、12 路 control、reversible flags 和采样时间；Topic 单深度，阶段 5 仅使用前两路 | ADAPTED / TARGET REVERIFY PENDING |
 | Dima Rover 两轴请求与输出状态 | `Dima/messages/rover_motion_request.*`、`actuator_output_status.*` | 新增深度 8 产品契约，隔离 Manual/未来 Navigation 与混控/PWM，并暴露六路后端 safe-off/active/retry/fault 状态 | DIMA CONTRACT / TARGET REVERIFY PENDING |
+| `src/modules/rover_differential/RoverDifferential.cpp`、`DifferentialDriveModes/DifferentialManualMode/`、`DifferentialActControl/` | `Dima/rover/control/ManualMotionAdapter.*`、`RoverDifferential.*`、`DifferentialDrive.*` | 保留 Manual 两轴、100 Hz rate-control WorkQueue 和 `actuator_motors` 边界；适配为固定存储、Commander 三 Topic 一致性门控及 ARMED 参数延后，不导入未使用的 Auto/Offboard/Position 控制器 | ADAPTED / HARDWARE CONSUMER PENDING |
+| ArduPilot `libraries/AR_Motors/AP_MotorsUGV.cpp` 行为 | `Dima/rover/control/DifferentialDrive.*` | 仅参考倒车车头方向、转向/油门饱和优先级、slew、`MOT_THR_MIN` 静摩擦补偿、反向推力不对称和左右独立换向延时；未复制 GPL 源码 | BEHAVIOR REFERENCE ONLY |
+| Stage 5 Rover 控制与油门保护参数 | `Dima/middleware/parameters/definitions/rover_actuator_params.c` | 新增请求超时、倒车转向、混控优先级、最小/最大输出、slew、换向延时、expo、反向不对称及解锁 ramp；运行期仅在新鲜 DISARMED 快照后整体应用 | DIMA PARAMETER / TARGET REVERIFY PENDING |
 | PX4 RC/Commander 参数定义与生成元数据 | `Dima/middleware/parameters/definitions/rc_params.c`、`commander_params.c` | 保留 RC 失联参数；增加 Dima Rover 公开参数 `COM_ARM_STICK_DZ`，避免复用单位为 m/s 的 `RO_SPEED_TH`；阶段 4 后总参数数为 136 | ADAPTED / DIMA PARAMETER |
 | Dima Rover 生命周期与 Parameter Autosave 写门控 | `Dima/rover/ApplicationContext.*`、`Dima/modules/parameters/ParameterService.*`、`Dima/middleware/uorb/`、`Dima/middleware/work_queue/`、`Dima/platform/api/Platform.*` | ApplicationContext 只注入 capability；Parameter、Commander 与 BootControl 共用 Armed/Flash coordinator；Runtime shutdown 失效 Parameter cache、推进 uORB epoch、drain WorkQueue 并释放 Console，只有 Termination 跨 Runtime 保留 | DIMA INTEGRATION / SOURCE GATE PASS / TARGET REVERIFY PENDING |
 | MCUboot image confirmation 与 Recovery | `Dima/platform/stm32h7/BootControl.cpp`、`flash_bank1.c` | 非阻塞 transaction 保留 DEFERRED；Bank 1 program 在 DTCM 执行并统一调用 cache helper | DIMA BACKEND |
