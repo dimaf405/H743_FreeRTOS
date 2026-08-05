@@ -195,9 +195,17 @@ Storage       128 KiB
 
 ### 阶段 5：差速执行器链
 
-只有 Windows 原生 clean build、签名/布局校验和生命周期 ELF 门禁全部通过后，才允许开始本阶段源码开发；在目标板验证和单独授权前，执行器代码不得接入 `ApplicationContext`，不得启动 TIM5/TIM8 PWM。
+阶段 5 已在唯一产品目录 `Dima/rover/control/` 完成以下受控子集：
 
-在 `Dima/rover/control/` 移植 RoverDifferential、FunctionMotors、MixingOutput 和 OutputLimit，接入六路 PWM，实现 Manual、倒车、普通转弯和零速原地旋转。保留成熟的 armed 门控、failsafe 输出、限幅、反向、slew 和解锁 ramp。
+- 只保留前后 `longitudinal` 和左右 `steering/yaw` 两轴。Manual 适配器发布 `rover_motion_request`，RoverDifferential 在 100 Hz 生成右、左两路 `actuator_motors`；其余十路保持 NaN。
+- `rover_motion_request` 同时预留 `SOURCE_NAVIGATION` 和 `MODE_SPEED_YAW_RATE`，但当前只接受 `SOURCE_MANUAL + MODE_NORMALIZED_AXES`。阶段 9 Navigation 必须复用该消息边界，不能直接依赖 DifferentialDrive、MotorOutput 或板级 PWM。
+- 差速混控采用 PX4 v1.17.0 的两轴/消息边界，并综合 ArduPilot Rover 的倒车车头方向、转向/油门饱和优先级、静摩擦补偿、反向推力不对称和左右独立换向延时行为；ArduPilot GPL 源码只作行为参考，没有复制。
+- 六路输出只提供 Disabled、MotorRight、MotorLeft 三种功能。默认全 Disabled；每路公开 `FUNC/MIN/CENT/MAX/REV`，零命令严格落在 CENT，允许同一 Motor function 映射多个物理口。
+- 固定物理映射为 S1/PB0/TIM8_CH2N、S2/PB1/TIM8_CH3N、S3～S6/PA0～PA3/TIM5_CH1～CH4。TIM8 Update TRGO 同步复位 TIM5，二者均为 1 MHz、ARR 19999、50 Hz。
+- MotorOutput 只有在完整、严格前进且新鲜的 Commander 安全快照、有效双向 Motor 命令和 `COM_ACT_LOSS_T` 双时间戳约束同时满足时才启动 PWM。所有负向安全事件、命令超时、参数/发布错误和后端异常均停止定时器并把六路切回 GPIO 低。
+- USB CDC 已作为系统调试日志与维护命令口，移除周期性 HelloWorld 和示例心跳；控制/ISR 热路径只上报固定结构事件，不直接格式化或阻塞发送。
+
+Windows 原生 clean build、签名、Factory HEX、MCUboot 布局、应用 ELF 生命周期/执行器门禁和静态热路径检查已经通过。阶段状态为“源码及目标构建通过，板测待完成”；示波器确认六路频率、脉宽、相位、TIM8 N 极性、真实低电平以及 Arm/Disarm/Kill/Termination/超时波形之前，不得宣称执行器运行行为已经验收。详细数据见 [阶段 5 资源与验收基线](DIMA_PHASE5_RESOURCE_BASELINE_ZH.md)。
 
 ### 阶段 6：传感器层
 
