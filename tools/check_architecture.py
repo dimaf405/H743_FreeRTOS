@@ -715,8 +715,8 @@ def scan_clock_contract(violations: list[Violation]) -> None:
                 ))
 
 
-def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
-    allowed_motor_owners = {
+def scan_active_actuator_contract(violations: list[Violation]) -> None:
+    allowed_motor_calls = {
         "Boards/H743/Inc/motor_pwm.h",
         "Boards/H743/Src/motor_pwm.c",
         "Dima/platform/stm32h7/ActuatorPwm.cpp",
@@ -738,25 +738,35 @@ def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
         relative = path.relative_to(ROOT).as_posix()
         for line_number, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), 1):
-            if (relative not in allowed_motor_owners and
-                    re.search(r"\bboard_motor_pwm_(?:start|write)\s*\(", line)):
+            board_call = re.search(
+                r"\bboard_motor_pwm_(start|stop|write|started)\s*\(", line,
+            )
+            board_call_allowed = relative in allowed_motor_calls or (
+                relative == "Boards/H743/Src/board_init.c" and
+                board_call is not None and board_call.group(1) == "stop"
+            )
+            if board_call is not None and not board_call_allowed:
                 violations.append(Violation(
                     path, line_number, "R120",
-                    "actuator PWM has a consumer before Rover control stage",
+                    "board motor PWM escaped the board safe-off or STM32 "
+                    "capability owners",
                 ))
-            if (relative not in allowed_motor_owners and
-                    re.search(r"\bHAL_TIM(?:Ex)?_PWMN?_Start\s*\(", line)):
+            if (relative != "Boards/H743/Src/motor_pwm.c" and
+                    re.search(
+                        r"\bHAL_TIM(?:Ex)?_PWMN?_(?:Start|Stop)\s*\(", line,
+                    )):
                 violations.append(Violation(
                     path, line_number, "R121",
-                    "PWM start is outside the dormant board backend",
+                    "PWM start/stop is outside the board motor backend",
                 ))
             if (path.is_relative_to(ROOT / "Dima") and any(
                     token in line for token in (
-                        "MixingOutput", "FunctionMotors", "ActuatorOutput",
+                        "Mixer", "MixingOutput", "FunctionMotors",
+                        "ActuatorOutput",
                     ))):
                 violations.append(Violation(
                     path, line_number, "R122",
-                    "actuator consumer exists before the authorized stage",
+                    "an unauthorized actuator consumer is present",
                 ))
             if (path.is_relative_to(ROOT / "Dima") and
                     "RoverDifferential" in line and
@@ -773,6 +783,65 @@ def scan_inactive_actuator_contract(violations: list[Violation]) -> None:
                     "six-channel PWM capability escaped its platform and "
                     "Rover output owners",
                 ))
+
+    requirements = {
+        ROOT / "Boards/H743/Src/board_init.c": (
+            ("board_motor_pwm_stop() != BOARD_MOTOR_PWM_APPLIED", "R161",
+             "board initialization must establish motor PWM safe-off"),
+        ),
+        ROOT / "Boards/H743/Src/platform_composition.cpp": (
+            ("&stm32h7::actuator_pwm(),", "R162",
+             "platform composition does not inject actuator PWM"),
+        ),
+        ROOT / "Dima/rover/ApplicationContext.cpp": (
+            ("boot_health_.bind_motor_output(motor_output_);", "R163",
+             "BootHealth is not bound to MotorOutput"),
+            ("module_manager_.start(motor_output_)", "R164",
+             "Application Runtime does not start MotorOutput"),
+            ("module_manager_.stop(motor_output_)", "R165",
+             "Application Runtime does not stop MotorOutput"),
+            ("motor_output_.safe_off_confirmed()", "R166",
+             "MotorOutput lifecycle does not verify physical safe-off"),
+        ),
+        ROOT / "Dima/rover/ApplicationContext.hpp": (
+            ("dima::rover::control::MotorOutput motor_output_;", "R167",
+             "ApplicationContext does not own MotorOutput"),
+        ),
+        ROOT / "Dima/rover/control/MotorOutput.hpp": (
+            ("px4::params::COM_ACT_LOSS_T", "R168",
+             "MotorOutput is missing the actuator command timeout"),
+        ),
+        ROOT / "Dima/rover/control/MotorOutput.cpp": (
+            ("timestamp > safety_.actuator_armed.timestamp", "R175",
+             "positive safety recovery does not require a newer snapshot"),
+            ("now_us - actuator_motors_.timestamp <= timeout_us", "R169",
+             "actuator publication time is not bounded"),
+            ("now_us - actuator_motors_.timestamp_sample <= timeout_us", "R170",
+             "actuator sample time is not bounded"),
+            ("pwm_->stop()", "R171",
+             "MotorOutput has no backend safe-off path"),
+        ),
+        ROOT / "Dima/modules/boot_health/boot_health.cpp": (
+            ("motor_output_->state()", "R176",
+             "BootHealth does not monitor MotorOutput lifecycle"),
+            ("confirmation_state_safe()", "R177",
+             "BootHealth does not reset its window for unsafe vehicle state"),
+            ("actuator_output_status_s::STATE_SAFE_OFF", "R178",
+             "BootHealth does not require an observed safe-off output"),
+            ("status.active_output_mask != 0U", "R179",
+             "BootHealth does not reject active PWM channels"),
+        ),
+        ROOT / "Dima/middleware/parameters/definitions/commander_params.c": (
+            ("PARAM_DEFINE_FLOAT(COM_ACT_LOSS_T, 0.10f);", "R172",
+             "COM_ACT_LOSS_T definition or default changed"),
+            ("* @min 0.02", "R173",
+             "COM_ACT_LOSS_T minimum changed"),
+            ("* @max 1.00", "R174",
+             "COM_ACT_LOSS_T maximum changed"),
+        ),
+    }
+    for path, required in requirements.items():
+        require_literals(path, required, violations)
 
     timer_source = ROOT / "Core/Src/tim.c"
     require_literals(
@@ -914,7 +983,7 @@ def main() -> int:
     scan_runtime_contracts(violations)
     scan_fault_ownership(violations)
     scan_clock_contract(violations)
-    scan_inactive_actuator_contract(violations)
+    scan_active_actuator_contract(violations)
     scan_linker_contract(violations)
     if violations:
         for violation in sorted(

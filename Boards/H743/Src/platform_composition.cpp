@@ -35,6 +35,9 @@ static_assert(static_cast<std::uint32_t>(
                   dima::platform::StartupStage::ApplicationFailed) ==
               DIMA_BOOT_STAGE_APPLICATION_FAILED);
 static_assert(static_cast<std::uint32_t>(
+                  dima::platform::StartupStage::MotorOutputStart) ==
+              DIMA_BOOT_STAGE_MOTOR_OUTPUT_START);
+static_assert(static_cast<std::uint32_t>(
                   dima::platform::FailureKind::ErrorHandler) ==
               DIMA_BOOT_FAILURE_ERROR_HANDLER);
 
@@ -89,7 +92,7 @@ extern "C" bool dima_platform_early_init(void)
         stm32h7::dma_memory(),
         stm32h7::sbus_input(),
         stm32h7::sensor_interrupts(),
-        nullptr,
+        &stm32h7::actuator_pwm(),
     };
 
     if (!install_services(services)) {

@@ -41,3 +41,18 @@
  * @group Commander
  */
 PARAM_DEFINE_FLOAT(COM_ARM_STICK_DZ, 0.10f);
+
+/**
+ * Actuator command loss timeout
+ *
+ * Maximum age of both the actuator command publication and its original
+ * input sample before the physical PWM backend returns to safe-off.
+ *
+ * @unit s
+ * @min 0.02
+ * @max 1.00
+ * @increment 0.01
+ * @decimal 2
+ * @group Commander
+ */
+PARAM_DEFINE_FLOAT(COM_ACT_LOSS_T, 0.10f);

@@ -30,9 +30,11 @@ ApplicationContext::ApplicationContext(
       parameter_service_(journal_, services.console, services.boot_control,
                          services.armed_flash, services.synchronization,
                          services.critical),
-      commander_(services.armed_flash), sbus_rc_(services.sbus)
+      motor_output_(services.actuator_pwm), commander_(services.armed_flash),
+      sbus_rc_(services.sbus)
 {
     boot_health_.bind_commander(commander_);
+    boot_health_.bind_motor_output(motor_output_);
 }
 
 bool ApplicationContext::owner_call(bool bind_if_unset) noexcept
@@ -51,6 +53,7 @@ bool ApplicationContext::register_modules() noexcept
 {
     if (!module_manager_.register_module(parameter_service_) ||
         !module_manager_.register_module(log_service_) ||
+        !module_manager_.register_module(motor_output_) ||
         !module_manager_.register_module(commander_) ||
         !module_manager_.register_module(sbus_rc_) ||
         !module_manager_.register_module(rc_update_) ||
@@ -211,6 +214,15 @@ bool ApplicationContext::start() noexcept
     }
 
     services_.diagnostics.set_stage(
+        dima::platform::StartupStage::MotorOutputStart);
+    motor_output_started_ = module_manager_.start(motor_output_);
+    if (!motor_output_started_ || !motor_output_.safe_off_confirmed()) {
+        (void)rollback_start();
+        return false;
+    }
+    PX4_INFO("Motor output safe-off established");
+
+    services_.diagnostics.set_stage(
         dima::platform::StartupStage::CommanderStart);
     commander_started_ = module_manager_.start(commander_);
     if (!commander_started_) {
@@ -322,6 +334,19 @@ bool ApplicationContext::stop_control_chain() noexcept
     return stopped;
 }
 
+bool ApplicationContext::stop_motor_output() noexcept
+{
+    if (!motor_output_started_) {
+        return true;
+    }
+    const bool stopped = module_manager_.stop(motor_output_) &&
+                         motor_output_.state() ==
+                             dima::middleware::lifecycle::ModuleState::Stopped &&
+                         motor_output_.safe_off_confirmed();
+    motor_output_started_ = !stopped;
+    return stopped;
+}
+
 bool ApplicationContext::stop_started_modules() noexcept
 {
     bool stopped = true;
@@ -330,8 +355,9 @@ bool ApplicationContext::stop_started_modules() noexcept
         boot_started_ = !result;
         stopped = result && stopped;
     }
-    stopped = stop_control_chain() && stopped;
     stopped = stop_rc_chain() && stopped;
+    stopped = stop_motor_output() && stopped;
+    stopped = stop_control_chain() && stopped;
     if (commander_started_) {
         const bool result = module_manager_.stop(commander_);
         commander_started_ = !result;

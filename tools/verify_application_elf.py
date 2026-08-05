@@ -70,7 +70,7 @@ FORBIDDEN_APPLICATION_FRAGMENTS = {
     "HelloWorld",
     "app_heartbeat",
 }
-FORBIDDEN_ACTUATOR_SYMBOLS = {
+REQUIRED_ACTUATOR_SYMBOLS = {
     "HAL_TIM_PWM_Start",
     "HAL_TIM_PWM_Stop",
     "HAL_TIMEx_PWMN_Start",
@@ -542,11 +542,29 @@ def verify_lifecycle_symbols(elf: Elf32) -> None:
     )
 
 
+def verify_actuator_symbols(elf: Elf32) -> None:
+    for name in sorted(REQUIRED_ACTUATOR_SYMBOLS):
+        symbol = elf.symbol(name)
+        if symbol.symbol_type != STT_FUNC:
+            raise ElfVerificationError(
+                f"required actuator symbol '{name}' is not a function"
+            )
+    require_symbol_match(
+        elf, "MotorOutput::start()",
+        lambda symbol: "MotorOutput5startEv" in symbol.name and
+        symbol.symbol_type == STT_FUNC,
+    )
+    require_symbol_match(
+        elf, "MotorOutput::force_safe_off()",
+        lambda symbol: "MotorOutput14force_safe_offEv" in symbol.name and
+        symbol.symbol_type == STT_FUNC,
+    )
+
+
 def verify_forbidden_symbols(elf: Elf32) -> None:
-    forbidden_names = FORBIDDEN_APPLICATION_SYMBOLS | FORBIDDEN_ACTUATOR_SYMBOLS
     present_names = sorted({
         symbol.name for symbol in elf.symbols
-        if symbol.defined and symbol.name in forbidden_names
+        if symbol.defined and symbol.name in FORBIDDEN_APPLICATION_SYMBOLS
     })
     forbidden_fragments = (
         FORBIDDEN_APPLICATION_FRAGMENTS | FORBIDDEN_ACTUATOR_FRAGMENTS
@@ -571,12 +589,13 @@ def verify(elf_path: pathlib.Path) -> None:
     verify_initialization_arrays(elf)
     verify_memory_layout(elf)
     verify_lifecycle_symbols(elf)
+    verify_actuator_symbols(elf)
     verify_forbidden_symbols(elf)
     print("application ELF lifecycle verification passed")
     print(f"  vector: 0x{APP_VECTOR:08x}")
     print(f"  init array: {len(INIT_ARRAY_ALLOWLIST)} allowed entries")
     print(f"  DMA region: 0x{DMA_BASE:08x}, {DMA_SIZE} bytes maximum")
-    print("  hardware actuator consumers: absent")
+    print("  six-channel safety-gated PWM chain: linked")
 
 
 def parse_args(arguments: Iterable[str] | None = None) -> argparse.Namespace:

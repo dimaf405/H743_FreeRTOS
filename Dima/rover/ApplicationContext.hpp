@@ -6,6 +6,7 @@
 #include "parameters/ParameterJournal.hpp"
 #include "platform/api/Platform.hpp"
 #include "control/ManualMotionAdapter.hpp"
+#include "control/MotorOutput.hpp"
 #include "control/RoverDifferential.hpp"
 #include "rc/ManualControl.hpp"
 #include "rc/RCUpdate.hpp"
@@ -44,6 +45,7 @@ private:
     bool stop_rc_chain() noexcept;
     bool start_control_chain() noexcept;
     bool stop_control_chain() noexcept;
+    bool stop_motor_output() noexcept;
 
     dima::platform::Services &services_;
     dima::parameters::ParameterJournal journal_;
@@ -51,6 +53,7 @@ private:
     dima::modules::boot_health::BootHealthService boot_health_;
     dima::modules::logging::LogService log_service_;
     dima::modules::parameters::ParameterService parameter_service_;
+    dima::rover::control::MotorOutput motor_output_;
     dima::modules::safety::Commander commander_;
     dima::modules::rc::SbusRc sbus_rc_;
     dima::modules::rc::RCUpdate rc_update_{};
@@ -67,6 +70,7 @@ private:
     bool boot_started_{false};
     bool log_started_{false};
     bool parameter_started_{false};
+    bool motor_output_started_{false};
     bool commander_started_{false};
     bool sbus_started_{false};
     bool rc_update_started_{false};

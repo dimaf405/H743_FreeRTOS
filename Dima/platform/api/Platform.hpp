@@ -364,6 +364,7 @@ enum class StartupStage : std::uint32_t {
     HelloStart = 0x0710U,
     ParameterStart = 0x0720U,
     LogStart = 0x0730U,
+    MotorOutputStart = 0x0738U,
     CommanderStart = 0x0740U,
     RcStart = 0x0750U,
     ApplicationRunning = 0x07FFU,

@@ -56,6 +56,7 @@ private:
     };
 
     struct ParameterSnapshot {
+        float command_timeout_s;
         ChannelConfig channels[kChannelCount];
         std::uint8_t configured_mask;
         std::uint8_t right_mask;
@@ -109,6 +110,7 @@ private:
     uORB::Publication<actuator_output_status_s> output_status_publication_{
         ORB_ID(actuator_output_status)};
 
+    px4::ParamFloat<px4::params::COM_ACT_LOSS_T> command_timeout_{};
     param_t parameter_handles_[kChannelCount][kFieldsPerChannel]{};
     ParameterSnapshot parameters_{};
     actuator_motors_s actuator_motors_{};

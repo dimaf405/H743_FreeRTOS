@@ -18,6 +18,12 @@ void BootHealthService::bind_commander(
     commander_ = &commander;
 }
 
+void BootHealthService::bind_motor_output(
+    const dima::middleware::lifecycle::ModuleBase &motor_output) noexcept
+{
+    motor_output_ = &motor_output;
+}
+
 bool BootHealthService::start()
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
@@ -27,7 +33,7 @@ bool BootHealthService::start()
         state_ = dima::middleware::lifecycle::ModuleState::Running;
         return true;
     }
-    if (commander_ == nullptr) {
+    if (commander_ == nullptr || motor_output_ == nullptr) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
@@ -38,13 +44,16 @@ bool BootHealthService::start()
 
     stable_window_start_ms_ = clock_.now_ms();
     safety_snapshot_observed_ = false;
+    output_snapshot_observed_ = false;
     stable_window_active_ = false;
     last_safety_timestamp_us_ = 0U;
+    last_output_sequence_ = 0U;
     // 丢弃 Commander 启动时的静态快照；必须观察下一组严格前进的
     // 三 Topic 快照后，连续健康窗口才允许开始。
     (void)actuator_armed_subscription_.update();
     (void)vehicle_control_mode_subscription_.update();
     (void)vehicle_status_subscription_.update();
+    (void)actuator_output_status_subscription_.update();
     const bool scheduled = ScheduleOnInterval(kCheckIntervalMs * 1000U);
     if (!scheduled) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -63,7 +72,9 @@ void BootHealthService::stop()
     stable_window_active_ = false;
     stable_window_start_ms_ = 0U;
     safety_snapshot_observed_ = false;
+    output_snapshot_observed_ = false;
     last_safety_timestamp_us_ = 0U;
+    last_output_sequence_ = 0U;
 }
 
 dima::middleware::lifecycle::ModuleState BootHealthService::state() const
@@ -81,10 +92,16 @@ void BootHealthService::Run()
     const uint64_t now_us = clock_.now_us();
     const uint64_t now_ms = clock_.now_ms();
 
+    const bool safety_healthy = update_safety_health(now_us);
+    const bool output_healthy = update_output_health(now_us);
     const bool healthy = param_is_ready() && commander_ != nullptr &&
                          commander_->state() ==
                              dima::middleware::lifecycle::ModuleState::Running &&
-                         update_safety_health(now_us);
+                         motor_output_ != nullptr &&
+                         motor_output_->state() ==
+                             dima::middleware::lifecycle::ModuleState::Running &&
+                         safety_healthy && output_healthy &&
+                         confirmation_state_safe();
     if (!healthy) {
         reset_stable_window(now_ms);
         return;
@@ -96,8 +113,7 @@ void BootHealthService::Run()
         return;
     }
 
-    if (now_ms - stable_window_start_ms_ < kStableWindowMs ||
-        actuator_armed_subscription_.get().armed) {
+    if (now_ms - stable_window_start_ms_ < kStableWindowMs) {
         return;
     }
 
@@ -202,6 +218,55 @@ bool BootHealthService::safety_topics_consistent(uint64_t now_us) const noexcept
            status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROVER &&
            status.valid_nav_states_mask == (manual_mask | termination_mask) &&
            status.can_set_nav_states_mask == manual_mask;
+}
+
+bool BootHealthService::update_output_health(uint64_t now_us) noexcept
+{
+    if (actuator_output_status_subscription_.update()) {
+        const actuator_output_status_s &status =
+            actuator_output_status_subscription_.get();
+        const uint32_t sequence_delta = status.sequence - last_output_sequence_;
+        if (status.sequence == 0U ||
+            (last_output_sequence_ != 0U &&
+             (sequence_delta == 0U || sequence_delta >= 0x80000000U))) {
+            output_snapshot_observed_ = false;
+            return false;
+        }
+        last_output_sequence_ = status.sequence;
+        output_snapshot_observed_ = true;
+    }
+    return output_snapshot_observed_ && output_status_safe(now_us);
+}
+
+bool BootHealthService::output_status_safe(uint64_t now_us) const noexcept
+{
+    const actuator_output_status_s &status =
+        actuator_output_status_subscription_.get();
+    if (status.timestamp == 0U || status.timestamp > now_us ||
+        now_us - status.timestamp > kOutputStatusTimeoutUs ||
+        status.state != actuator_output_status_s::STATE_SAFE_OFF ||
+        !status.backend_ready || !status.safe_off ||
+        status.active_output_mask != 0U) {
+        return false;
+    }
+    for (uint16_t pulse_us : status.pwm_us) {
+        if (pulse_us != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool BootHealthService::confirmation_state_safe() const noexcept
+{
+    const actuator_armed_s &armed = actuator_armed_subscription_.get();
+    const vehicle_status_s &status = vehicle_status_subscription_.get();
+    return !armed.armed && !armed.kill && !armed.termination &&
+           !armed.lockdown &&
+           status.arming_state == vehicle_status_s::ARMING_STATE_DISARMED &&
+           status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
+           status.failure_detector_status == vehicle_status_s::FAILURE_NONE &&
+           !status.failsafe;
 }
 
 void BootHealthService::reset_stable_window(uint64_t now_ms) noexcept

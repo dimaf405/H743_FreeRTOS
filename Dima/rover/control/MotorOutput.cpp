@@ -59,12 +59,12 @@ bool MotorOutput::start()
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (pwm_ == nullptr || !ScheduleEnable()) {
+    reset_runtime_state();
+    if (pwm_ == nullptr) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
 
-    reset_runtime_state();
     const dima::platform::ActuatorPwmResult stopped = pwm_->stop();
     if (stopped != dima::platform::ActuatorPwmResult::Applied) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -72,6 +72,10 @@ bool MotorOutput::start()
     }
     backend_ready_ = true;
     safe_off_ = true;
+    if (!ScheduleEnable()) {
+        enter_error(kEventScheduleFailure);
+        return false;
+    }
 
     if (!bind_parameters()) {
         enter_error(kEventParameterInvalid);
@@ -231,6 +235,9 @@ void MotorOutput::Run()
 bool MotorOutput::bind_parameters() noexcept
 {
     invalidate_parameter_bindings();
+    if (!command_timeout_.bind()) {
+        return false;
+    }
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
         for (std::size_t field = 0U; field < kFieldsPerChannel; ++field) {
             const param_t handle =
@@ -248,6 +255,7 @@ bool MotorOutput::bind_parameters() noexcept
 
 void MotorOutput::invalidate_parameter_bindings() noexcept
 {
+    command_timeout_.invalidate();
     for (auto &channel : parameter_handles_) {
         for (param_t &handle : channel) {
             handle = PARAM_INVALID;
@@ -262,6 +270,9 @@ bool MotorOutput::apply_parameter_snapshot() noexcept
     bool loaded = true;
     {
         px4::AtomicTransaction transaction;
+        loaded = command_timeout_.bound() &&
+                 param_get(command_timeout_.handle(),
+                           &candidate.command_timeout_s) == 0;
         for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
             for (std::size_t field = 0U; field < kFieldsPerChannel; ++field) {
                 const param_t handle = parameter_handles_[channel][field];
@@ -273,6 +284,12 @@ bool MotorOutput::apply_parameter_snapshot() noexcept
         }
     }
     if (!loaded) {
+        parameters_valid_ = false;
+        return false;
+    }
+    if (!finite(candidate.command_timeout_s) ||
+        candidate.command_timeout_s < 0.02F ||
+        candidate.command_timeout_s > 1.0F) {
         parameters_valid_ = false;
         return false;
     }
@@ -310,6 +327,7 @@ bool MotorOutput::apply_parameter_snapshot() noexcept
     }
     candidate.drive_available =
         candidate.right_mask != 0U && candidate.left_mask != 0U;
+    command_timeout_.set(candidate.command_timeout_s);
     parameters_ = candidate;
     parameters_valid_ = true;
     return true;
@@ -362,7 +380,9 @@ bool MotorOutput::observed_snapshot_complete(
     const std::uint64_t timestamp = observed_actuator_armed_.timestamp;
     return timestamp != 0U && timestamp == observed_control_mode_.timestamp &&
            timestamp == observed_vehicle_status_.timestamp &&
-           timestamp <= now_us;
+           timestamp <= now_us &&
+           (!safety_.valid ||
+            timestamp > safety_.actuator_armed.timestamp);
 }
 
 bool MotorOutput::active_snapshot_fresh(std::uint64_t now_us) const noexcept
@@ -380,15 +400,23 @@ bool MotorOutput::safety_permits_output(std::uint64_t now_us) const noexcept
     const actuator_armed_s &armed = safety_.actuator_armed;
     const vehicle_control_mode_s &control = safety_.control_mode;
     const vehicle_status_s &status = safety_.vehicle_status;
+    const std::uint32_t manual_mask =
+        1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
+    const std::uint32_t termination_mask =
+        1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
     return armed.armed && armed.ready_to_arm && !armed.prearmed &&
            !armed.lockdown && !armed.kill && !armed.termination &&
            !armed.in_esc_calibration_mode && control.flag_armed &&
+           !control.flag_multicopter_position_control_enabled &&
            control.flag_control_manual_enabled &&
            !control.flag_control_termination_enabled &&
            !control.flag_control_auto_enabled &&
            !control.flag_control_offboard_enabled &&
            !control.flag_control_position_enabled &&
            !control.flag_control_velocity_enabled &&
+           !control.flag_control_altitude_enabled &&
+           !control.flag_control_climb_rate_enabled &&
+           !control.flag_control_acceleration_enabled &&
            !control.flag_control_attitude_enabled &&
            !control.flag_control_rates_enabled &&
            !control.flag_control_allocation_enabled &&
@@ -396,20 +424,31 @@ bool MotorOutput::safety_permits_output(std::uint64_t now_us) const noexcept
            status.arming_state == vehicle_status_s::ARMING_STATE_ARMED &&
            status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
            status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROVER &&
-           !status.failsafe;
+           status.failure_detector_status == vehicle_status_s::FAILURE_NONE &&
+           status.hil_state == vehicle_status_s::HIL_STATE_OFF &&
+           status.valid_nav_states_mask == (manual_mask | termination_mask) &&
+           status.can_set_nav_states_mask == manual_mask && !status.failsafe;
 }
 
 bool MotorOutput::motor_command_valid(std::uint64_t now_us) const noexcept
 {
-    return have_motor_command_ && actuator_motors_.timestamp != 0U &&
-           actuator_motors_.timestamp_sample != 0U &&
-           actuator_motors_.timestamp_sample <= actuator_motors_.timestamp &&
-           actuator_motors_.timestamp <= now_us &&
-           actuator_motors_.timestamp_sample <= now_us &&
-           (actuator_motors_.reversible_flags & kRequiredReversibleMask) ==
-               kRequiredReversibleMask &&
-           normalized(actuator_motors_.control[0]) &&
-           normalized(actuator_motors_.control[1]);
+    if (!parameters_valid_ || !have_motor_command_ ||
+        actuator_motors_.timestamp == 0U ||
+        actuator_motors_.timestamp_sample == 0U ||
+        actuator_motors_.timestamp_sample > actuator_motors_.timestamp ||
+        actuator_motors_.timestamp > now_us ||
+        actuator_motors_.timestamp_sample > now_us ||
+        (actuator_motors_.reversible_flags & kRequiredReversibleMask) !=
+            kRequiredReversibleMask ||
+        !normalized(actuator_motors_.control[0]) ||
+        !normalized(actuator_motors_.control[1])) {
+        return false;
+    }
+    const std::uint64_t timeout_us = static_cast<std::uint64_t>(
+        parameters_.command_timeout_s * 1000000.0F);
+    return timeout_us > 0U &&
+           now_us - actuator_motors_.timestamp <= timeout_us &&
+           now_us - actuator_motors_.timestamp_sample <= timeout_us;
 }
 
 bool MotorOutput::build_frame(
@@ -464,7 +503,11 @@ bool MotorOutput::publish_status(std::uint64_t now_us,
     actuator_output_status_s status{};
     status.timestamp = now_us;
     status.timestamp_sample = actuator_motors_.timestamp_sample;
-    status.sequence = ++status_sequence_;
+    ++status_sequence_;
+    if (status_sequence_ == 0U) {
+        ++status_sequence_;
+    }
+    status.sequence = status_sequence_;
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
         status.pwm_us[channel] = applied_frame_.pulse_us[channel];
     }
@@ -549,15 +592,30 @@ std::uint16_t MotorOutput::map_normalized(const ChannelConfig &channel,
 bool MotorOutput::safety_negative(const actuator_armed_s &armed) noexcept
 {
     return armed.timestamp != 0U &&
-           (!armed.armed || armed.kill || armed.termination || armed.lockdown);
+           (!armed.armed || !armed.ready_to_arm || armed.prearmed ||
+            armed.kill || armed.termination || armed.lockdown ||
+            armed.in_esc_calibration_mode);
 }
 
 bool MotorOutput::safety_negative(
     const vehicle_control_mode_s &control) noexcept
 {
     return control.timestamp != 0U &&
-           (!control.flag_armed || !control.flag_control_manual_enabled ||
-            control.flag_control_termination_enabled);
+           (!control.flag_armed ||
+            control.flag_multicopter_position_control_enabled ||
+            !control.flag_control_manual_enabled ||
+            control.flag_control_auto_enabled ||
+            control.flag_control_offboard_enabled ||
+            control.flag_control_position_enabled ||
+            control.flag_control_velocity_enabled ||
+            control.flag_control_altitude_enabled ||
+            control.flag_control_climb_rate_enabled ||
+            control.flag_control_acceleration_enabled ||
+            control.flag_control_attitude_enabled ||
+            control.flag_control_rates_enabled ||
+            control.flag_control_allocation_enabled ||
+            control.flag_control_termination_enabled ||
+            control.source_id != vehicle_status_s::NAVIGATION_STATE_MANUAL);
 }
 
 bool MotorOutput::safety_negative(const vehicle_status_s &status) noexcept
@@ -565,6 +623,9 @@ bool MotorOutput::safety_negative(const vehicle_status_s &status) noexcept
     return status.timestamp != 0U &&
            (status.arming_state != vehicle_status_s::ARMING_STATE_ARMED ||
             status.nav_state != vehicle_status_s::NAVIGATION_STATE_MANUAL ||
+            status.vehicle_type != vehicle_status_s::VEHICLE_TYPE_ROVER ||
+            status.failure_detector_status != vehicle_status_s::FAILURE_NONE ||
+            status.hil_state != vehicle_status_s::HIL_STATE_OFF ||
             status.failsafe);
 }
 

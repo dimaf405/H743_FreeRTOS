@@ -6,6 +6,7 @@
 #include "fdcan.h"
 #include "gpio.h"
 #include "i2c.h"
+#include "motor_pwm.h"
 #include "sdmmc.h"
 #include "spi.h"
 #include "stm32h7xx.h"
@@ -58,5 +59,10 @@ void board_init(void)
   MX_TIM5_Init();
   dima_boot_stage_set(DIMA_BOOT_STAGE_TIM8);
   MX_TIM8_Init();
+  dima_boot_stage_set(DIMA_BOOT_STAGE_MOTOR_PWM_SAFE);
+  if (board_motor_pwm_stop() != BOARD_MOTOR_PWM_APPLIED)
+  {
+    Error_Handler();
+  }
   dima_boot_stage_set(DIMA_BOOT_STAGE_BOARD_READY);
 }
