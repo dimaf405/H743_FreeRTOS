@@ -61,7 +61,7 @@ Dima/
 ├── platform/freertos/              Task、同步、Heap 与 transaction 后端
 ├── platform/stm32h7/               MPU/cache/DMA/Flash/时钟/USB/串口后端
 ├── middleware/                     lifecycle、parameters、uORB、WorkQueue
-├── modules/                        Parameter、Log、boot_health、hello_world、RC、安全、EKF2
+├── modules/                        Parameter、Log、boot_health、RC、安全、EKF2
 ├── lib/                            motor、rover_control 与公共算法库
 ├── messages/
 └── rover/                          唯一 Rover 产品域；组合根、control、navigation

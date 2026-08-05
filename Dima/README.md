@@ -6,7 +6,7 @@
 
 - `application/`：应用任务入口和启动胶水。
 - `rover/`：唯一 Rover 产品域，包含产品装配以及后续 `control/`、`navigation/` 专属功能。
-- `modules/`：Parameter、Log、BootHealth、HelloWorld、RC、安全和 Estimator 等可复用运行模块。
+- `modules/`：Parameter、Log、BootHealth、RC、安全和 Estimator 等可复用运行模块。
 - `adapters/`：只依赖公共 capability 的 USB Console 等外部协议适配。
 - `middleware/`：生命周期、uORB、WorkQueue、Parameter、Event、Perf 和 Logging。
 - `platform/api/`：不暴露 OS、MCU 或厂商类型的公共 capability 契约。
@@ -22,6 +22,7 @@
 - `platform/freertos` 不依赖 STM32/HAL/CMSIS；`platform/stm32h7` 不依赖 FreeRTOS 或业务模块。
 - `Boards/H743/Src/platform_composition.cpp` 是具体后端与产品 capability 的唯一组合根。
 - CubeMX 生成区只保留初始化和胶水，不承载产品业务逻辑。
+- USB CDC 是系统调试日志与维护命令口，不运行周期性示例输出；实时路径只上报固定结构事件，由 LP 日志服务有界格式化和发送。
 - `make check-architecture` 强制检查源码标识、硬件操作所有权和各层私有 include 集；`firmware`、`verify`、`dima_rover` 均以该门禁为前置条件。
 - 新增自研应用代码不得恢复顶层 `App/` 目录。
 

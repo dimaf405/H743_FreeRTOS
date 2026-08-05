@@ -59,7 +59,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | 职责 | 当前本地位置 | 状态 |
 |---|---|---|
 | 启动壳、C ABI 入口、appMainTask | `Dima/application/` | RELOCATED / TARGET VERIFY PASS |
-| BootHealth、HelloWorld | `Dima/modules/boot_health/`、`Dima/modules/hello_world/` | RELOCATED / TARGET VERIFY PASS |
+| BootHealth、USB 调试日志 | `Dima/modules/boot_health/`、`Dima/modules/logging/` | ADAPTED / TARGET REVERIFY PENDING |
 | USB Console 协议适配 | `Dima/adapters/usb_console/` | RELOCATED / PLATFORM ISOLATED |
 | 生命周期 | `Dima/middleware/lifecycle/` | RELOCATED / TARGET VERIFY PASS |
 | 公共 capability 与时间契约 | `Dima/platform/api/` | DIMA CONTRACT |
@@ -100,7 +100,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | PX4 参数命令行为与 USB 接入需求 | `Dima/adapters/usb_console/`、Parameter Service | CDC ISR 仅写固定 1024-byte SPSC Ring并立即恢复接收；瞬时重挂接失败由 LP 服务重试；任务侧解析和执行 | ADAPTED |
 | PX4 flashparams/flashfs 思路 | `Dima/middleware/parameters/ParameterJournal.*`、`Dima/platform/stm32h7/FlashDevice.cpp` | 平台无关 Journal 与 raw Flash device 分离；保持 Bank 2 最后 128 KiB、v1 字节格式、CRC/Sequence/Commit Marker 和 ENOSPC；ECC 安全读、实际修改范围 cache 一致性及通用 Flash BusFault hook 归 MCU 后端 | ADAPTED / PLATFORM ISOLATED |
 | Rover Parameter 定义 | `Dima/middleware/parameters/definitions/` | 导入 24 项 `RO_*`/`RD_*` 参数，名称、默认值、单位和元数据保持 PX4 来源 | ADAPTED |
-| `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp` | `Dima/middleware/logging/` | 保留 PX4 日志宏和默认输出格式，固定 Ring + LP USB flush | ADAPTED |
+| `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp` | `Dima/middleware/logging/`、`Dima/modules/logging/` | 保留 PX4 日志宏和默认输出格式；固定 Log Ring，LP 服务有界转储 Event Ring 并刷新 USB；移除 HelloWorld 与示例心跳 | ADAPTED / TARGET REVERIFY PENDING |
 | `src/lib/rc/sbus.h`、`src/lib/rc/sbus.cpp` | `Dima/lib/rc/sbus.hpp`、`Dima/lib/rc/sbus.cpp` | 保留 25-byte 帧、16 路 11-bit 通道、数字 17/18、4 ms 重同步、Failsafe/Frame-Lost 与 PX4 数值映射；移除 POSIX 串口和 SBUS 输出 | ADAPTED |
 | `src/drivers/rc/sbus_rc/SbusRc.hpp`、`SbusRc.cpp` | `Dima/modules/rc/SbusRc.*` | 保留 WorkItem 接收、锁定、重试和 `input_rc` 发布流程；仅依赖公共 SbusInput 与 ISR-safe callback | ADAPTED / PLATFORM ISOLATED |
 | PX4 串口配置与板级 RC 输入行为 | `Dima/platform/stm32h7/SbusUart.cpp`、`DmaMemory.cpp` | 适配 STM32H743 UART RXINV、DMA1 Stream2、DMAMUX 和多 UART 参数选择；64-byte non-cacheable DMA Buffer 在 ISR 复制到 256 项 CPU-only SPSC Ring，overflow/UART/restart 同时推进接收 epoch 并清 parser | DIMA BACKEND / OWNERSHIP GATED |

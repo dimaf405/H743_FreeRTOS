@@ -12,13 +12,6 @@ $(error BOARD_SD_INIT_AT_BOOT must be 0 or 1)
 endif
 endif
 
-APP_HELLO_WORLD_ENABLED ?= 1
-ifneq ($(APP_HELLO_WORLD_ENABLED),0)
-ifneq ($(APP_HELLO_WORLD_ENABLED),1)
-$(error APP_HELLO_WORLD_ENABLED must be 0 or 1)
-endif
-endif
-
 PYTHON ?= python3
 BUILD_PROGRESS_TOOL ?= tools/build_progress.py
 DIMA_PROGRESS_STATE ?=
@@ -27,33 +20,8 @@ DIMA_PROGRESS_NO_COLOR_FLAG = $(if $(strip $(NO_COLOR)),--no-color,)
 DIMA_PROGRESS_RUN = $(PYTHON) $(BUILD_PROGRESS_TOOL) run \
 	--state "$(DIMA_PROGRESS_STATE)" --plan-token DIMA_PROGRESS_STEP_V1 \
 	$(DIMA_PROGRESS_VERBOSE_FLAG) $(DIMA_PROGRESS_NO_COLOR_FLAG)
-APP_HELLO_WORLD_INTERVAL_MS ?= 1000
-APP_HELLO_WORLD_INTERVAL_RAW := $(value APP_HELLO_WORLD_INTERVAL_MS)
-unexport APP_HELLO_WORLD_INTERVAL_MS
-export APP_HELLO_WORLD_INTERVAL_RAW
-APP_HELLO_WORLD_INTERVAL_NON_DIGITS := $(subst 0,,$(subst 1,,$(subst 2,,$(subst 3,,$(subst 4,,$(subst 5,,$(subst 6,,$(subst 7,,$(subst 8,,$(subst 9,,$(APP_HELLO_WORLD_INTERVAL_RAW)))))))))))
-ifneq ($(words $(APP_HELLO_WORLD_INTERVAL_RAW)),1)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
-endif
-ifneq ($(strip $(APP_HELLO_WORLD_INTERVAL_NON_DIGITS)),)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
-endif
-strip_interval_leading_zeros = $(if $(filter 0%,$(1)),$(call strip_interval_leading_zeros,$(patsubst 0%,%,$(1))),$(1))
-APP_HELLO_WORLD_INTERVAL_CANONICAL := $(call strip_interval_leading_zeros,$(APP_HELLO_WORLD_INTERVAL_RAW))
-ifeq ($(APP_HELLO_WORLD_INTERVAL_CANONICAL),)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
-endif
-APP_HELLO_WORLD_INTERVAL_VALIDATED := $(shell APP_HELLO_WORLD_INTERVAL_RAW=$(APP_HELLO_WORLD_INTERVAL_CANONICAL) $(PYTHON) tools/validate_hello_world_interval.py)
-ifeq ($(strip $(APP_HELLO_WORLD_INTERVAL_VALIDATED)),)
-$(error APP_HELLO_WORLD_INTERVAL_MS must be in 1..4294967)
-endif
-
-DIMA_PRODUCT_DEFS := \
-	-DAPP_HELLO_WORLD_ENABLED=$(APP_HELLO_WORLD_ENABLED) \
-	-DAPP_HELLO_WORLD_INTERVAL_MS=$(APP_HELLO_WORLD_INTERVAL_VALIDATED)
 C_DEFS += -DH743_APPLICATION_IMAGE \
-	-DBOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT) \
-	$(DIMA_PRODUCT_DEFS)
+	-DBOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT)
 DIMA_COMMON_HEADER_DIRS := \
 	Dima \
 	Dima/application \
@@ -199,7 +167,6 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/modules/rc/RCUpdate.cpp \
 	Dima/modules/rc/ManualControl.cpp \
 	Dima/modules/safety/Commander.cpp \
-	Dima/modules/hello_world/hello_world.cpp \
 	Dima/modules/boot_health/boot_health.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
@@ -209,7 +176,6 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/parameters/autosave.cpp \
 	Dima/lib/tinybson/tinybson.cpp \
 	Dima/middleware/parameters/flashparams/flashparams.cpp \
-	Dima/messages/app_heartbeat.cpp \
 	Dima/messages/parameter_update.cpp \
 	Dima/messages/input_rc.cpp \
 	Dima/messages/rc_channels.cpp \
@@ -387,8 +353,6 @@ intellisense: $(COMPILE_COMMANDS_TOOL)
 		--output "$(COMPILE_COMMANDS_OUTPUT)" \
 		$(if $(strip $(GCC_PATH)),--gcc-path "$(GCC_PATH)",) \
 		--make-variable "BOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT)" \
-		--make-variable "APP_HELLO_WORLD_ENABLED=$(APP_HELLO_WORLD_ENABLED)" \
-		--make-variable "APP_HELLO_WORLD_INTERVAL_MS=$(APP_HELLO_WORLD_INTERVAL_VALIDATED)" \
 		--make-variable "DEBUG=$(DEBUG)"
 
 firmware: check-architecture \

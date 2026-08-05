@@ -47,7 +47,6 @@ INIT_ARRAY_ALLOWLIST = {
     "_GLOBAL__sub_I__ZN4dima10parameters6detail16transaction_lockEv",
     "_GLOBAL__sub_I___orb_action_request",
     "_GLOBAL__sub_I___orb_actuator_armed",
-    "_GLOBAL__sub_I___orb_app_heartbeat",
     "_GLOBAL__sub_I___orb_input_rc",
     "_GLOBAL__sub_I___orb_manual_control_setpoint",
     "_GLOBAL__sub_I___orb_manual_control_switches",
@@ -59,9 +58,14 @@ INIT_ARRAY_ALLOWLIST = {
 FINI_ARRAY_ALLOWLIST = {"__do_global_dtors_aux"}
 
 FORBIDDEN_APPLICATION_SYMBOLS = {
+    "__orb_app_heartbeat",
     "dima_boot_diagnostics_capture_pending",
     "dima_boot_diagnostics_store_enable",
     "dima_boot_diagnostics_store_pending",
+}
+FORBIDDEN_APPLICATION_FRAGMENTS = {
+    "HelloWorld",
+    "app_heartbeat",
 }
 FORBIDDEN_ACTUATOR_SYMBOLS = {
     "HAL_TIM_PWM_Start",
@@ -532,11 +536,14 @@ def verify_forbidden_symbols(elf: Elf32) -> None:
         symbol.name for symbol in elf.symbols
         if symbol.defined and symbol.name in forbidden_names
     })
+    forbidden_fragments = (
+        FORBIDDEN_APPLICATION_FRAGMENTS | FORBIDDEN_ACTUATOR_FRAGMENTS
+    )
     present_fragments = sorted({
         fragment
         for symbol in elf.symbols
         if symbol.defined
-        for fragment in FORBIDDEN_ACTUATOR_FRAGMENTS
+        for fragment in forbidden_fragments
         if fragment in symbol.name
     })
     if present_names or present_fragments:

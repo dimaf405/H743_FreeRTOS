@@ -405,6 +405,52 @@ def scan_rover_root_contract(violations: list[Violation]) -> None:
                 ))
 
 
+def scan_debug_console_contract(violations: list[Violation]) -> None:
+    legacy_paths = (
+        ROOT / "Dima/modules/hello_world",
+        ROOT / "Dima/messages/app_heartbeat.cpp",
+        ROOT / "Dima/messages/app_heartbeat.hpp",
+        ROOT / "tools/validate_hello_world_interval.py",
+    )
+    for path in legacy_paths:
+        if path.exists():
+            violations.append(Violation(
+                path, 1, "R043",
+                "HelloWorld and app_heartbeat must remain removed",
+            ))
+
+    project_make = ROOT / "make/project.mk"
+    if project_make.is_file():
+        text = project_make.read_text(encoding="utf-8")
+        for token in ("APP_HELLO_WORLD", "app_heartbeat", "hello_world"):
+            if token in text:
+                violations.append(Violation(
+                    project_make, line_for(text, token), "R044",
+                    f"legacy debug example token '{token}' is still built",
+                ))
+
+    require_literals(
+        ROOT / "Dima/rover/ApplicationContext.cpp",
+        (
+            ("dima::events::reset();", "R045",
+             "Application Runtime must reset the Event Ring"),
+            ("dima::logging::reset();", "R046",
+             "Application Runtime must reset the Log Ring"),
+        ), violations,
+    )
+    require_literals(
+        ROOT / "Dima/modules/logging/LogService.cpp",
+        (
+            ("dima::events::pop(event)", "R047",
+             "USB debug logger must consume structured events"),
+            ("kMaxEventsPerRun", "R048",
+             "structured event logging must remain bounded"),
+            ("USB debug logging ready", "R049",
+             "USB debug logger startup record is missing"),
+        ), violations,
+    )
+
+
 def scan_runtime_contracts(violations: list[Violation]) -> None:
     requirements = {
         ROOT / "Dima/middleware/parameters/param.h": (
@@ -756,6 +802,7 @@ def main() -> int:
     scan_hardware_ownership(violations)
     scan_build_isolation(violations)
     scan_rover_root_contract(violations)
+    scan_debug_console_contract(violations)
     scan_runtime_contracts(violations)
     scan_fault_ownership(violations)
     scan_clock_contract(violations)

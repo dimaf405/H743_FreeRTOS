@@ -214,7 +214,7 @@ Secondary；Bootloader 会拒绝 `-n 1`，从实现层禁止 USB 擦写正在运
 
 6. 复位后保持供电稳定，等待 MCUboot 完成 scratch swap 并启动新应用。不要在交换 Flash 的过程中断电。
 
-7. 新应用启动 FreeRTOS 和 USB 后，由 HP 工作队列上的 `BootHealthService` 开始连续 5 秒稳定窗口。只有 Parameter Core ready、Commander healthy，并且 `actuator_armed → vehicle_control_mode → vehicle_status` 三个安全 Topic 具有相同时间戳、状态一致、时间新鲜且相对上一组严格前进，窗口才继续累计；任一条件失效都从零重新计时。HelloWorld 和 `app_heartbeat` 不参与确认，`APP_HELLO_WORLD_ENABLED=0` 不改变该契约。窗口满足后仍须处于 DISARMED 且 Flash 非 busy，才写入 MCUboot `image_ok`；ARMED 或 FlashBusy 只返回 Deferred，并在条件解除后重试。它不是 `vTaskDelay(5000)` 后的无条件确认。
+7. 新应用启动 FreeRTOS 和 USB 后，由 HP 工作队列上的 `BootHealthService` 开始连续 5 秒稳定窗口。只有 Parameter Core ready、Commander healthy，并且 `actuator_armed → vehicle_control_mode → vehicle_status` 三个安全 Topic 具有相同时间戳、状态一致、时间新鲜且相对上一组严格前进，窗口才继续累计；任一条件失效都从零重新计时。系统不创建示例心跳 Topic。窗口满足后仍须处于 DISARMED 且 Flash 非 busy，才写入 MCUboot `image_ok`；ARMED 或 FlashBusy 只返回 Deferred，并在条件解除后重试。它不是 `vTaskDelay(5000)` 后的无条件确认。
 
 8. 如需验收确认状态，复位并在 3 秒窗口内再次执行 `image list`，确认运行镜像已经是新版本且为 confirmed/permanent 状态。
 
@@ -282,7 +282,7 @@ ROM Bootloader 的 USB FS DFU 使用 HSI48 + CRS，不依赖外部 HSE；芯片�
 - [ ] 正常复位时 BOOT0 为低，设备先出现约 3 秒 MCUboot CDC 窗口，随后启动应用。
 - [ ] 3 秒内执行 `mcumgr ... image list` 后，设备持续停留在 recovery。
 - [ ] `image upload -n 2 build/H743_FreeRTOS_signed.bin`、`image test <hash>`、`reset` 全流程通过。
-- [ ] 新镜像运行 5 秒以上且 `app_heartbeat` 正常发布后保持不回滚。
+- [ ] 新镜像的 Parameter、Commander 和三个安全 Topic 连续健康 5 秒以上后保持不回滚。
 - [ ] 在 5 秒内人工复位后，旧镜像能够恢复。
 - [ ] 擦除或破坏 Primary 镜像后，MCUboot 能永久停留在 USB recovery。
 - [ ] BOOT0 拉高并硬复位后，STM32CubeProgrammer 能通过同一 USB 口识别 ROM DFU。
@@ -295,4 +295,4 @@ ROM Bootloader 的 USB FS DFU 使用 HSI48 + CRS，不依赖外部 HSE；芯片�
 
 - ST AN2606 Rev 70，STM32H74xxx/75xxx System Memory Bootloader、Pattern 10、USB DFU 引脚/供电和 ROM 版本限制。
 - ST DS12110 Rev 11，STM32H743VI LQFP100 pinout 与 USB OTG FS 电气要求。
-- 本工程 `Bootloader/Src/main.c`、`Bootloader/Src/flash_map_backend.c`、`Dima/platform/stm32h7/BootControl.cpp`、`Dima/platform/stm32h7/flash_bank1.c`、`Dima/modules/boot_health/boot_health.cpp`、`Dima/messages/app_heartbeat.hpp`、`Boards/H743/Inc/boot_layout.h` 和根 Makefile。
+- 本工程 `Bootloader/Src/main.c`、`Bootloader/Src/flash_map_backend.c`、`Dima/platform/stm32h7/BootControl.cpp`、`Dima/platform/stm32h7/flash_bank1.c`、`Dima/modules/boot_health/boot_health.cpp`、Commander 三个安全消息、`Boards/H743/Inc/boot_layout.h` 和根 Makefile。

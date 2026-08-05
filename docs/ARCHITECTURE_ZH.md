@@ -19,7 +19,7 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── platform/stm32h7/         MPU/cache/DMA/Flash/时钟/USB/串口后端
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
-├── modules/                  Parameter、Log、boot_health、hello_world、RC、安全、EKF2
+├── modules/                  Parameter、Log、boot_health、RC、安全、EKF2
 ├── lib/                      motor、rover_control 与公共算法库
 ├── messages/                 共享消息契约
 └── rover/                    唯一 Rover 产品域（ApplicationContext、control、navigation）
@@ -94,7 +94,7 @@ USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 跨 Runtime：Commander Termination、D3 Fault 记录和明确标注的累计诊断
 ```
 
-Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter Journal/Core → Module registration`；启动顺序固定为 `Parameter → Log → Commander → SBUS → RCUpdate → ManualControl → HelloWorld（启用时）→ BootHealth`。关闭时严格反向停止生产者和模块，再按 `Parameter Core/Journal → uORB → WorkQueue → Console` 释放 Runtime 资源。
+Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter Journal/Core → Module registration`；启动顺序固定为 `Parameter → Log → Commander → SBUS → RCUpdate → ManualControl → BootHealth`。关闭时严格反向停止生产者和模块，再按 `Parameter Core/Journal → uORB → WorkQueue → Console` 释放 Runtime 资源。
 
 - `ApplicationContext` 只接受 owner task 执行 init/start/shutdown；部分初始化和 Error 状态按成功步骤逆序回滚，清理失败时不得伪装为 Stopped 或重新 init。
 - `Param<T>` 构造不访问 Parameter Core；模块每次 start 必须 `bind()`，shutdown 清除 ready、used、unsaved、值 cache、动态 Layer、callback 和运行期同步对象。Journal 下次 initialize/load 必须重新扫描并复验 Header、Commit Marker 和 payload CRC。
@@ -119,7 +119,7 @@ Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter J
 
 ## 6. 消息、参数和状态估计边界
 
-- 生产消息接口统一采用 uORB 兼容 Publication/Subscription；`app_heartbeat` 使用生产 uORB 链。
+- 生产消息接口统一采用 uORB 兼容 Publication/Subscription；启动健康只观察 Commander 三个安全 Topic，不建立示例心跳 Topic。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
 - 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。
 - 参数核心只依赖公共 execution/memory/synchronization 接口；`ParameterJournal` 与 STM32H7 raw Flash device 分离，保持 `0x081E0000/128 KiB`、Journal v1 字节格式和 ENOSPC 语义不变。

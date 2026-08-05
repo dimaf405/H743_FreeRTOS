@@ -11,10 +11,6 @@
 #include "safety/Commander.hpp"
 #include "lifecycle/module_manager.hpp"
 
-#if APP_HELLO_WORLD_ENABLED
-#include "hello_world/hello_world.hpp"
-#endif
-
 namespace dima::rover {
 
 class ApplicationContext {
@@ -55,9 +51,6 @@ private:
     dima::modules::rc::SbusRc sbus_rc_;
     dima::modules::rc::RCUpdate rc_update_{};
     dima::modules::rc::ManualControl manual_control_{};
-#if APP_HELLO_WORLD_ENABLED
-    dima::modules::hello_world::HelloWorld hello_world_;
-#endif
     dima::platform::TaskHandle owner_task_{};
     RuntimeState runtime_state_{RuntimeState::Stopped};
     bool console_initialized_{false};
@@ -72,9 +65,6 @@ private:
     bool sbus_started_{false};
     bool rc_update_started_{false};
     bool manual_control_started_{false};
-#if APP_HELLO_WORLD_ENABLED
-    bool hello_started_{false};
-#endif
 };
 
 ApplicationContext &application_context() noexcept;

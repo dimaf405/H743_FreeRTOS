@@ -1,5 +1,6 @@
 #include "ApplicationContext.hpp"
 
+#include "events/events.hpp"
 #include "logging/logging.hpp"
 #include "uorb/uORB.hpp"
 #include "work_queue/WorkQueue.hpp"
@@ -57,12 +58,6 @@ bool ApplicationContext::register_modules() noexcept
         module_manager_.reset();
         return false;
     }
-#if APP_HELLO_WORLD_ENABLED
-    if (!module_manager_.register_module(hello_world_)) {
-        module_manager_.reset();
-        return false;
-    }
-#endif
     if (!module_manager_.register_module(boot_health_)) {
         module_manager_.reset();
         return false;
@@ -99,6 +94,8 @@ bool ApplicationContext::release_runtime_resources() noexcept
         }
         console_initialized_ = false;
     }
+    dima::events::reset();
+    dima::logging::reset();
     return true;
 }
 
@@ -123,6 +120,9 @@ bool ApplicationContext::init() noexcept
     }
 
     runtime_state_ = RuntimeState::Initializing;
+    dima::events::reset();
+    dima::logging::reset();
+    PX4_INFO("Application Runtime initialization started");
     services_.diagnostics.set_stage(dima::platform::StartupStage::UsbInit);
     console_initialized_ = true;
     if (!services_.console.initialize()) {
@@ -165,6 +165,7 @@ bool ApplicationContext::init() noexcept
     runtime_state_ = RuntimeState::Initialized;
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::ApplicationInitialized);
+    PX4_INFO("Application Runtime initialized");
     return true;
 }
 
@@ -198,6 +199,7 @@ bool ApplicationContext::start() noexcept
         (void)rollback_start();
         return false;
     }
+    PX4_INFO("Parameter service started");
 
     services_.diagnostics.set_stage(dima::platform::StartupStage::LogStart);
     log_started_ = module_manager_.start(log_service_);
@@ -213,21 +215,15 @@ bool ApplicationContext::start() noexcept
         (void)rollback_start();
         return false;
     }
+    PX4_INFO("Commander started");
 
     // RC 链故障只降级手动输入，不能拖垮参数、日志和恢复服务。
     services_.diagnostics.set_stage(dima::platform::StartupStage::RcStart);
     if (!start_rc_chain()) {
-        PX4_WARN("Dima RC chain unavailable; actuator output remains disabled");
+        PX4_ERR("RC chain unavailable; actuator output remains inhibited");
+    } else {
+        PX4_INFO("RC input chain started");
     }
-
-#if APP_HELLO_WORLD_ENABLED
-    services_.diagnostics.set_stage(dima::platform::StartupStage::HelloStart);
-    hello_started_ = module_manager_.start(hello_world_);
-    if (!hello_started_) {
-        (void)rollback_start();
-        return false;
-    }
-#endif
 
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::BootHealthStart);
@@ -238,6 +234,7 @@ bool ApplicationContext::start() noexcept
     }
 
     runtime_state_ = RuntimeState::Running;
+    PX4_INFO("Application Runtime running");
     return true;
 }
 
@@ -293,13 +290,6 @@ bool ApplicationContext::stop_started_modules() noexcept
         boot_started_ = !result;
         stopped = result && stopped;
     }
-#if APP_HELLO_WORLD_ENABLED
-    if (hello_started_) {
-        const bool result = module_manager_.stop(hello_world_);
-        hello_started_ = !result;
-        stopped = result && stopped;
-    }
-#endif
     stopped = stop_rc_chain() && stopped;
     if (commander_started_) {
         const bool result = module_manager_.stop(commander_);
