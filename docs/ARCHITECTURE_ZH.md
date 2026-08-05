@@ -17,10 +17,10 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── platform/freertos/        FreeRTOS 平台适配（libc、platform_time）
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
-├── modules/                  Parameter、Log、boot_health、hello_world、RC、安全、Rover、EKF2
+├── modules/                  Parameter、Log、boot_health、hello_world、RC、安全、EKF2
 ├── lib/                      motor、rover_control 与公共算法库
 ├── messages/                 共享消息契约
-└── rover/                    Rover 产品配置、模式和组合根
+└── rover/                    唯一 Rover 产品域（ApplicationContext、control、navigation）
 
 Boards/H743/                  板级初始化、Flash 布局和外设适配
 Core/                         CubeMX/HAL 应用生成层
@@ -36,8 +36,9 @@ docs/                         计划、架构、ADR、来源和维护文档
 
 ## 3. 依赖规则
 
-- `Dima/rover` 是最终产品装配层，只保留 Rover 配置与 `ApplicationContext`，并装配所需的 Dima 和上游兼容模块。
+- `Dima/rover` 是唯一 Rover 产品域，保留 `ApplicationContext` 产品装配根，并在 `control/`、`navigation/` 承载 Rover 专属功能。
 - `Dima/modules` 承载具有独立生命周期和运行状态的功能块；Parameter、Log 等系统功能与 RC、Commander 一样实现统一的 ModuleBase 契约。
+- `Dima/modules` 和 `Dima/middleware` 禁止反向依赖 `Dima/rover`。
 - `Dima/modules` 可依赖 Dima middleware、messages、lib 和明确的平台适配接口，不直接包含 STM32 HAL 全局句柄。
 - `Dima/lib` 保持算法属性，不依赖 HAL、USB、MCUboot 或具体板卡。
 - `Dima/middleware` 直接拥有 lifecycle、Parameter、uORB、WorkQueue、Event、Perf 和 Logging，不再依赖顶层 `App`。

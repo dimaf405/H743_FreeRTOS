@@ -5,8 +5,8 @@
 ## 目录职责
 
 - `application/`：应用任务入口和启动胶水。
-- `rover/`：Rover 产品配置与装配根。
-- `modules/`：Parameter、Log、BootHealth、HelloWorld、RC、安全、Rover 和 Estimator 模块。
+- `rover/`：唯一 Rover 产品域，包含产品装配以及后续 `control/`、`navigation/` 专属功能。
+- `modules/`：Parameter、Log、BootHealth、HelloWorld、RC、安全和 Estimator 等可复用运行模块。
 - `adapters/`：USB Console、MCUboot 等外部接口适配。
 - `middleware/`：生命周期、uORB、WorkQueue、Parameter、Event、Perf 和 Logging。
 - `platform/freertos/`：FreeRTOS、时间、内存、Flash 和 libc 适配。

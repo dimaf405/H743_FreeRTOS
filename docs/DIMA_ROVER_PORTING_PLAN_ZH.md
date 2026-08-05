@@ -58,10 +58,10 @@ Dima/
 ├── adapters/                       USB Console、MCUboot 适配
 ├── platform/freertos/              libc、platform_time 与 FreeRTOS 平台适配
 ├── middleware/                     lifecycle、parameters、uORB、WorkQueue
-├── modules/                        Parameter、Log、boot_health、hello_world、RC、安全、Rover、EKF2
+├── modules/                        Parameter、Log、boot_health、hello_world、RC、安全、EKF2
 ├── lib/                            motor、rover_control 与公共算法库
 ├── messages/
-└── rover/                          Rover 配置与 ApplicationContext 组合根
+└── rover/                          唯一 Rover 产品域；组合根、control、navigation
 
 Boards/H743/  Core/  Drivers/  Middlewares/  USB_DEVICE/  Bootloader/
 ```
@@ -189,7 +189,7 @@ Storage       128 KiB
 
 ### 阶段 5：差速执行器链
 
-移植 RoverDifferential、FunctionMotors、MixingOutput 和 OutputLimit，接入六路 PWM，实现 Manual、倒车、普通转弯和零速原地旋转。保留成熟的 armed 门控、failsafe 输出、限幅、反向、slew 和解锁 ramp。
+在 `Dima/rover/control/` 移植 RoverDifferential、FunctionMotors、MixingOutput 和 OutputLimit，接入六路 PWM，实现 Manual、倒车、普通转弯和零速原地旋转。保留成熟的 armed 门控、failsafe 输出、限幅、反向、slew 和解锁 ramp。
 
 ### 阶段 6：传感器层
 
@@ -231,7 +231,7 @@ Wheel Encoder 不直接侵入 EKF Core；先通过独立 Dima Odometry Adapter �
 
 ### 阶段 9：Position、Waypoint、Reverse 与 PivotTurn
 
-接入 Position、路径前视、航点、倒车、停车和原地旋转管理。PivotTurn 使用独立状态过程，不使用零速下无定义的曲率表达。
+在 `Dima/rover/navigation/` 接入 Position、路径前视、航点、倒车、停车和原地旋转管理。PivotTurn 使用独立状态过程，不使用零速下无定义的曲率表达。
 
 ### 阶段 10：MAVLink、日志与产品化收敛
 
