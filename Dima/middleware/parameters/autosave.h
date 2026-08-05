@@ -34,34 +34,32 @@
 #pragma once
 
 #include "containers/atomic.h"
+#include "platform/api/Time.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
-#include "freertos/hrt.hpp"
 
 class ParamAutosave : public px4::ScheduledWorkItem
 {
 public:
-    using WriteAllowedCallback = bool (*)();
-
-    ParamAutosave() noexcept;
+    explicit ParamAutosave(
+        dima::platform::ArmedFlashCoordinator &armed_flash) noexcept;
     void request() noexcept;
     void enable(bool enable) noexcept;
     void stop() noexcept;
     int saveNow(bool blocking = true) noexcept;
-    void setWriteAllowedCallback(WriteAllowedCallback callback) noexcept { _write_allowed = callback; }
     bool enabled() const noexcept;
     bool pending() const noexcept { return _scheduled.load(); }
     hrt_abstime lastAutosave() const noexcept;
 
 private:
     void Run() override;
-    bool writeAllowed() const noexcept { return !_write_allowed || _write_allowed(); }
+    bool writeAllowed() const noexcept { return !_armed_flash.armed(); }
 
+    dima::platform::ArmedFlashCoordinator &_armed_flash;
     hrt_abstime _last_attempt_timestamp{0};
     hrt_abstime _last_success_timestamp{0};
     px4::atomic_bool _scheduled{false};
     int _retry_count{0};
     bool _disabled{false};
-    WriteAllowedCallback _write_allowed{nullptr};
 };
 
 // Upstream path: src/lib/parameters/autosave.h @ d6f12ad1

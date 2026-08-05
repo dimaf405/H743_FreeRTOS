@@ -35,7 +35,7 @@
 
 #include "ParamLayer.h"
 #include "containers/atomic.h"
-#include "freertos/dima_platform.hpp"
+#include "platform/api/Platform.hpp"
 
 #include <cstring>
 #include <cstdlib>

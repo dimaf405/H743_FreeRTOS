@@ -27,8 +27,10 @@ void reportStorageFull() noexcept
 }
 } // namespace
 
-ParamAutosave::ParamAutosave() noexcept
-    : ScheduledWorkItem("param-autosave", px4::wq_configurations::lp_default)
+ParamAutosave::ParamAutosave(
+    dima::platform::ArmedFlashCoordinator &armed_flash) noexcept
+    : ScheduledWorkItem("param-autosave", px4::wq_configurations::lp_default),
+      _armed_flash(armed_flash)
 {
 }
 
@@ -77,6 +79,10 @@ void ParamAutosave::stop() noexcept
         _scheduled.store(false);
     }
     ScheduleCancelAndDrain();
+    px4::AtomicTransaction transaction;
+    _last_attempt_timestamp = 0U;
+    _last_success_timestamp = 0U;
+    _retry_count = 0;
 }
 
 bool ParamAutosave::enabled() const noexcept

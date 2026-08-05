@@ -3,11 +3,12 @@
 #include "boot_health/boot_health.hpp"
 #include "logging/LogService.hpp"
 #include "parameters/ParameterService.hpp"
+#include "parameters/ParameterJournal.hpp"
+#include "platform/api/Platform.hpp"
 #include "rc/ManualControl.hpp"
 #include "rc/RCUpdate.hpp"
 #include "rc/SbusRc.hpp"
 #include "safety/Commander.hpp"
-#include "freertos/sbus_uart_backend.hpp"
 #include "lifecycle/module_manager.hpp"
 
 #if APP_HELLO_WORLD_ENABLED
@@ -18,29 +19,52 @@ namespace dima::rover {
 
 class ApplicationContext {
 public:
-    ApplicationContext() noexcept;
+    explicit ApplicationContext(dima::platform::Services &services) noexcept;
 
     bool init() noexcept;
     bool start() noexcept;
-    void stop() noexcept;
+    bool shutdown() noexcept;
 
 private:
-    static bool commander_allows_flash_write() noexcept;
-    bool start_rc_chain() noexcept;
-    void stop_rc_chain() noexcept;
+    enum class RuntimeState : std::uint8_t {
+        Stopped,
+        Initializing,
+        Initialized,
+        Starting,
+        Running,
+        Stopping,
+        Error,
+    };
 
+    bool owner_call(bool bind_if_unset) noexcept;
+    bool register_modules() noexcept;
+    bool release_runtime_resources() noexcept;
+    bool rollback_initialization() noexcept;
+    bool rollback_start() noexcept;
+    bool stop_started_modules() noexcept;
+    bool start_rc_chain() noexcept;
+    bool stop_rc_chain() noexcept;
+
+    dima::platform::Services &services_;
+    dima::parameters::ParameterJournal journal_;
     dima::middleware::lifecycle::ModuleManager module_manager_{};
     dima::modules::boot_health::BootHealthService boot_health_;
-    dima::modules::logging::LogService log_service_{};
-    dima::modules::parameters::ParameterService parameter_service_{};
-    dima::modules::safety::Commander commander_{};
+    dima::modules::logging::LogService log_service_;
+    dima::modules::parameters::ParameterService parameter_service_;
+    dima::modules::safety::Commander commander_;
     dima::modules::rc::SbusRc sbus_rc_;
     dima::modules::rc::RCUpdate rc_update_{};
     dima::modules::rc::ManualControl manual_control_{};
 #if APP_HELLO_WORLD_ENABLED
     dima::modules::hello_world::HelloWorld hello_world_;
 #endif
-    bool initialized_{false};
+    dima::platform::TaskHandle owner_task_{};
+    RuntimeState runtime_state_{RuntimeState::Stopped};
+    bool console_initialized_{false};
+    bool work_queue_initialized_{false};
+    bool uorb_initialized_{false};
+    bool parameter_initialized_{false};
+    bool modules_registered_{false};
     bool boot_started_{false};
     bool log_started_{false};
     bool parameter_started_{false};

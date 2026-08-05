@@ -15,10 +15,7 @@ void usb_console_transport_disconnected(void);
 
 /* 仅供CDC OUT回调使用：ISR只复制字节并返回，不解析、不分配。 */
 void usb_console_receive_from_isr(const uint8_t *data, size_t length);
-
-#ifdef APP_USB_CONSOLE_FREERTOS_TEST_SEAM
-void usb_console_freertos_test_reset(void);
-#endif
+void usb_console_tx_complete_from_isr(void);
 
 #ifdef __cplusplus
 }

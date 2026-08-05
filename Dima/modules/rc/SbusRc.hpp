@@ -1,14 +1,14 @@
 /****************************************************************************
- * PX4-Autopilot v1.17.0 SbusRc receive flow adapted to Dima FreeRTOS.
+ * PX4-Autopilot v1.17.0 SbusRc receive flow adapted to the Dima platform.
  ****************************************************************************/
 #pragma once
 
 #include "rc/sbus.hpp"
-#include "rc/sbus_backend.hpp"
 #include "input_rc.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
 #include "perf/perf_counter.h"
+#include "platform/api/Platform.hpp"
 #include "uorb/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"
 
@@ -27,7 +27,7 @@ public:
         std::uint32_t read_wakeups{0U};
     };
 
-    explicit SbusRc(dima::rc::SbusBackend &backend) noexcept;
+    explicit SbusRc(dima::platform::SbusInput &backend) noexcept;
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
@@ -38,13 +38,14 @@ private:
     static constexpr std::uint32_t kRetryDelayUs = 100000U;
     static constexpr std::size_t kReadBufferSize = 64U;
     void Run() override;
+    static void notify_from_isr(void *context) noexcept;
     void schedule_retry() noexcept;
     void allocate_perf_counters() noexcept;
     void free_perf_counters() noexcept;
     void publish(const dima::rc::SbusParser::Frame &frame,
                  std::uint64_t frame_arrival_us) noexcept;
 
-    dima::rc::SbusBackend &backend_;
+    dima::platform::SbusInput &backend_;
     dima::rc::SbusParser parser_{};
     uORB::Publication<input_rc_s> input_rc_pub_{ORB_ID(input_rc)};
     px4::ParamInt<px4::params::RC_PORT_CONFIG> rc_port_{};

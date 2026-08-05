@@ -92,6 +92,7 @@ extern const param_info_s param_info[];
 extern const uint16_t param_info_count;
 
 void param_init(void);
+bool param_shutdown(void) PARAM_NOEXCEPT;
 bool param_is_ready(void);
 param_t param_find(const char *name);
 param_t param_find_no_notification(const char *name);
@@ -168,24 +169,50 @@ template<typename T, px4::params p>
 class Param
 {
 public:
-    Param()
+    constexpr Param() noexcept
     {
         static_assert(px4::parameters_type[static_cast<unsigned>(p)] == ParamTraits<T, p>::type,
                       "parameter type mismatch");
-        param_set_used(handle());
-        update();
     }
+    bool bind()
+    {
+        T value{};
+        if (ParamTraits<T, p>::get(handle(), value) != 0) {
+            invalidate();
+            return false;
+        }
+        param_set_used(handle());
+        _value = value;
+        _bound = true;
+        return true;
+    }
+    void invalidate() noexcept { _value = T{}; _bound = false; }
+    bool bound() const noexcept { return _bound; }
     T get() const { return _value; }
     const T &reference() const { return _value; }
     void set(T value) { _value = value; }
-    bool update() { return ParamTraits<T, p>::get(handle(), _value) == 0; }
-    bool commit() const { return ParamTraits<T, p>::set(handle(), _value, true) == 0; }
-    bool commit_no_notification() const { return ParamTraits<T, p>::set(handle(), _value, false) == 0; }
+    bool update()
+    {
+        if (!_bound) {
+            _value = T{};
+            return false;
+        }
+        T value{};
+        if (ParamTraits<T, p>::get(handle(), value) != 0) {
+            invalidate();
+            return false;
+        }
+        _value = value;
+        return true;
+    }
+    bool commit() const { return _bound && ParamTraits<T, p>::set(handle(), _value, true) == 0; }
+    bool commit_no_notification() const { return _bound && ParamTraits<T, p>::set(handle(), _value, false) == 0; }
     bool commit_no_notification(T value) { if (value == _value) { return false; } _value = value; return commit_no_notification(); }
-    void reset() { param_reset_no_notification(handle()); update(); }
+    void reset() { if (_bound) { param_reset_no_notification(handle()); (void)update(); } }
     static constexpr param_t handle() { return static_cast<param_t>(p); }
 private:
     T _value{};
+    bool _bound{false};
 };
 
 template<px4::params p> using ParamFloat = Param<float, p>;

@@ -1,166 +1,242 @@
 #include "ApplicationContext.hpp"
 
-#include "boot_diagnostics.h"
 #include "logging/logging.hpp"
 #include "uorb/uORB.hpp"
 #include "work_queue/WorkQueue.hpp"
-#include "freertos/dima_platform.hpp"
-#include "usb_device.h"
 
 namespace dima::rover {
 namespace {
 
 void *uorb_allocate(size_t size, size_t alignment) noexcept
 {
-    if (alignment > portBYTE_ALIGNMENT) {
+    auto *services = dima::platform::try_services();
+    if (services == nullptr || alignment > services->heap.alignment()) {
         return nullptr;
     }
-    return dima::platform::allocate(
-        size, dima::platform::AllocationDomain::Startup);
+    return services->heap.allocate(size,
+                                   dima::platform::AllocationDomain::Startup);
 }
-
-ApplicationContext g_application_context;
 
 } // namespace
 
-ApplicationContext::ApplicationContext() noexcept
-    : sbus_rc_(dima::platform::sbus_uart_backend())
+ApplicationContext::ApplicationContext(
+    dima::platform::Services &services) noexcept
+    : services_(services),
+      journal_(services.parameter_partition, services.flash_transactions,
+               services.armed_flash, services.synchronization),
+      boot_health_(services.boot_control, services.clock),
+      log_service_(services.console),
+      parameter_service_(journal_, services.console, services.boot_control,
+                         services.armed_flash, services.synchronization,
+                         services.critical),
+      commander_(services.armed_flash), sbus_rc_(services.sbus)
 {
     boot_health_.bind_commander(commander_);
 }
 
-bool ApplicationContext::init() noexcept
+bool ApplicationContext::owner_call(bool bind_if_unset) noexcept
 {
-    if (initialized_) {
-        return true;
+    const dima::platform::TaskHandle current = services_.tasks.current();
+    if (!current) {
+        return false;
     }
+    if (!owner_task_ && bind_if_unset) {
+        owner_task_ = current;
+    }
+    return owner_task_ == current;
+}
 
-    dima_boot_stage_set(DIMA_BOOT_STAGE_USB_INIT);
-    MX_USB_DEVICE_Init();
-    dima_boot_stage_set(DIMA_BOOT_STAGE_USB_READY);
-    dima_boot_stage_set(DIMA_BOOT_STAGE_WORK_QUEUE_INIT);
-    if (!px4::work_queue_init()) {
-        return false;
-    }
-    dima_boot_stage_set(DIMA_BOOT_STAGE_UORB_INIT);
-    const uORB::Allocator allocator{&uorb_allocate, &dima::platform::deallocate};
-    if (!uORB::initialize(allocator)) {
-        px4::work_queue_shutdown();
-        return false;
-    }
-    dima_boot_stage_set(DIMA_BOOT_STAGE_PARAMETER_INIT);
-    if (!parameter_service_.init()) {
-        uORB::shutdown();
-        px4::work_queue_shutdown();
-        return false;
-    }
-    dima_boot_stage_set(DIMA_BOOT_STAGE_MODULE_REGISTER);
-    if (!module_manager_.register_module(boot_health_) ||
-        !module_manager_.register_module(parameter_service_) ||
-        !module_manager_.register_module(log_service_)) {
+bool ApplicationContext::register_modules() noexcept
+{
+    if (!module_manager_.register_module(parameter_service_) ||
+        !module_manager_.register_module(log_service_) ||
+        !module_manager_.register_module(commander_) ||
+        !module_manager_.register_module(sbus_rc_) ||
+        !module_manager_.register_module(rc_update_) ||
+        !module_manager_.register_module(manual_control_)) {
         module_manager_.reset();
-        uORB::shutdown();
-        px4::work_queue_shutdown();
         return false;
     }
 #if APP_HELLO_WORLD_ENABLED
     if (!module_manager_.register_module(hello_world_)) {
         module_manager_.reset();
-        uORB::shutdown();
-        px4::work_queue_shutdown();
         return false;
     }
 #endif
-    if (!module_manager_.register_module(commander_) ||
-        !module_manager_.register_module(sbus_rc_) ||
-        !module_manager_.register_module(rc_update_) ||
-        !module_manager_.register_module(manual_control_)) {
+    if (!module_manager_.register_module(boot_health_)) {
         module_manager_.reset();
+        return false;
+    }
+    modules_registered_ = true;
+    return true;
+}
+
+bool ApplicationContext::release_runtime_resources() noexcept
+{
+    if (modules_registered_) {
+        module_manager_.reset();
+        modules_registered_ = false;
+    }
+    if (parameter_initialized_) {
+        if (!parameter_service_.shutdown()) {
+            return false;
+        }
+        parameter_initialized_ = false;
+    }
+    if (uorb_initialized_) {
         uORB::shutdown();
+        uorb_initialized_ = false;
+    }
+    if (work_queue_initialized_) {
         px4::work_queue_shutdown();
+        work_queue_initialized_ = false;
+    }
+    if (console_initialized_) {
+        if (!services_.console.shutdown()) {
+            return false;
+        }
+        console_initialized_ = false;
+    }
+    return true;
+}
+
+bool ApplicationContext::rollback_initialization() noexcept
+{
+    const bool cleaned = release_runtime_resources();
+    runtime_state_ = cleaned ? RuntimeState::Stopped : RuntimeState::Error;
+    return cleaned;
+}
+
+bool ApplicationContext::init() noexcept
+{
+    if (!owner_call(true)) {
+        return false;
+    }
+    if (runtime_state_ == RuntimeState::Initialized ||
+        runtime_state_ == RuntimeState::Running) {
+        return true;
+    }
+    if (runtime_state_ != RuntimeState::Stopped) {
         return false;
     }
 
-    initialized_ = true;
-    dima_boot_stage_set(DIMA_BOOT_STAGE_APPLICATION_INITIALIZED);
+    runtime_state_ = RuntimeState::Initializing;
+    services_.diagnostics.set_stage(dima::platform::StartupStage::UsbInit);
+    if (!services_.console.initialize()) {
+        (void)rollback_initialization();
+        return false;
+    }
+    console_initialized_ = true;
+    services_.diagnostics.set_stage(dima::platform::StartupStage::UsbReady);
+
+    services_.diagnostics.set_stage(
+        dima::platform::StartupStage::WorkQueueInit);
+    if (!px4::work_queue_init()) {
+        (void)rollback_initialization();
+        return false;
+    }
+    work_queue_initialized_ = true;
+
+    services_.diagnostics.set_stage(dima::platform::StartupStage::UorbInit);
+    const uORB::Allocator allocator{&uorb_allocate, &dima::platform::deallocate};
+    if (!uORB::initialize(allocator)) {
+        (void)rollback_initialization();
+        return false;
+    }
+    uorb_initialized_ = true;
+
+    services_.diagnostics.set_stage(
+        dima::platform::StartupStage::ParameterInit);
+    if (!parameter_service_.init()) {
+        (void)rollback_initialization();
+        return false;
+    }
+    parameter_initialized_ = true;
+
+    services_.diagnostics.set_stage(
+        dima::platform::StartupStage::ModuleRegister);
+    if (!register_modules()) {
+        (void)rollback_initialization();
+        return false;
+    }
+
+    runtime_state_ = RuntimeState::Initialized;
+    services_.diagnostics.set_stage(
+        dima::platform::StartupStage::ApplicationInitialized);
     return true;
+}
+
+bool ApplicationContext::rollback_start() noexcept
+{
+    const bool modules_stopped = stop_started_modules();
+    const bool resources_released =
+        modules_stopped && release_runtime_resources();
+    runtime_state_ = resources_released ? RuntimeState::Stopped
+                                        : RuntimeState::Error;
+    return resources_released;
 }
 
 bool ApplicationContext::start() noexcept
 {
-    if (!initialized_ || boot_started_) {
-        return initialized_ && boot_started_;
-    }
-
-    dima_boot_stage_set(DIMA_BOOT_STAGE_BOOT_HEALTH_START);
-    boot_started_ = module_manager_.start(boot_health_);
-    if (!boot_started_) return false;
-#if APP_HELLO_WORLD_ENABLED
-    dima_boot_stage_set(DIMA_BOOT_STAGE_HELLO_START);
-    hello_started_ = module_manager_.start(hello_world_);
-    if (!hello_started_) {
-        (void)module_manager_.stop(boot_health_);
-        boot_started_ = false;
+    if (!owner_call(false)) {
         return false;
     }
-#endif
-    dima_boot_stage_set(DIMA_BOOT_STAGE_PARAMETER_START);
+    if (runtime_state_ == RuntimeState::Running) {
+        return true;
+    }
+    if (runtime_state_ != RuntimeState::Initialized) {
+        return false;
+    }
+    runtime_state_ = RuntimeState::Starting;
+
+    services_.diagnostics.set_stage(
+        dima::platform::StartupStage::ParameterStart);
     parameter_started_ = module_manager_.start(parameter_service_);
     if (!parameter_started_) {
-#if APP_HELLO_WORLD_ENABLED
-        (void)module_manager_.stop(hello_world_);
-        hello_started_ = false;
-#endif
-        (void)module_manager_.stop(boot_health_);
-        boot_started_ = false;
+        (void)rollback_start();
         return false;
     }
 
-    dima_boot_stage_set(DIMA_BOOT_STAGE_LOG_START);
+    services_.diagnostics.set_stage(dima::platform::StartupStage::LogStart);
     log_started_ = module_manager_.start(log_service_);
     if (!log_started_) {
-        (void)module_manager_.stop(parameter_service_);
-        parameter_started_ = false;
-#if APP_HELLO_WORLD_ENABLED
-        (void)module_manager_.stop(hello_world_);
-        hello_started_ = false;
-#endif
-        (void)module_manager_.stop(boot_health_);
-        boot_started_ = false;
+        (void)rollback_start();
         return false;
     }
 
-    dima_boot_stage_set(DIMA_BOOT_STAGE_COMMANDER_START);
+    services_.diagnostics.set_stage(
+        dima::platform::StartupStage::CommanderStart);
     commander_started_ = module_manager_.start(commander_);
     if (!commander_started_) {
-        stop_rc_chain();
-        dima::modules::parameters::set_flash_write_allowed_hook(nullptr);
-        (void)module_manager_.stop(log_service_);
-        log_started_ = false;
-        (void)module_manager_.stop(parameter_service_);
-        parameter_started_ = false;
-#if APP_HELLO_WORLD_ENABLED
-        (void)module_manager_.stop(hello_world_);
-        hello_started_ = false;
-#endif
-        (void)module_manager_.stop(boot_health_);
-        boot_started_ = false;
+        (void)rollback_start();
         return false;
     }
-    dima::modules::parameters::set_flash_write_allowed_hook(
-        &ApplicationContext::commander_allows_flash_write);
 
     // RC 链故障只降级手动输入，不能拖垮参数、日志和恢复服务。
-    dima_boot_stage_set(DIMA_BOOT_STAGE_RC_START);
+    services_.diagnostics.set_stage(dima::platform::StartupStage::RcStart);
     if (!start_rc_chain()) {
         PX4_WARN("Dima RC chain unavailable; actuator output remains disabled");
     }
-    return true;
-}
 
-bool ApplicationContext::commander_allows_flash_write() noexcept
-{
-    return !application_context().commander_.armed();
+#if APP_HELLO_WORLD_ENABLED
+    services_.diagnostics.set_stage(dima::platform::StartupStage::HelloStart);
+    hello_started_ = module_manager_.start(hello_world_);
+    if (!hello_started_) {
+        (void)rollback_start();
+        return false;
+    }
+#endif
+
+    services_.diagnostics.set_stage(
+        dima::platform::StartupStage::BootHealthStart);
+    boot_started_ = module_manager_.start(boot_health_);
+    if (!boot_started_) {
+        (void)rollback_start();
+        return false;
+    }
+
+    runtime_state_ = RuntimeState::Running;
+    return true;
 }
 
 bool ApplicationContext::start_rc_chain() noexcept
@@ -186,59 +262,88 @@ bool ApplicationContext::start_rc_chain() noexcept
     return true;
 }
 
-void ApplicationContext::stop_rc_chain() noexcept
+bool ApplicationContext::stop_rc_chain() noexcept
 {
+    bool stopped = true;
     if (manual_control_started_) {
-        (void)module_manager_.stop(manual_control_);
-        manual_control_started_ = false;
+        const bool result = module_manager_.stop(manual_control_);
+        manual_control_started_ = !result;
+        stopped = result && stopped;
     }
     if (rc_update_started_) {
-        (void)module_manager_.stop(rc_update_);
-        rc_update_started_ = false;
+        const bool result = module_manager_.stop(rc_update_);
+        rc_update_started_ = !result;
+        stopped = result && stopped;
     }
     if (sbus_started_) {
-        (void)module_manager_.stop(sbus_rc_);
-        sbus_started_ = false;
+        const bool result = module_manager_.stop(sbus_rc_);
+        sbus_started_ = !result;
+        stopped = result && stopped;
     }
+    return stopped;
 }
 
-void ApplicationContext::stop() noexcept
+bool ApplicationContext::stop_started_modules() noexcept
 {
-    stop_rc_chain();
-    if (commander_started_) {
-        (void)module_manager_.stop(commander_);
-        commander_started_ = false;
-    }
-    dima::modules::parameters::set_flash_write_allowed_hook(nullptr);
-    if (log_started_) {
-        (void)module_manager_.stop(log_service_);
-        log_started_ = false;
-    }
-    if (parameter_started_) {
-        (void)module_manager_.stop(parameter_service_);
-        parameter_started_ = false;
+    bool stopped = true;
+    if (boot_started_) {
+        const bool result = module_manager_.stop(boot_health_);
+        boot_started_ = !result;
+        stopped = result && stopped;
     }
 #if APP_HELLO_WORLD_ENABLED
     if (hello_started_) {
-        (void)module_manager_.stop(hello_world_);
-        hello_started_ = false;
+        const bool result = module_manager_.stop(hello_world_);
+        hello_started_ = !result;
+        stopped = result && stopped;
     }
 #endif
-    if (boot_started_) {
-        (void)module_manager_.stop(boot_health_);
-        boot_started_ = false;
+    stopped = stop_rc_chain() && stopped;
+    if (commander_started_) {
+        const bool result = module_manager_.stop(commander_);
+        commander_started_ = !result;
+        stopped = result && stopped;
     }
-    if (initialized_) {
-        module_manager_.reset();
-        uORB::shutdown();
-        px4::work_queue_shutdown();
-        initialized_ = false;
+    if (log_started_) {
+        const bool result = module_manager_.stop(log_service_);
+        log_started_ = !result;
+        stopped = result && stopped;
     }
+    if (parameter_started_) {
+        const bool result = module_manager_.stop(parameter_service_);
+        parameter_started_ = !result;
+        stopped = result && stopped;
+    }
+    return stopped;
+}
+
+bool ApplicationContext::shutdown() noexcept
+{
+    if (!owner_call(false)) {
+        return false;
+    }
+    if (runtime_state_ == RuntimeState::Stopped) {
+        return true;
+    }
+    if (runtime_state_ == RuntimeState::Initializing ||
+        runtime_state_ == RuntimeState::Starting ||
+        runtime_state_ == RuntimeState::Stopping) {
+        return false;
+    }
+
+    runtime_state_ = RuntimeState::Stopping;
+    if (!stop_started_modules() || !release_runtime_resources()) {
+        runtime_state_ = RuntimeState::Error;
+        return false;
+    }
+    runtime_state_ = RuntimeState::Stopped;
+    return true;
 }
 
 ApplicationContext &application_context() noexcept
 {
-    return g_application_context;
+    static ApplicationContext instance{dima::platform::services()};
+    return instance;
 }
 
 } // namespace dima::rover

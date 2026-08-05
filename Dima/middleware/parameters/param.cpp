@@ -9,7 +9,7 @@
 #include "ConstLayer.h"
 #include "DynamicSparseLayer.h"
 #include "containers/AtomicBitset.hpp"
-#include "freertos/dima_platform.hpp"
+#include "platform/api/Platform.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -268,6 +268,67 @@ void param_init(void)
     g_notification_pending = false;
 }
 
+bool param_shutdown(void) noexcept
+{
+    if (!task_read_allowed()) {
+        return false;
+    }
+
+    const param_lock_callback_t lock = g_lock;
+    const param_lock_callback_t unlock = g_unlock;
+    void *const lock_context = g_lock_context;
+    if ((lock == nullptr) != (unlock == nullptr)) {
+        return false;
+    }
+    if (lock != nullptr) {
+        lock(lock_context);
+    }
+
+    // Holding the registered recursive mutex excludes all other parameter
+    // transactions. A non-zero depth here would mean the caller attempted to
+    // tear the core down from inside a parameter callback.
+    if (g_transaction_depth != 0U) {
+        if (unlock != nullptr) {
+            unlock(lock_context);
+        }
+        return false;
+    }
+
+    g_initialized = false;
+    g_notify = nullptr;
+    g_notify_context = nullptr;
+    g_storage = nullptr;
+    g_storage_context = nullptr;
+    g_notification_pending = false;
+
+    if (g_user_constructed) {
+        g_user_config->~DynamicSparseLayer();
+        g_user_constructed = false;
+    }
+    if (g_runtime_constructed) {
+        g_runtime_defaults->~DynamicSparseLayer();
+        g_runtime_constructed = false;
+    }
+    g_user_config = nullptr;
+    g_runtime_defaults = nullptr;
+    g_active.reset();
+    g_unsaved.reset();
+    g_get_count = 0U;
+    g_set_count = 0U;
+    g_find_count = 0U;
+    g_export_count = 0U;
+    g_instance = 0U;
+    g_default_generation = 0U;
+
+    if (unlock != nullptr) {
+        unlock(lock_context);
+    }
+    g_lock = nullptr;
+    g_unlock = nullptr;
+    g_lock_context = nullptr;
+    return true;
+}
+
 bool param_is_ready(void)
 {
     if (!task_read_allowed()) {
@@ -321,7 +382,7 @@ void param_set_used(param_t param)
 {
     if (!task_read_allowed()) { return; }
     px4::AtomicTransaction transaction;
-    if (valid(param)) { g_active.set(param); }
+    if (g_initialized && valid(param)) { g_active.set(param); }
 }
 
 param_t param_for_index(unsigned index)
@@ -468,6 +529,7 @@ void param_reset_all(void)
 {
     if (!service_write_allowed()) { return; }
     px4::AtomicTransaction transaction;
+    if (!g_initialized) { return; }
     bool changed = false;
     for (param_t param = 0U; param < kCount; ++param) {
         if (g_user_config->contains(param)) {
@@ -487,6 +549,7 @@ void param_foreach(param_foreach_func_t callback, void *context,
 {
     if (!task_read_allowed() || callback == nullptr) { return; }
     px4::AtomicTransaction transaction;
+    if (!g_initialized) { return; }
     for (param_t param = 0U; param < kCount; ++param) {
         if ((!only_changed || g_user_config->contains(param))
             && (!only_used || g_active[param])) {
@@ -601,7 +664,7 @@ int param_register_storage_backend(const param_storage_backend_s *backend,
     px4::AtomicTransaction transaction;
     g_storage = backend;
     g_storage_context = context;
-    return backend ? 0 : -EINVAL;
+    return 0;
 }
 
 int param_storage_get_status(param_storage_status_s *status) noexcept

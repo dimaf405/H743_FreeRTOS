@@ -1,5 +1,5 @@
 /****************************************************************************
- * PX4-Autopilot v1.17.0 SbusRc receive flow adapted to Dima FreeRTOS.
+ * PX4-Autopilot v1.17.0 SbusRc receive flow adapted to the Dima platform.
  ****************************************************************************/
 #include "SbusRc.hpp"
 
@@ -26,9 +26,16 @@ void count_delta(perf_counter_t counter, std::uint32_t current,
 
 } // namespace
 
-SbusRc::SbusRc(dima::rc::SbusBackend &backend) noexcept
+SbusRc::SbusRc(dima::platform::SbusInput &backend) noexcept
     : px4::ScheduledWorkItem("sbus_rc", px4::wq_configurations::io), backend_(backend)
 {
+}
+
+void SbusRc::notify_from_isr(void *context) noexcept
+{
+    if (context != nullptr) {
+        (void)static_cast<SbusRc *>(context)->ScheduleNowFromISR();
+    }
 }
 
 bool SbusRc::start()
@@ -38,9 +45,16 @@ bool SbusRc::start()
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
-    (void)rc_port_.update();
-    (void)rc_protocol_.update();
-    (void)sbus_inverted_.update();
+    if (!rc_port_.bind() || !rc_protocol_.bind() ||
+        !sbus_inverted_.bind()) {
+        rc_port_.invalidate();
+        rc_protocol_.invalidate();
+        sbus_inverted_.invalidate();
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
+        PX4_ERR("SBUS parameters unavailable");
+        return false;
+    }
     if (rc_protocol_.get() != 2 || rc_port_.get() <= 0 ||
         !backend_.configure(rc_port_.get(), sbus_inverted_.get())) {
         ++stats_.start_failures;
@@ -84,6 +98,9 @@ void SbusRc::stop()
     parser_.reset();
     free_perf_counters();
     timestamp_last_signal_us_ = 0U;
+    rc_port_.invalidate();
+    rc_protocol_.invalidate();
+    sbus_inverted_.invalidate();
 }
 
 dima::middleware::lifecycle::ModuleState SbusRc::state() const { return state_; }
@@ -92,7 +109,9 @@ void SbusRc::Run()
 {
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) return;
     if (!backend_started_) {
-        if (!backend_.start(*this)) {
+        const dima::platform::IsrCallback notification{
+            &SbusRc::notify_from_isr, this};
+        if (!backend_.start(notification)) {
             ++stats_.start_failures;
             if (!backend_fault_reported_) {
                 PX4_ERR("SBUS UART/DMA start failed");
