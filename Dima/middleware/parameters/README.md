@@ -33,6 +33,14 @@ PX4 PARAM_DEFINE_* 参数定义
 - 参数持久化使用 `0x081E0000～0x08200000` 单个 128 KiB 扇区追加 Journal；记录包含 Sequence、Payload Length、CRC32 和最终 Commit Marker；Bank 2 扫描使用 ECC 安全读，DBECC 仅在参数区受控恢复并跳过不可读记录；空间不足返回 ENOSPC且不自动擦除。
 - 每次 load 都重新读取并验证 Header CRC、最终 Commit Marker 和 payload CRC；缓存的最新记录失效时重新扫描整个 Journal，回退到上一条有效快照后再次复验。
 
+## Application Runtime 生命周期
+
+- `Param<T>` 构造只执行编译期类型约束，不调用 `param_get()` 或 `param_set_used()`；模块每次 start 必须显式 `bind()`，bind 失败时不得继续沿用上一 Runtime 的值。
+- `param_shutdown()` 停止 Autosave，注销 notify/storage/lock callback，清除 ready、used、unsaved、动态 Layer、值 cache 和运行期同步对象；下一次 init 从未绑定状态开始。
+- `ParameterService::shutdown()` 在释放自身 Mutex 前依次关闭 Parameter Core 和 `ParameterJournal`。Journal shutdown 清除 append/latest/snapshot 和故障缓存，下一次 initialize/load 必须重新扫描 Flash。
+- Armed/Flash coordinator 仍独立于 Application Runtime，确保 ARMED 时 save/erase/confirm 延后、FlashBusy 时 Arm 被拒绝；pending 操作在 Disarm 后重试。
+- 以上是源码生命周期契约。2026-08-05 的 Windows 原生 clean build、最终 ELF 和同上电 `shutdown → init → start` 目标板验收尚未完成，不沿用下方历史资源数字作为当前证明。
+
 ## 当前资源与验证
 
 ```text

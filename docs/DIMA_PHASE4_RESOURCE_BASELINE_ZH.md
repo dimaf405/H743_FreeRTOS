@@ -122,3 +122,28 @@ MCUboot（当前工作区）             46060 bytes
 本轮应用增量为 text `+1296` bytes、data `0`、bss `+32` bytes、Signed BIN `+1296` bytes；Signed BIN 占 768 KiB Slot 约 19.1%，仍低于 85% 控制线。MCUboot `46060` bytes 包含保留在工作区、未混入本轮提交的 Recovery 请求改动，不能归因于上述应用修复。
 
 `make -j4 verify`、链接、签名、Factory HEX、MCUboot 地址校验、`0x08040400` 向量检查和 `git diff --check` 已通过。以下项目没有由目标构建证明，仍必须在目标板执行：HAL/FreeRTOS tick 同速、TIM2 加速回绕、10/20/500 ms 抖动统计、Flash/Arm 并发、损坏快照回退、stop/run 竞争、RC DMA 积压，以及 ICM42688 的 SPI/CS/INT 示波器检查。当前结论仍为“源码及目标构建通过，板测待完成”。
+
+## 7. 生命周期收敛后的验证状态
+
+日期：2026-08-05
+
+状态：生命周期修复源码及架构静态门禁通过；Windows 原生 clean build、最终 ELF 门禁和目标板行为均待完成。本节不覆盖第 2、6 节的历史构建记录，也不把历史镜像尺寸外推为当前结果。
+
+- Rover 产品域已收敛为唯一 `Dima/rover`；阶段 5 控制组合进入 `Dima/rover/control`，阶段 9 导航进入 `Dima/rover/navigation`，modules 下不再保留重复 Rover 子目录。
+- Application Runtime 已补齐 Parameter bind/shutdown、Journal cache 失效、uORB lifecycle epoch、WorkQueue owner/destroy、Console shutdown 和逆序 rollback；同一次上电内的 `shutdown → init → start` 不再继承上一 Runtime 的参数、Topic 或 RC 有效性。
+- BootHealth 只接受 Commander 三个安全 Topic 同时间戳、一致、新鲜且严格前进的快照，不再依赖 HelloWorld 或 `app_heartbeat`；连续 5 秒窗口在任一条件失效后重新计时。
+- Application Fault/Panic 只写 non-cacheable D3 记录并复位；诊断 Flash 持久化由 MCUboot 冷启动独占。SBUS 使用 64-byte DMA Buffer 向 256 项 CPU-only SPSC Ring 复制，接收 epoch 变化时同时清 Ring 和 parser。
+- TIM5/TIM8 可以保留 CubeMX 初始化，但六路 compare 初值固定为 0；当前应用不得链接 PWM start、Motor backend 消费者、Mixer 或 RoverDifferential。
+
+| 当前门禁或资源 | 生命周期收敛状态 |
+|---|---|
+| 源码架构扫描 | `PASS`，184 个一方源文件 |
+| `.init_array` 目标白名单 | 13 项：2 个工具链项、1 个 Parameter ConstLayer 构造、10 个 uORB registrar |
+| `.fini_array` 目标白名单 | 仅 `__do_global_dtors_aux` |
+| uORB 启动分配 | 没有新增 Topic；最终 Heap 实际值待 clean build/ELF 复核 |
+| Task Pool | 链接上限仍为 48 KiB；最终 section 使用量待 clean build/ELF 复核 |
+| SBUS 内存所有权 | `g_dma_buffer` 必须位于 `.dima_dma`；`g_receive_ring` 必须位于 CPU `.bss` |
+| Application Flash/RAM、Signed BIN 增量 | 待 Windows 原生 clean build，当前不填入推测值 |
+| 目标板 Runtime restart、Fault、SBUS 和 Termination | 待人工验收 |
+
+当前 `build/H743_FreeRTOS.elf` 只用于 ELF 解析器烟雾检查：新门禁按预期拒绝其中旧 WorkQueue 带来的第 14 个 `.init_array` 项；它不是本节源码的重建产物，不能作为当前链接或目标构建证据。

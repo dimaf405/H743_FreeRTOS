@@ -185,9 +185,12 @@ Storage       128 KiB
 - 启动顺序为基础服务、Parameter、Log、Commander、RC；停止顺序为 RC、Commander、Log、Parameter。RC 链失败不停止 Commander，Commander 启动失败则回滚应用服务。
 - 最终目标构建为 Application `136956/7660/331912` bytes、Signed BIN `145830` bytes，签名、Factory HEX、MCUboot 和 `0x08040400` 向量检查通过；详见 [阶段 4 资源与验收基线](DIMA_PHASE4_RESOURCE_BASELINE_ZH.md)。
 - 2026-08-03 全量回归修复后，应用收敛为 SysTick + TIM2 双时基，补齐 Flash/Arming 原子互锁、Commander 发布失效安全、真实 RC DMA 到达时间、ICM42688 板级接口、参数快照回退和 WorkQueue cancel-and-drain。增量目标构建为 Application `141428/7668/332584` bytes、Signed BIN `150311` bytes；实板时序、电气和并发验收仍待完成。
+- 2026-08-05 生命周期收敛建立唯一 `Dima/rover`，补齐 Parameter cache、uORB epoch、WorkQueue owner/drain、Console、BootHealth、Fault 冷启动持久化和 SBUS DMA/CPU Ring 所有权。源码架构门禁已通过；Windows 原生 clean build、最终 ELF 门禁和同上电 Runtime restart 板测仍待完成，历史尺寸不得作为当前结果。
 - 本阶段未接 PWM、Mixer、RoverDifferential 或 HAL 执行器输出，因此车辆仍不能运动；目标板行为尚未验收。
 
 ### 阶段 5：差速执行器链
+
+只有 Windows 原生 clean build、签名/布局校验和生命周期 ELF 门禁全部通过后，才允许开始本阶段源码开发；在目标板验证和单独授权前，执行器代码不得接入 `ApplicationContext`，不得启动 TIM5/TIM8 PWM。
 
 在 `Dima/rover/control/` 移植 RoverDifferential、FunctionMotors、MixingOutput 和 OutputLimit，接入六路 PWM，实现 Manual、倒车、普通转弯和零速原地旋转。保留成熟的 armed 门控、failsafe 输出、限幅、反向、slew 和解锁 ramp。
 

@@ -200,16 +200,23 @@ Secondary；Bootloader 会拒绝 `-n 1`，从实现层禁止 USB 擦写正在运
 
 6. 复位后保持供电稳定，等待 MCUboot 完成 scratch swap 并启动新应用。不要在交换 Flash 的过程中断电。
 
-7. 新应用启动 FreeRTOS 和 USB 后，由 HP 工作队列上的 `BootHealthService` 开始 5 秒稳定窗口；LP 工作队列上的 `HelloWorld` 默认每 1000 ms 发布一次 `app_heartbeat`。只有稳定窗口已满 5 秒且健康服务至少复制到一个新 heartbeat，才会写入 MCUboot `image_ok` 确认标记。它不是 `vTaskDelay(5000)` 后的无条件确认；USB 输出失败也不会阻断 heartbeat。满足这两个门槛后，下一次复位不会回滚，无需另行执行 `mcumgr image confirm`。
+7. 新应用启动 FreeRTOS 和 USB 后，由 HP 工作队列上的 `BootHealthService` 开始连续 5 秒稳定窗口。只有 Parameter Core ready、Commander healthy，并且 `actuator_armed → vehicle_control_mode → vehicle_status` 三个安全 Topic 具有相同时间戳、状态一致、时间新鲜且相对上一组严格前进，窗口才继续累计；任一条件失效都从零重新计时。HelloWorld 和 `app_heartbeat` 不参与确认，`APP_HELLO_WORLD_ENABLED=0` 不改变该契约。窗口满足后仍须处于 DISARMED 且 Flash 非 busy，才写入 MCUboot `image_ok`；ARMED 或 FlashBusy 只返回 Deferred，并在条件解除后重试。它不是 `vTaskDelay(5000)` 后的无条件确认。
 
 8. 如需验收确认状态，复位并在 3 秒窗口内再次执行 `image list`，确认运行镜像已经是新版本且为 confirmed/permanent 状态。
 
 ### 3.4 回滚行为
 
-- 新镜像在 5 秒健康窗口内崩溃、看门狗复位或被人工硬复位，或者稳定窗口结束前始终没有产生 `app_heartbeat` 时，`image_ok` 尚未写入；下一次 MCUboot 启动会回滚到旧镜像。
+- 新镜像在 5 秒健康窗口内崩溃、看门狗复位或被人工硬复位，或者 Parameter/Commander/三个安全 Topic 未形成连续健康进展时，`image_ok` 尚未写入；下一次 MCUboot 启动会回滚到旧镜像。
 - 如果新镜像只是无限卡死且没有看门狗触发，需人工复位/重新上电，之后 MCUboot 才能执行回滚。
 - 回滚和首次测试启动都涉及 Flash swap，必须保持电源和 USB 供电稳定。
 - `mcumgr` recovery 依赖 MCUboot 本身能够运行；MCUboot 损坏时改用下一节的 ROM DFU。
+
+### 3.5 Fault 冷启动持久化
+
+- Application HardFault/Panic 只更新 non-cacheable D3 固定故障快照和 capture-valid marker，执行内存屏障后立即复位；异常上下文禁止扫描、擦除或编程 Bank 1 Flash。
+- MCUboot 在冷启动阶段校验 D3 snapshot，按既有 ABI、序号和 CRC 生成持久 Flash record，写入诊断扇区并进入 USB Recovery。诊断 Flash store 只属于 MCUboot，最终 Application ELF 不得链接其 enable/capture/store 符号。
+- 正常 Parameter/BootControl Flash transaction、Armed/Flash coordinator 和 Fault emergency capture 是三条独立路径；Fault 记录不能等待 Mutex、WorkQueue、USB 或 Application Runtime shutdown。
+- D3 record 跨 Application Runtime 保留，但 Runtime 重启不得把上一轮 Parameter/uORB/RC cache 当作有效状态。故障被 MCUboot 成功持久化和处理后，才按既有协议清除 pending 标志。
 
 ## 4. STM32CubeProgrammer ROM USB DFU 最终救援
 

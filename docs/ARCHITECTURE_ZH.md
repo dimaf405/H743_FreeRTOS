@@ -82,6 +82,24 @@ service:logger   非实时日志
 
 USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 
+### 4.2 Application Runtime 生命周期
+
+平台资源分为上电期、Application Runtime 和跨 Runtime 保留三类，禁止把三者的 cache、句柄或有效性标志混用：
+
+```text
+整次上电：MPU/cache、SysTick、TIM2 HRT、平台 Services、Heap、Flash 互锁、USB transport
+每次 Runtime：Console 前端、WorkQueue、uORB Buffer、Parameter Core/Journal、ModuleManager
+跨 Runtime：Commander Termination、D3 Fault 记录和明确标注的累计诊断
+```
+
+Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter Journal/Core → Module registration`；启动顺序固定为 `Parameter → Log → Commander → SBUS → RCUpdate → ManualControl → HelloWorld（启用时）→ BootHealth`。关闭时严格反向停止生产者和模块，再按 `Parameter Core/Journal → uORB → WorkQueue → Console` 释放 Runtime 资源。
+
+- `ApplicationContext` 只接受 owner task 执行 init/start/shutdown；部分初始化和 Error 状态按成功步骤逆序回滚，清理失败时不得伪装为 Stopped 或重新 init。
+- `Param<T>` 构造不访问 Parameter Core；模块每次 start 必须 `bind()`，shutdown 清除 ready、used、unsaved、值 cache、动态 Layer、callback 和运行期同步对象。Journal 下次 initialize/load 必须重新扫描并复验 Header、Commit Marker 和 payload CRC。
+- uORB 每次成功 initialize 推进上电期单调 epoch。Publication、Subscription、instance、generation 和 callback 发现 epoch 变化后丢弃旧 Runtime 状态；深度队列从当前最旧有效样本恢复，generation 0 不得复制空槽。
+- WorkQueue 由 Runtime owner 创建和关闭；ISR、worker 自身或非 owner 无权销毁。外部 stop 在释放订阅和后端前 cancel-and-drain；Signal 和 task slot 由 shutdown 显式回收，不依赖全局析构器。
+- Commander Termination 是唯一跨 Runtime 保留的模块安全状态，只能由 MCU reset 清除；RC 边沿、Failsafe 临时原因、BootHealth 窗口和参数绑定状态每次 Runtime 重建。
+
 ## 5. 内存与实时边界
 
 本项目不再要求全系统完全静态，但动态内存必须受控：
@@ -123,6 +141,7 @@ Storage       128 KiB
 - 阶段 0 不缩小升级 Slot，也不改变 MCUboot 地址。
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源。
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
+- `tools/check_architecture.py` 在源码阶段拒绝重复 Rover 根、逆向依赖、越权硬件访问、生命周期契约缺失和非零 PWM compare；`tools/verify_application_elf.py` 在最终应用 ELF 上检查向量、ISR 强弱绑定、section 地址/容量、SBUS DMA/CPU Ring、生命周期符号、初始化数组白名单以及无执行器消费者。源码扫描通过不等于 ELF、目标构建或板测通过。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。
 - Arm 与应用 Flash 操作由同一原子互锁协调；模块停止先关闭新调度并 drain 正在执行的 `Run()`，再释放订阅、DMA、Perf、Flash 或日志资源。
 
