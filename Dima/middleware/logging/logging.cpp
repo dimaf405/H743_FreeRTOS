@@ -108,11 +108,16 @@ std::size_t pop_bytes(std::uint8_t *destination,
 
 namespace {
 
-WriteResult write_v(Level level, const char *module_name, bool raw,
+WriteResult write_v(Source source, Level level, const char *module_name, bool raw,
                     const char *format, va_list arguments) noexcept
 {
     if (format == nullptr || (!raw && module_name == nullptr)) {
         return WriteResult::InvalidArgument;
+    }
+    // RAW records carry parameter command responses and are deliberately not
+    // subject to the USB diagnostic filter.
+    if (!raw && !config::enabled(source, level)) {
+        return WriteResult::Filtered;
     }
     if (!formatting_allowed()) {
         dima::platform::CriticalGuard lock;
@@ -173,7 +178,19 @@ WriteResult writef(Level level, const char *format, ...) noexcept
 {
     va_list arguments;
     va_start(arguments, format);
-    const WriteResult result = write_v(level, "dima", false, format, arguments);
+    const WriteResult result = write_v(
+        Source::System, level, "dima", false, format, arguments);
+    va_end(arguments);
+    return result;
+}
+
+WriteResult write_module(Source source, Level level, const char *module_name,
+                         const char *format, ...) noexcept
+{
+    va_list arguments;
+    va_start(arguments, format);
+    const WriteResult result = write_v(
+        source, level, module_name, false, format, arguments);
     va_end(arguments);
     return result;
 }
@@ -266,8 +283,10 @@ extern "C" void px4_log_modulename(int level, const char *module_name,
     }
     va_list arguments;
     va_start(arguments, format);
-    (void)dima::logging::write_v(static_cast<dima::logging::Level>(level),
-                                 module_name, false, format, arguments);
+    (void)dima::logging::write_v(
+        dima::logging::Source::System,
+        static_cast<dima::logging::Level>(level), module_name, false, format,
+        arguments);
     va_end(arguments);
 }
 
@@ -278,7 +297,9 @@ extern "C" void px4_log_raw(int level, const char *format, ...)
     }
     va_list arguments;
     va_start(arguments, format);
-    (void)dima::logging::write_v(static_cast<dima::logging::Level>(level),
-                                 nullptr, true, format, arguments);
+    (void)dima::logging::write_v(
+        dima::logging::Source::System,
+        static_cast<dima::logging::Level>(level), nullptr, true, format,
+        arguments);
     va_end(arguments);
 }

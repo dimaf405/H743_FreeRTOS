@@ -1,5 +1,7 @@
 #pragma once
 
+#include "debug_config.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -33,17 +35,21 @@ namespace dima::logging {
 
 constexpr std::size_t kLogRingCapacity = 8U * 1024U;
 
-enum class Level : std::uint8_t {
-    Debug = _PX4_LOG_LEVEL_DEBUG,
-    Info = _PX4_LOG_LEVEL_INFO,
-    Warning = _PX4_LOG_LEVEL_WARN,
-    Error = _PX4_LOG_LEVEL_ERROR,
-    Panic = _PX4_LOG_LEVEL_PANIC,
-};
+static_assert(static_cast<std::uint8_t>(Level::Debug) ==
+              _PX4_LOG_LEVEL_DEBUG);
+static_assert(static_cast<std::uint8_t>(Level::Info) ==
+              _PX4_LOG_LEVEL_INFO);
+static_assert(static_cast<std::uint8_t>(Level::Warning) ==
+              _PX4_LOG_LEVEL_WARN);
+static_assert(static_cast<std::uint8_t>(Level::Error) ==
+              _PX4_LOG_LEVEL_ERROR);
+static_assert(static_cast<std::uint8_t>(Level::Panic) ==
+              _PX4_LOG_LEVEL_PANIC);
 
 enum class WriteResult : std::uint8_t {
     Ok = 0U,
     Truncated,
+    Filtered,
     RejectedRealtime,
     InvalidArgument,
 };
@@ -68,6 +74,9 @@ struct ServiceWriter {
 // Dima internal compatibility entry. Product modules should prefer PX4_* macros.
 WriteResult writef(Level level, const char *format, ...) noexcept
     __attribute__((format(printf, 2, 3)));
+WriteResult write_module(Source source, Level level, const char *module_name,
+                         const char *format, ...) noexcept
+    __attribute__((format(printf, 4, 5)));
 WriteResult write_literal(const char *text, std::size_t length) noexcept;
 std::size_t service_flush(const ServiceWriter &writer,
                           std::size_t max_bytes = kLogRingCapacity) noexcept;
@@ -80,6 +89,11 @@ void reset() noexcept;
     px4_log_modulename(level, MODULE_NAME, format, ##__VA_ARGS__)
 #define __dima_px4_log_omit(level, format, ...) \
     do { if (false) { px4_log_modulename(level, MODULE_NAME, format, ##__VA_ARGS__); } } while (0)
+#define DIMA_LOG_SOURCE(source, level, format, ...) \
+    do { \
+        (void)dima::logging::write_module(source, level, MODULE_NAME, format, \
+                                           ##__VA_ARGS__); \
+    } while (0)
 
 #define PX4_INFO(format, ...) \
     __dima_px4_log_module(_PX4_LOG_LEVEL_INFO, format, ##__VA_ARGS__)
@@ -90,15 +104,10 @@ void reset() noexcept;
 #define PX4_ERR(format, ...) \
     __dima_px4_log_module(_PX4_LOG_LEVEL_ERROR, format, ##__VA_ARGS__)
 
-#if defined(RELEASE_BUILD)
-#define PX4_WARN(format, ...) \
-    __dima_px4_log_omit(_PX4_LOG_LEVEL_WARN, format, ##__VA_ARGS__)
-#else
 #define PX4_WARN(format, ...) \
     __dima_px4_log_module(_PX4_LOG_LEVEL_WARN, format, ##__VA_ARGS__)
-#endif
 #define PX4_DEBUG(format, ...) \
-    __dima_px4_log_omit(_PX4_LOG_LEVEL_DEBUG, format, ##__VA_ARGS__)
+    __dima_px4_log_module(_PX4_LOG_LEVEL_DEBUG, format, ##__VA_ARGS__)
 
 #define PX4_LOG_NAMED(name, format, ...) \
     PX4_INFO("%s " format, name, ##__VA_ARGS__)
