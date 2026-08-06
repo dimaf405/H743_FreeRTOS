@@ -1,6 +1,6 @@
 # Dima 阶段 5 差速执行器链资源与验收基线
 
-日期：2026-08-05
+日期：2026-08-06
 
 状态：源码、Windows 原生目标构建和镜像门禁通过；目标板电气、时序与车辆行为验收待完成。
 
@@ -10,7 +10,7 @@
 
 ```text
 manual_control_setpoint
-→ ManualMotionAdapter
+→ ManualMode
 → rover_motion_request（前后、左右两轴）
 → RoverDifferential / DifferentialDrive
 → actuator_motors（Motor1 右侧、Motor2 左侧）
@@ -19,17 +19,17 @@ manual_control_setpoint
 → S1～S6 / TIM8 + TIM5
 ```
 
-- USB CDC 已收敛为系统调试日志与维护命令口，不再周期打印 HelloWorld，也不再发布示例心跳。
+- USB CDC 已收敛为系统调试日志与维护命令口，不再周期打印 HelloWorld，也不再发布示例心跳。唯一编译期 `debug_config.hpp` 默认把 SBUS 限制为 Error；100 ms 最新样本入口保留但默认不输出，后续由 MAVLink 接入重新定义诊断传输边界。ICM42688 仅预留关闭的策略入口。
 - Manual 输入只保留 `longitudinal` 和 `steering/yaw` 两轴；`actuator_motors` 只使用 Motor1、Motor2，其余十路保持 NaN。
 - MotorOutput 只允许 Disabled、MotorRight、MotorLeft 三种通道功能，不导入通用 Mixer、MixingOutput、FunctionMotors 或 ActuatorOutput 框架。
-- 本阶段没有增加 FreeRTOS Task；ManualMotionAdapter 和 RoverDifferential 复用 `wq:rate_ctrl`，MotorOutput 复用 `wq:io`。
+- 本阶段没有增加 FreeRTOS Task；ManualMode 复用 `wq:hp_default`，RoverDifferential 复用 `wq:rate_ctrl`，MotorOutput 复用 `wq:io`。
 
 ## 2. 上游来源与许可证边界
 
 阶段 5 的直接代码和消息契约来源固定为 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`：
 
 - `msg/versioned/ActuatorMotors.msg` 对应本地 `actuator_motors` 完整公开契约。
-- `src/modules/rover_differential/RoverDifferential.cpp`、`DifferentialDriveModes/DifferentialManualMode/` 和 `DifferentialActControl/` 对应本地两轴请求、差速混控和 Motor 命令边界。
+- `src/modules/rover_differential/RoverDifferential.cpp`、`DifferentialDriveModes/DifferentialManualMode/` 和 `DifferentialActControl/` 分别映射到本地 `Dima/rover/control/RoverDifferential.*` 运行适配、`Dima/rover/modes/ManualMode.*` 产品模式和 `Dima/lib/rover/DifferentialDrive.*` 纯差速算法；Motor 命令边界仍由消息隔离。
 - PX4 actuator function/output 只保留本项目需要的 MotorRight/MotorLeft 到六路 PWM 的固定存储子集。
 
 ArduPilot commit `3f2e4763accb` 的 `libraries/AR_Motors/AP_MotorsUGV.cpp` 仅作为 Rover 行为参考，用于倒车时车头方向、转向与油门饱和优先级、slew、`MOT_THR_MIN` 静摩擦补偿、反向推力不对称和左右独立换向延时；没有把 GPL 源码复制进本目录。
@@ -68,7 +68,7 @@ TIM8 与 TIM5 的目标配置均为 240 MHz 输入、prescaler 239、1 MHz 计�
 - 零命令严格映射到 `CENT`；负向在 `CENT→MIN` 区间映射，正向在 `CENT→MAX` 区间映射，`REV` 在通道映射前反转归一化方向。
 - 同一个 Motor function 可以映射到多个物理口；未启用通道的有效掩码和脉宽必须保持 0。
 
-阶段 5 新增 41 项参数：10 项两轴/油门保护参数、六路各 5 项 PWM 参数，以及 `COM_ACT_LOSS_T`。`COM_ACT_LOSS_T` 默认 0.10 s、范围 0.02～1.00 s，同时约束 `actuator_motors.timestamp` 和 `timestamp_sample`；任一时间戳为零、未来值、顺序反转或超时都禁止输出。
+阶段 5 新增 41 项参数：10 项两轴/油门保护参数、六路各 5 项 PWM 参数，以及 `COM_ACT_LOSS_T`。`COM_ACT_LOSS_T` 默认 0.10 s、范围 0.02～1.00 s，同时约束 `actuator_motors.timestamp` 和 `timestamp_sample`；任一时间戳为零、未来值、顺序反转或超时都禁止输出。后续 SBUS 电气收敛删除手动极性参数，当前参数总数由 177 降为 176。
 
 ## 5. 生命周期与安全门控
 
@@ -76,11 +76,11 @@ Application Runtime 的相关启动顺序固定为：
 
 ```text
 Parameter → Log → MotorOutput safe-off → Commander
-→ SBUS → RCUpdate → ManualControl
-→ ManualMotionAdapter → RoverDifferential → BootHealth
+→ SbusRc → RCUpdate → RcManualInput
+→ ManualMode → RoverDifferential → BootHealth
 ```
 
-关闭时先停 BootHealth 和 RC 链，再让 MotorOutput 停止 TIM5/TIM8、清零 CCR 并把六路恢复为 GPIO 低电平，然后停止 RoverDifferential、ManualMotionAdapter、Commander、Log 和 Parameter。`board_init()` 在调度器与 Runtime 启动前也会确认相同的物理 safe-off。
+关闭时先停 BootHealth 和 RC 链，再让 MotorOutput 停止 TIM5/TIM8、清零 CCR 并把六路恢复为 GPIO 低电平，然后停止 RoverDifferential、ManualMode、Commander、Log 和 Parameter。`board_init()` 在调度器与 Runtime 启动前也会确认相同的物理 safe-off。
 
 MotorOutput 只有同时满足以下条件才允许启动或维持 PWM：
 
@@ -98,30 +98,31 @@ BootHealth 除 Commander 三 Topic 外还要求 `actuator_output_status` 持续�
 
 阶段 5 起点为 `3568b84`。该提交已在独立临时 worktree 使用 Windows 原生进程、Windows 路径和 Windows ARM 工具链执行 clean build；阶段 5 最终状态使用相同边界执行 clean verify。WSL 只负责发起命令，不作为编译验收环境。
 
-| 资源 | 阶段 5 起点 | 阶段 5 最终 | 增量 |
+| 资源 | 阶段 5 起点 | 当前收敛 | 增量 |
 |---|---:|---:|---:|
-| 生成参数 | 136 | 177 | +41 |
-| 一方源文件 | 184 | 196 | +12 |
-| Application text | 166596 | 186216 | +19620 bytes |
-| Application data | 12044 | 12092 | +48 bytes |
-| Application bss | 356016 | 359392 | +3376 bytes |
-| Signed App | 179855 | 199524 | +19669 bytes |
+| 生成参数 | 136 | 176 | +40 |
+| 一方源文件 | 184 | 193 | +9 |
+| Application text | 166596 | 188912 | +22316 bytes |
+| Application data | 12044 | 12212 | +168 bytes |
+| Application bss | 356016 | 359584 | +3568 bytes |
+| Signed App | 179855 | 202339 | +22484 bytes |
 | MCUboot BIN | 47884 | 47884 | 0 bytes |
 | `.init_array` | 13 | 15 | +2 项 |
 
 最终镜像与布局门禁结果：
 
 ```text
-Factory HEX                 595448 bytes
+Factory HEX                 602222 bytes
 Application vector         0x08040400
-Application Flash usage    186024 bytes
-DTCM usage                  58044 bytes
+Application Flash usage    188720 bytes
+DTCM usage                  58356 bytes
 SRAM usage                  313632 bytes
 DMA usage                   2112 bytes
 D3 diagnostics              224 bytes
+Image digest                ce85eafb4351952aef1ab10a4bcdfaad90bf259da191f1b2fe7441edd4e54a04
 ```
 
-Signed App 占 768 KiB Primary Slot 约 25.37%，低于 85% 发布控制线。MCUboot 大小未变化；构建已检查应用/MCUboot 无未解析符号、签名、Factory HEX、Slot 地址、向量和镜像验证。
+Signed App 占 768 KiB Primary Slot 约 25.73%，低于 85% 发布控制线。MCUboot 大小未变化；构建已检查应用/MCUboot 无未解析符号、签名、Factory HEX、Slot 地址、向量和镜像验证。
 
 ## 7. uORB、初始化数组与任务资源
 
@@ -142,6 +143,8 @@ Signed App 占 768 KiB Primary Slot 约 25.37%，低于 85% 发布控制线。MC
 
 - 架构扫描要求唯一控制链和六路映射，禁止底层反向依赖 `Dima/rover`，并拒绝非零初始 compare、额外执行器消费者及重复 Rover 根。
 - 目标 ELF 要求 HAL PWM、`board_motor_pwm_start/write/stop`、MotorOutput start/safe-off 和平台 `ActuatorPwm` 符号实际链接，同时继续拒绝 Mixer、MixingOutput、FunctionMotors 和通用 ActuatorOutput。
+- SBUS 门禁要求 `RC_INPUT_PROTO=0/2`、自动 `100000/8E2 + RXINV + pulldown`、UART/FIFO/RX GPIO 事务恢复和任务上下文单次故障日志；UART/DMA ISR 后端不得格式化日志或写 USB。
+- 启用 SBUS Debug 后，连续数据只能由低优先级 LogService 通过 `input_rc` 输出，周期不得小于 100 ms；最坏 18 路记录为 209 bytes，低于固定 256-byte 格式缓冲。默认 Error 策略不产生该数据，后续传输边界交由 MAVLink 方案收敛。
 - MotorOutput、ApplicationContext 和 BootHealth 热路径没有 `new`、`malloc` 或 `free` 调用。目标文件中编译器为虚析构生成的 deleting-destructor `operator delete` 重定位不在 `Run()` 调用路径。
 - 应用向量保持 `0x08040400`，`.dima_task_pool`、`.dima_dma`、D3 diagnostics、SysTick/TIM2 ISR、TIM12 非 HAL tick 和生命周期符号继续由目标 ELF 门禁检查。
 - 没有新增 Host Test、Mock、Fixture、测试目标、SITL 或仿真入口。
@@ -156,6 +159,9 @@ Signed App 占 768 KiB Primary Slot 约 25.37%，低于 85% 发布控制线。MC
 4. Arm/Disarm、Kill/Unkill、Termination、Failsafe、RC 丢失和命令超时波形符合 fail-closed 行为。
 5. 油门中位、正反向、倒车转向、静摩擦补偿、换向延时、slew、解锁 ramp 和左右多路映射符合实车驱动器要求。
 6. USB 日志在高负载、断开、Busy 和 Ring 满时不阻塞控制 WorkQueue。
-7. 既有 HRT、Parameter、Runtime restart、SBUS/RC、Flash/Arm 互锁和 ICM42688 板级待验项目。
+7. 四个候选口自动进入原始反相 SBUS 电气状态，禁用、失败回滚和 Runtime shutdown 后真实恢复普通 UART。
+8. 未接接收机时不再产生周期性后端故障洪泛；真实 UART/DMA 故障只记录一次，收到有效帧后才开启下一故障周期。
+9. 显式启用 SBUS Debug 时，USB 上的 18 路 SBUS 数据不超过 10 Hz，断开不影响 RC/控制调度，重连不补发历史样本；MAVLink 接入后按新传输契约重新验收。
+10. 既有 HRT、Parameter、Runtime restart、SBUS/RC、Flash/Arm 互锁和 ICM42688 板级待验项目。
 
 完成逻辑分析仪、示波器和目标车人工验收之前，阶段结论只能表述为“源码及目标构建通过，板测待完成”。

@@ -12,7 +12,7 @@ STM32 UART RXINV + DMA1 Stream2
 → input_rc
 → RCUpdate
 → rc_channels + manual_control_switches
-→ ManualControl
+→ RcManualInput（PX4 ManualControl RC 子集）
 → manual_control_setpoint + action_request
 ```
 
@@ -70,7 +70,7 @@ Signed BIN 占 768 KiB Application Slot 约 17.8%，低于 85% 控制线。
 
 - SBUS DMA Buffer 为固定 64 bytes、32-byte 对齐，不使用动态内存。
 - SPI4 使用 DMA1 Stream0/1；SBUS 使用 DMA1 Stream2，不冲突。
-- 阶段 3 没有新建 FreeRTOS Task：SbusRc 与 RCUpdate 复用 `wq:io`，ManualControl 复用 `wq:hp_default`。
+- 阶段 3 没有新建 FreeRTOS Task：SbusRc 与 RCUpdate 复用 `wq:io`，当前命名为 `RcManualInput` 的 ManualControl RC 子集复用 `wq:hp_default`。
 - 七个 WorkQueue 静态栈总量仍为 28,672 bytes。
 - Perf 固定池为 4,608 bytes；RC 链启动后占用 7 个 Counter：SBUS 字节、完整帧、非法帧、丢帧、UART 错误、`input_rc` 间隔和 `rc_channels` 间隔。
 - Event Ring 仍为 128 条；阶段 3 增加 UART/DMA、Failsafe、RC loss、校准、映射和 Topic 发布失败事件。

@@ -13,16 +13,21 @@ Estimator 固定采用 PX4 EKF2。此前涉及 ArduPilot EKF3 的阶段计划均
 ```text
 Dima/                         唯一自研应用根、兼容层和产品装配
 ├── application/              启动壳、C ABI 入口和 appMainTask
-├── adapters/                 仅依赖公共 capability 的外部协议适配
+├── adapters/                 仅依赖公共 capability 的外部协议编解码/适配
 ├── platform/api/             OS/MCU 无关 capability 与 opaque handle
 ├── platform/freertos/        Task、同步、Heap 和 transaction 后端
 ├── platform/stm32h7/         MPU/cache/DMA/Flash/时钟/USB/串口后端
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
-├── modules/                  Parameter、Log、boot_health、RC、安全、EKF2
-├── lib/                      motor、rover_control 与公共算法库
+├── modules/                  具有独立生命周期的运行模块
+│   ├── rc/                   SBUS、校准、通道映射与 RC 手动输入转换
+│   └── motor/                安全门控后的六路 MotorOutput
+├── lib/                      平台无关算法、容器和移植库
+│   └── rover/                当前已接入的 DifferentialDrive 纯算法
 ├── messages/                 共享消息契约
-└── rover/                    唯一 Rover 产品域（ApplicationContext、control、navigation）
+└── rover/                    唯一 Rover 产品域
+    ├── control/              RoverDifferential 消息/参数/安全运行适配
+    └── modes/                ManualMode 等 Rover 产品模式
 
 Boards/H743/                  板级初始化、Flash 布局和外设适配
 Core/                         CubeMX/HAL 应用生成层
@@ -34,18 +39,22 @@ Linker/、make/、tools/        链接、构建、签名和升级工具
 docs/                         计划、架构、ADR、来源和维护文档
 ```
 
-已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/Clock.cpp`。参数 Journal 与 STM32H7 raw Flash、USB Console 与 STM32 USB transport、SBUS 模块与 STM32 UART/DMA 驱动均已拆分，不再保留混合后端。
+已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/Clock.cpp`。参数 Journal 与 STM32H7 raw Flash、USB Console 与 STM32 USB transport、SBUS 模块与 STM32 UART/DMA 驱动均已拆分，不再保留混合后端。源码树只呈现已经存在的实现；EKF2、PID、SlewRate 和阶段 8 控制器在正式导入前只保留于计划/ADR，不建立 README-only 占位目录或无消费者的预实现源码。
 
 ## 3. 依赖规则
 
 - `Dima/rover` 是唯一 Rover 产品域，可依赖 modules、middleware、messages、lib 和 `platform/api`，但不包含具体后端类型；`Boards/H743/Src/platform_composition.cpp` 是后端组合根。
-- `Dima/modules` 承载具有独立生命周期和运行状态的功能块；Parameter、Log 等系统功能与 RC、Commander 一样实现统一的 ModuleBase 契约。
+- `Dima/modules` 承载具有独立生命周期和运行状态的功能块；Parameter、Log、RC、MotorOutput 与 Commander 均实现统一的 ModuleBase 契约。`RcManualInput` 明确只转换 RC 来源，不代表 Rover 模式或未来 MAVLink 入口。
+- `Dima/rover/modes` 只把通用输入契约转换为 Rover 产品请求；`Dima/rover/control` 只消费 `rover_motion_request`、调用 `Dima/lib/rover` 纯算法并产生双 Motor 命令，二者都不得直接访问 PWM 后端。
+- `Dima/lib/rover` 不得依赖 uORB、Parameter、WorkQueue 或 ModuleBase；阶段 5 的 `DifferentialDrive` 由 `RoverDifferential` 调用。阶段 8 闭环控制核在接入状态估计前既不得进入生产构建，也不得被描述为生产链路。
 - `Dima/modules` 和 `Dima/middleware` 禁止反向依赖 `Dima/rover`。
 - `application/rover/modules/middleware/messages/lib/adapters` 只允许依赖标准库、内部公共契约和 `Dima/platform/api`，禁止 FreeRTOS、HAL、CMSIS、SCB/NVIC、Core、Board 与 USB 生成头。
 - `Dima/platform/api` 只定义整数、尺寸、opaque handle、callback 和窄 capability，不暴露 OS/MCU/厂商类型。
 - `Dima/platform/freertos` 只连接 `platform/api` 与 FreeRTOS；`Dima/platform/stm32h7` 只连接 `platform/api`、HAL/CMSIS 和板级定义，二者禁止互相包含。
 - `Boards/H743` 负责 MCU、引脚、DMA、PWM、Flash 和总线接线，不依赖上层控制模块。
 - `Core/` 与 `USB_DEVICE/` 的生成区只保留必要接线，禁止写入业务逻辑。
+- `Core/Inc/FreeRTOSConfig.h` 只是 CubeMX/FreeRTOS 查找约定所需的转发头，唯一配置实现为 `Dima/platform/freertos/FreeRTOSConfig.h`；STM32H7 capability 工厂统一由 `HardwareServices.hpp` 声明。
+- 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源；禁止第二份 `.ioc`、README-only 源码目录、Dima 同名源码文件和未列入 `make/project.mk` 的翻译单元。
 - `make check-architecture` 检查底层 include/API、cache/DMA/Flash 操作所有权、依赖方向和私有 include 集，并是 `firmware/verify/dima_rover` 的强制前置条件。
 - 上游移植文件必须保留原始版权头，并在 Source Manifest 中记录原始路径、版本和本地修改。
 - 项目内不新建名称包含大小写不敏感 `px4` 的目录；该规则不适用于源码符号、许可证和来源说明。
@@ -94,7 +103,7 @@ USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 跨 Runtime：Commander Termination、D3 Fault 记录和明确标注的累计诊断
 ```
 
-Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter Journal/Core → Module registration`；启动顺序固定为 `Parameter → Log → MotorOutput safe-off → Commander → SBUS → RCUpdate → ManualControl → ManualMotionAdapter → RoverDifferential → BootHealth`。关闭时先停 BootHealth 和 RC 链，再确认 MotorOutput 已停止 TIM5/TIM8 并恢复六路 GPIO 低电平，然后停止控制生产者、Commander、Log 和 Parameter，最后按 `Parameter Core/Journal → uORB → WorkQueue → Console` 释放 Runtime 资源。
+Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter Journal/Core → Module registration`；启动顺序固定为 `Parameter → Log → MotorOutput safe-off → Commander → SbusRc → RCUpdate → RcManualInput → ManualMode → RoverDifferential → BootHealth`。关闭时先停 BootHealth 和 RC 链，再确认 MotorOutput 已停止 TIM5/TIM8 并恢复六路 GPIO 低电平，然后停止控制生产者、Commander、Log 和 Parameter，最后按 `Parameter Core/Journal → uORB → WorkQueue → Console` 释放 Runtime 资源。
 
 - `ApplicationContext` 只接受 owner task 执行 init/start/shutdown；部分初始化和 Error 状态按成功步骤逆序回滚，清理失败时不得伪装为 Stopped 或重新 init。
 - `Param<T>` 构造不访问 Parameter Core；模块每次 start 必须 `bind()`，shutdown 清除 ready、used、unsaved、值 cache、动态 Layer、callback 和运行期同步对象。Journal 下次 initialize/load 必须重新扫描并复验 Header、Commit Marker 和 payload CRC。
@@ -108,6 +117,7 @@ Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter J
 
 ```text
 manual_control_setpoint
+→ ManualMode
 → rover_motion_request（前后、左右两轴）
 → RoverDifferential
 → actuator_motors（Motor1 右侧、Motor2 左侧）
@@ -141,7 +151,7 @@ manual_control_setpoint
 
 - 生产消息接口统一采用 uORB 兼容 Publication/Subscription；启动健康观察 Commander 三个安全 Topic 和 `actuator_output_status`，不建立示例心跳 Topic。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
-- 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。
+- 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。MAVLink 纯协议/byte-stream 适配归 `Dima/adapters/mavlink`，uORB、Parameter 与调度生命周期归 `Dima/modules/mavlink`，MCU 串口/DMA 后端归 `Dima/platform/stm32h7`，实现前不建立空占位目录。
 - 参数核心只依赖公共 execution/memory/synchronization 接口；`ParameterJournal` 与 STM32H7 raw Flash device 分离，保持 `0x081E0000/128 KiB`、Journal v1 字节格式和 ENOSPC 语义不变。
 - 参数扫描不执行整段 cache invalidate；raw Flash 仅在 program/erase 成功后处理实际修改范围，D-cache 关闭时中央 helper no-op。
 - 每次 load 都重新验证 Header、Commit Marker 和 payload CRC；最新记录损坏时重扫并回退上一条有效快照。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。

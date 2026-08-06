@@ -295,4 +295,4 @@ ROM Bootloader 的 USB FS DFU 使用 HSI48 + CRS，不依赖外部 HSE；芯片�
 
 - ST AN2606 Rev 70，STM32H74xxx/75xxx System Memory Bootloader、Pattern 10、USB DFU 引脚/供电和 ROM 版本限制。
 - ST DS12110 Rev 11，STM32H743VI LQFP100 pinout 与 USB OTG FS 电气要求。
-- 本工程 `Bootloader/Src/main.c`、`Bootloader/Src/flash_map_backend.c`、`Dima/platform/stm32h7/BootControl.cpp`、`Dima/platform/stm32h7/flash_bank1.c`、`Dima/modules/boot_health/boot_health.cpp`、Commander 三个安全消息、`Boards/H743/Inc/boot_layout.h` 和根 Makefile。
+- 本工程 `Bootloader/Src/main.c`、`Bootloader/Src/flash_map_backend.c`、`Dima/platform/stm32h7/BootControl.cpp`、`Dima/platform/stm32h7/flash_bank1.c`、`Dima/modules/boot_health/BootHealthService.cpp`、Commander 三个安全消息、`Boards/H743/Inc/boot_layout.h` 和根 Makefile。

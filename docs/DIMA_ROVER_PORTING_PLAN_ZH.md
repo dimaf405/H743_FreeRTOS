@@ -34,7 +34,7 @@ Dima Product Rover
   Mode / Arming Policy / Failsafe / Mission
                     ↓
 成熟 Rover 模块
-  RCUpdate / ManualControl / Commander 子集
+  RCUpdate / RcManualInput（ManualControl RC 子集）/ Commander 子集
   RoverDifferential / EKF2 / Position Control
   FunctionMotors / MixingOutput
                     ↓
@@ -56,20 +56,21 @@ MCUboot
 ```text
 Dima/
 ├── application/                    启动壳、C ABI 入口和 appMainTask
-├── adapters/                       只依赖 capability 的外部协议适配
+├── adapters/                       只依赖 capability 的外部协议编解码/适配
 ├── platform/api/                   OS/MCU 无关公共契约
 ├── platform/freertos/              Task、同步、Heap 与 transaction 后端
 ├── platform/stm32h7/               MPU/cache/DMA/Flash/时钟/USB/串口后端
 ├── middleware/                     lifecycle、parameters、uORB、WorkQueue
-├── modules/                        Parameter、Log、boot_health、RC、安全、EKF2
-├── lib/                            motor、rover_control 与公共算法库
+├── modules/                        Parameter、Log、BootHealth、RC、MotorOutput、安全等已实现运行模块
+├── lib/                            平台无关算法、容器和移植库
+│   └── rover/                      当前生产链使用的 DifferentialDrive
 ├── messages/
-└── rover/                          唯一 Rover 产品域；组合根、control、navigation
+└── rover/                          唯一 Rover 产品域；组合根、control、modes、navigation
 
 Boards/H743/  Core/  Drivers/  Middlewares/  USB_DEVICE/  Bootloader/
 ```
 
-已退役的顶层 `App/` 已完成目录归并。C/C++ Runtime 留在 FreeRTOS 后端，公共时间接口进入 `platform/api`，TIM2、Flash、DMA、USB 与中断实现进入 STM32H7 后端；`ApplicationContext` 只装配 capability。`Core/Boards/Drivers/Middlewares/USB_DEVICE/Bootloader` 保持独立；项目自有测试子系统已移除；目标构建、签名镜像和目标板行为以本次验证及后续板测为准。
+已退役的顶层 `App/` 已完成目录归并。C/C++ Runtime 留在 FreeRTOS 后端，公共时间接口进入 `platform/api`，TIM2、Flash、DMA、USB 与中断实现进入 STM32H7 后端；`ApplicationContext` 只装配 capability。`Core/Boards/Drivers/Middlewares/USB_DEVICE/Bootloader` 保持独立；项目自有测试子系统已移除；尚未实现的 EKF2、PID、SlewRate 和阶段 8 控制器不建立源码占位目录。目标构建、签名镜像和目标板行为以本次验证及后续板测为准。
 
 ## 4. 阶段 0：保存计划并建立重构基线
 
@@ -163,12 +164,13 @@ Storage       128 KiB
 → input_rc
 → RCUpdate
 → rc_channels + manual_control_switches
-→ ManualControl
+→ RcManualInput（PX4 ManualControl RC 子集）
 → manual_control_setpoint + action_request
 ```
 
-- `RC_PORT_CONFIG` 支持 0 禁用、1 UART4/PB8、2 UART7/PE7、3 UART8/PE0、4 USART2/PD6；默认 UART4/PB8。
-- 原始反相 SBUS 使用 100000 bit/s、8E2、UART RXINV、SRAM3 non-cacheable 64-byte 循环 DMA Buffer；ISR 仅更新时间并经 ISR-safe callback 唤醒 `wq:io`，业务层不执行 cache maintenance。
+- `RC_INPUT_PROTO` 使用 `0=Disabled`、`2=SBUS`，默认 SBUS；`RC_PORT_CONFIG` 支持 1 UART4/PB8、2 UART7/PE7、3 UART8/PE0、4 USART2/PD6，值 0 只兼容旧配置的安全禁用语义。
+- 原始反相 SBUS 自动使用 100000 bit/s、8E2、UART RXINV 和 RX pulldown，不再提供手动极性参数；接管前保存 UART/FIFO/RX GPIO，停用、失败回滚和 Runtime shutdown 均恢复普通 UART。
+- SRAM3 non-cacheable 64-byte 循环 DMA Buffer 只由 DMA 写入；ISR 记录真实到达时间并复制到 256 项 CPU-only Ring，再经 ISR-safe callback 唤醒 `wq:io`，业务层不执行 cache maintenance。
 - RC 参数由生成器扩展到 135 项总量，其中阶段 3 新增 111 项 RC 配置、18 通道校准、映射和失联参数。
 - `RC_CHAN_CNT=0` 时按实际接收通道数工作，仍可通过在线参数显式限制通道数；校准与映射在 `parameter_update` 后在线刷新。
 - SBUS 单帧丢失只累计丢帧统计，不误判为整条链路失联；Failsafe、显式 `rc_lost` 或 `COM_RC_LOSS_T` 超时才发布失联状态。
@@ -191,13 +193,15 @@ Storage       128 KiB
 - 2026-08-03 全量回归修复后，应用收敛为 SysTick + TIM2 双时基，补齐 Flash/Arming 原子互锁、Commander 发布失效安全、真实 RC DMA 到达时间、ICM42688 板级接口、参数快照回退和 WorkQueue cancel-and-drain。增量目标构建为 Application `141428/7668/332584` bytes、Signed BIN `150311` bytes；实板时序、电气和并发验收仍待完成。
 - 2026-08-04 平台隔离重构把 FreeRTOS、HAL/CMSIS、cache/DMA/Flash 所有权收敛到独立后端；WorkQueue、uORB、Parameter、Console、Commander、RC 和启动任务只使用公共 capability。最终 clean 构建与实板压力验收以本次交付证据为准。
 - 2026-08-05 生命周期收敛建立唯一 `Dima/rover`，补齐 Parameter cache、uORB epoch、WorkQueue owner/drain、Console、BootHealth、Fault 冷启动持久化和 SBUS DMA/CPU Ring 所有权。源码架构门禁已通过；Windows 原生 clean build、最终 ELF 门禁和同上电 Runtime restart 板测仍待完成，历史尺寸不得作为当前结果。
+- 2026-08-06 SBUS 电气状态改由协议自动管理，删除手动极性参数；统一 Debug SourcePolicy 支持低优先级日志服务以不超过 10 Hz 输出最新 18 路 SBUS 数据，默认 SBUS Error 不输出，ISR/DMA 路径不格式化或写 USB；后续由 MAVLink 接入重新收敛诊断传输边界。
+- 2026-08-06 目录职责再次收敛：RC 来源转换明确命名为 `modules/rc/RcManualInput`，Rover 的实际入口明确命名为 `rover/modes/ManualMode`；MotorOutput 归入执行器运行模块，纯 `DifferentialDrive` 归入 `Dima/lib/rover`。同时移除从未进入生产调用链的 `speed_to_pwm` 和阶段 8 预实现控制器、README-only 规划目录、旧 75 MHz CubeMX 工程及未参与构建的根级 newlib 锁文件，并消除两个含义不同的 `Backend.hpp`。
 - 本阶段未接 PWM、Mixer、RoverDifferential 或 HAL 执行器输出，因此车辆仍不能运动；目标板行为尚未验收。
 
 ### 阶段 5：差速执行器链
 
-阶段 5 已在唯一产品目录 `Dima/rover/control/` 完成以下受控子集：
+阶段 5 已由 `Dima/rover/control/` 运行适配、`Dima/lib/rover/DifferentialDrive.*` 纯算法和 `Dima/modules/motor/` 安全输出模块完成以下受控子集：
 
-- 只保留前后 `longitudinal` 和左右 `steering/yaw` 两轴。Manual 适配器发布 `rover_motion_request`，RoverDifferential 在 100 Hz 生成右、左两路 `actuator_motors`；其余十路保持 NaN。
+- 只保留前后 `longitudinal` 和左右 `steering/yaw` 两轴。`ManualMode` 发布 `rover_motion_request`，RoverDifferential 在 100 Hz 生成右、左两路 `actuator_motors`；其余十路保持 NaN。
 - `rover_motion_request` 同时预留 `SOURCE_NAVIGATION` 和 `MODE_SPEED_YAW_RATE`，但当前只接受 `SOURCE_MANUAL + MODE_NORMALIZED_AXES`。阶段 9 Navigation 必须复用该消息边界，不能直接依赖 DifferentialDrive、MotorOutput 或板级 PWM。
 - 差速混控采用 PX4 v1.17.0 的两轴/消息边界，并综合 ArduPilot Rover 的倒车车头方向、转向/油门饱和优先级、静摩擦补偿、反向推力不对称和左右独立换向延时行为；ArduPilot GPL 源码只作行为参考，没有复制。
 - 六路输出只提供 Disabled、MotorRight、MotorLeft 三种功能。默认全 Disabled；每路公开 `FUNC/MIN/CENT/MAX/REV`，零命令严格落在 CENT，允许同一 Motor function 映射多个物理口。
@@ -243,7 +247,7 @@ Wheel Encoder 不直接侵入 EKF Core；先通过独立 Dima Odometry Adapter �
 
 ### 阶段 8：闭环 Rover 控制
 
-接入 Speed、Yaw Rate、Heading 和 Stop 控制链，完成实车参数调整和控制状态可观测性。
+待状态估计和运行接口确定后，从 PX4 v1.17.0 重新导入 Speed、Yaw Rate、Heading 和 Stop 纯控制核，再由独立 Rover 运行模块连接状态估计、参数、消息和安全门控。当前源码树不保留无消费者的预实现控制器，也不得提前描述为生产闭环。完成后还需实车参数调整和控制状态可观测性。
 
 ### 阶段 9：Position、Waypoint、Reverse 与 PivotTurn
 
@@ -251,7 +255,7 @@ Wheel Encoder 不直接侵入 EKF Core；先通过独立 Dima Odometry Adapter �
 
 ### 阶段 10：MAVLink、日志与产品化收敛
 
-加入在线参数、状态、任务、Estimator、控制器、Fault/Event 和升级状态的现场可观测能力，完成长时间运行、失联、传感器异常、看门狗、升级与回滚等实车验收。
+加入在线参数、状态、任务、Estimator、控制器、Fault/Event 和升级状态的现场可观测能力。纯 MAVLink 协议与 byte-stream 适配进入 `Dima/adapters/mavlink/`，uORB/Parameter/调度生命周期进入 `Dima/modules/mavlink/`，STM32 UART/DMA 后端继续留在 `Dima/platform/stm32h7/`；实现前不创建空目录。完成长时间运行、失联、传感器异常、看门狗、升级与回滚等实车验收。
 
 ## 6. 当前目录迁移验收条件
 

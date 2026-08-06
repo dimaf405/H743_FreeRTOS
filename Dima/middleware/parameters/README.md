@@ -21,6 +21,8 @@ PX4 PARAM_DEFINE_* 参数定义
 → STM32H7 FlashPartition
 ```
 
+`definitions/` 是参数生成器的集中 Schema 输入区，不是 Parameter 中间件对 Commander、RC、Rover 或 MotorOutput 业务的运行时所有权声明。文件按功能域命名并由 `make/project.mk` 显式排序；实际参数消费和生命周期仍归各自模块。集中保存可避免跨目录扫描隐式改变生成顺序，后续若改为模块就近定义，必须先证明生成元数据及持久化兼容性。
+
 ## 当前实现
 
 - 参数数量完全由生成结果决定，不设置固定 64、128 等容量。
