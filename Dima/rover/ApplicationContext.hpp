@@ -43,6 +43,7 @@ private:
     bool stop_started_modules() noexcept;
     bool start_rc_chain() noexcept;
     bool stop_rc_chain() noexcept;
+    bool stop_sbus() noexcept;
     bool start_control_chain() noexcept;
     bool stop_control_chain() noexcept;
     bool stop_motor_output() noexcept;

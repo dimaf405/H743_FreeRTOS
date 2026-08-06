@@ -1,4 +1,4 @@
-#include "Backend.hpp"
+#include "HardwareServices.hpp"
 
 #include "usart.h"
 
@@ -68,37 +68,167 @@ IRQn_Type irq_for(const UART_HandleTypeDef *uart) noexcept
     return USART2_IRQn;
 }
 
+struct RxPinConfig {
+    GPIO_TypeDef *port{nullptr};
+    std::uint32_t pin{0U};
+    std::uint32_t alternate{0U};
+    std::uint32_t index{0U};
+};
+
+struct RxPinSnapshot {
+    GPIO_TypeDef *port{nullptr};
+    std::uint32_t index{0U};
+    std::uint32_t mode{0U};
+    std::uint32_t output_type{0U};
+    std::uint32_t speed{0U};
+    std::uint32_t pull{0U};
+    std::uint32_t alternate{0U};
+    bool valid{false};
+};
+
+RxPinConfig rx_pin_for(SbusPort port) noexcept
+{
+    switch (port) {
+    case SbusPort::Uart4Pb8:
+        return {GPIOB, GPIO_PIN_8, GPIO_AF8_UART4, 8U};
+    case SbusPort::Uart7Pe7:
+        return {GPIOE, GPIO_PIN_7, GPIO_AF7_UART7, 7U};
+    case SbusPort::Uart8Pe0:
+        return {GPIOE, GPIO_PIN_0, GPIO_AF8_UART8, 0U};
+    case SbusPort::Usart2Pd6:
+        return {GPIOD, GPIO_PIN_6, GPIO_AF7_USART2, 6U};
+    default:
+        return {};
+    }
+}
+
+bool capture_rx_pin(SbusPort port, RxPinSnapshot &snapshot) noexcept
+{
+    const RxPinConfig pin = rx_pin_for(port);
+    if (pin.port == nullptr || pin.pin == 0U || pin.index >= 16U) {
+        return false;
+    }
+
+    const std::uint32_t pair_shift = pin.index * 2U;
+    const std::uint32_t alternate_shift = (pin.index % 8U) * 4U;
+    snapshot.port = pin.port;
+    snapshot.index = pin.index;
+    snapshot.mode = pin.port->MODER & (0x3U << pair_shift);
+    snapshot.output_type = pin.port->OTYPER & (0x1U << pin.index);
+    snapshot.speed = pin.port->OSPEEDR & (0x3U << pair_shift);
+    snapshot.pull = pin.port->PUPDR & (0x3U << pair_shift);
+    snapshot.alternate =
+        pin.port->AFR[pin.index / 8U] & (0xFU << alternate_shift);
+    snapshot.valid = true;
+    return true;
+}
+
+bool restore_rx_pin(const RxPinSnapshot &snapshot) noexcept
+{
+    if (!snapshot.valid || snapshot.port == nullptr || snapshot.index >= 16U) {
+        return false;
+    }
+
+    const std::uint32_t pair_shift = snapshot.index * 2U;
+    const std::uint32_t pair_mask = 0x3U << pair_shift;
+    const std::uint32_t pin_mask = 0x1U << snapshot.index;
+    const std::uint32_t alternate_shift = (snapshot.index % 8U) * 4U;
+    const std::uint32_t alternate_mask = 0xFU << alternate_shift;
+    dima::platform::CriticalGuard guard;
+    MODIFY_REG(snapshot.port->AFR[snapshot.index / 8U], alternate_mask,
+               snapshot.alternate);
+    MODIFY_REG(snapshot.port->OTYPER, pin_mask, snapshot.output_type);
+    MODIFY_REG(snapshot.port->OSPEEDR, pair_mask, snapshot.speed);
+    MODIFY_REG(snapshot.port->PUPDR, pair_mask, snapshot.pull);
+    MODIFY_REG(snapshot.port->MODER, pair_mask, snapshot.mode);
+    return true;
+}
+
+void configure_sbus_rx_pin(SbusPort port) noexcept
+{
+    const RxPinConfig pin = rx_pin_for(port);
+    if (pin.port == nullptr) {
+        return;
+    }
+
+    GPIO_InitTypeDef gpio{};
+    gpio.Pin = pin.pin;
+    gpio.Mode = GPIO_MODE_AF_PP;
+    /* A raw inverted SBUS line idles low before the UART applies RXINV. */
+    gpio.Pull = GPIO_PULLDOWN;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    gpio.Alternate = pin.alternate;
+    HAL_GPIO_Init(pin.port, &gpio);
+}
+
+std::uint32_t translate_uart_error(std::uint32_t error) noexcept
+{
+    std::uint32_t translated = SbusInputErrorNone;
+    if ((error & HAL_UART_ERROR_PE) != 0U) translated |= SbusInputErrorParity;
+    if ((error & HAL_UART_ERROR_NE) != 0U) translated |= SbusInputErrorNoise;
+    if ((error & HAL_UART_ERROR_FE) != 0U) translated |= SbusInputErrorFraming;
+    if ((error & HAL_UART_ERROR_ORE) != 0U) translated |= SbusInputErrorOverrun;
+    if ((error & HAL_UART_ERROR_DMA) != 0U) translated |= SbusInputErrorDma;
+    if ((error & HAL_UART_ERROR_RTO) != 0U) translated |= SbusInputErrorTimeout;
+    constexpr std::uint32_t known = HAL_UART_ERROR_PE | HAL_UART_ERROR_NE |
+                                    HAL_UART_ERROR_FE | HAL_UART_ERROR_ORE |
+                                    HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO;
+    if ((error & ~known) != 0U) translated |= SbusInputErrorUnknown;
+    return translated;
+}
+
 class Stm32SbusInput final : public SbusInput {
 public:
-    bool configure(std::int32_t port, bool inverted) noexcept override
+    bool configure(std::int32_t port) noexcept override
     {
         if (running() || uart_ != nullptr || dma_initialized_) {
             return false;
         }
         reset_statistics();
         const auto selected = static_cast<SbusPort>(port);
-        if (uart_for(selected) == nullptr || request_for(selected) == 0U) {
+        auto *const uart = uart_for(selected);
+        if (uart == nullptr || request_for(selected) == 0U) {
+            return false;
+        }
+        RxPinSnapshot rx_pin{};
+        if (!capture_rx_pin(selected, rx_pin)) {
             return false;
         }
         configured_port_ = selected;
-        configured_inverted_ = inverted;
+        normal_uart_ = uart;
+        normal_init_ = uart->Init;
+        normal_advanced_init_ = uart->AdvancedInit;
+        normal_fifo_mode_ = uart->FifoMode;
+        normal_tx_fifo_threshold_ = uart->Instance->CR3 & USART_CR3_TXFTCFG;
+        normal_rx_fifo_threshold_ = uart->Instance->CR3 & USART_CR3_RXFTCFG;
+        normal_rx_pin_ = rx_pin;
+        normal_configuration_valid_ = true;
         return true;
     }
 
     bool start(IsrCallback notification) noexcept override
     {
-        stop();
+        if (!stop()) {
+            return false;
+        }
         auto *const uart = uart_for(configured_port_);
         const std::uint32_t request = request_for(configured_port_);
         const DmaBufferView dma_buffer =
             dma_memory().view(g_dma_buffer, sizeof(g_dma_buffer));
-        if (uart == nullptr || request == 0U ||
+        if (uart == nullptr || uart != normal_uart_ ||
+            !normal_configuration_valid_ || request == 0U ||
             !dma_memory().valid(dma_buffer) || notification.function == nullptr) {
             increment_recovery_failure();
             return false;
         }
 
-        (void)HAL_UART_DeInit(uart);
+        uart_ = uart;
+        takeover_active_ = true;
+        if (HAL_UART_DeInit(uart) != HAL_OK) {
+            increment_recovery_failure();
+            (void)stop();
+            return false;
+        }
         uart->Init.BaudRate = 100000U;
         uart->Init.WordLength = UART_WORDLENGTH_9B;
         uart->Init.StopBits = UART_STOPBITS_2;
@@ -109,20 +239,24 @@ public:
         uart->Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
         uart->Init.ClockPrescaler = UART_PRESCALER_DIV1;
         uart->AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_RXINVERT_INIT;
-        uart->AdvancedInit.RxPinLevelInvert = configured_inverted_
-            ? UART_ADVFEATURE_RXINV_ENABLE : UART_ADVFEATURE_RXINV_DISABLE;
+        uart->AdvancedInit.RxPinLevelInvert = UART_ADVFEATURE_RXINV_ENABLE;
         if (HAL_UART_Init(uart) != HAL_OK) {
             increment_recovery_failure();
-            (void)HAL_UART_DeInit(uart);
+            (void)stop();
             return false;
         }
 
-        uart_ = uart;
+        configure_sbus_rx_pin(configured_port_);
+
         if (HAL_UARTEx_DisableFifoMode(uart) != HAL_OK) {
             increment_recovery_failure();
-            stop();
+            (void)stop();
             return false;
         }
+        __HAL_UART_CLEAR_FLAG(uart, UART_CLEAR_OREF | UART_CLEAR_NEF |
+                                       UART_CLEAR_FEF | UART_CLEAR_PEF |
+                                       UART_CLEAR_IDLEF);
+        __HAL_UART_SEND_REQ(uart, UART_RXDATA_FLUSH_REQUEST);
 
         g_sbus_dma = DMA_HandleTypeDef{};
         g_sbus_dma.Instance = DMA1_Stream2;
@@ -137,7 +271,7 @@ public:
         g_sbus_dma.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
         if (HAL_DMA_Init(&g_sbus_dma) != HAL_OK) {
             increment_recovery_failure();
-            stop();
+            (void)stop();
             return false;
         }
         dma_initialized_ = true;
@@ -159,13 +293,13 @@ public:
         if (!arm_receive()) {
             __atomic_store_n(&running_, false, __ATOMIC_RELEASE);
             increment_recovery_failure();
-            stop();
+            (void)stop();
             return false;
         }
         return true;
     }
 
-    void stop() noexcept override
+    bool stop() noexcept override
     {
         __atomic_store_n(&running_, false, __ATOMIC_RELEASE);
         auto *const uart = static_cast<UART_HandleTypeDef *>(uart_);
@@ -188,9 +322,20 @@ public:
             uart->hdmarx = nullptr;
             (void)HAL_UART_DeInit(uart);
         }
-        uart_ = nullptr;
+        bool restored = true;
+        if (takeover_active_) {
+            restored = restore_normal_uart(uart);
+            if (!restored) {
+                increment_recovery_failure();
+            }
+        }
+        if (restored) {
+            uart_ = nullptr;
+            takeover_active_ = false;
+        }
         notification_ = {};
         reset_receive_epoch();
+        return restored;
     }
 
     std::size_t read(std::uint8_t *destination,
@@ -242,6 +387,7 @@ public:
             __atomic_load_n(&overwritten_bytes_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&receive_errors_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&recovery_failures_, __ATOMIC_ACQUIRE),
+            __atomic_load_n(&receive_error_flags_, __ATOMIC_ACQUIRE),
         };
     }
 
@@ -325,11 +471,38 @@ public:
 
     void on_error_from_isr(std::uint32_t error) noexcept
     {
-        (void)error;
+        (void)__atomic_fetch_or(&receive_error_flags_,
+                                translate_uart_error(error),
+                                __ATOMIC_RELAXED);
         fail_from_isr(kReceiveFaultUart, true);
     }
 
 private:
+    bool restore_normal_uart(UART_HandleTypeDef *uart) noexcept
+    {
+        if (!normal_configuration_valid_ || uart == nullptr ||
+            uart != normal_uart_) {
+            return false;
+        }
+
+        uart->Init = normal_init_;
+        uart->AdvancedInit = normal_advanced_init_;
+        uart->hdmarx = nullptr;
+        if (HAL_UART_Init(uart) != HAL_OK ||
+            HAL_UARTEx_SetTxFifoThreshold(
+                uart, normal_tx_fifo_threshold_) != HAL_OK ||
+            HAL_UARTEx_SetRxFifoThreshold(
+                uart, normal_rx_fifo_threshold_) != HAL_OK ||
+            (normal_fifo_mode_ == UART_FIFOMODE_ENABLE
+                 ? HAL_UARTEx_EnableFifoMode(uart)
+                 : HAL_UARTEx_DisableFifoMode(uart)) != HAL_OK ||
+            !restore_rx_pin(normal_rx_pin_)) {
+            (void)HAL_UART_DeInit(uart);
+            return false;
+        }
+        return true;
+    }
+
     void fail_from_isr(std::uint32_t fault, bool count_error) noexcept
     {
         if (count_error) {
@@ -365,6 +538,7 @@ private:
         __atomic_store_n(&overwritten_bytes_, 0U, __ATOMIC_RELAXED);
         __atomic_store_n(&receive_errors_, 0U, __ATOMIC_RELAXED);
         __atomic_store_n(&recovery_failures_, 0U, __ATOMIC_RELAXED);
+        __atomic_store_n(&receive_error_flags_, 0U, __ATOMIC_RELAXED);
     }
 
     bool arm_receive() noexcept
@@ -379,8 +553,11 @@ private:
     }
 
     SbusPort configured_port_{SbusPort::Disabled};
-    bool configured_inverted_{true};
     void *uart_{nullptr};
+    UART_HandleTypeDef *normal_uart_{nullptr};
+    UART_InitTypeDef normal_init_{};
+    UART_AdvFeatureInitTypeDef normal_advanced_init_{};
+    RxPinSnapshot normal_rx_pin_{};
     IsrCallback notification_{};
     std::uint32_t ring_write_sequence_{0U};
     std::uint32_t ring_read_sequence_{0U};
@@ -391,6 +568,12 @@ private:
     std::uint32_t overwritten_bytes_{0U};
     std::uint32_t receive_errors_{0U};
     std::uint32_t recovery_failures_{0U};
+    std::uint32_t receive_error_flags_{0U};
+    std::uint32_t normal_fifo_mode_{UART_FIFOMODE_DISABLE};
+    std::uint32_t normal_tx_fifo_threshold_{UART_TXFIFO_THRESHOLD_1_8};
+    std::uint32_t normal_rx_fifo_threshold_{UART_RXFIFO_THRESHOLD_1_8};
+    bool normal_configuration_valid_{false};
+    bool takeover_active_{false};
     bool dma_initialized_{false};
     bool running_{false};
 };

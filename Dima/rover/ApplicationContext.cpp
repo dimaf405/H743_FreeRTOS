@@ -265,8 +265,7 @@ bool ApplicationContext::start_rc_chain() noexcept
 
     rc_update_started_ = module_manager_.start(rc_update_);
     if (!rc_update_started_) {
-        (void)module_manager_.stop(sbus_rc_);
-        sbus_started_ = false;
+        (void)stop_sbus();
         return false;
     }
 
@@ -274,8 +273,7 @@ bool ApplicationContext::start_rc_chain() noexcept
     if (!manual_control_started_) {
         (void)module_manager_.stop(rc_update_);
         rc_update_started_ = false;
-        (void)module_manager_.stop(sbus_rc_);
-        sbus_started_ = false;
+        (void)stop_sbus();
         return false;
     }
     return true;
@@ -294,11 +292,19 @@ bool ApplicationContext::stop_rc_chain() noexcept
         rc_update_started_ = !result;
         stopped = result && stopped;
     }
-    if (sbus_started_) {
-        const bool result = module_manager_.stop(sbus_rc_);
-        sbus_started_ = !result;
-        stopped = result && stopped;
+    stopped = stop_sbus() && stopped;
+    return stopped;
+}
+
+bool ApplicationContext::stop_sbus() noexcept
+{
+    if (!sbus_started_) {
+        return true;
     }
+    const bool stopped = module_manager_.stop(sbus_rc_) &&
+                         sbus_rc_.state() ==
+                             dima::middleware::lifecycle::ModuleState::Stopped;
+    sbus_started_ = !stopped;
     return stopped;
 }
 

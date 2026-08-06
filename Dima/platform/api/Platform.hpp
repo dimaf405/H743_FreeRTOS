@@ -430,14 +430,26 @@ struct SbusInputStats {
     std::uint32_t overwritten_bytes{0U};
     std::uint32_t receive_errors{0U};
     std::uint32_t recovery_failures{0U};
+    std::uint32_t receive_error_flags{0U};
+};
+
+enum SbusInputError : std::uint32_t {
+    SbusInputErrorNone = 0U,
+    SbusInputErrorParity = 1U << 0U,
+    SbusInputErrorNoise = 1U << 1U,
+    SbusInputErrorFraming = 1U << 2U,
+    SbusInputErrorOverrun = 1U << 3U,
+    SbusInputErrorDma = 1U << 4U,
+    SbusInputErrorTimeout = 1U << 5U,
+    SbusInputErrorUnknown = 1U << 31U,
 };
 
 class SbusInput {
 public:
     virtual ~SbusInput() = default;
-    virtual bool configure(std::int32_t port, bool inverted) noexcept = 0;
+    virtual bool configure(std::int32_t port) noexcept = 0;
     virtual bool start(IsrCallback notification) noexcept = 0;
-    virtual void stop() noexcept = 0;
+    virtual bool stop() noexcept = 0;
     virtual std::size_t read(std::uint8_t *destination,
                              std::uint64_t *arrival_timestamps_us,
                              std::size_t capacity) noexcept = 0;

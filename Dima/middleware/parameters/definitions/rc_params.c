@@ -34,10 +34,10 @@
  * @file rc_params.c
  *
  * Dima RC 参数。校准、映射和阈值基于 PX4 v1.17.0 RCUpdate/ManualControl/Commander，
- * 并增加 STM32H743 SBUS UART 端口与硬件反相配置。
+ * 并增加 STM32H743 SBUS UART 端口与按协议自动硬件反相配置。
  */
 
-/** RC 输入 UART 端口：0 禁用，1 UART4/PB8，2 UART7/PE7，3 UART8/PE0，4 USART2/PD6。
+/** RC 输入 UART 端口。0 仅兼容旧版禁用配置；新配置使用 RC_INPUT_PROTO=0。
  * @min 0
  * @max 4
  * @value 0 Disabled
@@ -50,22 +50,15 @@
  */
 PARAM_DEFINE_INT32(RC_PORT_CONFIG, 1);
 
-/** RC 输入协议：当前阶段仅支持 SBUS。
+/** RC 输入协议：0 禁用，2 SBUS。
  * @min 0
- * @min 2
  * @max 2
+ * @value 0 Disabled
  * @value 2 SBUS
  * @reboot_required true
  * @group Radio Configuration
  */
 PARAM_DEFINE_INT32(RC_INPUT_PROTO, 2);
-
-/** 使用 STM32 UART RXINV 对 SBUS 输入执行硬件反相。
- * @boolean
- * @reboot_required true
- * @group Radio Configuration
- */
-PARAM_DEFINE_INT32(DIMA_SBUS_INV, 1);
 /** RC 通道 1 最小脉宽。
  * @unit us
  * @min 800

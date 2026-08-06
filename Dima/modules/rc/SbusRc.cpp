@@ -1,6 +1,7 @@
 /****************************************************************************
  * PX4-Autopilot v1.17.0 SbusRc receive flow adapted to the Dima platform.
  ****************************************************************************/
+#define MODULE_NAME "sbus"
 #include "SbusRc.hpp"
 
 #include "events/events.hpp"
@@ -23,6 +24,34 @@ void count_delta(perf_counter_t counter, std::uint32_t current,
     const std::uint32_t delta = current - previous;
     for (std::uint32_t index = 0U; index < delta; ++index) perf_count(counter);
     previous = current;
+}
+
+void report_backend_failure(
+    const dima::platform::SbusInputStats &stats) noexcept
+{
+    /* count, CPU Ring drops, restart failures, accumulated backend flags */
+    const std::uint32_t arguments[4]{
+        stats.receive_errors,
+        stats.overwritten_bytes,
+        stats.recovery_failures,
+        stats.receive_error_flags,
+    };
+    const std::uint32_t flags = stats.receive_error_flags;
+    PX4_ERR("UART/DMA fault errors=%lu ring_drop=%lu recovery_fail=%lu "
+            "flags=0x%08lx pe=%u ne=%u fe=%u ore=%u dma=%u rto=%u",
+            static_cast<unsigned long>(stats.receive_errors),
+            static_cast<unsigned long>(stats.overwritten_bytes),
+            static_cast<unsigned long>(stats.recovery_failures),
+            static_cast<unsigned long>(flags),
+            (flags & dima::platform::SbusInputErrorParity) != 0U ? 1U : 0U,
+            (flags & dima::platform::SbusInputErrorNoise) != 0U ? 1U : 0U,
+            (flags & dima::platform::SbusInputErrorFraming) != 0U ? 1U : 0U,
+            (flags & dima::platform::SbusInputErrorOverrun) != 0U ? 1U : 0U,
+            (flags & dima::platform::SbusInputErrorDma) != 0U ? 1U : 0U,
+            (flags & dima::platform::SbusInputErrorTimeout) != 0U ? 1U : 0U);
+    (void)dima::events::report(kEventBackendFailure,
+                               dima::events::Severity::Error,
+                               arguments, 4U);
 }
 
 } // namespace
@@ -48,17 +77,30 @@ bool SbusRc::start()
     }
     reset_runtime_state();
     if (!rc_port_.bind() || !rc_protocol_.bind() ||
-        !sbus_inverted_.bind()) {
+        !rc_loss_timeout_.bind()) {
         rc_port_.invalidate();
         rc_protocol_.invalidate();
-        sbus_inverted_.invalidate();
+        rc_loss_timeout_.invalidate();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
         PX4_ERR("SBUS parameters unavailable");
         return false;
     }
-    if (rc_protocol_.get() != 2 || rc_port_.get() <= 0 ||
-        !backend_.configure(rc_port_.get(), sbus_inverted_.get())) {
+    const std::int32_t protocol = rc_protocol_.get();
+    const std::int32_t port = rc_port_.get();
+    const float loss_timeout_s = rc_loss_timeout_.get();
+    if (protocol == 0 || (protocol == 2 && port == 0)) {
+        state_ = dima::middleware::lifecycle::ModuleState::Running;
+        DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
+                        dima::logging::Level::Info,
+                        "disabled protocol=%ld port=%ld; UART remains normal",
+                        static_cast<long>(protocol), static_cast<long>(port));
+        return true;
+    }
+    if (protocol != 2 || port < 1 || port > 4 ||
+        !std::isfinite(loss_timeout_s) || loss_timeout_s < 0.1F ||
+        loss_timeout_s > 35.0F ||
+        !backend_.configure(port)) {
         ++stats_.start_failures;
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
@@ -66,9 +108,14 @@ bool SbusRc::start()
         (void)dima::events::report(kEventConfigInvalid, dima::events::Severity::Error);
         return false;
     }
+    signal_loss_timeout_us_ = static_cast<std::uint64_t>(
+        static_cast<double>(loss_timeout_s) * 1000000.0);
     allocate_perf_counters();
     state_ = dima::middleware::lifecycle::ModuleState::Running;
-    PX4_INFO("SBUS port=%ld inverted=%d", static_cast<long>(rc_port_.get()), sbus_inverted_.get() ? 1 : 0);
+    DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
+                    dima::logging::Level::Info,
+                    "port=%ld protocol=SBUS 100000 8E2 rxinv=auto",
+                    static_cast<long>(port));
     if (!ScheduleNow()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
@@ -80,13 +127,23 @@ bool SbusRc::start()
 
 void SbusRc::stop()
 {
+    const bool was_started = backend_started_;
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
-    backend_.stop();
+    const bool restored = backend_.stop();
+    if (!restored) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        PX4_ERR("SBUS release failed; UART normal configuration not restored");
+        report_backend_failure(backend_.stats());
+    } else if (was_started) {
+        DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
+                        dima::logging::Level::Info,
+                        "released; UART normal configuration restored");
+    }
     free_perf_counters();
     rc_port_.invalidate();
     rc_protocol_.invalidate();
-    sbus_inverted_.invalidate();
+    rc_loss_timeout_.invalidate();
     reset_runtime_state();
 }
 
@@ -102,15 +159,13 @@ void SbusRc::Run()
             ++stats_.start_failures;
             if (!backend_fault_reported_) {
                 PX4_ERR("SBUS UART/DMA start failed");
-                (void)dima::events::report(kEventBackendFailure,
-                                           dima::events::Severity::Error);
+                report_backend_failure(backend_.stats());
                 backend_fault_reported_ = true;
             }
             schedule_retry();
             return;
         }
         backend_started_ = true;
-        backend_fault_reported_ = false;
         const auto backend_stats = backend_.stats();
         last_backend_faults_ = backend_stats.receive_errors +
                                backend_stats.overwritten_bytes;
@@ -125,19 +180,18 @@ void SbusRc::Run()
         const bool loss_published = publish_backend_loss(
             hrt_absolute_time());
         parser_.reset();
-        backend_.stop();
+        const bool restored = backend_.stop();
         backend_started_ = false;
+        if (!restored) {
+            state_ = dima::middleware::lifecycle::ModuleState::Error;
+            PX4_ERR("SBUS fault rollback failed; UART not restored");
+            report_backend_failure(backend_.stats());
+            return;
+        }
         if (signal_locked_) PX4_WARN("SBUS signal lost after UART/DMA error");
         signal_locked_ = false;
         if (!backend_fault_reported_) {
-            const std::uint32_t arguments[3]{
-                backend_stats.receive_errors,
-                backend_stats.overwritten_bytes,
-                backend_stats.recovery_failures,
-            };
-            (void)dima::events::report(kEventBackendFailure,
-                                       dima::events::Severity::Error,
-                                       arguments, 3U);
+            report_backend_failure(backend_stats);
             backend_fault_reported_ = true;
         }
         if (!loss_published) {
@@ -153,9 +207,31 @@ void SbusRc::Run()
     std::uint64_t arrival_timestamps_us[kReadBufferSize]{};
     bool received = false;
     for (;;) {
-        const std::size_t count = backend_.read(
+        std::size_t count = backend_.read(
             buffer, arrival_timestamps_us, sizeof(buffer));
-        if (count == 0U) break;
+        if (count == 0U) {
+            if (!backend_.service() || !backend_.running()) {
+                if (!ScheduleNow()) {
+                    fail_scheduling("SBUS fault service scheduling failed");
+                }
+                return;
+            }
+            if (!schedule_signal_timeout()) {
+                fail_scheduling("SBUS signal timeout scheduling failed");
+                return;
+            }
+            /* Close the race where an ISR filled the CPU Ring immediately
+             * before the timeout request replaced its immediate wakeup. */
+            count = backend_.read(
+                buffer, arrival_timestamps_us, sizeof(buffer));
+            if (count == 0U) {
+                if ((!backend_.service() || !backend_.running()) &&
+                    !ScheduleNow()) {
+                    fail_scheduling("SBUS fault rescheduling failed");
+                }
+                break;
+            }
+        }
         received = true;
         for (std::size_t index = 0U; index < count; ++index) {
             perf_count(byte_count_);
@@ -167,10 +243,15 @@ void SbusRc::Run()
 
             const std::uint64_t frame_arrival_us = arrival_timestamps_us[index];
             timestamp_last_signal_us_ = frame_arrival_us;
+            /* Peripheral start is not recovery; a valid frame is. */
+            backend_fault_reported_ = false;
             if (!signal_locked_) {
-                PX4_INFO(signal_seen_ ? "SBUS signal recovered channels=%u"
-                                      : "SBUS signal locked channels=%u",
-                         frame.channel_count);
+                DIMA_LOG_SOURCE(
+                    dima::logging::Source::Sbus,
+                    dima::logging::Level::Info,
+                    signal_seen_ ? "signal recovered channels=%u"
+                                 : "signal locked channels=%u",
+                    frame.channel_count);
                 signal_locked_ = true;
                 signal_seen_ = true;
             }
@@ -195,6 +276,7 @@ void SbusRc::reset_runtime_state() noexcept
     backend_fault_reported_ = false;
     last_invalid_frames_ = 0U;
     last_backend_faults_ = 0U;
+    signal_loss_timeout_us_ = 500000U;
     stats_ = Stats{};
 }
 
@@ -223,6 +305,44 @@ void SbusRc::free_perf_counters() noexcept
 void SbusRc::schedule_retry() noexcept
 {
     if (!ScheduleDelayed(kRetryDelayUs)) state_ = dima::middleware::lifecycle::ModuleState::Error;
+}
+
+bool SbusRc::schedule_signal_timeout() noexcept
+{
+    if (!signal_locked_ || timestamp_last_signal_us_ == 0U) {
+        return true;
+    }
+
+    const std::uint64_t now_us = hrt_absolute_time();
+    const bool timestamp_invalid = timestamp_last_signal_us_ > now_us;
+    const bool timed_out = timestamp_invalid ||
+                           now_us - timestamp_last_signal_us_ >=
+                               signal_loss_timeout_us_;
+    if (timed_out) {
+        DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
+                        dima::logging::Level::Warning,
+                        "signal lost last_frame_us=%llu timeout_us=%llu",
+                        static_cast<unsigned long long>(
+                            timestamp_last_signal_us_),
+                        static_cast<unsigned long long>(
+                            signal_loss_timeout_us_));
+        signal_locked_ = false;
+        return true;
+    }
+
+    return ScheduleAt(timestamp_last_signal_us_ + signal_loss_timeout_us_);
+}
+
+void SbusRc::fail_scheduling(const char *reason) noexcept
+{
+    state_ = dima::middleware::lifecycle::ModuleState::Error;
+    const bool restored = backend_.stop();
+    backend_started_ = false;
+    PX4_ERR("%s", reason != nullptr ? reason : "SBUS scheduling failed");
+    if (!restored) {
+        PX4_ERR("SBUS scheduling rollback failed; UART not restored");
+        report_backend_failure(backend_.stats());
+    }
 }
 
 bool SbusRc::publish_backend_loss(std::uint64_t now) noexcept
@@ -275,7 +395,9 @@ void SbusRc::publish(const dima::rc::SbusParser::Frame &frame,
     if (frame.failsafe != failsafe_active_) {
         const std::uint32_t active = frame.failsafe ? 1U : 0U;
         if (frame.failsafe) PX4_WARN("SBUS receiver failsafe");
-        else PX4_INFO("SBUS receiver failsafe cleared");
+        else DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
+                             dima::logging::Level::Info,
+                             "receiver failsafe cleared");
         (void)dima::events::report(kEventFailsafe,
                                    frame.failsafe ? dima::events::Severity::Warning
                                                   : dima::events::Severity::Info,

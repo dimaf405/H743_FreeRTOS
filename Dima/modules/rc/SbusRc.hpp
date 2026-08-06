@@ -41,6 +41,8 @@ private:
     static void notify_from_isr(void *context) noexcept;
     void reset_runtime_state() noexcept;
     void schedule_retry() noexcept;
+    bool schedule_signal_timeout() noexcept;
+    void fail_scheduling(const char *reason) noexcept;
     bool publish_backend_loss(std::uint64_t now) noexcept;
     void allocate_perf_counters() noexcept;
     void free_perf_counters() noexcept;
@@ -52,9 +54,10 @@ private:
     uORB::Publication<input_rc_s> input_rc_pub_{ORB_ID(input_rc)};
     px4::ParamInt<px4::params::RC_PORT_CONFIG> rc_port_{};
     px4::ParamInt<px4::params::RC_INPUT_PROTO> rc_protocol_{};
-    px4::ParamBool<px4::params::DIMA_SBUS_INV> sbus_inverted_{};
+    px4::ParamFloat<px4::params::COM_RC_LOSS_T> rc_loss_timeout_{};
     dima::middleware::lifecycle::ModuleState state_{dima::middleware::lifecycle::ModuleState::Stopped};
     std::uint64_t timestamp_last_signal_us_{0U};
+    std::uint64_t signal_loss_timeout_us_{500000U};
     bool backend_started_{false};
     bool signal_locked_{false};
     bool signal_seen_{false};
