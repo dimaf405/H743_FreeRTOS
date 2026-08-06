@@ -16,11 +16,12 @@
 
 namespace dima::modules::rc {
 
-class ManualControl final : public dima::middleware::lifecycle::ModuleBase,
+/** Converts normalized RC channels and switch edges into input topics. */
+class RcManualInput final : public dima::middleware::lifecycle::ModuleBase,
                             public px4::ScheduledWorkItem {
 public:
-    ManualControl() noexcept;
-    ~ManualControl() override;
+    RcManualInput() noexcept;
+    ~RcManualInput() override;
 
     bool start() override;
     void stop() override;

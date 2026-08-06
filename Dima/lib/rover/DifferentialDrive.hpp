@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace dima::rover::control {
+namespace dima::lib::rover {
 
 struct DifferentialDriveConfig {
     float steering_throttle_mix;
@@ -60,4 +60,4 @@ private:
     bool armed_{false};
 };
 
-} // namespace dima::rover::control
+} // namespace dima::lib::rover

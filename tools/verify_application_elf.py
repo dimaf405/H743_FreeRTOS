@@ -531,8 +531,8 @@ def verify_lifecycle_symbols(elf: Elf32) -> None:
         symbol.symbol_type == STT_FUNC,
     )
     require_symbol_match(
-        elf, "ManualMotionAdapter::start()",
-        lambda symbol: "ManualMotionAdapter5startEv" in symbol.name and
+        elf, "ManualMode::start()",
+        lambda symbol: "ManualMode5startEv" in symbol.name and
         symbol.symbol_type == STT_FUNC,
     )
     require_symbol_match(

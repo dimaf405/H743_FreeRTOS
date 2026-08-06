@@ -12,15 +12,15 @@
 
 #include <cstdint>
 
-namespace dima::rover::control {
+namespace dima::rover::modes {
 
-/** Converts the current Manual two-axis command into the Rover product ABI. */
-class ManualMotionAdapter final
+/** Owns the Rover Manual mode and publishes its two-axis motion request. */
+class ManualMode final
     : public dima::middleware::lifecycle::ModuleBase,
       public px4::ScheduledWorkItem {
 public:
-    ManualMotionAdapter() noexcept;
-    ~ManualMotionAdapter() override;
+    ManualMode() noexcept;
+    ~ManualMode() override;
 
     bool start() override;
     void stop() override;
@@ -80,4 +80,4 @@ private:
     bool parameter_update_pending_{false};
 };
 
-} // namespace dima::rover::control
+} // namespace dima::rover::modes

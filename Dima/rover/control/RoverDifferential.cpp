@@ -350,7 +350,7 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         return publish_invalid(now_us, motion_request_.timestamp_sample);
     }
 
-    const DifferentialDriveOutput output = drive_.update(
+    const dima::lib::rover::DifferentialDriveOutput output = drive_.update(
         motion_request_.normalized_longitudinal,
         motion_request_.normalized_steering, true, true, now_us, dt_s);
     if (!output.valid || !normalized(output.right) || !normalized(output.left)) {
@@ -421,7 +421,7 @@ bool RoverDifferential::normalized(float value) noexcept
 bool RoverDifferential::valid_parameter_snapshot(
     const ParameterSnapshot &snapshot) noexcept
 {
-    const DifferentialDriveConfig &drive = snapshot.drive;
+    const dima::lib::rover::DifferentialDriveConfig &drive = snapshot.drive;
     return finite(snapshot.command_timeout_s) &&
            snapshot.command_timeout_s >= 0.02F &&
            snapshot.command_timeout_s <= 1.0F &&

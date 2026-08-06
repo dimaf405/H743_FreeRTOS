@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DifferentialDrive.hpp"
+#include "rover/DifferentialDrive.hpp"
 
 #include "actuator_armed.hpp"
 #include "actuator_motors.hpp"
@@ -37,7 +37,7 @@ private:
 
     struct ParameterSnapshot {
         float command_timeout_s;
-        DifferentialDriveConfig drive;
+        dima::lib::rover::DifferentialDriveConfig drive;
     };
 
     struct SafetySnapshot {
@@ -95,7 +95,7 @@ private:
     px4::ParamFloat<px4::params::MOT_THR_ASYM> thrust_asymmetry_{};
     px4::ParamFloat<px4::params::MOT_ARM_RAMP> arm_ramp_{};
 
-    DifferentialDrive drive_{};
+    dima::lib::rover::DifferentialDrive drive_{};
     ParameterSnapshot parameters_{};
     rover_motion_request_s motion_request_{};
     actuator_armed_s observed_actuator_armed_{};

@@ -1,7 +1,7 @@
 /****************************************************************************
  * PX4-Autopilot v1.17.0 ManualControl RC subset adapted to the Dima platform.
  ****************************************************************************/
-#include "ManualControl.hpp"
+#include "RcManualInput.hpp"
 
 #include "platform/api/Time.hpp"
 
@@ -15,18 +15,18 @@ constexpr float kUnavailableControl = std::numeric_limits<float>::quiet_NaN();
 
 } // namespace
 
-ManualControl::ManualControl() noexcept
-    : px4::ScheduledWorkItem("manual_control",
+RcManualInput::RcManualInput() noexcept
+    : px4::ScheduledWorkItem("rc_manual_input",
                              px4::wq_configurations::hp_default)
 {
 }
 
-ManualControl::~ManualControl()
+RcManualInput::~RcManualInput()
 {
     stop();
 }
 
-bool ManualControl::start()
+bool RcManualInput::start()
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
@@ -67,7 +67,7 @@ bool ManualControl::start()
     return true;
 }
 
-void ManualControl::stop()
+void RcManualInput::stop()
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     switches_subscription_.unregisterCallback();
@@ -78,12 +78,12 @@ void ManualControl::stop()
     reset_switch_baseline();
 }
 
-dima::middleware::lifecycle::ModuleState ManualControl::state() const
+dima::middleware::lifecycle::ModuleState RcManualInput::state() const
 {
     return state_;
 }
 
-void ManualControl::Run()
+void RcManualInput::Run()
 {
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
@@ -98,7 +98,7 @@ void ManualControl::Run()
     }
 }
 
-bool ManualControl::mapped_channel(const rc_channels_s &channels,
+bool RcManualInput::mapped_channel(const rc_channels_s &channels,
                                    std::uint8_t function,
                                    float &value) noexcept
 {
@@ -119,7 +119,7 @@ bool ManualControl::mapped_channel(const rc_channels_s &channels,
     return true;
 }
 
-void ManualControl::process_rc_channels(const rc_channels_s &channels) noexcept
+void RcManualInput::process_rc_channels(const rc_channels_s &channels) noexcept
 {
     const std::uint64_t now = hrt_absolute_time();
 
@@ -179,7 +179,7 @@ void ManualControl::process_rc_channels(const rc_channels_s &channels) noexcept
     (void)setpoint_publication_.publish(setpoint);
 }
 
-void ManualControl::process_switches(
+void RcManualInput::process_switches(
     const manual_control_switches_s &switches) noexcept
 {
     if (!rc_signal_available_) {
@@ -214,7 +214,7 @@ void ManualControl::process_switches(
     previous_switches_ = switches;
 }
 
-void ManualControl::publish_action(std::uint8_t action) noexcept
+void RcManualInput::publish_action(std::uint8_t action) noexcept
 {
     action_request_s request{};
     request.timestamp = hrt_absolute_time();
@@ -224,7 +224,7 @@ void ManualControl::publish_action(std::uint8_t action) noexcept
     (void)action_request_publication_.publish(request);
 }
 
-void ManualControl::reset_switch_baseline() noexcept
+void RcManualInput::reset_switch_baseline() noexcept
 {
     previous_switches_ = manual_control_switches_s{};
     switches_initialized_ = false;

@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace dima::rover::control {
+namespace dima::lib::rover {
 namespace {
 
 constexpr float kZeroThreshold = 1.0e-6F;
@@ -240,4 +240,4 @@ void DifferentialDrive::reset() noexcept
     armed_ = false;
 }
 
-} // namespace dima::rover::control
+} // namespace dima::lib::rover

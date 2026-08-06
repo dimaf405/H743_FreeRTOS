@@ -3,7 +3,7 @@
 #include "boot_diagnostics.h"
 #include "platform/api/Platform.hpp"
 #include "platform/freertos/Backend.hpp"
-#include "platform/stm32h7/Backend.hpp"
+#include "platform/stm32h7/HardwareServices.hpp"
 #include "usb_console/UsbConsole.hpp"
 
 namespace {

@@ -5,7 +5,7 @@
 
 #include <cmath>
 
-namespace dima::rover::control {
+namespace dima::modules::motor {
 namespace {
 
 constexpr std::uint32_t kEventParameterInvalid = 0x524D4F01U;
@@ -629,4 +629,4 @@ bool MotorOutput::safety_negative(const vehicle_status_s &status) noexcept
             status.failsafe);
 }
 
-} // namespace dima::rover::control
+} // namespace dima::modules::motor

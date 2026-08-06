@@ -16,7 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dima::rover::control {
+namespace dima::modules::motor {
 
 /** Safety-gated mapping from two reversible motors to six ordinary PWM pins. */
 class MotorOutput final
@@ -130,4 +130,4 @@ private:
     bool safe_off_{false};
 };
 
-} // namespace dima::rover::control
+} // namespace dima::modules::motor

@@ -1,14 +1,14 @@
 #pragma once
 
-#include "boot_health/boot_health.hpp"
+#include "boot_health/BootHealthService.hpp"
 #include "logging/LogService.hpp"
 #include "parameters/ParameterService.hpp"
 #include "parameters/ParameterJournal.hpp"
 #include "platform/api/Platform.hpp"
-#include "control/ManualMotionAdapter.hpp"
-#include "control/MotorOutput.hpp"
 #include "control/RoverDifferential.hpp"
-#include "rc/ManualControl.hpp"
+#include "rc/RcManualInput.hpp"
+#include "modes/ManualMode.hpp"
+#include "motor/MotorOutput.hpp"
 #include "rc/RCUpdate.hpp"
 #include "rc/SbusRc.hpp"
 #include "safety/Commander.hpp"
@@ -54,12 +54,12 @@ private:
     dima::modules::boot_health::BootHealthService boot_health_;
     dima::modules::logging::LogService log_service_;
     dima::modules::parameters::ParameterService parameter_service_;
-    dima::rover::control::MotorOutput motor_output_;
+    dima::modules::motor::MotorOutput motor_output_;
     dima::modules::safety::Commander commander_;
     dima::modules::rc::SbusRc sbus_rc_;
     dima::modules::rc::RCUpdate rc_update_{};
-    dima::modules::rc::ManualControl manual_control_{};
-    dima::rover::control::ManualMotionAdapter manual_motion_adapter_{};
+    dima::modules::rc::RcManualInput rc_manual_input_{};
+    dima::rover::modes::ManualMode manual_mode_{};
     dima::rover::control::RoverDifferential rover_differential_{};
     dima::platform::TaskHandle owner_task_{};
     RuntimeState runtime_state_{RuntimeState::Stopped};
@@ -75,8 +75,8 @@ private:
     bool commander_started_{false};
     bool sbus_started_{false};
     bool rc_update_started_{false};
-    bool manual_control_started_{false};
-    bool manual_motion_started_{false};
+    bool rc_manual_input_started_{false};
+    bool manual_mode_started_{false};
     bool rover_differential_started_{false};
 };
 

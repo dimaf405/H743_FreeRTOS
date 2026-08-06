@@ -378,6 +378,48 @@ def scan_rover_root_contract(violations: list[Violation]) -> None:
             "legacy Dima/modules/rover must not exist",
         ))
 
+    ambiguous_paths = (
+        "Dima/modules/rc/ManualControl.cpp",
+        "Dima/modules/rc/ManualControl.hpp",
+        "Dima/modules/manual_control",
+        "Dima/rover/control/ManualMotionAdapter.cpp",
+        "Dima/rover/control/ManualMotionAdapter.hpp",
+        "Dima/rover/modes/manual",
+        "Dima/rover/control/MotorOutput.cpp",
+        "Dima/rover/control/MotorOutput.hpp",
+        "Dima/rover/control/DifferentialDrive.cpp",
+        "Dima/rover/control/DifferentialDrive.hpp",
+        "Dima/lib/rover_control/rover_control.cpp",
+        "Dima/lib/rover_control/rover_control.hpp",
+        "Dima/lib/motor/speed_to_pwm.cpp",
+        "Dima/lib/motor/speed_to_pwm.hpp",
+    )
+    for relative in ambiguous_paths:
+        path = ROOT / relative
+        if path.exists():
+            violations.append(Violation(
+                path, 1, "R212",
+                "file or directory remains in a retired ambiguous path",
+            ))
+
+    required_paths = (
+        "Dima/modules/rc/RcManualInput.cpp",
+        "Dima/modules/rc/RcManualInput.hpp",
+        "Dima/modules/motor/MotorOutput.cpp",
+        "Dima/modules/motor/MotorOutput.hpp",
+        "Dima/rover/modes/ManualMode.cpp",
+        "Dima/rover/modes/ManualMode.hpp",
+        "Dima/lib/rover/DifferentialDrive.cpp",
+        "Dima/lib/rover/DifferentialDrive.hpp",
+    )
+    for relative in required_paths:
+        path = ROOT / relative
+        if not path.is_file():
+            violations.append(Violation(
+                path, 1, "R212",
+                "required source is missing from its unambiguous owner path",
+            ))
+
     roots = ("Dima", "Boards", "Core", "Bootloader", "USB_DEVICE",
              "make", "docs")
     candidates = sources_under(roots)
@@ -403,6 +445,130 @@ def scan_rover_root_contract(violations: list[Violation]) -> None:
                     path, line_number, "R042",
                     "references the removed Dima/modules/rover path",
                 ))
+            ambiguous_references = (
+                "Dima/modules/rc/ManualControl",
+                "Dima/modules/manual_control/",
+                "Dima/rover/control/ManualMotionAdapter",
+                "Dima/rover/modes/manual/",
+                "Dima/rover/control/MotorOutput",
+                "Dima/rover/control/DifferentialDrive",
+                "Dima/lib/rover_control/",
+                "Dima/lib/motor/speed_to_pwm",
+            )
+            if any(token in normalized for token in ambiguous_references):
+                violations.append(Violation(
+                    path, line_number, "R213",
+                    "references a retired ambiguous ownership path",
+                ))
+
+    runtime_tokens = (
+        "ModuleBase", "ScheduledWorkItem", "uORB::", "px4::Param",
+        "param_find", "param_get", "param_set",
+    )
+    for path in sources_under(("Dima/lib/rover",)):
+        text = path.read_text(encoding="utf-8")
+        for token in runtime_tokens:
+            if token in text:
+                violations.append(Violation(
+                    path, line_for(text, token), "R214",
+                    "Rover algorithm library owns runtime or middleware state",
+                ))
+
+
+def scan_repository_layout(violations: list[Violation]) -> None:
+    expected_ioc = ROOT / "H743_FreeRTOS.ioc"
+    ioc_files = list(ROOT.glob("*.ioc"))
+    skipped_roots = {
+        ".git", ".keys", ".vscode", "Drivers", "Middlewares", "build",
+    }
+    for child in ROOT.iterdir():
+        if (not child.is_dir() or child.name in skipped_roots or
+                child.name.startswith("build-")):
+            continue
+        ioc_files.extend(child.rglob("*.ioc"))
+    for path in sorted(ioc_files):
+        if path != expected_ioc:
+            violations.append(Violation(
+                path, 1, "R220",
+                "secondary CubeMX project makes the authoritative .ioc "
+                "ambiguous",
+            ))
+
+    retired_files = (
+        ROOT / "newlib_lock_glue.c",
+        ROOT / "stm32_lock.h",
+        ROOT / "Dima/platform/stm32h7/Backend.hpp",
+        ROOT / "Dima/modules/boot_health/boot_health.cpp",
+        ROOT / "Dima/modules/boot_health/boot_health.hpp",
+    )
+    for path in retired_files:
+        if path.exists():
+            violations.append(Violation(
+                path, 1, "R221",
+                "retired or misleading source path has returned",
+            ))
+
+    dima_root = ROOT / "Dima"
+    for directory in sorted(
+            path for path in dima_root.rglob("*") if path.is_dir()):
+        files = sorted(path for path in directory.rglob("*") if path.is_file())
+        if not files:
+            violations.append(Violation(
+                directory, 1, "R222",
+                "empty directory does not describe an implemented owner",
+            ))
+        elif all(path.name == "README.md" for path in files):
+            violations.append(Violation(
+                files[0], 1, "R223",
+                "README-only source directory implies an implementation "
+                "that does not exist",
+            ))
+
+    by_basename: dict[str, list[pathlib.Path]] = {}
+    for path in sources_under(("Dima",)):
+        by_basename.setdefault(path.name.lower(), []).append(path)
+    for paths in by_basename.values():
+        if len(paths) < 2:
+            continue
+        for path in paths:
+            violations.append(Violation(
+                path, 1, "R224",
+                "duplicate Dima source basename makes short includes "
+                "ambiguous",
+            ))
+
+    project_make = ROOT / "make/project.mk"
+    if project_make.is_file():
+        text = project_make.read_text(encoding="utf-8")
+        dima_sources = sorted(
+            path for path in dima_root.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".c", ".cpp"}
+        )
+        for path in dima_sources:
+            relative = path.relative_to(ROOT).as_posix()
+            if relative not in text:
+                violations.append(Violation(
+                    path, 1, "R225",
+                    "Dima translation unit is absent from make/project.mk",
+                ))
+        listed = set(re.findall(
+            r"Dima/[A-Za-z0-9_./-]+\.(?:cpp|c)\b", text,
+        ))
+        for relative in sorted(listed):
+            path = ROOT / relative
+            if not path.is_file():
+                violations.append(Violation(
+                    project_make, line_for(text, relative), "R226",
+                    f"build manifest references missing source {relative}",
+                ))
+
+    require_literals(
+        ROOT / "Core/Inc/FreeRTOSConfig.h",
+        (("#include \"../../Dima/platform/freertos/FreeRTOSConfig.h\"",
+          "R227", "CubeMX FreeRTOSConfig shim no longer forwards to the "
+          "single Dima configuration"),),
+        violations,
+    )
 
 
 def scan_debug_console_contract(violations: list[Violation]) -> None:
@@ -447,6 +613,35 @@ def scan_debug_console_contract(violations: list[Violation]) -> None:
              "structured event logging must remain bounded"),
             ("USB debug logging ready", "R049",
              "USB debug logger startup record is missing"),
+            ("enqueue_sbus_data(hrt_absolute_time())", "R189",
+             "USB debug logger does not service SBUS data"),
+            ("kSbus.data_period_ms", "R190",
+             "SBUS USB data output is not rate limited by DebugConfig"),
+            ("Source::Sbus, Level::Debug, \"sbus\"", "R191",
+             "SBUS data does not use the PX4-style source log path"),
+        ), violations,
+    )
+    require_literals(
+        ROOT / "Dima/modules/logging/LogService.hpp",
+        (
+            ("uORB::SubscriptionData<input_rc_s>", "R188",
+             "USB debug logger must observe decoded SBUS data through uORB"),
+        ), violations,
+    )
+    require_literals(
+        ROOT / "Dima/middleware/logging/debug_config.hpp",
+        (
+            ("kUsbMinimumLevel = Level::Debug", "R184",
+             "default USB debug level changed"),
+            ("kIcm42688{Level::Off, false, 100U}", "R186",
+             "future ICM42688 debug output must default off"),
+        ), violations,
+    )
+    require_literals(
+        ROOT / "Dima/middleware/logging/logging.cpp",
+        (
+            ("if (!raw && !config::enabled(source, level))", "R187",
+             "module logs are not filtered before formatting"),
         ), violations,
     )
 
@@ -564,6 +759,8 @@ def scan_runtime_contracts(violations: list[Violation]) -> None:
              "Application Runtime must release the Console frontend"),
             ("if (!px4::work_queue_shutdown())", "R071",
              "Application Runtime must release WorkQueue"),
+            ("sbus_rc_.state() ==", "R217",
+             "Application Runtime ignores SBUS UART restore failure"),
         ),
         ROOT / "Dima/platform/stm32h7/SbusUart.cpp": (
             ("kDmaBufferSize = 64U", "R072",
@@ -574,10 +771,81 @@ def scan_runtime_contracts(violations: list[Violation]) -> None:
              "SBUS CPU-only handoff Ring is missing"),
             ("reset_receive_epoch()", "R075",
              "SBUS receive epoch reset is missing"),
+            ("configure_sbus_rx_pin", "R180",
+             "SBUS RX pin configuration is missing"),
+            ("GPIO_PULLDOWN", "R181",
+             "inverted SBUS must bias the physical RX line low"),
+            ("restore_normal_uart", "R182",
+             "SBUS release must restore the pre-takeover UART state"),
+            ("receive_error_flags_", "R183",
+             "SBUS UART error detail is missing"),
+            ("UART_ADVFEATURE_RXINV_ENABLE", "R192",
+             "SBUS must automatically enable hardware RX inversion"),
+            ("uart->Init.BaudRate = 100000U", "R204",
+             "SBUS baud rate must remain 100000 bit/s"),
+            ("uart->Init.WordLength = UART_WORDLENGTH_9B", "R205",
+             "SBUS 8E2 word length contract changed"),
+            ("uart->Init.StopBits = UART_STOPBITS_2", "R206",
+             "SBUS must use two stop bits"),
+            ("uart->Init.Parity = UART_PARITY_EVEN", "R207",
+             "SBUS must use even parity"),
+            ("uart->Init.Mode = UART_MODE_RX", "R208",
+             "SBUS UART must remain RX-only"),
+            ("normal_advanced_init_", "R193",
+             "SBUS must preserve the normal UART advanced configuration"),
+            ("normal_fifo_mode_", "R199",
+             "SBUS must preserve the normal UART FIFO mode"),
+            ("normal_tx_fifo_threshold_", "R200",
+             "SBUS must preserve the normal UART TX FIFO threshold"),
+            ("normal_rx_fifo_threshold_", "R201",
+             "SBUS must preserve the normal UART RX FIFO threshold"),
+            ("normal_rx_pin_", "R202",
+             "SBUS must preserve the pre-takeover RX GPIO state"),
+            ("restore_rx_pin(normal_rx_pin_)", "R203",
+             "SBUS release must restore the pre-takeover RX GPIO state"),
+            ("bool stop() noexcept override", "R194",
+             "SBUS stop must report UART restoration failure"),
+            ("if (restored) {", "R218",
+             "SBUS restore failure discards the retry context"),
+        ),
+        ROOT / "Dima/middleware/parameters/definitions/rc_params.c": (
+            ("* @value 0 Disabled", "R195",
+             "RC_INPUT_PROTO disabled value is missing"),
+            ("PARAM_DEFINE_INT32(RC_INPUT_PROTO, 2);", "R196",
+             "SBUS must remain the default RC input protocol"),
+        ),
+        ROOT / "Dima/modules/rc/SbusRc.cpp": (
+            ("protocol == 0 || (protocol == 2 && port == 0)", "R209",
+             "disabled RC protocol must remain a normal lifecycle state"),
+            ("schedule_signal_timeout()", "R210",
+             "SBUS signal loss logging must follow the RC timeout"),
+            ("signal lost last_frame_us=", "R211",
+             "SBUS signal loss state log is missing"),
+            ("SBUS release failed; UART normal configuration not restored",
+             "R219", "SBUS module does not surface UART restore failure"),
         ),
     }
     for path, required in requirements.items():
         require_literals(path, required, violations)
+
+    for path in first_party_sources():
+        text = path.read_text(encoding="utf-8")
+        if "DIMA_SBUS_INV" in text:
+            violations.append(Violation(
+                path, line_for(text, "DIMA_SBUS_INV"), "R197",
+                "manual SBUS inversion control must remain removed",
+            ))
+
+    sbus_backend = ROOT / "Dima/platform/stm32h7/SbusUart.cpp"
+    if sbus_backend.is_file():
+        text = sbus_backend.read_text(encoding="utf-8")
+        for token in ("PX4_INFO", "PX4_WARN", "PX4_ERR", "PX4_DEBUG",
+                      "write_module(", "printf(", "console_.write"):
+            if token in text:
+                violations.append(Violation(
+                    sbus_backend, line_for(text, token), "R198",
+                    "SBUS ISR/backend path performs formatted USB logging",
+                ))
 
     param_header = ROOT / "Dima/middleware/parameters/param.h"
     if param_header.is_file():
@@ -730,9 +998,9 @@ def scan_active_actuator_contract(violations: list[Violation]) -> None:
     allowed_actuator_pwm_owners = {
         "Dima/platform/api/Platform.hpp",
         "Dima/platform/stm32h7/ActuatorPwm.cpp",
-        "Dima/platform/stm32h7/Backend.hpp",
-        "Dima/rover/control/MotorOutput.cpp",
-        "Dima/rover/control/MotorOutput.hpp",
+        "Dima/platform/stm32h7/HardwareServices.hpp",
+        "Dima/modules/motor/MotorOutput.cpp",
+        "Dima/modules/motor/MotorOutput.hpp",
     }
     for path in first_party_sources():
         relative = path.relative_to(ROOT).as_posix()
@@ -804,14 +1072,20 @@ def scan_active_actuator_contract(violations: list[Violation]) -> None:
              "MotorOutput lifecycle does not verify physical safe-off"),
         ),
         ROOT / "Dima/rover/ApplicationContext.hpp": (
-            ("dima::rover::control::MotorOutput motor_output_;", "R167",
+            ("dima::modules::motor::MotorOutput motor_output_;", "R167",
              "ApplicationContext does not own MotorOutput"),
         ),
-        ROOT / "Dima/rover/control/MotorOutput.hpp": (
+        ROOT / "Dima/rover/control/RoverDifferential.hpp": (
+            ("#include \"rover/DifferentialDrive.hpp\"", "R215",
+             "RoverDifferential does not consume the pure Rover library"),
+            ("dima::lib::rover::DifferentialDrive drive_{};", "R216",
+             "DifferentialDrive escaped its pure algorithm namespace"),
+        ),
+        ROOT / "Dima/modules/motor/MotorOutput.hpp": (
             ("px4::params::COM_ACT_LOSS_T", "R168",
              "MotorOutput is missing the actuator command timeout"),
         ),
-        ROOT / "Dima/rover/control/MotorOutput.cpp": (
+        ROOT / "Dima/modules/motor/MotorOutput.cpp": (
             ("timestamp > safety_.actuator_armed.timestamp", "R175",
              "positive safety recovery does not require a newer snapshot"),
             ("now_us - actuator_motors_.timestamp <= timeout_us", "R169",
@@ -821,7 +1095,7 @@ def scan_active_actuator_contract(violations: list[Violation]) -> None:
             ("pwm_->stop()", "R171",
              "MotorOutput has no backend safe-off path"),
         ),
-        ROOT / "Dima/modules/boot_health/boot_health.cpp": (
+        ROOT / "Dima/modules/boot_health/BootHealthService.cpp": (
             ("motor_output_->state()", "R176",
              "BootHealth does not monitor MotorOutput lifecycle"),
             ("confirmation_state_safe()", "R177",
@@ -977,6 +1251,7 @@ def main() -> int:
     scan_layer_dependencies(violations)
     scan_hardware_ownership(violations)
     scan_build_isolation(violations)
+    scan_repository_layout(violations)
     scan_rover_root_contract(violations)
     scan_debug_console_contract(violations)
     scan_phase5_message_contracts(violations)

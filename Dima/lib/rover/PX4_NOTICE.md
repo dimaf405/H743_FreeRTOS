@@ -1,7 +1,7 @@
 # PX4 Rover control attribution
 
-This directory contains an independent, project-native adaptation of control
-algorithms and module boundaries from PX4-Autopilot.
+This directory contains independent, project-native adaptations of Rover
+control algorithms and module boundaries from PX4-Autopilot.
 
 - Upstream: PX4/PX4-Autopilot
 - Release: v1.17.0

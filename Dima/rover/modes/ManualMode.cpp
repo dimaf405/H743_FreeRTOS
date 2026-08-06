@@ -1,4 +1,4 @@
-#include "ManualMotionAdapter.hpp"
+#include "ManualMode.hpp"
 
 #include "events/events.hpp"
 #include "platform/api/Time.hpp"
@@ -7,7 +7,7 @@
 #include <cmath>
 #include <limits>
 
-namespace dima::rover::control {
+namespace dima::rover::modes {
 namespace {
 
 constexpr std::uint32_t kEventParameterInvalid = 0x524D4101U;
@@ -17,18 +17,18 @@ constexpr float kUnavailable = std::numeric_limits<float>::quiet_NaN();
 
 } // namespace
 
-ManualMotionAdapter::ManualMotionAdapter() noexcept
-    : px4::ScheduledWorkItem("manual_motion",
+ManualMode::ManualMode() noexcept
+    : px4::ScheduledWorkItem("rover_manual_mode",
                              px4::wq_configurations::hp_default)
 {
 }
 
-ManualMotionAdapter::~ManualMotionAdapter()
+ManualMode::~ManualMode()
 {
     stop();
 }
 
-bool ManualMotionAdapter::start()
+bool ManualMode::start()
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
@@ -67,7 +67,7 @@ bool ManualMotionAdapter::start()
     return true;
 }
 
-void ManualMotionAdapter::stop()
+void ManualMode::stop()
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     parameter_update_subscription_.unregisterCallback();
@@ -82,12 +82,12 @@ void ManualMotionAdapter::stop()
     reset_runtime_state();
 }
 
-dima::middleware::lifecycle::ModuleState ManualMotionAdapter::state() const
+dima::middleware::lifecycle::ModuleState ManualMode::state() const
 {
     return state_;
 }
 
-void ManualMotionAdapter::Run()
+void ManualMode::Run()
 {
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
@@ -117,7 +117,7 @@ void ManualMotionAdapter::Run()
     }
 }
 
-bool ManualMotionAdapter::bind_parameters() noexcept
+bool ManualMode::bind_parameters() noexcept
 {
     const bool bound = yaw_stick_deadzone_.bind() && yaw_expo_.bind() &&
                        yaw_superexpo_.bind() && yaw_stick_gain_.bind();
@@ -129,7 +129,7 @@ bool ManualMotionAdapter::bind_parameters() noexcept
     return true;
 }
 
-void ManualMotionAdapter::invalidate_parameter_bindings() noexcept
+void ManualMode::invalidate_parameter_bindings() noexcept
 {
     yaw_stick_deadzone_.invalidate();
     yaw_expo_.invalidate();
@@ -137,7 +137,7 @@ void ManualMotionAdapter::invalidate_parameter_bindings() noexcept
     yaw_stick_gain_.invalidate();
 }
 
-bool ManualMotionAdapter::apply_parameter_snapshot() noexcept
+bool ManualMode::apply_parameter_snapshot() noexcept
 {
     if (!yaw_stick_deadzone_.bound() || !yaw_expo_.bound() ||
         !yaw_superexpo_.bound() || !yaw_stick_gain_.bound()) {
@@ -171,7 +171,7 @@ bool ManualMotionAdapter::apply_parameter_snapshot() noexcept
     return true;
 }
 
-bool ManualMotionAdapter::apply_pending_parameters(
+bool ManualMode::apply_pending_parameters(
     std::uint64_t now_us) noexcept
 {
     if (!parameter_update_pending_ || !fresh_disarmed_mode(now_us)) {
@@ -187,7 +187,7 @@ bool ManualMotionAdapter::apply_pending_parameters(
     return false;
 }
 
-bool ManualMotionAdapter::fresh_disarmed_mode(std::uint64_t now_us) const noexcept
+bool ManualMode::fresh_disarmed_mode(std::uint64_t now_us) const noexcept
 {
     return have_control_mode_ && vehicle_control_mode_.timestamp != 0U &&
            vehicle_control_mode_.timestamp <= now_us &&
@@ -195,7 +195,7 @@ bool ManualMotionAdapter::fresh_disarmed_mode(std::uint64_t now_us) const noexce
            !vehicle_control_mode_.flag_armed;
 }
 
-bool ManualMotionAdapter::manual_mode_active(std::uint64_t now_us) const noexcept
+bool ManualMode::manual_mode_active(std::uint64_t now_us) const noexcept
 {
     return have_control_mode_ && vehicle_control_mode_.timestamp != 0U &&
            vehicle_control_mode_.timestamp <= now_us &&
@@ -208,7 +208,7 @@ bool ManualMotionAdapter::manual_mode_active(std::uint64_t now_us) const noexcep
            !vehicle_control_mode_.flag_control_offboard_enabled;
 }
 
-bool ManualMotionAdapter::manual_input_valid(std::uint64_t now_us) const noexcept
+bool ManualMode::manual_input_valid(std::uint64_t now_us) const noexcept
 {
     return have_manual_control_ && manual_control_.valid &&
            manual_control_.data_source == manual_control_setpoint_s::SOURCE_RC &&
@@ -222,7 +222,7 @@ bool ManualMotionAdapter::manual_input_valid(std::uint64_t now_us) const noexcep
            manual_control_.yaw >= -1.0F && manual_control_.yaw <= 1.0F;
 }
 
-bool ManualMotionAdapter::publish_current_request(
+bool ManualMode::publish_current_request(
     std::uint64_t now_us) noexcept
 {
     rover_motion_request_s request{};
@@ -253,7 +253,7 @@ bool ManualMotionAdapter::publish_current_request(
     return motion_request_publication_.publish(request);
 }
 
-void ManualMotionAdapter::reset_runtime_state() noexcept
+void ManualMode::reset_runtime_state() noexcept
 {
     config_ = Config{};
     manual_control_ = manual_control_setpoint_s{};
@@ -266,7 +266,7 @@ void ManualMotionAdapter::reset_runtime_state() noexcept
     invalidate_parameter_bindings();
 }
 
-void ManualMotionAdapter::enter_error(std::uint32_t event_id) noexcept
+void ManualMode::enter_error(std::uint32_t event_id) noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     parameter_update_subscription_.unregisterCallback();
@@ -276,17 +276,17 @@ void ManualMotionAdapter::enter_error(std::uint32_t event_id) noexcept
     (void)dima::events::report(event_id, dima::events::Severity::Error);
 }
 
-bool ManualMotionAdapter::finite(float value) noexcept
+bool ManualMode::finite(float value) noexcept
 {
     return std::isfinite(value);
 }
 
-float ManualMotionAdapter::clamp(float value, float lower, float upper) noexcept
+float ManualMode::clamp(float value, float lower, float upper) noexcept
 {
     return value < lower ? lower : (value > upper ? upper : value);
 }
 
-float ManualMotionAdapter::deadzone(float value, float width) noexcept
+float ManualMode::deadzone(float value, float width) noexcept
 {
     const float input = clamp(value, -1.0F, 1.0F);
     const float bounded_width = clamp(width, 0.0F, 0.99F);
@@ -297,7 +297,7 @@ float ManualMotionAdapter::deadzone(float value, float width) noexcept
     return (input - sign * bounded_width) / (1.0F - bounded_width);
 }
 
-float ManualMotionAdapter::superexpo(float value, float expo,
+float ManualMode::superexpo(float value, float expo,
                                      float superexpo_value) noexcept
 {
     const float input = clamp(value, -1.0F, 1.0F);
@@ -309,7 +309,7 @@ float ManualMotionAdapter::superexpo(float value, float expo,
            (1.0F - std::fabs(input) * bounded_superexpo);
 }
 
-bool ManualMotionAdapter::valid_config(const Config &config) noexcept
+bool ManualMode::valid_config(const Config &config) noexcept
 {
     return finite(config.yaw_stick_deadzone) &&
            config.yaw_stick_deadzone >= 0.0F &&
@@ -321,4 +321,4 @@ bool ManualMotionAdapter::valid_config(const Config &config) noexcept
            config.yaw_stick_gain <= 1.0F;
 }
 
-} // namespace dima::rover::control
+} // namespace dima::rover::modes

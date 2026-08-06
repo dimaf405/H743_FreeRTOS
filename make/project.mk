@@ -158,21 +158,18 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/adapters/usb_console/UsbConsole.cpp \
 	Dima/application/app_bootstrap.cpp \
 	Dima/rover/ApplicationContext.cpp \
-	Dima/rover/control/DifferentialDrive.cpp \
-	Dima/rover/control/ManualMotionAdapter.cpp \
-	Dima/rover/control/MotorOutput.cpp \
 	Dima/rover/control/RoverDifferential.cpp \
+	Dima/rover/modes/ManualMode.cpp \
 	Dima/modules/logging/LogService.cpp \
+	Dima/modules/motor/MotorOutput.cpp \
 	Dima/modules/parameters/ParameterService.cpp \
 	Dima/application/app_main.cpp \
-	Dima/lib/motor/speed_to_pwm.cpp \
-	Dima/lib/rover_control/rover_control.cpp \
+	Dima/lib/rover/DifferentialDrive.cpp \
 	Dima/lib/rc/sbus.cpp \
 	Dima/modules/rc/SbusRc.cpp \
 	Dima/modules/rc/RCUpdate.cpp \
-	Dima/modules/rc/ManualControl.cpp \
 	Dima/modules/safety/Commander.cpp \
-	Dima/modules/boot_health/boot_health.cpp \
+	Dima/modules/boot_health/BootHealthService.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uorb/uORB.cpp \
@@ -181,6 +178,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/parameters/autosave.cpp \
 	Dima/lib/tinybson/tinybson.cpp \
 	Dima/middleware/parameters/flashparams/flashparams.cpp \
+	Dima/modules/rc/RcManualInput.cpp \
 	Dima/messages/parameter_update.cpp \
 	Dima/messages/input_rc.cpp \
 	Dima/messages/rc_channels.cpp \

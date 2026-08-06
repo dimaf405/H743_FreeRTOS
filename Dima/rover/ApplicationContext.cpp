@@ -57,8 +57,8 @@ bool ApplicationContext::register_modules() noexcept
         !module_manager_.register_module(commander_) ||
         !module_manager_.register_module(sbus_rc_) ||
         !module_manager_.register_module(rc_update_) ||
-        !module_manager_.register_module(manual_control_) ||
-        !module_manager_.register_module(manual_motion_adapter_) ||
+        !module_manager_.register_module(rc_manual_input_) ||
+        !module_manager_.register_module(manual_mode_) ||
         !module_manager_.register_module(rover_differential_)) {
         module_manager_.reset();
         return false;
@@ -269,8 +269,8 @@ bool ApplicationContext::start_rc_chain() noexcept
         return false;
     }
 
-    manual_control_started_ = module_manager_.start(manual_control_);
-    if (!manual_control_started_) {
+    rc_manual_input_started_ = module_manager_.start(rc_manual_input_);
+    if (!rc_manual_input_started_) {
         (void)module_manager_.stop(rc_update_);
         rc_update_started_ = false;
         (void)stop_sbus();
@@ -282,9 +282,9 @@ bool ApplicationContext::start_rc_chain() noexcept
 bool ApplicationContext::stop_rc_chain() noexcept
 {
     bool stopped = true;
-    if (manual_control_started_) {
-        const bool result = module_manager_.stop(manual_control_);
-        manual_control_started_ = !result;
+    if (rc_manual_input_started_) {
+        const bool result = module_manager_.stop(rc_manual_input_);
+        rc_manual_input_started_ = !result;
         stopped = result && stopped;
     }
     if (rc_update_started_) {
@@ -310,15 +310,15 @@ bool ApplicationContext::stop_sbus() noexcept
 
 bool ApplicationContext::start_control_chain() noexcept
 {
-    manual_motion_started_ = module_manager_.start(manual_motion_adapter_);
-    if (!manual_motion_started_) {
+    manual_mode_started_ = module_manager_.start(manual_mode_);
+    if (!manual_mode_started_) {
         return false;
     }
 
     rover_differential_started_ = module_manager_.start(rover_differential_);
     if (!rover_differential_started_) {
-        (void)module_manager_.stop(manual_motion_adapter_);
-        manual_motion_started_ = false;
+        (void)module_manager_.stop(manual_mode_);
+        manual_mode_started_ = false;
         return false;
     }
     return true;
@@ -332,9 +332,9 @@ bool ApplicationContext::stop_control_chain() noexcept
         rover_differential_started_ = !result;
         stopped = result && stopped;
     }
-    if (manual_motion_started_) {
-        const bool result = module_manager_.stop(manual_motion_adapter_);
-        manual_motion_started_ = !result;
+    if (manual_mode_started_) {
+        const bool result = module_manager_.stop(manual_mode_);
+        manual_mode_started_ = !result;
         stopped = result && stopped;
     }
     return stopped;
