@@ -1265,6 +1265,84 @@ def scan_build_isolation(violations: list[Violation]) -> None:
             ))
 
 
+def scan_include_style(violations: list[Violation]) -> None:
+    """R300: no Dima/... full-path includes; R301: cross-dir uses layer root."""
+    dima_full_path_re = re.compile(r'^\s*#\s*include\s*[<"]Dima/')
+    for path in sources_under(("Dima",)):
+        if is_vendored(path):
+            continue
+        if path.suffix.lower() not in SOURCE_SUFFIXES:
+            continue
+        for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1):
+            match = INCLUDE_RE.match(line)
+            if not match:
+                continue
+            if dima_full_path_re.match(line):
+                violations.append(Violation(
+                    path, line_number, "R300",
+                    f"include uses full 'Dima/' path '{match.group(1)}'; "
+                    f"use layer-root-relative form instead",
+                ))
+
+
+def scan_namespace_convention(violations: list[Violation]) -> None:
+    """R310: C++ sources under Dima/ must live inside a known namespace.
+
+    Accepted patterns:
+      - namespace dima / dima::*
+      - namespace px4 (upstream middleware)
+      - namespace uORB (upstream messaging)
+      - anonymous namespace { … }
+      - extern "C" linkage wrappers (application entry points)
+      - pure C-header wrappers (#ifdef __cplusplus extern "C")
+    """
+    known_ns_re = re.compile(
+        r"^\s*namespace\s+(?:dima\b|dima::|px4\b|uORB\b)", re.MULTILINE,
+    )
+    anon_ns_re = re.compile(r"^\s*namespace\s*\{", re.MULTILINE)
+    extern_c_re = re.compile(r'^\s*extern\s+"C"', re.MULTILINE)
+    qualified_ns_re = re.compile(
+        r"\b(?:dima|px4|uORB)::", re.MULTILINE,
+    )
+    # PX4 upstream directories that intentionally use C-style or
+    # thin forwarding headers without their own namespace declaration.
+    ns_exempt_roots = (
+        "Dima/messages",
+        "Dima/lib/containers",
+    )
+    # Thin forwarding headers that delegate to a namesake .hpp
+    # which already carries the namespace declaration.
+    forwarding_header_ok = {
+        "Dima/middleware/uorb/Publication.hpp",
+        "Dima/middleware/uorb/SubscriptionData.hpp",
+        "Dima/middleware/work_queue/ScheduledWorkItem.hpp",
+    }
+    for path in sources_under(("Dima",)):
+        if is_vendored(path):
+            continue
+        if path.suffix.lower() not in {".cpp", ".hpp"}:
+            continue
+        try:
+            rel = path.relative_to(ROOT).as_posix()
+        except ValueError:
+            continue
+        if any(rel.startswith(root + "/") for root in ns_exempt_roots):
+            continue
+        if rel in forwarding_header_ok:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if (known_ns_re.search(text) or anon_ns_re.search(text)
+                or extern_c_re.search(text)
+                or qualified_ns_re.search(text)):
+            continue
+        violations.append(Violation(
+            path, 1, "R310",
+            "C++ source does not declare a known namespace "
+            "(dima, px4, uORB) or extern \"C\"",
+        ))
+
+
 def main() -> int:
     violations: list[Violation] = []
     scan_include_directions(violations)
@@ -1280,6 +1358,8 @@ def main() -> int:
     scan_clock_contract(violations)
     scan_active_actuator_contract(violations)
     scan_linker_contract(violations)
+    scan_include_style(violations)
+    scan_namespace_convention(violations)
     if violations:
         for violation in sorted(
                 violations,
