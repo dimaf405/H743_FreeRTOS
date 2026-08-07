@@ -67,6 +67,14 @@ public:
         return BootConfirmResult::Ok;
     }
 
+    [[noreturn]] void reboot() noexcept override
+    {
+        NVIC_SystemReset();
+        for (;;) {
+            __NOP();
+        }
+    }
+
     [[noreturn]] void reboot_to_recovery() noexcept override
     {
         (void)dima_boot_request_set_recovery();

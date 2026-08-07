@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run architecture check when Dima sources are staged.
+# Install: make install-hooks  (from H743_FreeRTOS/)
+
+set -eu
+
+# Only check when Dima sources are in the commit.
+if git diff --cached --name-only --diff-filter=ACMR | grep -qE '^Dima/'; then
+    echo "[pre-commit] Dima sources staged — running architecture check"
+    # Windows: invoke make through cmd so PATH includes the MSYS2 wrapper.
+    if ! cmd.exe //c make check-architecture; then
+        echo "[pre-commit] Architecture check FAILED — commit blocked"
+        exit 1
+    fi
+    echo "[pre-commit] Architecture check passed"
+fi

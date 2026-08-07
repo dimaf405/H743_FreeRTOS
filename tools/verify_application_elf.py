@@ -41,6 +41,8 @@ PLATFORM_HEAP_SIZE = 256 * 1024
 TASK_POOL_BASE = RAM_D1_BASE + PLATFORM_HEAP_SIZE
 TASK_POOL_MAX_SIZE = 48 * 1024
 
+# MAVLink module added 4 entries: orb_mavlink_log, orb_vehicle_command,
+# orb_vehicle_command_ack, and LogService::mavlink_log_publication_.
 INIT_ARRAY_ALLOWLIST = {
     "register_fini",
     "frame_dummy",
@@ -57,8 +59,17 @@ INIT_ARRAY_ALLOWLIST = {
     "_GLOBAL__sub_I___orb_rover_motion_request",
     "_GLOBAL__sub_I___orb_vehicle_control_mode",
     "_GLOBAL__sub_I___orb_vehicle_status",
+    # --- MAVLink module (uORB topics + LogService static) ---
+    "_GLOBAL__sub_I___orb_mavlink_log",
+    "_GLOBAL__sub_I___orb_vehicle_command",
+    "_GLOBAL__sub_I___orb_vehicle_command_ack",
+    "_GLOBAL__sub_I__ZN4dima7modules7logging10LogService24mavlink_log_publication_E",
 }
-FINI_ARRAY_ALLOWLIST = {"__do_global_dtors_aux"}
+FINI_ARRAY_ALLOWLIST = {
+    "__do_global_dtors_aux",
+    # --- MAVLink module (LogService static destructor) ---
+    "_GLOBAL__sub_D__ZN4dima7modules7logging10LogService24mavlink_log_publication_E",
+}
 
 FORBIDDEN_APPLICATION_SYMBOLS = {
     "__orb_app_heartbeat",

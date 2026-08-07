@@ -71,6 +71,20 @@ struct ServiceWriter {
     ServiceWrite write;
 };
 
+/**
+ * Structured record sink (dependency inversion hook).
+ *
+ * Called once per formatted, non-raw log record with the message body
+ * (without the level/module prefix and trailing newline). Registered
+ * by the logging module to publish mavlink_log uORB records; the
+ * middleware itself stays free of any messages-layer dependency.
+ * Invoked in the writing task's context; implementations must be
+ * non-blocking.
+ */
+using StructuredSink = void (*)(void *context, Level level,
+                                const char *text, std::size_t length);
+void set_structured_sink(void *context, StructuredSink sink) noexcept;
+
 // Dima internal compatibility entry. Product modules should prefer PX4_* macros.
 WriteResult writef(Level level, const char *format, ...) noexcept
     __attribute__((format(printf, 2, 3)));

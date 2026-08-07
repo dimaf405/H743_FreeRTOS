@@ -1,8 +1,10 @@
 #pragma once
 
 #include "input_rc.hpp"
+#include "mavlink_log.hpp"
 #include "lifecycle/module_base.hpp"
-#include "platform/api/Platform.hpp"
+#include "logging/logging.hpp"
+#include "uorb/Publication.hpp"
 #include "uorb/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
@@ -10,10 +12,19 @@
 
 namespace dima::modules::logging {
 
+/**
+ * LogService — structured log producer.
+ *
+ * Responsibilities (USB transport is owned by MavlinkService):
+ *   - Writes Event/SBUS debug records into the logging middleware ring.
+ *   - Registers the structured sink of the logging middleware and
+ *     publishes every formatted record as a mavlink_log uORB message,
+ *     which MavlinkService converts to MAVLink STATUSTEXT.
+ */
 class LogService final : public dima::middleware::lifecycle::ModuleBase,
                          public px4::ScheduledWorkItem {
 public:
-    explicit LogService(dima::platform::Console &console) noexcept;
+    LogService() noexcept;
 
     bool start() noexcept override;
     void stop() noexcept override;
@@ -23,11 +34,14 @@ protected:
     void Run() override;
 
 private:
+    static void structured_sink(void *context, dima::logging::Level level,
+                                const char *text, std::size_t length) noexcept;
+
     void enqueue_sbus_data(std::uint64_t now_us) noexcept;
     void reset_debug_state() noexcept;
 
-    dima::platform::Console &console_;
     static constexpr uint32_t kFlushIntervalUs = 20000U;
+    static uORB::Publication<mavlink_log_s> mavlink_log_publication_;
     uORB::SubscriptionData<input_rc_s> input_rc_subscription_{
         ORB_ID(input_rc)};
     std::uint64_t last_sbus_sample_timestamp_us_{0U};

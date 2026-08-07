@@ -20,10 +20,20 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
 ├── modules/                  具有独立生命周期的运行模块
+│   ├── boot_health/          BootHealth 启动健康观察
+│   ├── logging/              LogService 日志转储服务
+│   ├── mavlink/              MAVLink v2.0 协议处理（心跳、命令、参数、时间同步、FTP）
+│   ├── motor/                安全门控后的六路 MotorOutput
+│   ├── parameters/           ParameterService 参数持久化与在线管理
 │   ├── rc/                   SBUS、校准、通道映射与 RC 手动输入转换
-│   └── motor/                安全门控后的六路 MotorOutput
+│   └── safety/               Commander 安全状态机（Arming、Failsafe、Termination）
 ├── lib/                      平台无关算法、容器和移植库
-│   └── rover/                当前已接入的 DifferentialDrive 纯算法
+│   ├── containers/           平台无关容器
+│   ├── mavlink/              MAVLink 裁剪消息库与桥接头
+│   ├── rc/                   RC 工具库
+│   ├── rover/                DifferentialDrive 纯算法
+│   ├── timesync/             时间同步库
+│   └── tinybson/             TinyBSON 编解码
 ├── messages/                 共享消息契约
 └── rover/                    唯一 Rover 产品域
     ├── control/              RoverDifferential 消息/参数/安全运行适配
@@ -44,7 +54,7 @@ docs/                         计划、架构、ADR、来源和维护文档
 ## 3. 依赖规则
 
 - `Dima/rover` 是唯一 Rover 产品域，可依赖 modules、middleware、messages、lib 和 `platform/api`，但不包含具体后端类型；`Boards/H743/Src/platform_composition.cpp` 是后端组合根。
-- `Dima/modules` 承载具有独立生命周期和运行状态的功能块；Parameter、Log、RC、MotorOutput 与 Commander 均实现统一的 ModuleBase 契约。`RcManualInput` 明确只转换 RC 来源，不代表 Rover 模式或未来 MAVLink 入口。
+- `Dima/modules` 承载具有独立生命周期和运行状态的功能块；Parameter、Log、RC、MotorOutput、Commander 与 MavlinkService 均实现统一的 ModuleBase 契约。`RcManualInput` 明确只转换 RC 来源，不代表 Rover 模式或未来 MAVLink 入口。
 - `Dima/rover/modes` 只把通用输入契约转换为 Rover 产品请求；`Dima/rover/control` 只消费 `rover_motion_request`、调用 `Dima/lib/rover` 纯算法并产生双 Motor 命令，二者都不得直接访问 PWM 后端。
 - `Dima/lib/rover` 不得依赖 uORB、Parameter、WorkQueue 或 ModuleBase；阶段 5 的 `DifferentialDrive` 由 `RoverDifferential` 调用。阶段 8 闭环控制核在接入状态估计前既不得进入生产构建，也不得被描述为生产链路。
 - `Dima/modules` 和 `Dima/middleware` 禁止反向依赖 `Dima/rover`。
@@ -85,7 +95,7 @@ wq:rate_ctrl     Rover 两轴差速控制
 wq:estimator     EKF2
 wq:sensors       传感器采样与处理
 wq:nav           Position、Waypoint、PivotTurn
-wq:io            六路 MotorOutput、SBUS、GNSS 和串口协议
+wq:io            六路 MotorOutput、SBUS、GNSS、MAVLink 和串口协议
 service:param    参数和 Flash
 service:console  USB 命令
 service:logger   非实时日志
@@ -103,7 +113,7 @@ USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
 跨 Runtime：Commander Termination、D3 Fault 记录和明确标注的累计诊断
 ```
 
-Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter Journal/Core → Module registration`；启动顺序固定为 `Parameter → Log → MotorOutput safe-off → Commander → SbusRc → RCUpdate → RcManualInput → ManualMode → RoverDifferential → BootHealth`。关闭时先停 BootHealth 和 RC 链，再确认 MotorOutput 已停止 TIM5/TIM8 并恢复六路 GPIO 低电平，然后停止控制生产者、Commander、Log 和 Parameter，最后按 `Parameter Core/Journal → uORB → WorkQueue → Console` 释放 Runtime 资源。
+Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Parameter Journal/Core → Module registration`；启动顺序固定为 `Parameter → Log → MotorOutput safe-off → Commander → MavlinkService → SbusRc → RCUpdate → RcManualInput → ManualMode → RoverDifferential → BootHealth`。关闭时先停 BootHealth 和 RC 链，再确认 MotorOutput 已停止 TIM5/TIM8 并恢复六路 GPIO 低电平，然后停止控制生产者、MavlinkService、Commander、MotorOutput、Log 和 Parameter，最后按 `Parameter Core/Journal → uORB → WorkQueue → Console` 释放 Runtime 资源。
 
 - `ApplicationContext` 只接受 owner task 执行 init/start/shutdown；部分初始化和 Error 状态按成功步骤逆序回滚，清理失败时不得伪装为 Stopped 或重新 init。
 - `Param<T>` 构造不访问 Parameter Core；模块每次 start 必须 `bind()`，shutdown 清除 ready、used、unsaved、值 cache、动态 Layer、callback 和运行期同步对象。Journal 下次 initialize/load 必须重新扫描并复验 Header、Commit Marker 和 payload CRC。
@@ -151,7 +161,7 @@ manual_control_setpoint
 
 - 生产消息接口统一采用 uORB 兼容 Publication/Subscription；启动健康观察 Commander 三个安全 Topic 和 `actuator_output_status`，不建立示例心跳 Topic。
 - 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项上限。
-- 在线参数通过 USB，后续增加 MAVLink；Flash 写入由非实时服务执行。MAVLink 纯协议/byte-stream 适配归 `Dima/adapters/mavlink`，uORB、Parameter 与调度生命周期归 `Dima/modules/mavlink`，MCU 串口/DMA 后端归 `Dima/platform/stm32h7`，实现前不建立空占位目录。
+- 在线参数通过 USB 和 MAVLink；Flash 写入由非实时服务执行。MAVLink 协议处理模块位于 `Dima/modules/mavlink/`（MavlinkService 统一承载心跳、命令、参数、时间同步、FTP 等），MAVLink v2.0 裁剪消息库与桥接头位于 `Dima/lib/mavlink/`，时间同步算法位于 `Dima/lib/timesync/`，MCU 串口/DMA 后端归 `Dima/platform/stm32h7`，实现前不建立空占位目录。
 - 参数核心只依赖公共 execution/memory/synchronization 接口；`ParameterJournal` 与 STM32H7 raw Flash device 分离，保持 `0x081E0000/128 KiB`、Journal v1 字节格式和 ENOSPC 语义不变。
 - 参数扫描不执行整段 cache invalidate；raw Flash 仅在 program/erase 成功后处理实际修改范围，D-cache 关闭时中央 helper no-op。
 - 每次 load 都重新验证 Header、Commit Marker 和 payload CRC；最新记录损坏时重扫并回退上一条有效快照。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。

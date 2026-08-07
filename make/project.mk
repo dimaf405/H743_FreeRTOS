@@ -161,6 +161,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/rover/control/RoverDifferential.cpp \
 	Dima/rover/modes/ManualMode.cpp \
 	Dima/modules/logging/LogService.cpp \
+	Dima/modules/mavlink/MavlinkService.cpp \
 	Dima/modules/motor/MotorOutput.cpp \
 	Dima/modules/parameters/ParameterService.cpp \
 	Dima/application/app_main.cpp \
@@ -191,6 +192,9 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/messages/actuator_motors.cpp \
 	Dima/messages/rover_motion_request.cpp \
 	Dima/messages/actuator_output_status.cpp \
+	Dima/messages/vehicle_command.cpp \
+	Dima/messages/vehicle_command_ack.cpp \
+	Dima/messages/mavlink_log.cpp \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
@@ -202,6 +206,7 @@ DIMA_STM32_CXX_SOURCES := \
 	Dima/platform/stm32h7/Clock.cpp \
 	Dima/platform/stm32h7/DmaMemory.cpp \
 	Dima/platform/stm32h7/FlashDevice.cpp \
+	Dima/platform/stm32h7/HardwareUid.cpp \
 	Dima/platform/stm32h7/SbusUart.cpp \
 	Dima/platform/stm32h7/SensorInterrupts.cpp \
 	Dima/platform/stm32h7/UsbCdcTransport.cpp
@@ -287,6 +292,11 @@ $(PROJECT_CXX_OBJECTS): $(BUILD_DIR)/%.o: %.cpp GNUmakefile Makefile make/projec
 	$(CXX) -c $(DIMA_PROJECT_CXXFLAGS) $< -o $@
 endif
 
+# Generated MAVLink C library headers (c_library_v2) trigger packed-member
+# and alignment warnings, suppressed upstream by PX4 the same way.
+$(BUILD_DIR)/Dima/modules/mavlink/MavlinkService.o: DIMA_PROJECT_CXXFLAGS += \
+	-Wno-cast-align -Wno-address-of-packed-member
+
 # Add project objects as prerequisites without replacing CubeMX's ELF recipe.
 # That recipe intentionally links $(CC) $(OBJECTS), keeping GCC as the final
 # link driver and avoiding implicit C++ runtime-library dependencies.
@@ -339,12 +349,19 @@ $(error UPLOAD_VERIFY_CONFIRM must be 0 or 1)
 endif
 
 .PHONY: check-architecture app-check intellisense firmware mcuboot host-tools verify dima_rover \
-	upload-preflight upload \
+	upload-preflight upload install-hooks \
 	__dima_clean_progress __dima_summary \
 	FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
 check-architecture: $(ARCHITECTURE_CHECK_TOOL)
 	$(DIMA_PROGRESS_RUN) --label ARCH --target "$@" -- \
 		$(PYTHON) $(ARCHITECTURE_CHECK_TOOL)
+
+# Install git hooks so that architecture check runs automatically on commit.
+GIT_HOOKS_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null)/.git/hooks
+install-hooks:
+	@cp hooks/pre-commit $(GIT_HOOKS_DIR)/pre-commit && \
+	chmod +x $(GIT_HOOKS_DIR)/pre-commit && \
+	echo "Installed pre-commit hook → $(GIT_HOOKS_DIR)/pre-commit"
 
 # Fast application-only gate for local iterations.  It deliberately excludes
 # image signing, MCUboot and Factory HEX generation; `verify` remains the full

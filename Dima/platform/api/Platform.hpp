@@ -348,6 +348,8 @@ class BootControl {
 public:
     virtual ~BootControl() = default;
     virtual BootConfirmResult confirm_running_image() noexcept = 0;
+    /** Normal MCU reset (boots the confirmed application). */
+    [[noreturn]] virtual void reboot() noexcept = 0;
     [[noreturn]] virtual void reboot_to_recovery() noexcept = 0;
 };
 
@@ -366,6 +368,7 @@ enum class StartupStage : std::uint32_t {
     LogStart = 0x0730U,
     MotorOutputStart = 0x0738U,
     CommanderStart = 0x0740U,
+    MavlinkStart = 0x0745U,
     RcStart = 0x0750U,
     ApplicationRunning = 0x07FFU,
     ApplicationFailed = 0x0F00U,
@@ -533,5 +536,13 @@ TimeMs platform_time_ms() noexcept;
 void *allocate(std::size_t size, AllocationDomain domain) noexcept;
 void deallocate(void *pointer) noexcept;
 HeapStats heap_stats() noexcept;
+
+/**
+ * Board-level identity helpers.
+ * Implemented by the composition root (Boards/); available once
+ * install_services() has completed.
+ */
+uint64_t board_hardware_uid() noexcept;
+uint32_t board_version() noexcept;
 
 } // namespace dima::platform

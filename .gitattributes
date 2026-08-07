@@ -1,0 +1,2 @@
+# Ensure hooks always use LF line endings for bash compatibility
+/hooks/* text eol=lf

@@ -2,6 +2,7 @@
 
 #include "boot_health/BootHealthService.hpp"
 #include "logging/LogService.hpp"
+#include "mavlink/MavlinkService.hpp"
 #include "parameters/ParameterService.hpp"
 #include "parameters/ParameterJournal.hpp"
 #include "platform/api/Platform.hpp"
@@ -53,6 +54,7 @@ private:
     dima::middleware::lifecycle::ModuleManager module_manager_{};
     dima::modules::boot_health::BootHealthService boot_health_;
     dima::modules::logging::LogService log_service_;
+    dima::modules::mavlink::MavlinkService mavlink_service_;
     dima::modules::parameters::ParameterService parameter_service_;
     dima::modules::motor::MotorOutput motor_output_;
     dima::modules::safety::Commander commander_;
@@ -70,6 +72,7 @@ private:
     bool modules_registered_{false};
     bool boot_started_{false};
     bool log_started_{false};
+    bool mavlink_started_{false};
     bool parameter_started_{false};
     bool motor_output_started_{false};
     bool commander_started_{false};

@@ -138,8 +138,19 @@ def sources_under(relative_roots: Iterable[str]) -> list[pathlib.Path]:
             continue
         for path in base.rglob("*"):
             if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES:
+                if is_vendored(path):
+                    continue
                 files.add(path)
     return sorted(files)
+
+
+def is_vendored(path: pathlib.Path) -> bool:
+    """True for upstream-generated sources kept verbatim (c_library_v2)."""
+    try:
+        relative = path.relative_to(ROOT)
+    except ValueError:
+        return False
+    return "c_library_v2" in relative.parts
 
 
 def first_party_sources() -> list[pathlib.Path]:
@@ -511,6 +522,8 @@ def scan_repository_layout(violations: list[Violation]) -> None:
     dima_root = ROOT / "Dima"
     for directory in sorted(
             path for path in dima_root.rglob("*") if path.is_dir()):
+        if is_vendored(directory):
+            continue
         files = sorted(path for path in directory.rglob("*") if path.is_file())
         if not files:
             violations.append(Violation(
@@ -526,6 +539,8 @@ def scan_repository_layout(violations: list[Violation]) -> None:
 
     by_basename: dict[str, list[pathlib.Path]] = {}
     for path in sources_under(("Dima",)):
+        if is_vendored(path):
+            continue
         by_basename.setdefault(path.name.lower(), []).append(path)
     for paths in by_basename.values():
         if len(paths) < 2:
@@ -611,8 +626,13 @@ def scan_debug_console_contract(violations: list[Violation]) -> None:
              "USB debug logger must consume structured events"),
             ("kMaxEventsPerRun", "R048",
              "structured event logging must remain bounded"),
-            ("USB debug logging ready", "R049",
-             "USB debug logger startup record is missing"),
+            ("Structured logging ready", "R049",
+             "structured logger startup record is missing"),
+            ("set_structured_sink(nullptr, &LogService::structured_sink)",
+             "R049B",
+             "structured logger must register the mavlink_log sink"),
+            ("mavlink_log_publication_.publish(record)", "R049C",
+             "structured logger must publish mavlink_log records"),
             ("enqueue_sbus_data(hrt_absolute_time())", "R189",
              "USB debug logger does not service SBUS data"),
             ("kSbus.data_period_ms", "R190",

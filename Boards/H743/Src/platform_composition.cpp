@@ -102,3 +102,20 @@ extern "C" bool dima_platform_early_init(void)
     dima_boot_stage_set(DIMA_BOOT_STAGE_PLATFORM_READY);
     return true;
 }
+
+/* Hardware board version — increment when the PCB revision changes. */
+static constexpr std::uint32_t kBoardVersion = 1;
+
+namespace dima::platform {
+
+uint64_t board_hardware_uid() noexcept
+{
+    return stm32h7::board_hardware_uid();
+}
+
+uint32_t board_version() noexcept
+{
+    return kBoardVersion;
+}
+
+}  // namespace dima::platform

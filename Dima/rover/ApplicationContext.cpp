@@ -26,7 +26,8 @@ ApplicationContext::ApplicationContext(
       journal_(services.parameter_partition, services.flash_transactions,
                services.armed_flash, services.synchronization),
       boot_health_(services.boot_control, services.clock),
-      log_service_(services.console),
+      log_service_(),
+      mavlink_service_(services.console, services.boot_control),
       parameter_service_(journal_, services.console, services.boot_control,
                          services.armed_flash, services.synchronization,
                          services.critical),
@@ -55,6 +56,7 @@ bool ApplicationContext::register_modules() noexcept
         !module_manager_.register_module(log_service_) ||
         !module_manager_.register_module(motor_output_) ||
         !module_manager_.register_module(commander_) ||
+        !module_manager_.register_module(mavlink_service_) ||
         !module_manager_.register_module(sbus_rc_) ||
         !module_manager_.register_module(rc_update_) ||
         !module_manager_.register_module(rc_manual_input_) ||
@@ -231,6 +233,14 @@ bool ApplicationContext::start() noexcept
     }
     PX4_INFO("Commander started");
 
+    services_.diagnostics.set_stage(dima::platform::StartupStage::MavlinkStart);
+    mavlink_started_ = module_manager_.start(mavlink_service_);
+    if (!mavlink_started_) {
+        (void)rollback_start();
+        return false;
+    }
+    PX4_INFO("MAVLink service started");
+
     // RC 链故障只降级手动输入，不能拖垮参数、日志和恢复服务。
     services_.diagnostics.set_stage(dima::platform::StartupStage::RcStart);
     if (!start_rc_chain()) {
@@ -355,20 +365,27 @@ bool ApplicationContext::stop_motor_output() noexcept
 
 bool ApplicationContext::stop_started_modules() noexcept
 {
+    // 停止顺序与启动顺序相反：
+    // Parameter → Log → MotorOutput → Commander → MAVLink → RC → Control → BootHealth
     bool stopped = true;
     if (boot_started_) {
         const bool result = module_manager_.stop(boot_health_);
         boot_started_ = !result;
         stopped = result && stopped;
     }
-    stopped = stop_rc_chain() && stopped;
-    stopped = stop_motor_output() && stopped;
     stopped = stop_control_chain() && stopped;
+    stopped = stop_rc_chain() && stopped;
+    if (mavlink_started_) {
+        const bool result = module_manager_.stop(mavlink_service_);
+        mavlink_started_ = !result;
+        stopped = result && stopped;
+    }
     if (commander_started_) {
         const bool result = module_manager_.stop(commander_);
         commander_started_ = !result;
         stopped = result && stopped;
     }
+    stopped = stop_motor_output() && stopped;
     if (log_started_) {
         const bool result = module_manager_.stop(log_service_);
         log_started_ = !result;

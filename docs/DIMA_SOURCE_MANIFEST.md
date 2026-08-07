@@ -1,7 +1,7 @@
 # Dima 上游源码与许可证清单
 
-- 日期：2026-08-06
-- 文档状态：阶段 1～5 已接通强制分层的平台、生命周期、两轴 Manual 差速控制和六路安全 PWM 链；Windows 原生目标构建已通过，实板电气、时序和车辆行为仍待验收
+- 日期：2026-08-07
+- 文档状态：阶段 1～6 已接通强制分层的平台、生命周期、两轴 Manual 差速控制、六路安全 PWM 链和 MAVLink v2.0 协议处理；Windows 原生目标构建已通过，实板电气、时序和车辆行为仍待验收
 - 许可证决策：`PENDING`
 
 ## 1. 管理规则
@@ -19,7 +19,7 @@
 
 | 字段 | 内容 |
 |---|---|
-| 用途 | Parameter、ModuleParams、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl RC 子集、Commander Rover 子集、RoverDifferential、执行器链和后续 EKF2 |
+| 用途 | Parameter、ModuleParams、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl RC 子集、Commander Rover 子集、RoverDifferential、执行器链、MAVLink v2.0 协议处理和后续 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
 | 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
 | 当前状态 | 阶段 1～4 基础链已按 v1.17.0 接口和行为适配；阶段 5 已接通 Manual 两轴请求、RoverDifferential、MotorOutput 和六路 PWM，源码/目标构建通过，板级波形验证待完成 |
@@ -65,6 +65,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | 公共 capability 与时间契约 | `Dima/platform/api/` | DIMA CONTRACT |
 | FreeRTOS Task/同步/Heap 后端与 C/C++ Runtime | `Dima/platform/freertos/` | DIMA BACKEND / PLATFORM ISOLATED |
 | STM32H7 时钟、MPU/cache、DMA、Flash、USB、SBUS、中断与六路 PWM 后端 | `Dima/platform/stm32h7/` | DIMA BACKEND / PLATFORM ISOLATED / TARGET VERIFY PASS / BOARD PENDING |
+| MAVLink v2.0 协议处理 | `Dima/modules/mavlink/` | ADAPTED / TARGET VERIFY PASS |
 | H743 capability 组合根 | `Boards/H743/Src/platform_composition.cpp` | DIMA COMPOSITION |
 | Rover 产品装配、模式、专属控制与导航 | `Dima/rover/`、`Dima/rover/modes/`、`Dima/rover/control/` | UNIQUE PRODUCT ROOT / MANUAL OUTPUT CHAIN ADAPTED / NAV INTERFACE RESERVED |
 | Rover 纯控制算法 | `Dima/lib/rover/` | 当前只保留已由生产链调用的 `DifferentialDrive`；阶段 8 闭环控制器尚未导入 |
@@ -82,6 +83,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | SBUS、SbusRc、RCUpdate、ManualControl RC 子集 | PX4 v1.17.0 | `Dima/lib/rc/`、`Dima/modules/rc/`、`Dima/platform/stm32h7/SbusUart.cpp` | 3 | ADAPTED / PLATFORM ISOLATED / BOARD PENDING |
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/rover/control/`、`Dima/lib/rover/`、`Dima/modules/motor/` | 5 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
+| MAVLink v2.0 协议处理（RX/TX、心跳、命令、参数、时间同步、Metadata FTP） | PX4 v1.17.0；mavlink/mavlink commit `33af200d` | `Dima/modules/mavlink/`、`Dima/lib/mavlink/c_library_v2/` | 6 | ADAPTED / TARGET VERIFY PASS |
 | EKF2 与 Estimator 支撑库 | PX4 v1.17.0 | 尚未创建；正式导入后分别落入运行模块与纯算法所有者目录 | 7 | PLANNED / NO SOURCE PLACEHOLDER |
 | Position、Waypoint、Reverse、PivotTurn | PX4 v1.17.0；APM 行为参考 | `Dima/rover/navigation/` | 9 | PLANNED |
 
@@ -121,6 +123,13 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | PX4 RC/Commander 参数定义与生成元数据 | `Dima/middleware/parameters/definitions/rc_params.c`、`commander_params.c` | 保留 RC 失联参数；`RC_INPUT_PROTO=0/2` 控制 Disabled/SBUS 并移除手动极性参数；增加 `COM_ARM_STICK_DZ` 和约束执行器发布/采样时间的 `COM_ACT_LOSS_T`；当前总参数数为 176 | ADAPTED / DIMA PARAMETER / TARGET VERIFY PASS |
 | Dima Rover 生命周期与 Parameter Autosave 写门控 | `Dima/rover/ApplicationContext.*`、`Dima/modules/parameters/ParameterService.*`、`Dima/middleware/uorb/`、`Dima/middleware/work_queue/`、`Dima/platform/api/Platform.*` | ApplicationContext 只注入 capability；启动时在 Commander 前建立 MotorOutput safe-off，shutdown 在释放控制/参数资源前确认六路物理 safe-off；Parameter、Commander 与 BootControl 共用 Armed/Flash coordinator，只有 Termination 跨 Runtime 保留 | DIMA INTEGRATION / SOURCE AND TARGET GATE PASS / BOARD PENDING |
 | MCUboot image confirmation 与 Recovery | `Dima/platform/stm32h7/BootControl.cpp`、`flash_bank1.c` | 非阻塞 transaction 保留 DEFERRED；Bank 1 program 在 DTCM 执行并统一调用 cache helper | DIMA BACKEND |
+| `src/modules/mavlink/mavlink_main.cpp` | `Dima/modules/mavlink/MavlinkService.hpp/cpp` | RX/TX 主循环、USB 传输独占、延迟 reboot；适配为 ScheduledWorkItem + Console capability | ADAPTED |
+| `src/modules/mavlink/mavlink_receiver.cpp`（命令处理子集） | `Dima/modules/mavlink/MavlinkCommands.hpp` | COMMAND_LONG 接收、target 过滤、`vehicle_command` 发布、`MAV_CMD_REQUEST_MESSAGE` 解析；裁剪 COMMAND_INT、流间隔控制和 Autotune | ADAPTED |
+| `src/modules/mavlink/mavlink_parameters.cpp` | `Dima/modules/mavlink/MavlinkParameters.hpp` | Classic 参数协议——LIST/READ/SET 处理和 PARAM_VALUE 流式发送；移除 UAVCAN 转发和 PARAM_HASH | ADAPTED |
+| `src/modules/mavlink/mavlink_timesync.cpp` | `Dima/modules/mavlink/MavlinkTimesync.hpp` | TIMESYNC 处理——远端回传、本地喂入收敛滤波器；省略 SYSTEM_TIME 时钟设置 | ADAPTED |
+| `src/modules/mavlink/mavlink_ftp.h/.cpp` | `Dima/modules/mavlink/MavlinkMetadataFtp.hpp` | 只读 FTP 服务器——OpenFileRO/ReadFile/BurstReadFile；写/列操作码 NAK；文件从 Flash 只读数组提供 | ADAPTED |
+| `src/lib/mavlink/`（c_library_v2，mavlink/mavlink commit `33af200d`） | `Dima/lib/mavlink/c_library_v2/` | 裁剪方言 XML 通过 `mavgen` 生成；仅包含 Phase-6 允许列表的 12 条消息 | ADAPTED / TRIMMED |
+| PX4 `src/modules/mavlink/` 心跳与身份语义 | `Dima/modules/mavlink/MavlinkIdentity.hpp`、`HeartbeatPacer.hpp` | 系统身份纯数据 + 1 Hz HEARTBEAT 定标 + AUTOPILOT_VERSION 按需打包；适配为 uORB `vehicle_status` 订阅 | ADAPTED |
 | Fault 跨复位诊断持久化 | `Boards/H743/Src/boot_diagnostics.c`、`boot_diagnostics_store.c`、`Bootloader/Src/main.c` | Application Fault/Panic 只写 non-cacheable D3 record、执行 barrier 并复位；MCUboot 冷启动独占诊断 Flash store 和 Recovery，Application ELF 禁止链接 store 符号 | DIMA SAFETY / ELF GATED |
 
 许可证状态仅记录为 `PENDING`；延后处理项记录为 `DEFERRED`。该状态不阻塞当前内部移植、编译和板级调试工作。

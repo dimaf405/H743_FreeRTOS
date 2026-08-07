@@ -32,6 +32,13 @@ struct LogState {
 
 LogState g_state{};
 
+struct StructuredSinkState {
+    StructuredSink sink{nullptr};
+    void *context{nullptr};
+};
+
+StructuredSinkState g_sink{};
+
 void increment_saturated(std::uint32_t &value,
                          std::uint32_t amount = 1U) noexcept
 {
@@ -42,11 +49,11 @@ void increment_saturated(std::uint32_t &value,
 
 bool formatting_allowed() noexcept
 {
-    if (dima::platform::in_interrupt_context()) {
+    if (::dima::platform::in_interrupt_context()) {
         return false;
     }
 
-    return !dima::platform::in_realtime_context();
+    return !::dima::platform::in_realtime_context();
 }
 
 void push_bytes_locked(const std::uint8_t *data, std::size_t length) noexcept
@@ -86,7 +93,7 @@ void push_bytes_locked(const std::uint8_t *data, std::size_t length) noexcept
 std::size_t pop_bytes(std::uint8_t *destination,
                       std::size_t capacity) noexcept
 {
-    dima::platform::CriticalGuard lock;
+    ::dima::platform::CriticalGuard lock;
     const std::size_t length = std::min(capacity, g_state.count);
     if (length == 0U) {
         return 0U;
@@ -106,6 +113,13 @@ std::size_t pop_bytes(std::uint8_t *destination,
 
 } // namespace
 
+void set_structured_sink(void *context, StructuredSink sink) noexcept
+{
+    ::dima::platform::CriticalGuard lock;
+    g_sink.context = context;
+    g_sink.sink = sink;
+}
+
 namespace {
 
 WriteResult write_v(Source source, Level level, const char *module_name, bool raw,
@@ -120,7 +134,7 @@ WriteResult write_v(Source source, Level level, const char *module_name, bool ra
         return WriteResult::Filtered;
     }
     if (!formatting_allowed()) {
-        dima::platform::CriticalGuard lock;
+        ::dima::platform::CriticalGuard lock;
         increment_saturated(g_state.formatting_rejections);
         return WriteResult::RejectedRealtime;
     }
@@ -153,7 +167,7 @@ WriteResult write_v(Source source, Level level, const char *module_name, bool ra
     std::size_t length = std::min(prefix_length + static_cast<std::size_t>(body_result),
                                   sizeof(buffer) - 1U);
 
-    // PX4 module logs always append one newline; PX4_INFO_RAW keeps exact bytes.
+    /* PX4 module logs always append one newline; PX4_INFO_RAW keeps exact bytes. */
     if (!raw) {
         if (length < sizeof(buffer) - 1U) {
             buffer[length++] = '\n';
@@ -163,11 +177,30 @@ WriteResult write_v(Source source, Level level, const char *module_name, bool ra
         }
     }
 
-    dima::platform::CriticalGuard lock;
-    push_bytes_locked(reinterpret_cast<const std::uint8_t *>(buffer), length);
-    increment_saturated(g_state.records_written);
-    if (truncated) {
-        increment_saturated(g_state.records_truncated);
+    {
+        ::dima::platform::CriticalGuard lock;
+        push_bytes_locked(reinterpret_cast<const std::uint8_t *>(buffer), length);
+        increment_saturated(g_state.records_written);
+        if (truncated) {
+            increment_saturated(g_state.records_truncated);
+        }
+    }
+
+    /* Structured record sink (e.g. mavlink_log publication). Called
+     * outside the critical section with the body only. */
+    if (!raw) {
+        StructuredSinkState sink{};
+        {
+            ::dima::platform::CriticalGuard lock;
+            sink = g_sink;
+        }
+        if (sink.sink != nullptr) {
+            std::size_t body_length = length - prefix_length;
+            if (body_length > 0U && buffer[prefix_length + body_length - 1U] == '\n') {
+                --body_length;
+            }
+            sink.sink(sink.context, level, buffer + prefix_length, body_length);
+        }
     }
     return truncated ? WriteResult::Truncated : WriteResult::Ok;
 }
@@ -205,7 +238,7 @@ WriteResult write_literal(const char *text, std::size_t length) noexcept
         return WriteResult::Ok;
     }
 
-    dima::platform::CriticalGuard lock;
+    ::dima::platform::CriticalGuard lock;
     push_bytes_locked(reinterpret_cast<const std::uint8_t *>(text), length);
     increment_saturated(g_state.records_written);
     return WriteResult::Ok;
@@ -215,8 +248,8 @@ std::size_t service_flush(const ServiceWriter &writer,
                           std::size_t max_bytes) noexcept
 {
     if ((writer.write == nullptr) || (max_bytes == 0U) ||
-        dima::platform::in_interrupt_context() ||
-        dima::platform::in_realtime_context()) {
+        ::dima::platform::in_interrupt_context() ||
+        ::dima::platform::in_realtime_context()) {
         return 0U;
     }
 
@@ -236,7 +269,7 @@ std::size_t service_flush(const ServiceWriter &writer,
         total_written += accepted;
 
         if (accepted < popped) {
-            dima::platform::CriticalGuard lock;
+            ::dima::platform::CriticalGuard lock;
             increment_saturated(
                 g_state.service_dropped_bytes,
                 static_cast<std::uint32_t>(popped - accepted));
@@ -249,7 +282,7 @@ std::size_t service_flush(const ServiceWriter &writer,
 
 LogStats stats() noexcept
 {
-    dima::platform::CriticalGuard lock;
+    ::dima::platform::CriticalGuard lock;
     return LogStats{
         g_state.records_written,
         g_state.records_truncated,
@@ -262,7 +295,7 @@ LogStats stats() noexcept
 
 void reset() noexcept
 {
-    dima::platform::CriticalGuard lock;
+    ::dima::platform::CriticalGuard lock;
     g_state = LogState{};
 }
 

@@ -37,6 +37,8 @@
 #include "actuator_armed.hpp"
 #include "manual_control_setpoint.hpp"
 #include "parameter_update.hpp"
+#include "vehicle_command.hpp"
+#include "vehicle_command_ack.hpp"
 #include "vehicle_control_mode.hpp"
 #include "vehicle_status.hpp"
 #include "lifecycle/module_base.hpp"
@@ -67,6 +69,14 @@ public:
 
     /** 供非 Commander WorkQueue 的存储门控读取。 */
     bool armed() const noexcept { return armed_flash_.armed(); }
+
+    /** MAVLink 重启许可查询与清除。 */
+    bool take_reboot_pending() noexcept
+    {
+        const bool v = reboot_pending_;
+        reboot_pending_ = false;
+        return v;
+    }
 
 private:
     static constexpr std::uint32_t kCheckIntervalUs = 20000U;
@@ -100,6 +110,9 @@ private:
     void reset_runtime_state() noexcept;
     void initialize_public_state(std::uint64_t now) noexcept;
     void initialize_disarmed_snapshot(std::uint64_t now) noexcept;
+    bool handle_vehicle_command(std::uint64_t now) noexcept;
+    void publish_command_ack(std::uint16_t command, std::uint8_t result,
+                             std::uint64_t now) noexcept;
     bool handle_publication_failure(std::uint64_t now) noexcept;
     void handle_scheduling_failure(std::uint64_t now) noexcept;
     void enter_error(const char *reason) noexcept;
@@ -112,12 +125,16 @@ private:
         ORB_ID(manual_control_setpoint), *this};
     uORB::SubscriptionCallbackWorkItem parameter_update_subscription_{
         ORB_ID(parameter_update), *this};
+    uORB::SubscriptionCallbackWorkItem vehicle_command_subscription_{
+        ORB_ID(vehicle_command), *this};
     uORB::Publication<actuator_armed_s> actuator_armed_publication_{
         ORB_ID(actuator_armed)};
     uORB::Publication<vehicle_control_mode_s> vehicle_control_mode_publication_{
         ORB_ID(vehicle_control_mode)};
     uORB::Publication<vehicle_status_s> vehicle_status_publication_{
         ORB_ID(vehicle_status)};
+    uORB::Publication<vehicle_command_ack_s> vehicle_command_ack_publication_{
+        ORB_ID(vehicle_command_ack)};
 
     actuator_armed_s actuator_armed_{};
     vehicle_control_mode_s vehicle_control_mode_{};
@@ -135,6 +152,7 @@ private:
     bool parameters_valid_{false};
     bool have_manual_control_{false};
     bool termination_latched_{false};
+    bool reboot_pending_{false};
 };
 
 } // namespace dima::modules::safety

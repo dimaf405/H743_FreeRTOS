@@ -8,6 +8,7 @@
 #include "platform/api/Time.hpp"
 
 #include <cmath>
+#include <cstring>
 
 namespace dima::modules::safety {
 namespace {
@@ -83,6 +84,15 @@ bool Commander::start()
         PX4_ERR("Commander parameter callback registration failed");
         return false;
     }
+    if (!vehicle_command_subscription_.registerCallback()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        parameter_update_subscription_.unregisterCallback();
+        manual_control_subscription_.unregisterCallback();
+        action_request_subscription_.unregisterCallback();
+        ScheduleCancelAndDrain();
+        PX4_ERR("Commander vehicle_command callback registration failed");
+        return false;
+    }
 
     const std::uint64_t now = hrt_absolute_time();
     initialize_public_state(now);
@@ -103,6 +113,7 @@ void Commander::stop()
 {
     armed_flash_.disarm();
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    vehicle_command_subscription_.unregisterCallback();
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();
@@ -146,6 +157,17 @@ void Commander::Run()
 
         // 每一个状态转换都完成一次固定顺序发布，保持 Arm/Kill 队列顺序。
         if (action_changed && !publish_state(now)) {
+            (void)handle_publication_failure(now);
+            return;
+        }
+    }
+
+    /* ── External MAVLink vehicle_command ───────────────────────── */
+    if (handle_vehicle_command(hrt_absolute_time())) {
+        now = hrt_absolute_time();
+        state_changed = evaluate_safety(now) || state_changed;
+        state_changed = update_public_projection(now) || state_changed;
+        if (state_changed && !publish_state(now)) {
             (void)handle_publication_failure(now);
             return;
         }
@@ -483,6 +505,7 @@ void Commander::reset_runtime_state() noexcept
     parameter_handles_ready_ = false;
     parameters_valid_ = false;
     have_manual_control_ = false;
+    reboot_pending_ = false;
 }
 
 void Commander::initialize_public_state(std::uint64_t now) noexcept
@@ -559,10 +582,94 @@ void Commander::handle_scheduling_failure(std::uint64_t now) noexcept
     enter_error("Commander scheduling failed");
 }
 
+bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
+{
+    vehicle_command_s cmd{};
+    bool handled = false;
+    while (vehicle_command_subscription_.copy(&cmd)) {
+        handled = true;
+        std::uint8_t result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+
+        switch (cmd.command) {
+        case vehicle_command_s::NAV_CMD_COMPONENT_ARM_DISARM: {
+            float param1 = 0.0F;
+            std::memcpy(&param1, &cmd.param1_raw, sizeof(param1));
+            const bool want_arm = param1 > 0.5F;
+            if (want_arm) {
+                if (arm(vehicle_status_s::ARM_DISARM_REASON_COMMAND_EXTERNAL, now)) {
+                    result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                } else {
+                    result = vehicle_command_ack_s::RESULT_DENIED;
+                }
+            } else {
+                if (disarm(vehicle_status_s::ARM_DISARM_REASON_COMMAND_EXTERNAL)) {
+                    result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                } else {
+                    result = vehicle_command_ack_s::RESULT_DENIED;
+                }
+            }
+            break;
+        }
+
+        case vehicle_command_s::NAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN: {
+            /* Only permit reboot when disarmed. */
+            if (actuator_armed_.armed) {
+                result = vehicle_command_ack_s::RESULT_DENIED;
+            } else {
+                float param1 = 0.0F;
+                std::memcpy(&param1, &cmd.param1_raw, sizeof(param1));
+                const int mode = static_cast<int>(param1);
+                if (mode == 0) {
+                    /* Idempotent no-op request. */
+                    result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                } else if (mode == 1 || mode == 3) {
+                    /* 1 = normal reset, 3 = MCUboot Recovery. The actual
+                     * reset is deferred to MavlinkService so the ACK is
+                     * delivered over USB first. */
+                    result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                    publish_command_ack(cmd.command, result, now);
+                    PX4_INFO("Reboot (mode %d) permitted by Commander", mode);
+                    reboot_pending_ = true;
+                    continue;   /* skip the normal ACK below */
+                } else {
+                    result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+                }
+            }
+            break;
+        }
+
+        case vehicle_command_s::NAV_CMD_REQUEST_MESSAGE:
+            /* Handled by MavlinkService directly via its own subscription. */
+            result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+            break;
+
+        default:
+            PX4_WARN("Commander: unsupported command %u", cmd.command);
+            result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+            break;
+        }
+
+        publish_command_ack(cmd.command, result, now);
+    }
+    return handled;
+}
+
+void Commander::publish_command_ack(std::uint16_t command, std::uint8_t result,
+                                     std::uint64_t now) noexcept
+{
+    vehicle_command_ack_s ack{};
+    ack.timestamp = now;
+    ack.command = command;
+    ack.result = result;
+    ack.from_external = true;
+    vehicle_command_ack_publication_.publish(ack);
+}
+
 void Commander::enter_error(const char *reason) noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     armed_flash_.disarm();
+    vehicle_command_subscription_.unregisterCallback();
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();

@@ -14,4 +14,17 @@ PX4 v1.17.0 风格日志兼容层，固定 8 KiB 非阻塞字节环形。
 - `PX4_INFO_RAW`、参数查询结果和 USB 控制响应绕过诊断等级过滤。Error/Critical 结构化 Event 仍先进入独立 Event Ring 和故障锁存，外设 Debug 策略不改变安全故障记录。
 - Log/Event Ring 由 `ApplicationContext` 在每次 Runtime init/shutdown 边界重置，`LogService::start()` 不得丢弃 Parameter 启动阶段已经产生的记录。
 
+## 禁止事项
+
+- 不反向依赖 `rover/`，不直接包含 HAL/CMSIS/Core/Board 头文件。
+- 在 `namespace dima::logging` 内引用 `dima::platform` 符号时**必须使用 `::dima::platform::` 全局前缀**，避免被解析为 `dima::logging::dima::platform::`。
+
+## 文件清单
+
+| 文件 | 职责 |
+|---|---|
+| `logging.hpp` | 公开 API——`writef`、`write_module`、`write_literal`、`service_flush`、`stats`、`reset`、`set_structured_sink`；`LogStats`/`WriteResult`/`ServiceWriter` 类型定义 |
+| `logging.cpp` | 8 KiB 环形缓冲实现、中断/实时上下文过滤、结构化 sink 分发、PX4 C ABI 桥接 |
+| `debug_config.hpp` | 编译期 Source 级调试策略——USB/System/SBUS/ICM42688 最低等级与数据周期 |
+
 上游基线：PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`。

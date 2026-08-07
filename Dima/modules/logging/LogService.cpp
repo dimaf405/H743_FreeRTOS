@@ -1,24 +1,28 @@
 #include "LogService.hpp"
 
 #include "events/events.hpp"
-#include "logging/logging.hpp"
 #include "platform/api/Time.hpp"
+
+#include <algorithm>
+#include <cstring>
 
 namespace dima::modules::logging {
 namespace {
 
 constexpr std::size_t kMaxEventsPerRun = 4U;
-constexpr std::size_t kMaxLogBytesPerRun = 512U;
 
-std::size_t usb_service_write(void *context, const std::uint8_t *data,
-                              std::size_t length) noexcept
+/* PX4 Level -> MAV_SEVERITY mapping used for mavlink_log records. */
+std::uint8_t mav_severity(dima::logging::Level level) noexcept
 {
-    if (context == nullptr) {
-        return 0U;
+    using dima::logging::Level;
+    switch (level) {
+    case Level::Debug:   return 7U;   /* MAV_SEVERITY_DEBUG */
+    case Level::Info:    return 6U;   /* MAV_SEVERITY_INFO */
+    case Level::Warning: return 4U;   /* MAV_SEVERITY_WARNING */
+    case Level::Error:   return 3U;   /* MAV_SEVERITY_ERROR */
+    case Level::Panic:   return 0U;   /* MAV_SEVERITY_EMERGENCY */
     }
-    auto &console = *static_cast<dima::platform::Console *>(context);
-    const int written = console.write(data, length, 2U);
-    return written > 0 ? static_cast<std::size_t>(written) : 0U;
+    return 3U;
 }
 
 dima::logging::Level event_level(std::uint8_t severity) noexcept
@@ -66,9 +70,11 @@ void enqueue_structured_events() noexcept
 
 } // namespace
 
-LogService::LogService(dima::platform::Console &console) noexcept
-    : ScheduledWorkItem("dima_log", px4::wq_configurations::lp_default),
-      console_(console)
+uORB::Publication<mavlink_log_s> LogService::mavlink_log_publication_{
+    ORB_ID(mavlink_log)};
+
+LogService::LogService() noexcept
+    : ScheduledWorkItem("dima_log", px4::wq_configurations::lp_default)
 {
 }
 
@@ -82,18 +88,21 @@ bool LogService::start() noexcept
         return false;
     }
     reset_debug_state();
+    dima::logging::set_structured_sink(nullptr, &LogService::structured_sink);
     if (!ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        dima::logging::set_structured_sink(nullptr, nullptr);
         ScheduleCancelAndDrain();
         return false;
     }
     state_ = dima::middleware::lifecycle::ModuleState::Running;
-    PX4_INFO("USB debug logging ready");
+    PX4_INFO("Structured logging ready");
     return true;
 }
 
 void LogService::stop() noexcept
 {
+    dima::logging::set_structured_sink(nullptr, nullptr);
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
     reset_debug_state();
@@ -102,6 +111,24 @@ void LogService::stop() noexcept
 dima::middleware::lifecycle::ModuleState LogService::state() const noexcept
 {
     return state_;
+}
+
+void LogService::structured_sink(void *context, dima::logging::Level level,
+                                 const char *text, std::size_t length) noexcept
+{
+    (void)context;
+    if (text == nullptr || length == 0U) {
+        return;
+    }
+
+    mavlink_log_s record{};
+    record.timestamp = hrt_absolute_time();
+    record.severity = mav_severity(level);
+    const std::size_t copy =
+        std::min(length, static_cast<std::size_t>(mavlink_log_s::TEXT_LEN - 1U));
+    std::memcpy(record.text, text, copy);
+    record.text[copy] = '\0';
+    (void)mavlink_log_publication_.publish(record);
 }
 
 void LogService::reset_debug_state() noexcept
@@ -178,14 +205,8 @@ void LogService::Run()
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
     }
-    // USB 未连接时保留环形内容；生产者仍保持非阻塞，满后覆盖最旧数据。
-    if (!console_.ready()) {
-        return;
-    }
     enqueue_structured_events();
     enqueue_sbus_data(hrt_absolute_time());
-    const dima::logging::ServiceWriter writer{&console_, &usb_service_write};
-    (void)dima::logging::service_flush(writer, kMaxLogBytesPerRun);
 }
 
 } // namespace dima::modules::logging
