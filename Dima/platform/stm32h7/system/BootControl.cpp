@@ -1,8 +1,8 @@
-#include "HardwareServices.hpp"
+#include "platform/stm32h7/HardwareServices.hpp"
 
 #include "boot_layout.h"
 #include "dima_boot_request.h"
-#include "flash_bank1.h"
+#include "platform/stm32h7/flash/flash_bank1.h"
 
 #include <cstring>
 

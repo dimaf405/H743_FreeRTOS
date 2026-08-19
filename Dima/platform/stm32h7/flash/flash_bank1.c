@@ -1,7 +1,7 @@
 #include "flash_bank1.h"
 
 #include "boot_layout.h"
-#include "cache.h"
+#include "platform/stm32h7/memory/cache.h"
 #include "stm32h7xx_hal.h"
 
 #define DIMA_FLASH_BUSY_MASK \

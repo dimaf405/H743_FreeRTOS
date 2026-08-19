@@ -8,7 +8,7 @@
  * sufficient uniqueness for MAVLink AUTOPILOT_VERSION uid field.
  */
 
-#include "HardwareServices.hpp"
+#include "platform/stm32h7/HardwareServices.hpp"
 
 #include <cstdint>
 
@@ -17,14 +17,14 @@
 
 namespace dima::platform::stm32h7 {
 
-uint64_t board_hardware_uid() noexcept
+std::uint64_t board_hardware_uid() noexcept
 {
     const volatile uint32_t *uid =
         reinterpret_cast<const volatile uint32_t *>(UID_BASE);
 
     /* Combine the first two 32-bit words into a 64-bit UID. */
-    return static_cast<uint64_t>(uid[0])
-         | (static_cast<uint64_t>(uid[1]) << 32);
+    return static_cast<std::uint64_t>(uid[0])
+         | (static_cast<std::uint64_t>(uid[1]) << 32);
 }
 
 }  // namespace dima::platform::stm32h7

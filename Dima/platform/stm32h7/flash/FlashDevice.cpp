@@ -1,6 +1,7 @@
-#include "HardwareServices.hpp"
+#include "platform/stm32h7/HardwareServices.hpp"
 
-#include "cache.h"
+#include "flash_fault.h"
+#include "platform/stm32h7/memory/cache.h"
 #include "boot_layout.h"
 
 #include <algorithm>

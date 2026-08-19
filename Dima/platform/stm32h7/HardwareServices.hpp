@@ -1,6 +1,15 @@
 #pragma once
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/ActuatorPwm.hpp"
+#include "platform/api/Boot.hpp"
+#include "platform/api/Console.hpp"
+#include "platform/api/Execution.hpp"
+#include "platform/api/Flash.hpp"
+#include "platform/api/Memory.hpp"
+#include "platform/api/SensorInterrupts.hpp"
+#include "platform/api/Serial.hpp"
+
+#include <cstdint>
 
 namespace dima::platform::stm32h7 {
 
@@ -18,10 +27,7 @@ SbusInput &sbus_input() noexcept;
 SensorInterrupts &sensor_interrupts() noexcept;
 ActuatorPwm &actuator_pwm() noexcept;
 
-/**
- * Read the STM32H7 96-bit unique device ID and combine into a 64-bit value.
- * Uses the lower 64 bits of the 96-bit UID (word0 | word1<<32).
- */
-uint64_t board_hardware_uid() noexcept;
+/** 读取 STM32H7 的 96-bit UID，并将低两个 word 合成为 64-bit 板级标识。 */
+std::uint64_t board_hardware_uid() noexcept;
 
 } // namespace dima::platform::stm32h7

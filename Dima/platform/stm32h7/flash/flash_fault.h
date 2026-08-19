@@ -7,6 +7,7 @@
 extern "C" {
 #endif
 
+/* Core 提供 fail-closed 弱实现，FlashDevice 在安全读窗口内提供强实现。 */
 int dima_flash_busfault_recover(uint32_t *stacked_frame);
 
 #ifdef __cplusplus
