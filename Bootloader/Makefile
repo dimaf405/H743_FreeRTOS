@@ -57,8 +57,8 @@ C_SOURCES := \
 Bootloader/Src/main.c \
 Bootloader/Src/boot_compat.c \
 Boards/H743/Src/boot_diagnostics_store.c \
-Dima/platform/stm32h7/cache.c \
-Dima/platform/stm32h7/flash_bank1.c \
+Dima/platform/stm32h7/memory/cache.c \
+Dima/platform/stm32h7/flash/flash_bank1.c \
 Bootloader/Src/boot_platform.c \
 Bootloader/Src/boot_primary.c \
 Bootloader/Src/boot_watchdog.c \
@@ -120,7 +120,7 @@ C_DEFS := -DUSE_HAL_DRIVER -DSTM32H743xx
 C_INCLUDES := \
 -I. \
 -IBoards/H743/Inc \
--IDima/platform/stm32h7 \
+-IDima \
 -IBootloader/Inc \
 -ICore/Inc \
 -IUSB_DEVICE/Target \

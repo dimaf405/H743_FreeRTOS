@@ -1,5 +1,6 @@
 # Stable user-owned entry point.  STM32CubeMX may regenerate Makefile; project
-# sources, C++ support and release-image rules stay in make/project.mk.
+# sources and C++ support stay in make/project.mk; signing, MCUboot and upload
+# rules stay in make/release.mk.
 
 DIMA_WINDOWS_NATIVE := $(filter Windows_NT,$(OS))
 ifeq ($(DIMA_WINDOWS_NATIVE),)
