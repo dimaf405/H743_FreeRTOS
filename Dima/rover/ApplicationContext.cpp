@@ -1,4 +1,8 @@
 #include "ApplicationContext.hpp"
+#include "platform/api/Boot.hpp"
+#include "platform/api/Console.hpp"
+#include "platform/api/Memory.hpp"
+#include "platform/api/TaskRuntime.hpp"
 
 #include "events/events.hpp"
 #include "logging/logging.hpp"

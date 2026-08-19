@@ -1,6 +1,7 @@
 #include "app_main.h"
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/Services.hpp"
+#include "platform/api/TaskRuntime.hpp"
 
 namespace {
 
