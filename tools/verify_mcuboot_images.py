@@ -32,6 +32,30 @@ def symbol_address(nm: str, elf: pathlib.Path, symbol: str) -> int:
     raise RuntimeError(f"{symbol} not found in {elf}")
 
 
+def verify_no_undefined_symbols(nm: str, elf: pathlib.Path) -> None:
+    output = subprocess.check_output([nm, "-u", str(elf)], text=True)
+    unresolved = [line.strip() for line in output.splitlines() if line.strip()]
+    if unresolved:
+        raise RuntimeError(
+            f"{elf} has unresolved symbols: {', '.join(unresolved)}"
+        )
+
+
+def verify_required_symbols(
+        nm: str, elf: pathlib.Path, required: set[str]) -> None:
+    output = subprocess.check_output(
+        [nm, "-g", "--defined-only", str(elf)], text=True,
+    )
+    names = {
+        fields[-1]
+        for line in output.splitlines()
+        if len(fields := line.split()) >= 3
+    }
+    missing = sorted(required - names)
+    if missing:
+        raise RuntimeError(f"{elf} is missing required symbols: {missing}")
+
+
 def verify_signed_image(filename: pathlib.Path) -> bytes:
     data = filename.read_bytes()
     if len(data) > SLOT_SIZE - SLOT_TRAILER_SIZE:
@@ -88,6 +112,14 @@ def main() -> None:
     if boot_vector != BOOT_BASE:
         raise RuntimeError(f"MCUboot vector is 0x{boot_vector:08x}, expected 0x{BOOT_BASE:08x}")
 
+    verify_no_undefined_symbols(args.nm, args.app_elf)
+    verify_no_undefined_symbols(args.nm, args.boot_elf)
+    verify_required_symbols(args.nm, args.app_elf, {"app_main_task"})
+    verify_required_symbols(
+        args.nm, args.boot_elf,
+        {"boot_watchdog_prepare", "boot_watchdog_feed"},
+    )
+
     boot_bin = args.boot_elf.with_suffix(".bin").read_bytes()
     if len(boot_bin) > BOOT_SIZE:
         raise RuntimeError("MCUboot binary exceeds its 128 KiB code sector")
@@ -130,6 +162,8 @@ def main() -> None:
     )
     print(f"  signed app: {len(signed)} bytes @ 0x{PRIMARY_BASE:08x}")
     print(f"  app vector: 0x{app_vector:08x}")
+    print("  application/MCUboot unresolved symbols: none")
+    print("  MCUboot watchdog prepare/feed chain: linked")
 
 
 if __name__ == "__main__":

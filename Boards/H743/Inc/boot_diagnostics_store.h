@@ -17,6 +17,7 @@ typedef enum {
 
 void dima_boot_diagnostics_store_enable(void);
 int dima_boot_diagnostics_capture_pending(void);
+int dima_boot_diagnostics_mark_application_bridge(void);
 dima_boot_diagnostics_store_result_t
 dima_boot_diagnostics_store_pending(int clear_capture);
 

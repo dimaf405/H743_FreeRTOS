@@ -212,6 +212,7 @@ swap_set_copy_done(uint8_t image_index)
     const struct flash_area *fap;
     int rc;
 
+    (void)image_index; /* Single-image flash-area macros may ignore the index. */
     rc = flash_area_open(FLASH_AREA_IMAGE_PRIMARY(image_index),
             &fap);
     if (rc != 0) {
@@ -230,6 +231,7 @@ swap_set_image_ok(uint8_t image_index)
     struct boot_swap_state state;
     int rc;
 
+    (void)image_index; /* Single-image flash-area macros may ignore the index. */
     rc = flash_area_open(FLASH_AREA_IMAGE_PRIMARY(image_index),
             &fap);
     if (rc != 0) {

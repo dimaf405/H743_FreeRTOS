@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "stm32h7xx_hal.h"
+#include "boot_watchdog.h"
 #include "usbd_cdc.h"
 #include "usbd_core.h"
 #include "usbd_desc.h"
@@ -120,6 +121,8 @@ int boot_usb_console_read(char *str, int count, int *newline)
 {
     int copied = 0;
 
+    boot_watchdog_feed();
+
     if (str == NULL || count <= 0 || newline == NULL) {
         return -1;
     }
@@ -148,6 +151,7 @@ static int wait_until_ready_to_transmit(void)
     const uint32_t start = HAL_GetTick();
 
     while ((HAL_GetTick() - start) < BOOT_USB_TX_TIMEOUT_MS) {
+        boot_watchdog_feed();
         if (hUsbDeviceFS.dev_state != USBD_STATE_CONFIGURED) {
             continue;
         }
@@ -165,6 +169,7 @@ static int wait_until_ready_to_transmit(void)
 void boot_usb_console_write(const char *data, int count)
 {
     while (count > 0) {
+        boot_watchdog_feed();
         const uint16_t chunk = count > (int)BOOT_USB_PACKET_SIZE
                                    ? (uint16_t)BOOT_USB_PACKET_SIZE
                                    : (uint16_t)count;

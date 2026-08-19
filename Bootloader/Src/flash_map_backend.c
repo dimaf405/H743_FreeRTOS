@@ -1,5 +1,7 @@
 #include "flash_map_backend/flash_map_backend.h"
 
+#include "boot_watchdog.h"
+
 #include <errno.h>
 #include <string.h>
 
@@ -90,7 +92,9 @@ int flash_area_read(const struct flash_area *fa, uint32_t off, void *dst, uint32
         return -EINVAL;
     }
 
+    boot_watchdog_feed();
     memcpy(dst, (const void *)(uintptr_t)(fa->fa_off + off), len);
+    boot_watchdog_feed();
     return 0;
 }
 
@@ -117,6 +121,7 @@ int flash_area_write(const struct flash_area *fa, uint32_t off, const void *src,
         __attribute__((aligned(H743_FLASH_WRITE_SIZE)));
 
     while (len != 0U) {
+        boot_watchdog_feed();
         memcpy(flash_word, input, H743_FLASH_WRITE_SIZE);
         clear_flash_errors(bank_for_address(address));
 
@@ -134,6 +139,7 @@ int flash_area_write(const struct flash_area *fa, uint32_t off, const void *src,
     }
 
     (void)HAL_FLASH_Lock();
+    boot_watchdog_feed();
     __DSB();
     __ISB();
     return result;
@@ -168,7 +174,9 @@ int flash_area_erase(const struct flash_area *fa, uint32_t off, uint32_t len)
     uint32_t sector_error = 0xFFFFFFFFUL;
 
     clear_flash_errors(bank);
+    boot_watchdog_feed();
     const HAL_StatusTypeDef status = HAL_FLASHEx_Erase(&erase, &sector_error);
+    boot_watchdog_feed();
     (void)HAL_FLASH_Lock();
 
     if (status != HAL_OK || sector_error != 0xFFFFFFFFUL) {

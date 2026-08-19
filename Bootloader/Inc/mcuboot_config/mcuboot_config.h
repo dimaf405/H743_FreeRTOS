@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include "boot_watchdog.h"
+
 #define MCUBOOT_IMAGE_NUMBER                    1
 #define MCUBOOT_MAX_IMG_SECTORS                 6
 #define MCUBOOT_BOOT_MAX_ALIGN                  32
@@ -28,7 +30,7 @@
 #define MCUBOOT_SERIAL_UNALIGNED_BUFFER_SIZE    512
 #define MCUBOOT_PERUSER_MGMT_GROUP_ENABLED      0
 
-#define MCUBOOT_WATCHDOG_FEED()                 do { } while (0)
+#define MCUBOOT_WATCHDOG_FEED()                 boot_watchdog_feed()
 #define MCUBOOT_CPU_IDLE()                      do { } while (0)
 
 #endif /* H743_MCUBOOT_CONFIG_H */

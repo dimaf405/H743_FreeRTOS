@@ -243,6 +243,57 @@ int dima_boot_diagnostics_capture_pending(void)
     return capture_is_valid(capture_record());
 }
 
+static void seed_application_bridge_record(
+    volatile dima_boot_diagnostics_t *record)
+{
+    const uint32_t reset_flags = RCC->RSR;
+    volatile uint32_t *words = (volatile uint32_t *)(void *)record;
+    for (size_t index = 0U;
+         index < sizeof(*record) / sizeof(words[0]); ++index) {
+        words[index] = 0U;
+    }
+
+    /* MCUboot runs before the Application has initialized the NOLOAD D3
+     * record after a cold boot or ROM-DFU recovery. Seed the persistent ABI
+     * here so the reset-only handoff cannot depend on code that has not been
+     * allowed to start yet. */
+    record->version = DIMA_BOOT_DIAGNOSTICS_VERSION;
+    record->size = sizeof(*record);
+    record->reset_flags = reset_flags;
+    record->stage = DIMA_BOOT_STAGE_SYSTEM_INIT;
+    record->detail = DIMA_BOOT_DETAIL_APPLICATION_BRIDGE;
+    record->failure_kind = DIMA_BOOT_FAILURE_NONE;
+    record->capture_valid = 0U;
+    record->abfsr = SCB->ABFSR;
+    record->scb_ccr = SCB->CCR;
+    record->mpu_ctrl = MPU->CTRL;
+    __DMB();
+    record->magic = DIMA_BOOT_DIAGNOSTICS_MAGIC;
+    __DSB();
+    __ISB();
+}
+
+int dima_boot_diagnostics_mark_application_bridge(void)
+{
+    volatile dima_boot_diagnostics_t *record =
+        (volatile dima_boot_diagnostics_t *)(uintptr_t)
+            DIMA_BOOT_DIAGNOSTICS_ADDRESS;
+    const uint32_t expected_size =
+        diagnostics_size_for_version(record->version);
+    if (record->magic != DIMA_BOOT_DIAGNOSTICS_MAGIC ||
+        expected_size == 0U || record->size != expected_size) {
+        seed_application_bridge_record(record);
+    } else {
+        record->detail = DIMA_BOOT_DETAIL_APPLICATION_BRIDGE;
+        __DMB();
+        __DSB();
+    }
+
+    return record->magic == DIMA_BOOT_DIAGNOSTICS_MAGIC &&
+           diagnostics_size_for_version(record->version) == record->size &&
+           record->detail == DIMA_BOOT_DETAIL_APPLICATION_BRIDGE;
+}
+
 dima_boot_diagnostics_store_result_t
 dima_boot_diagnostics_store_pending(int clear_capture)
 {

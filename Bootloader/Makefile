@@ -61,6 +61,7 @@ Dima/platform/stm32h7/cache.c \
 Dima/platform/stm32h7/flash_bank1.c \
 Bootloader/Src/boot_platform.c \
 Bootloader/Src/boot_primary.c \
+Bootloader/Src/boot_watchdog.c \
 Bootloader/Src/boot_usb.c \
 Bootloader/Src/flash_map_backend.c \
 Bootloader/Src/keys.c \
@@ -137,7 +138,7 @@ C_INCLUDES := \
 -I$(MCUBOOT_ROOT)/ext/tinycrypt/lib/include \
 -I$(MCUBOOT_ROOT)/ext/mbedtls-asn1/include
 
-CFLAGS := $(MCU) $(C_DEFS) $(C_INCLUDES) -std=gnu11 -Os -g3 -Wall -Wextra \
+CFLAGS := $(MCU) $(C_DEFS) $(C_INCLUDES) -std=gnu11 -Os -g3 -Wall -Wextra -Werror \
           -ffunction-sections -fdata-sections -MMD -MP
 ASFLAGS := $(MCU) -Os -g3 -Wall -ffunction-sections -fdata-sections
 LDSCRIPT := Bootloader/Linker/STM32H743_MCUBOOT.ld
@@ -191,7 +192,13 @@ $(BUILD_DIR)/obj/%.o: %.s Bootloader/Makefile | $(BUILD_DIR)/obj
 	$(AS) -c $(ASFLAGS) $< -o $@
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) Bootloader/Makefile $(LDSCRIPT)
-	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	@set -eu; \
+		tmp="$@.tmp.$$$$"; \
+		cleanup() { rm -f "$$tmp"; }; \
+		trap cleanup EXIT HUP INT TERM; \
+		$(CC) $(OBJECTS) $(LDFLAGS) -o "$$tmp"; \
+		mv -f "$$tmp" "$@"; \
+		trap - EXIT HUP INT TERM
 	$(SZ) $@
 
 $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf

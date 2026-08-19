@@ -69,23 +69,64 @@ make \
 按 VID/PID 或产品名排除端口，并按以下顺序进行协议识别：
 
 1. 先用短超时 `image list` 判断端口是否已经运行 MCUboot SMP；若是，立即开始烧写。
-2. 若不是 Recovery，则发送 `dima identify`。只有收到精确标识 `DIMA_ROVER_APP_V1`，才向该应用
-   串口发送与 PX4/APM 上传器一致的 `reboot -b`。
-3. 应用确认当前未 armed 后，在 RTC 备份寄存器写入一次性 Recovery 请求并执行
+2. 用户显式设置 `MCUMGR_PORT` 时，该端口就是本次操作授权。上传器先记录其物理 USB 绑定，再严格按
+   PX4 `Tools/px4_uploader.py` 的顺序执行三轮 bootloader kick：清空串口缓冲、发送 MAVLink v1
+   broadcast `0/0`、targeted `1/0`、NSH 前导 `\r\r\r` 和 `reboot -b\n`。该路径不先发送主动身份
+   请求，兼容身份请求会抢占旧固件 ACK Topic 的首次迁移场景。
+3. 未显式指定端口时继续使用安全自动发现：先兼容识别旧版 `DIMA_ROVER_APP_V1`，再使用固定版本
+   pymavlink 请求 `HEARTBEAT` 与 `AUTOPILOT_VERSION`。当前应用必须同时匹配 system/component
+   `1/1`、Ground Rover、PX4 autopilot、固件版本 `0.1.0`、板版本 `1`、能力位和非零硬件 UID；识别后
+   发送三轮 broadcast/targeted MAVLink reboot。Windows 在一个 PowerShell `SerialPort` 实例内完成
+   全部二进制写入，POSIX 在一个 raw file descriptor 内完成，避免每一帧重新开关端口。
+4. 应用确认当前未 armed 后，在 RTC 备份寄存器写入一次性 Recovery 请求并执行
    `NVIC_SystemReset()`。
-4. MCUboot 读取该请求后持续运行 USB Recovery，不受普通 3 秒窗口限制；USB 初始化成功后请求被
+5. MCUboot 读取该请求后持续运行 USB Recovery，不受普通 3 秒窗口限制；USB 初始化成功后请求被
    清除，因此上传结束时的 `mcumgr reset` 会正常启动应用。
 
+显式端口路径把 PX4 的 NSH `reboot -b` 作为旧固件兼容字节流一并发送；当前 MAVLink-only 应用不会
+解释该文本，其复位仍必须经过 Commander。自动发现路径只有精确识别为旧版 `DIMA_ROVER_APP_V1`
+文本控制台时才发送文本命令，并检查其 armed 拒绝响应。
+
+软件重启后只接受与已选应用相同的物理 USB 身份进入 Recovery，禁止无约束扫描所有端口，以免并发
+接入另一块板时误写。Windows 原生进程从注册表优先绑定 Container ID，并用 Configuration Manager
+排除离线历史 devnode；同一 COM 仍有多个候选时拒绝猜测。注册表缺项按端口用当前
+`Win32_SerialPort.PNPDeviceID` 的完整实例 ID 补齐，不能因其他 COM 已解析就跳过目标端口。WSL 使用
+同一完整 PnP 实例 ID。POSIX 绑定 USB serial、回退到物理总线拓扑，因此允许同一设备的 COM/tty
+名称变化。无法建立唯一物理绑定时命令会安全失败。
+
+PX4 uploader 不等待应用 ACK，而以重枚举后的 Bootloader 握手为准；显式端口兼容路径采用同一判据。
+安全自动发现路径还会解析当前固件的定向 accepted、`result_param2=3`，并兼容阶段 3 固件留下的零
+target/mode；明确的 DENIED/REJECTED ACK 立即终止。无论 ACK 是否到达，只有相同物理 USB 绑定重新
+枚举且 `image list` 得到有效 MCUboot SMP 响应，才判定 Recovery 切换成功。软件入口无效时命令返回
+非零，不把仅完成串口写入误报为复位成功。
+
 普通上电且没有软件 Recovery 请求时仍保留原有 3 秒 SMP 窗口。Primary 镜像缺失、签名无效或
-向量表无效时，MCUboot 也会持续停留在 Recovery。正在运行且不返回 `DIMA_ROVER_APP_V1` 的旧应用
-不可能执行尚未包含在该固件中的软件复位命令；首次迁移必须通过现有工厂/调试通道写入
+向量表无效时，MCUboot 也会持续停留在 Recovery。正在运行且既不返回旧版身份、也不提供上述
+MAVLink 身份与重启命令的应用无法安全授权软件切换；首次迁移必须通过现有工厂/调试通道写入
 `build/H743_FreeRTOS_factory.hex`。普通 `mcumgr` 只更新应用槽，不能更新 MCUboot 本身。从完整
 Factory 镜像部署完成后，后续升级不再需要断电或按键操作。
 
+PX4 式软件切换的前提是应用命令链仍能运行。若 USB CDC 仍枚举但应用已经不产生 heartbeat、也不处理
+定向 reboot 命令，USB 主机无法仅凭串口字节强制 Cortex-M7 执行系统复位；上传器会失败关闭，不会
+盲发后继续烧写。固件现已接入约 2048 ms 的独立 IWDG：appMain 是应用侧唯一 feed owner，只有
+BootHealth 持续推进安全健康 generation 才喂狗；MCUboot 对跨复位仍运行的 IWDG 临时扩展，并在
+Recovery、镜像校验、swap、Flash 与 USB 串行长循环中喂狗。应用在冷启动时先启动 IWDG/LSI，再写
+PR/RLR/WINR 并等待同步；若先等待 SR 清零再启动，LSI 未运行会导致初始化永久失败。该链路的源码/目标构建证据不等于实际
+2 秒复位、复位后 PWM/GPIO 或长时间升级行为已经验收；无按键故障恢复仍必须以实板 IWDG 试验或主机
+可控的 NRST/电源控制为准，不能由 uploader 主机脚本单独保证。
+
 MCUboot 完成 swap 和 Primary 校验后不会携带当前 USB、PLL、SysTick 或 NVIC 状态热跳转应用。
-它写入一次性应用桥接标记并执行系统复位；复位后的 Bootloader 清除标记，只读复验 Primary 的
-header、哈希、ECDSA 签名和 `0x08040400` 向量后再进入应用。该复验不处理 swap trailer，因此
-pending/test 镜像能获得首次启动机会；桥接失败则停留在 Recovery，不会形成复位循环。
+它写入一次性应用桥接标记并执行系统复位；冷上电、全片擦除或 ROM DFU 后 D3 尚未由 Application
+初始化时，MCUboot 先以当前 `RCC->RSR` 建立最小 v2 bridge 记录，避免形成“Bootloader 等待
+Application 初始化、Application 又无法启动”的循环依赖。复位后的 Bootloader 清除标记，只读复验
+Primary 的 header、哈希、ECDSA 签名和 `0x08040400` 向量后再进入应用。该复验不处理 swap trailer，
+因此 pending/test 镜像能获得首次启动机会；真实的桥接写入或复验失败仍停留在 Recovery，不会形成复位循环。
+
+2026-08-19 实板 ROM DFU 首启验证发现：诊断 Flash 全 `0xFF` 且 Primary 已 confirmed 时若仍永久停在
+Recovery，应先检查 D3 bridge 头的冷启动初始化，而不是把 Recovery 本身误判成 Application USB 死机。
+随后捕获的真实记录为 `ERROR_HANDLER / APPLICATION_RUNNING / stacked_r0=2048`，对应应用 IWDG 在
+LSI 启动前等待 SR 同步。两项修复烧写后，USB 完成 MCUboot→bridge reset→Application 双枚举，
+`--preflight-only` 返回 `Dima Rover MAVLink`；这证明首启和协议链恢复，不替代 IWDG 超时及 PWM 板测。
 
 Linux 一般为 `/dev/ttyACM0`，Windows 一般为 `COMx`。下面所有命令中的端口必须替换为实际端口：
 
@@ -110,10 +151,10 @@ Recovery；日常升级应直接使用下一节的一键命令，由上传器自
 
 工程的正式构建和上传入口必须运行在 Windows 原生 GNU Make、Windows 路径和 Windows Python
 中；WSL 只可作为调用 Windows 进程的控制终端，不能直接执行本工程的 Make 构建。根 Makefile
-优先选择 `%USERPROFILE%\.platformio\penv\Scripts\python.exe`，并在访问板卡和开始耗时构建前
-执行只读 USB 端点预检。主机只需预先具备 Windows GNU Make 与 Python 3 + pip；如果没有显式
-提供 `GCC_PATH`、Go 或 `mcumgr`，脚本会自动准备固定版本的 xPack Arm GNU 10.3.1、Go 和带
-Dima USB CDC 修补的 Apache `mcumgr`。
+优先选择 `%USERPROFILE%\.platformio\penv\Scripts\python.exe`。主机只需预先具备 Windows GNU Make
+与 Python 3 + pip；如果没有显式提供 `GCC_PATH`、Go 或 `mcumgr`，脚本会自动准备固定版本的
+xPack Arm GNU 10.3.1、Go 和带 Dima USB CDC 修补的 Apache `mcumgr`，并按锁文件准备仅用于协议
+编解码的 pymavlink。
 
 所有自举工具均进入 `Path.home()/.cache/dima-rover/host-tools` 共享缓存，不写入仓库、系统工具
 目录或个人 Go `bin` 目录。下载必须同时通过固定版本、文件大小和 SHA-256 校验：Go 优先使用
@@ -124,16 +165,21 @@ Dima USB CDC 修补的 Apache `mcumgr`。
 make dima_rover upload
 ```
 
-该命令会依次完成 `HOST_PREFLIGHT`、架构门禁、应用与 MCUboot 编译、签名和布局校验，再处理
-实板。上传器默认选择 `build/H743_FreeRTOS_signed.bin`，解析本地签名镜像 SHA-256，扫描并识别
-应用或 Recovery 串口；若识别到应用，会自动发送 `reboot -b` 并等待 USB 重新枚举。`upload`
-默认每次都将镜像写入 Secondary，并显示连续的字节数、百分比、速度和剩余时间进度，即使板上
-已经运行相同 hash 也不会用“无需做任何事”代替烧写。
+该命令在用户未显式传入 `-jN` 时自动采用 `-j4`，只构建上传必需的应用 ELF/BIN、签名镜像并缓存
+应用 ELF 与签名校验结果；不会为日常 OTA 重建 MCUboot、Factory HEX 或重跑完整 Factory 布局验收。
+`make dima_rover` 单独执行时仍保留完整发布验收。C 源码的 GCC 汇编 listing 默认关闭；需底层排查时
+先执行 `make clean`，再设置 `DIMA_LISTINGS=1` 完整重建。上传器默认选择
+`build/H743_FreeRTOS_signed.bin`，解析本地签名镜像 SHA-256，
+扫描并识别应用或 Recovery 串口；主机工具只解析一次，设备探测不再在构建前额外重复一轮独立
+USB 预检。板上已运行相同 active/confirmed hash 时默认跳过重写并恢复应用运行。
+若当前 Primary 仍是 active 但未 confirmed 的测试镜像，命令会拒绝覆盖 Secondary，避免破坏唯一的
+回滚副本；应先完成健康确认或复位回滚，再发起新的升级事务。
 
-需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、Secondary hash 校验、`TEST`、pending 状态
-校验、`RESET`、`APPLICATION_RUNNING`、`HEALTH_CONFIRM`、`active confirmed` 校验，最后再次
-复位并确认应用已经恢复运行。任何阶段不满足契约都会使命令返回非零，不会把只完成传输误报为
-烧写成功。仓库自举的是带 Dima USB CDC 快速通道的固定版本 `mcumgr`：在虚拟 921600 波特率下
+需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、`TEST`，直接从 TEST 响应同时校验 Secondary
+完整 hash 与 pending 状态，再执行 `RESET`、MAVLink/旧版应用身份校验、`HEALTH_CONFIRM`、Primary
+槽完整 hash 的 `active confirmed` 校验，最后再次复位并确认应用已经恢复运行。任何阶段不满足契约
+都会使命令返回非零，不会把只完成传输误报为烧写成功。仓库自举的是带 Dima USB CDC 快速通道的
+固定版本 `mcumgr`：在虚拟 921600 波特率下
 取消 Apache 串口传输原有的 20 ms 分片间延时、将 NLIP 帧扩展到 512 字节 MTU，并把非末尾固件
 块对齐到 STM32H743 的 32 字节 Flash 写入粒度。生产默认使用 `--maxwinsize 1` 的 stop-and-wait；
 它规避 Bootloader 2048 字节 CDC RX 环形缓冲的窗口溢出，并已取消原来把单窗口传输压低到约
@@ -142,22 +188,25 @@ make dima_rover upload
 Linux 会枚举 `/dev/serial/by-id/`、`/dev/ttyACM*` 和 `/dev/ttyUSB*`，并优先显示稳定的
 `by-id` 路径；WSL 使用 Windows .NET 串口 API 枚举当前 `COMx`，通过 PowerShell 访问应用，
 再使用自动缓存的 Windows `mcumgr.exe` 完成 Recovery 传输。VID/PID、COM 号和设备名称都不作为
-烧写授权，只有精确的 `DIMA_ROVER_APP_V1` 或 MCUboot `image list` 协议响应才确认身份。普通端口
-打开失败或协议不匹配只会被跳过；若识别到多个 Dima 协议端点，命令会拒绝猜测目标，此时必须
-覆盖端口：
+烧写授权，只有兼容的旧版精确标识、当前 MAVLink 复合身份或 MCUboot `image list` 协议响应才确认
+身份；MAVLink 的 64-bit hardware UID 用于约束复位前后的应用关联，但不作为密码学设备身份。普通
+端口打开失败或协议不匹配只会被跳过；
+若识别到多个 Dima 协议端点，命令会拒绝猜测目标，此时必须覆盖端口：
 
 ```bash
 make dima_rover upload MCUMGR_PORT=/dev/ttyACM1
 make dima_rover upload MCUMGR=/absolute/path/to/mcumgr
 ```
 
-`UPLOAD_IMAGE` 可覆盖默认上传包，`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间；
-`UPLOAD_CONFIRM_WAIT_SECONDS` 默认等待 8 秒再验收应用健康确认。`UPLOAD_FORCE=1` 是默认值，
-保证每次 `upload` 都真正写入；只有明确希望相同 active/confirmed hash 跳过写入时才设置
-`UPLOAD_FORCE=0`。`UPLOAD_VERIFY_CONFIRM=0` 只用于明确接受跳过最终确认探测的诊断场景，不能
-作为正式烧写验收。`MCUMGR_BAUD`、`MCUMGR_MTU` 和 `MCUMGR_MAX_WINDOW` 分别覆盖虚拟波特率、
-串行 MTU 和窗口；窗口默认值为 1，在完成持续实板压力验收前不应调大。`HOST_TOOLS_CACHE_ROOT`
-可覆盖包括 Arm GNU、Go、`mcumgr` 和 Python 依赖在内的统一工具缓存目录。受限网络可通过
+`UPLOAD_IMAGE` 可覆盖默认上传包；外部包与本地 ELF stamp 无关联，因此每次都会用 `KEY_FILE` 对
+实际上传文件重新执行签名验证。`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间；
+`UPLOAD_CONFIRM_WAIT_SECONDS` 默认等待 8 秒再验收应用健康确认。`UPLOAD_FORCE=0` 是默认值，
+相同 active/confirmed hash 不再重复擦写；确需强制重写时显式设置 `UPLOAD_FORCE=1`，该特殊路径会
+额外读取一次 Secondary，避免 Primary 与 Secondary 同 hash 时产生歧义。`UPLOAD_VERIFY_CONFIRM=0`
+只用于明确接受跳过最终确认探测的诊断场景，不能作为正式烧写验收。`MCUMGR_BAUD`、`MCUMGR_MTU`
+和 `MCUMGR_MAX_WINDOW` 分别覆盖虚拟波特率、串行 MTU 和窗口；窗口默认值为 1，在完成持续实板压力
+验收前不应调大。`HOST_TOOLS_CACHE_ROOT` 可覆盖包括 Arm GNU、Go、`mcumgr`、pymavlink 和 Python
+依赖在内的统一工具缓存目录。受限网络可通过
 `DIMA_GOPROXY` 指定 Go 模块代理；离线环境也可用 `GCC_PATH` 和
 `MCUMGR=/absolute/path/to/mcumgr` 显式指定已审核工具。无论使用哪个入口，上传包都必须由板上
 MCUboot 已内置公钥对应的私钥签名。

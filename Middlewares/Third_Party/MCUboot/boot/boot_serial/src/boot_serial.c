@@ -255,6 +255,7 @@ bs_list_img_ver(char *dst, int maxlen, struct image_version *ver)
 {
     int off;
 
+    (void)maxlen; /* The non-snprintf formatter has a documented 25-byte ABI. */
     off = u32toa(dst, ver->iv_major);
     dst[off++] = '.';
     off += u32toa(dst + off, ver->iv_minor);
@@ -298,6 +299,8 @@ bs_list(struct boot_loader_state *state, char *buf, int len)
     uint8_t hash[IMAGE_HASH_SIZE];
 #endif
 
+    (void)buf;
+    (void)len;
     zcbor_map_start_encode(cbor_state, 1);
     zcbor_tstr_put_lit_cast(cbor_state, "images");
     zcbor_list_start_encode(cbor_state, 5);
@@ -458,7 +461,8 @@ bs_list(struct boot_loader_state *state, char *buf, int len)
 #ifdef MCUBOOT_SERIAL_IMG_GRP_HASH
             if (rc == 0) {
                 zcbor_tstr_put_lit_cast(cbor_state, "hash");
-                zcbor_bstr_encode_ptr(cbor_state, hash, sizeof(hash));
+                zcbor_bstr_encode_ptr(cbor_state, (const char *)hash,
+                                      sizeof(hash));
             }
 #endif
 
@@ -716,6 +720,8 @@ bs_slot_info(uint8_t op, char *buf, int len)
     bool ok = true;
     const struct image_max_size *image_max_sizes;
 
+    (void)buf;
+    (void)len;
     if (op != NMGR_OP_READ) {
         bs_rc_rsp(MGMT_ERR_ENOTSUP);
     }
@@ -875,7 +881,7 @@ static off_t erase_range(const struct flash_area *fap, off_t start, off_t end)
     size_t size;
     int rc;
 
-    if (end >= flash_area_get_size(fap)) {
+    if (end < 0 || (uintmax_t)end >= (uintmax_t)flash_area_get_size(fap)) {
         return -EINVAL;
     }
 
@@ -1282,6 +1288,9 @@ static void
 bs_reset(char *buf, int len)
 {
     int rc = BOOT_HOOK_CALL(boot_reset_request_hook, 0, false);
+
+    (void)buf;
+    (void)len;
     if (rc == BOOT_RESET_REQUEST_HOOK_BUSY) {
 	rc = MGMT_ERR_EBUSY;
     } else {
@@ -1319,18 +1328,19 @@ void
 boot_serial_input(char *buf, int len)
 {
     struct nmgr_hdr *hdr;
+    const int header_size = (int)sizeof(*hdr);
 
     hdr = (struct nmgr_hdr *)buf;
-    if (len < sizeof(*hdr) ||
+    if (len < header_size ||
       (hdr->nh_op != NMGR_OP_READ && hdr->nh_op != NMGR_OP_WRITE) ||
-      (ntohs(hdr->nh_len) < len - sizeof(*hdr))) {
+      (ntohs(hdr->nh_len) < len - header_size)) {
         return;
     }
     bs_hdr = hdr;
     hdr->nh_group = ntohs(hdr->nh_group);
 
-    buf += sizeof(*hdr);
-    len -= sizeof(*hdr);
+    buf += header_size;
+    len -= header_size;
 
     reset_cbor_state();
 
@@ -1486,6 +1496,7 @@ boot_serial_in_dec(char *in, int inlen, char *out, int *out_off, int maxout)
     decoded_len = (int)rc;
 #else
     int rc;
+    (void)inlen;
     if (*out_off + base64_decode_len(in) >= maxout) {
         return -1;
     }
@@ -1497,7 +1508,7 @@ boot_serial_in_dec(char *in, int inlen, char *out, int *out_off, int maxout)
 #endif
 
     *out_off += decoded_len;
-    if (*out_off <= sizeof(uint16_t)) {
+    if (*out_off <= (int)sizeof(uint16_t)) {
         return 0;
     }
 

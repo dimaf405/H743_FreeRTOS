@@ -45,6 +45,8 @@ static void clear_record(volatile dima_boot_diagnostics_t *record)
 void dima_boot_diagnostics_early_init(void)
 {
     /* STM32H743 SRAM4 has no run-mode clock gate in RCC_AHB4ENR. */
+    const uint32_t reset_flags = RCC->RSR;
+    RCC->RSR |= RCC_RSR_RMVF;
 
     const uint32_t previous_version = dima_boot_diagnostics.version;
     const uint32_t previous_size = dima_boot_diagnostics.size;
@@ -56,8 +58,12 @@ void dima_boot_diagnostics_early_init(void)
           previous_size == sizeof(dima_boot_diagnostics_t)));
     const uint32_t previous_boot_count =
         previous_valid ? dima_boot_diagnostics.boot_count : 0U;
+    const uint32_t previous_reset_flags =
+        previous_valid ? dima_boot_diagnostics.reset_flags : 0U;
     const uint32_t previous_stage =
         previous_valid ? dima_boot_diagnostics.stage : 0U;
+    const uint32_t previous_detail =
+        previous_valid ? dima_boot_diagnostics.detail : 0U;
     const uint32_t previous_failure =
         previous_valid ? dima_boot_diagnostics.failure_kind : 0U;
     const uint32_t previous_pc =
@@ -74,7 +80,21 @@ void dima_boot_diagnostics_early_init(void)
     dima_boot_diagnostics.version = DIMA_BOOT_DIAGNOSTICS_VERSION;
     dima_boot_diagnostics.size = sizeof(dima_boot_diagnostics_t);
     dima_boot_diagnostics.boot_count = previous_boot_count + 1U;
-    dima_boot_diagnostics.reset_flags = RCC->RSR;
+    const uint32_t reset_cause_mask =
+        RCC_RSR_CPURSTF | RCC_RSR_D1RSTF | RCC_RSR_D2RSTF |
+        RCC_RSR_BORRSTF | RCC_RSR_PINRSTF | RCC_RSR_PORRSTF |
+        RCC_RSR_SFTRSTF | RCC_RSR_IWDG1RSTF | RCC_RSR_WWDG1RSTF |
+        RCC_RSR_LPWRRSTF;
+    const int application_bridge =
+        previous_valid &&
+        previous_detail == DIMA_BOOT_DETAIL_APPLICATION_BRIDGE &&
+        (reset_flags & RCC_RSR_SFTRSTF) != 0U;
+    const int same_reset_handoff =
+        previous_valid && (reset_flags & reset_cause_mask) == 0U;
+    dima_boot_diagnostics.reset_flags =
+        application_bridge || same_reset_handoff
+            ? previous_reset_flags
+            : reset_flags;
     dima_boot_diagnostics.stage = DIMA_BOOT_STAGE_SYSTEM_INIT;
     dima_boot_diagnostics.previous_stage = previous_stage;
     dima_boot_diagnostics.previous_failure_kind = previous_failure;

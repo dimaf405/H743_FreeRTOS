@@ -692,6 +692,7 @@ boot_set_pending_multi(int image_index, int permanent)
     const struct flash_area *fap;
     int rc;
 
+    (void)image_index; /* Single-image flash-area macros may ignore the index. */
     rc = flash_area_open(FLASH_AREA_IMAGE_SECONDARY(image_index), &fap);
     if (rc != 0) {
         return BOOT_EFLASH;

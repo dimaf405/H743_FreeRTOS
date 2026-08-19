@@ -107,6 +107,7 @@ out:
 int
 boot_status_entries(int image_index, const struct flash_area *fap)
 {
+    (void)image_index; /* Single-image flash-area macros may ignore the index. */
 #if MCUBOOT_SWAP_USING_SCRATCH
     if (flash_area_get_id(fap) == FLASH_AREA_IMAGE_SCRATCH) {
         return BOOT_STATUS_STATE_COUNT;
@@ -551,6 +552,7 @@ boot_read_sectors_recovery(struct boot_loader_state *state)
     int rc;
 
     image_index = BOOT_CURR_IMG(state);
+    (void)image_index; /* Single-image flash-area macros may ignore the index. */
 
     rc = boot_initialize_area(state, FLASH_AREA_IMAGE_PRIMARY(image_index));
     if (rc != 0) {

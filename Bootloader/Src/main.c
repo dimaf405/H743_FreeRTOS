@@ -8,6 +8,7 @@
 #include "boot_primary.h"
 #include "boot_serial/boot_serial.h"
 #include "boot_usb.h"
+#include "boot_watchdog.h"
 #include "bootutil/bootutil.h"
 #include "dima_boot_request.h"
 
@@ -26,6 +27,11 @@ int main(void)
 {
     struct boot_rsp response;
     FIH_DECLARE(boot_result, FIH_FAILURE);
+
+    /* IWDG cannot be stopped by reset. Give MCUboot a bounded ~32 s window
+     * without starting it on an ordinary power-on where it is inactive. */
+    boot_watchdog_prepare();
+
     uint32_t boot_request = dima_boot_request_read();
     const int captured_failure = dima_boot_diagnostics_capture_pending();
 
@@ -88,7 +94,8 @@ int main(void)
         if (boot_request != DIMA_BOOT_REQUEST_APPLICATION_MAGIC &&
             vector_address == H743_APP_VECTOR_BASE &&
             boot_vector_is_valid(vector_address)) {
-            if (dima_boot_request_set_application()) {
+            if (dima_boot_request_set_application() &&
+                dima_boot_diagnostics_mark_application_bridge()) {
                 NVIC_SystemReset();
             }
 
