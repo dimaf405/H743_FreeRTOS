@@ -13,6 +13,7 @@
 #include "rc/RCUpdate.hpp"
 #include "rc/SbusRc.hpp"
 #include "safety/Commander.hpp"
+#include "serial/SerialConfig.hpp"
 #include "lifecycle/module_manager.hpp"
 
 namespace dima::rover {
@@ -24,6 +25,9 @@ public:
     bool init() noexcept;
     bool start() noexcept;
     bool shutdown() noexcept;
+    bool watchdog_feed_allowed(
+        std::uint32_t previous_health_generation,
+        std::uint32_t &current_health_generation) const noexcept;
 
 private:
     enum class RuntimeState : std::uint8_t {
@@ -56,6 +60,7 @@ private:
     dima::modules::logging::LogService log_service_;
     dima::modules::mavlink::MavlinkService mavlink_service_;
     dima::modules::parameters::ParameterService parameter_service_;
+    dima::modules::serial::SerialConfig serial_config_;
     dima::modules::motor::MotorOutput motor_output_;
     dima::modules::safety::Commander commander_;
     dima::modules::rc::SbusRc sbus_rc_;
@@ -68,12 +73,14 @@ private:
     bool console_initialized_{false};
     bool work_queue_initialized_{false};
     bool uorb_initialized_{false};
+    bool log_initialized_{false};
     bool parameter_initialized_{false};
     bool modules_registered_{false};
     bool boot_started_{false};
     bool log_started_{false};
     bool mavlink_started_{false};
     bool parameter_started_{false};
+    bool serial_config_started_{false};
     bool motor_output_started_{false};
     bool commander_started_{false};
     bool sbus_started_{false};

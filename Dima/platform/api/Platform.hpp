@@ -447,6 +447,16 @@ enum SbusInputError : std::uint32_t {
     SbusInputErrorUnknown = 1U << 31U,
 };
 
+class SerialPorts {
+public:
+    virtual ~SerialPorts() = default;
+    /** Apply the normal 8N1 baudrate for a real board SERIAL port.
+     *  Auto/0 leaves final baud selection to the function driver. */
+    virtual bool configure_normal_baud(std::int32_t port,
+                                       std::uint32_t baudrate) noexcept = 0;
+    virtual bool reset_normal_configuration() noexcept = 0;
+};
+
 class SbusInput {
 public:
     virtual ~SbusInput() = default;
@@ -505,6 +515,14 @@ public:
     virtual bool started() const noexcept = 0;
 };
 
+class IndependentWatchdog {
+public:
+    virtual ~IndependentWatchdog() = default;
+    virtual bool start(std::uint32_t timeout_ms) noexcept = 0;
+    virtual void feed() noexcept = 0;
+    virtual bool active() const noexcept = 0;
+};
+
 struct Services {
     MonotonicClock &clock;
     ExecutionContext &execution;
@@ -519,6 +537,8 @@ struct Services {
     BootControl &boot_control;
     StartupDiagnostics &diagnostics;
     DmaMemory &dma;
+    IndependentWatchdog &watchdog;
+    SerialPorts &serial_ports;
     SbusInput &sbus;
     SensorInterrupts &sensor_interrupts;
     ActuatorPwm *actuator_pwm;

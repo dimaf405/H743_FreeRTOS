@@ -11,6 +11,10 @@ DIMA_PLATFORMIO_PYTHON := $(DIMA_USERPROFILE_POSIX)/.platformio/penv/Scripts/pyt
 PYTHON ?= $(if $(wildcard $(DIMA_PLATFORMIO_PYTHON)),$(DIMA_PLATFORMIO_PYTHON),python.exe)
 HOST_TOOLS_CACHE_ROOT ?= $(shell $(PYTHON) -c "import pathlib; print((pathlib.Path.home() / '.cache' / 'dima-rover' / 'host-tools').as_posix())")
 DIMA_ARM_GCC_BOOTSTRAP := tools/bootstrap_arm_gcc.py
+DIMA_DEFAULT_JOBS ?= 4
+ifeq ($(strip $(DIMA_DEFAULT_JOBS)),)
+$(error DIMA_DEFAULT_JOBS must be a positive job count)
+endif
 
 DIMA_BUILD_INTERNAL ?= 0
 
@@ -27,12 +31,14 @@ else
 # dry-run, then execute the same goals through one recursive Make so its
 # jobserver and command-line variables remain authoritative.
 DIMA_REQUESTED_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),firmware)
-DIMA_SUMMARY_GOALS := $(filter firmware mcuboot verify dima_rover upload,$(DIMA_REQUESTED_GOALS))
+DIMA_SUMMARY_GOALS := $(if $(filter upload,$(DIMA_REQUESTED_GOALS)),,$(filter firmware mcuboot verify dima_rover,$(DIMA_REQUESTED_GOALS)))
 DIMA_SHORT_MAKEFLAGS := $(filter-out --% %=%,$(firstword $(MAKEFLAGS)))
 DIMA_DRY_RUN := $(findstring n,$(DIMA_SHORT_MAKEFLAGS))
 DIMA_NO_COLOR_FLAG := $(if $(strip $(NO_COLOR)),--no-color,)
 DIMA_OUTPUT_SYNC_FLAG := $(if $(findstring output-sync,$(.FEATURES)),--output-sync=target,)
-DIMA_TOOLCHAIN_GOALS := $(filter app-check firmware mcuboot verify dima_rover upload intellisense,$(DIMA_REQUESTED_GOALS))
+DIMA_TOOLCHAIN_GOALS := $(filter app-check firmware mcuboot verify dima_rover upload upload-ready intellisense,$(DIMA_REQUESTED_GOALS))
+DIMA_PARALLEL_FLAG := $(if $(filter -j% --jobs%,$(MAKEFLAGS)),,-j$(DIMA_DEFAULT_JOBS))
+DIMA_STABILIZE_GENERATED_GOALS := $(filter app-check firmware verify dima_rover upload upload-ready intellisense,$(DIMA_REQUESTED_GOALS))
 
 .DEFAULT_GOAL := __dima_dispatch
 .PHONY: __dima_dispatch $(DIMA_REQUESTED_GOALS)
@@ -43,7 +49,7 @@ $(DIMA_REQUESTED_GOALS): __dima_dispatch
 ifneq ($(DIMA_DRY_RUN),)
 
 __dima_dispatch:
-	+@$(MAKE) --no-print-directory -f GNUmakefile \
+	+@$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -f GNUmakefile \
 		DIMA_BUILD_INTERNAL=1 \
 		DIMA_PROGRESS_STATE=/tmp/dima-progress-dry-run-not-used \
 		$(DIMA_REQUESTED_GOALS)
@@ -52,10 +58,6 @@ else
 
 __dima_dispatch:
 	+@set -eu; \
-		if test -n "$(filter upload,$(DIMA_REQUESTED_GOALS))"; then \
-			$(MAKE) --no-print-directory -f GNUmakefile \
-				DIMA_BUILD_INTERNAL=1 upload-preflight; \
-		fi; \
 		toolchain_path="$(GCC_PATH)"; \
 		if test -n "$(DIMA_TOOLCHAIN_GOALS)" && test -z "$$toolchain_path"; then \
 			toolchain_path=$$($(PYTHON) $(DIMA_ARM_GCC_BOOTSTRAP) \
@@ -74,16 +76,22 @@ __dima_dispatch:
 			exit "$$status"; \
 		}; \
 		trap cleanup EXIT HUP INT TERM; \
+		if test -n "$(DIMA_STABILIZE_GENERATED_GOALS)"; then \
+			$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -s -f GNUmakefile \
+				DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE= \
+				GCC_PATH="$$toolchain_path" \
+				__dima_prepare_generated; \
+		fi; \
 		plan="$$progress_dir/plan.txt"; \
 		state="$$progress_dir/state.json"; \
-		$(MAKE) --no-print-directory -f GNUmakefile -n $(DIMA_OUTPUT_SYNC_FLAG) \
+		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -f GNUmakefile -n $(DIMA_OUTPUT_SYNC_FLAG) \
 			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE="$$state" \
 			GCC_PATH="$$toolchain_path" \
 			$(DIMA_REQUESTED_GOALS) >"$$plan"; \
 		$(PYTHON) tools/build_progress.py prepare \
 			--plan "$$plan" --state "$$state" \
 			--goals "$(DIMA_REQUESTED_GOALS)" $(DIMA_NO_COLOR_FLAG); \
-		$(MAKE) --no-print-directory -f GNUmakefile \
+		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -f GNUmakefile \
 			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE="$$state" \
 			GCC_PATH="$$toolchain_path" \
 			$(DIMA_REQUESTED_GOALS); \

@@ -12,6 +12,18 @@ $(error BOARD_SD_INIT_AT_BOOT must be 0 or 1)
 endif
 endif
 
+# GCC assembler listings for C sources add tens of megabytes of text I/O to a
+# clean Windows build.  Keep them opt-in for low-level inspection.
+DIMA_LISTINGS ?= 0
+ifneq ($(filter-out 0 1,$(DIMA_LISTINGS)),)
+$(error DIMA_LISTINGS must be 0 or 1)
+endif
+DIMA_COMMA := ,
+DIMA_CUBEMX_LISTING_OPTIONS = -Wa$(DIMA_COMMA)-a$(DIMA_COMMA)-ad$(DIMA_COMMA)-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst))
+DIMA_PROJECT_LISTING_OPTIONS = -Wa$(DIMA_COMMA)-a$(DIMA_COMMA)-ad$(DIMA_COMMA)-alms=$(@:.o=.lst)
+DIMA_CUBEMX_LISTING_FLAG = $(if $(filter 1,$(DIMA_LISTINGS)),$(DIMA_CUBEMX_LISTING_OPTIONS),)
+DIMA_PROJECT_LISTING_FLAG = $(if $(filter 1,$(DIMA_LISTINGS)),$(DIMA_PROJECT_LISTING_OPTIONS),)
+
 PYTHON ?= python3
 BUILD_PROGRESS_TOOL ?= tools/build_progress.py
 DIMA_PROGRESS_STATE ?=
@@ -37,11 +49,18 @@ C_INCLUDES += -I. \
 	$(addprefix -I,$(DIMA_COMMON_HEADER_DIRS)) \
 	-IBoards/H743/Inc \
 	-I$(BUILD_DIR)/generated_include \
-	-I$(BUILD_DIR)/generated/parameters
+	-I$(BUILD_DIR)/generated/parameters \
+	-I$(BUILD_DIR)/generated/serial \
+	-I$(BUILD_DIR)/generated/component_metadata \
+	-I$(BUILD_DIR)/generated/mavlink
 
+MAVLINK_GENERATED_DIR := $(BUILD_DIR)/generated/mavlink
 DIMA_GENERATED_INCLUDES := \
 	-I$(BUILD_DIR)/generated_include \
-	-I$(BUILD_DIR)/generated/parameters
+	-I$(BUILD_DIR)/generated/parameters \
+	-I$(BUILD_DIR)/generated/serial \
+	-I$(BUILD_DIR)/generated/component_metadata \
+	-I$(MAVLINK_GENERATED_DIR)
 DIMA_COMMON_INCLUDES := \
 	$(addprefix -I,$(DIMA_COMMON_HEADER_DIRS)) \
 	$(DIMA_GENERATED_INCLUDES)
@@ -53,6 +72,7 @@ DIMA_FREERTOS_INCLUDES := \
 DIMA_STM32_INCLUDES := \
 	-IDima \
 	-IDima/platform/stm32h7 \
+	$(DIMA_GENERATED_INCLUDES) \
 	-IBoards/H743/Inc \
 	-ICore/Inc \
 	-IUSB_DEVICE/App \
@@ -72,14 +92,41 @@ PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
 ARCHITECTURE_CHECK_TOOL := tools/check_architecture.py
 APPLICATION_ELF_CHECK_TOOL := tools/verify_application_elf.py
 COMPILE_COMMANDS_TOOL := tools/generate_compile_commands.py
+MAVLINK_GENERATOR := tools/mavlink/build_trimmed_dialect.py
+MAVLINK_BOOTSTRAP := tools/mavlink/bootstrap_pymavlink.py
+MAVLINK_LOCK := tools/mavlink/mavlink.lock.json
+MAVLINK_XML_DIR := tools/mavlink/message_definitions
+MAVLINK_XML_INPUTS := \
+	$(MAVLINK_XML_DIR)/common.xml \
+	$(MAVLINK_XML_DIR)/standard.xml \
+	$(MAVLINK_XML_DIR)/minimal.xml
+MAVLINK_GENERATED_STAMP := $(MAVLINK_GENERATED_DIR)/.generated.json
+MAVLINK_LIBRARY_HEADER := $(MAVLINK_GENERATED_DIR)/dima/mavlink.h
+MAVLINK_GENERATOR_DEPS := \
+	$(MAVLINK_GENERATOR) $(MAVLINK_BOOTSTRAP) $(MAVLINK_LOCK) \
+	$(MAVLINK_XML_INPUTS)
 COMPILE_COMMANDS_OUTPUT ?= compile_commands.json
 PARAMETER_GENERATOR_DEPS := $(wildcard tools/parameters/*.py tools/parameters/dima_params/*.py)
+SERIAL_CONFIG_GENERATOR := tools/serial/generate_config.py
+SERIAL_PORT_MANIFEST := Boards/H743/serial_ports.json
+SERIAL_GENERATED_DIR := $(BUILD_DIR)/generated/serial
+SERIAL_GENERATED_STAMP := $(SERIAL_GENERATED_DIR)/.generated
+SERIAL_BAUD_PARAMETERS := $(SERIAL_GENERATED_DIR)/serial_baud_params.c
+SERIAL_CONFIG_PARAMETERS := $(SERIAL_GENERATED_DIR)/serial_config_params.c
+SERIAL_CONFIG_HEADER := $(SERIAL_GENERATED_DIR)/board_serial_config.hpp
+SERIAL_GENERATED_OUTPUTS := \
+	$(SERIAL_BAUD_PARAMETERS) \
+	$(SERIAL_CONFIG_PARAMETERS) \
+	$(SERIAL_CONFIG_HEADER)
 PARAMETER_DEFINITIONS := \
 	Dima/middleware/parameters/definitions/commander_params.c \
 	Dima/middleware/parameters/definitions/rover_control_params.c \
 	Dima/middleware/parameters/definitions/rover_differential_params.c \
 	Dima/middleware/parameters/definitions/rover_actuator_params.c \
-	Dima/middleware/parameters/definitions/rc_params.c
+	Dima/middleware/parameters/definitions/rc_params.c \
+	Dima/middleware/parameters/definitions/qgc_compat_params.c \
+	$(SERIAL_CONFIG_PARAMETERS) \
+	$(SERIAL_BAUD_PARAMETERS)
 PARAMETER_GENERATED_DIR := $(BUILD_DIR)/generated/parameters
 PARAMETER_INCLUDE_DIR := $(BUILD_DIR)/generated_include
 PARAMETER_GENERATED_STAMP := $(PARAMETER_GENERATED_DIR)/.generated
@@ -92,21 +139,76 @@ PARAMETER_GENERATED_OUTPUTS := \
 	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/param_macros.h \
 	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/module_params.h \
 	$(PARAMETER_INCLUDE_DIR)/parameters/px4_parameters.hpp
+PARAMETER_METADATA_GENERATOR := tools/mavlink/generate_parameter_metadata.py
+PARAMETER_METADATA_DIR := $(BUILD_DIR)/generated/component_metadata
+PARAMETER_METADATA_STAMP := $(PARAMETER_METADATA_DIR)/.generated.json
+PARAMETER_METADATA_HEADER := $(PARAMETER_METADATA_DIR)/parameter_metadata_files.hpp
+PARAMETER_METADATA_OUTPUTS := \
+	$(PARAMETER_METADATA_DIR)/component_general.json \
+	$(PARAMETER_METADATA_DIR)/component_general.json.xz \
+	$(PARAMETER_METADATA_DIR)/parameters.json \
+	$(PARAMETER_METADATA_DIR)/parameters.json.xz \
+	$(PARAMETER_METADATA_HEADER)
+$(SERIAL_GENERATED_STAMP): make/project.mk $(SERIAL_CONFIG_GENERATOR) $(SERIAL_PORT_MANIFEST)
+	$(DIMA_PROGRESS_RUN) --label SERIAL --target "$@" \
+		--display "$(SERIAL_GENERATED_DIR)" -- \
+		$(PYTHON) $(SERIAL_CONFIG_GENERATOR) \
+			--manifest $(SERIAL_PORT_MANIFEST) \
+			--output $(SERIAL_GENERATED_DIR)
+	@touch "$@"
 
-$(PARAMETER_GENERATED_STAMP): make/project.mk $(PARAMETER_GENERATOR_DEPS) $(PARAMETER_DEFINITIONS)
+$(SERIAL_GENERATED_OUTPUTS): | $(SERIAL_GENERATED_STAMP)
+	@test -f $@
+
+$(PARAMETER_GENERATED_STAMP): make/project.mk $(PARAMETER_GENERATOR_DEPS) \
+		$(SERIAL_GENERATED_OUTPUTS) $(PARAMETER_DEFINITIONS)
 	$(DIMA_PROGRESS_RUN) --label PARAM --target "$@" \
 		--display "$(PARAMETER_GENERATED_DIR)" -- \
 		$(PYTHON) $(PARAMETER_GENERATOR) \
 		$(foreach source,$(PARAMETER_DEFINITIONS),--source $(source)) \
+		--stable-tail-source Dima/middleware/parameters/definitions/qgc_compat_params.c \
+		--stable-tail-source $(SERIAL_BAUD_PARAMETERS) \
 		--output $(PARAMETER_GENERATED_DIR) \
 		--include-output $(PARAMETER_INCLUDE_DIR)
-	@touch -r "$(firstword $(PARAMETER_GENERATED_OUTPUTS))" "$@"
+	@touch "$@"
 
-$(PARAMETER_GENERATED_OUTPUTS): $(PARAMETER_GENERATED_STAMP)
+$(PARAMETER_GENERATED_OUTPUTS): | $(PARAMETER_GENERATED_STAMP)
 	@test -f $@
 
 .PHONY: parameter-generated
 parameter-generated: $(PARAMETER_GENERATED_OUTPUTS)
+
+$(PARAMETER_METADATA_STAMP): make/project.mk $(PARAMETER_METADATA_GENERATOR) \
+		$(PARAMETER_GENERATED_DIR)/parameters.json
+	$(DIMA_PROGRESS_RUN) --label META --target "$@" \
+		--display "$(PARAMETER_METADATA_DIR)" -- \
+		$(PYTHON) $(PARAMETER_METADATA_GENERATOR) \
+			--parameters $(PARAMETER_GENERATED_DIR)/parameters.json \
+			--output $(PARAMETER_METADATA_DIR)
+	@touch "$@"
+
+$(PARAMETER_METADATA_OUTPUTS): | $(PARAMETER_METADATA_STAMP)
+	@test -f $@
+
+.PHONY: parameter-metadata
+parameter-metadata: $(PARAMETER_METADATA_OUTPUTS)
+
+$(MAVLINK_GENERATED_STAMP): make/project.mk $(MAVLINK_GENERATOR_DEPS)
+	$(DIMA_PROGRESS_RUN) --label MAVLINK --target "$@" \
+		--display "$(MAVLINK_GENERATED_DIR)" -- \
+		env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) $(MAVLINK_GENERATOR) \
+			--xml-dir $(MAVLINK_XML_DIR) \
+			--output-dir $(MAVLINK_GENERATED_DIR) \
+			--lock $(MAVLINK_LOCK) \
+			--cache-root "$(HOST_TOOLS_CACHE_ROOT)" \
+			$(if $(strip $(PYMAVLINK_ROOT)),--pymavlink-root "$(PYMAVLINK_ROOT)",)
+	@touch "$@"
+
+$(MAVLINK_LIBRARY_HEADER): | $(MAVLINK_GENERATED_STAMP)
+	@test -f "$@"
+
+.PHONY: mavlink
+mavlink: $(MAVLINK_LIBRARY_HEADER)
 
 # newlib-nano lazily allocates its three standard FILE objects on the first
 # setvbuf/printf call.  Keep standard-stream setup independent of the shared
@@ -160,10 +262,19 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/rover/ApplicationContext.cpp \
 	Dima/rover/control/RoverDifferential.cpp \
 	Dima/rover/modes/ManualMode.cpp \
+	Dima/lib/timesync/Timesync.cpp \
 	Dima/modules/logging/LogService.cpp \
+	Dima/modules/mavlink/HeartbeatPacer.cpp \
+	Dima/modules/mavlink/MavlinkCommands.cpp \
+	Dima/modules/mavlink/MavlinkIdentity.cpp \
+	Dima/modules/mavlink/MavlinkMetadataFtp.cpp \
+	Dima/modules/mavlink/MavlinkMission.cpp \
+	Dima/modules/mavlink/MavlinkParameters.cpp \
 	Dima/modules/mavlink/MavlinkService.cpp \
+	Dima/modules/mavlink/MavlinkTimesync.cpp \
 	Dima/modules/motor/MotorOutput.cpp \
 	Dima/modules/parameters/ParameterService.cpp \
+	Dima/modules/serial/SerialConfig.cpp \
 	Dima/application/app_main.cpp \
 	Dima/lib/rover/DifferentialDrive.cpp \
 	Dima/lib/rc/sbus.cpp \
@@ -207,6 +318,7 @@ DIMA_STM32_CXX_SOURCES := \
 	Dima/platform/stm32h7/DmaMemory.cpp \
 	Dima/platform/stm32h7/FlashDevice.cpp \
 	Dima/platform/stm32h7/HardwareUid.cpp \
+	Dima/platform/stm32h7/Watchdog.cpp \
 	Dima/platform/stm32h7/SbusUart.cpp \
 	Dima/platform/stm32h7/SensorInterrupts.cpp \
 	Dima/platform/stm32h7/UsbCdcTransport.cpp
@@ -233,7 +345,8 @@ DIMA_BOARD_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_C_SOURCES:.c=.o)) \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_CXX_SOURCES:.cpp=.o))
 PROJECT_OBJECTS := $(PROJECT_C_OBJECTS) $(PROJECT_CXX_OBJECTS)
-$(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) check-architecture
+$(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) $(PARAMETER_METADATA_STAMP) \
+	$(MAVLINK_GENERATED_STAMP) check-architecture
 override OBJECTS += $(PROJECT_OBJECTS)
 
 $(DIMA_COMMON_OBJECTS): DIMA_PRIVATE_DEFS := $(DIMA_PRODUCT_DEFS)
@@ -271,7 +384,7 @@ override SZ = $(DIMA_PROGRESS_RUN) --kind size --target "$@" --source "$<" -- $(
 endif
 
 DIMA_PROJECT_CFLAGS = $(MCU) $(DIMA_PRIVATE_DEFS) $(DIMA_PRIVATE_INCLUDES) \
-	$(OPT) -Wall -fdata-sections -ffunction-sections
+	$(OPT) -Wall -Werror -fdata-sections -ffunction-sections
 DIMA_PROJECT_CXXFLAGS = $(DIMA_PROJECT_CFLAGS) \
 	-std=gnu++17 -fno-exceptions -fno-rtti \
 	-fno-threadsafe-statics -fno-use-cxa-atexit
@@ -280,10 +393,15 @@ DIMA_PROJECT_CFLAGS += -g -gdwarf-2
 endif
 DIMA_PROJECT_CFLAGS += -MMD -MP -MF"$(@:%.o=%.d)"
 
+# Treat warnings from the CubeMX/HAL application object set as build failures.
+# Third-party configuration-specific unused arguments are annotated at source;
+# do not hide future diagnostics with broad -Wno-* flags.
+override CFLAGS += -Werror
+
 ifneq ($(strip $(PROJECT_C_OBJECTS)),)
 $(PROJECT_C_OBJECTS): $(BUILD_DIR)/%.o: %.c GNUmakefile Makefile make/project.mk
 	@mkdir -p $(@D)
-	$(CC) -c $(DIMA_PROJECT_CFLAGS) -Wa,-a,-ad,-alms=$(@:.o=.lst) $< -o $@
+	$(CC) -c $(DIMA_PROJECT_CFLAGS) $(DIMA_PROJECT_LISTING_FLAG) $< -o $@
 endif
 
 ifneq ($(strip $(PROJECT_CXX_OBJECTS)),)
@@ -294,7 +412,7 @@ endif
 
 # Generated MAVLink C library headers (c_library_v2) trigger packed-member
 # and alignment warnings, suppressed upstream by PX4 the same way.
-$(BUILD_DIR)/Dima/modules/mavlink/MavlinkService.o: DIMA_PROJECT_CXXFLAGS += \
+$(BUILD_DIR)/Dima/modules/mavlink/%.o: DIMA_PROJECT_CXXFLAGS += \
 	-Wno-cast-align -Wno-address-of-packed-member
 
 # Add project objects as prerequisites without replacing CubeMX's ELF recipe.
@@ -333,9 +451,10 @@ MCUMGR_MTU ?= 512
 MCUMGR_MAX_WINDOW ?= 1
 UPLOAD_WAIT_SECONDS ?= 60
 UPLOAD_CONFIRM_WAIT_SECONDS ?= 8
-UPLOAD_FORCE ?= 1
+UPLOAD_FORCE ?= 0
 UPLOAD_VERIFY_CONFIRM ?= 1
 UPLOAD_IMAGE ?= $(SIGNED_BIN)
+UPLOAD_VERIFY_STAMP = $(BUILD_DIR)/.upload-image-verified
 UPLOAD_TOOL = tools/mcumgr_upload.py
 MCUMGR_BOOTSTRAP_TOOL = tools/bootstrap_mcumgr.py
 UPLOAD_FORCE_FLAG = $(if $(filter 1,$(UPLOAD_FORCE)),--force,)
@@ -348,10 +467,20 @@ ifneq ($(filter-out 0 1,$(UPLOAD_VERIFY_CONFIRM)),)
 $(error UPLOAD_VERIFY_CONFIRM must be 0 or 1)
 endif
 
-.PHONY: check-architecture app-check intellisense firmware mcuboot host-tools verify dima_rover \
-	upload-preflight upload install-hooks \
-	__dima_clean_progress __dima_summary \
-	FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
+.PHONY: check-architecture app-check intellisense mavlink firmware mcuboot host-tools verify dima_rover \
+		upload-ready upload-preflight upload install-hooks \
+		__dima_clean_progress __dima_prepare_generated __dima_summary \
+		FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
+
+# Stabilize content-addressed/generated outputs before the public wrapper takes
+# its dry-run snapshot.  A generator may run because an input timestamp changed
+# yet preserve every output timestamp when the content is unchanged; planning
+# before that decision overestimates the downstream compile/link actions.
+__dima_prepare_generated: $(SERIAL_GENERATED_OUTPUTS) \
+		$(PARAMETER_GENERATED_OUTPUTS) $(PARAMETER_METADATA_OUTPUTS) \
+		$(MAVLINK_LIBRARY_HEADER)
+	@:
+
 check-architecture: $(ARCHITECTURE_CHECK_TOOL)
 	$(DIMA_PROGRESS_RUN) --label ARCH --target "$@" -- \
 		$(PYTHON) $(ARCHITECTURE_CHECK_TOOL)
@@ -379,7 +508,7 @@ intellisense: $(COMPILE_COMMANDS_TOOL)
 		--make-variable "BOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT)" \
 		--make-variable "DEBUG=$(DEBUG)"
 
-firmware: check-architecture \
+firmware: mavlink check-architecture \
           $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
           $(BUILD_DIR)/$(TARGET).bin $(SIGNED_BIN) \
           $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(FACTORY_HEX)
@@ -474,6 +603,32 @@ $(SIGNED_BIN): $(BUILD_DIR)/$(TARGET).bin $(KEY_ID_STAMP) \
 		sign -k "$(KEY_FILE)" --align 32 --max-align 32 \
 		-v $(IMAGE_VERSION) -H 0x400 --pad-header -S 0xC0000 $< $@
 
+# Routine MCUboot OTA only consumes the signed application.  Cache its two
+# direct gates so an unchanged image does not rebuild MCUboot/Factory HEX or
+# rerun the full release-layout verification on every upload.
+$(UPLOAD_VERIFY_STAMP): $(BUILD_DIR)/$(TARGET).elf $(SIGNED_BIN) \
+                        $(APPLICATION_ELF_CHECK_TOOL) $(IMGTOOL) | $(BUILD_DIR)
+	$(DIMA_PROGRESS_RUN) --label ELF --target "$@" \
+		--display "$(BUILD_DIR)/$(TARGET).elf" -- \
+		$(PYTHON) $(APPLICATION_ELF_CHECK_TOOL) \
+		--elf $(BUILD_DIR)/$(TARGET).elf
+	$(DIMA_PROGRESS_RUN) --label VERIFY --target "$@" \
+		--display "$(SIGNED_BIN)" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
+		verify -k "$(KEY_FILE)" $(SIGNED_BIN)
+	@touch "$@"
+
+ifeq ($(UPLOAD_IMAGE),$(SIGNED_BIN))
+upload-ready: $(UPLOAD_VERIFY_STAMP)
+else
+# An external package has no trustworthy relationship to the local ELF stamp.
+# Verify the exact file on every invocation before the uploader may consume it.
+upload-ready: $(UPLOAD_IMAGE) $(HOST_TOOLS_STAMP) $(IMGTOOL)
+	$(DIMA_PROGRESS_RUN) --label VERIFY --target "$(UPLOAD_IMAGE)" -- \
+		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
+		verify -k "$(KEY_FILE)" "$(UPLOAD_IMAGE)"
+endif
+
 $(SIGNED_HEX): $(SIGNED_BIN) | $(BUILD_DIR)
 	$(CP) -I binary -O ihex --change-addresses 0x08040000 $< $@
 
@@ -500,12 +655,16 @@ verify: check-architecture firmware
 		--signed $(SIGNED_BIN) --factory $(FACTORY_HEX) \
 		--nm $(if $(GCC_PATH),$(GCC_PATH)/$(PREFIX)nm,$(PREFIX)nm)
 
-# Product-facing entry points.  `upload` depends on `dima_rover`, so both
-# `make upload` and the requested `make dima_rover upload` build and verify the
-# exact signed image before touching the board.
+# `make dima_rover` remains the full release-image gate.  When upload is also
+# requested, the long-standing `make dima_rover upload` spelling is normalized
+# to the cached application-only OTA gate instead of rebuilding Factory HEX.
+ifneq ($(filter upload,$(MAKECMDGOALS)),)
+dima_rover: upload-ready
+else
 dima_rover: check-architecture verify
+endif
 
-upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL)
+upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) $(MAVLINK_LOCK)
 	@env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
 		--preflight-only --mcumgr "$(MCUMGR)" \
 		--tools-cache "$(HOST_TOOLS_CACHE_ROOT)" \
@@ -513,7 +672,7 @@ upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL)
 		--baud "$(MCUMGR_BAUD)" --mtu "$(MCUMGR_MTU)" \
 		--wait-seconds "$(UPLOAD_WAIT_SECONDS)"
 
-upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL)
+upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) $(MAVLINK_LOCK)
 	$(DIMA_PROGRESS_RUN) --label UPLOAD --target "$(UPLOAD_IMAGE)" -- \
 		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
 		--image "$(UPLOAD_IMAGE)" --imgtool "$(IMGTOOL)" \

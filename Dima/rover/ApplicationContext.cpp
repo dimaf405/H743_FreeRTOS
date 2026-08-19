@@ -28,11 +28,11 @@ ApplicationContext::ApplicationContext(
       boot_health_(services.boot_control, services.clock),
       log_service_(),
       mavlink_service_(services.console, services.boot_control),
-      parameter_service_(journal_, services.console, services.boot_control,
-                         services.armed_flash, services.synchronization,
-                         services.critical),
+      parameter_service_(journal_, services.armed_flash,
+                         services.synchronization, services.critical),
+      serial_config_(services.serial_ports),
       motor_output_(services.actuator_pwm), commander_(services.armed_flash),
-      sbus_rc_(services.sbus)
+      sbus_rc_(services.sbus, serial_config_)
 {
     boot_health_.bind_commander(commander_);
     boot_health_.bind_motor_output(motor_output_);
@@ -54,6 +54,7 @@ bool ApplicationContext::register_modules() noexcept
 {
     if (!module_manager_.register_module(parameter_service_) ||
         !module_manager_.register_module(log_service_) ||
+        !module_manager_.register_module(serial_config_) ||
         !module_manager_.register_module(motor_output_) ||
         !module_manager_.register_module(commander_) ||
         !module_manager_.register_module(mavlink_service_) ||
@@ -84,6 +85,10 @@ bool ApplicationContext::release_runtime_resources() noexcept
             return false;
         }
         parameter_initialized_ = false;
+    }
+    if (log_initialized_) {
+        log_service_.shutdown();
+        log_initialized_ = false;
     }
     if (uorb_initialized_) {
         uORB::shutdown();
@@ -154,6 +159,12 @@ bool ApplicationContext::init() noexcept
         return false;
     }
 
+    log_initialized_ = true;
+    if (!log_service_.initialize()) {
+        (void)rollback_initialization();
+        return false;
+    }
+
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::ParameterInit);
     parameter_initialized_ = true;
@@ -213,6 +224,13 @@ bool ApplicationContext::start() noexcept
     if (!log_started_) {
         (void)rollback_start();
         return false;
+    }
+
+    serial_config_started_ = module_manager_.start(serial_config_);
+    if (!serial_config_started_) {
+        PX4_ERR("Board serial configuration invalid; RC input inhibited");
+    } else {
+        PX4_INFO("Board serial configuration started");
     }
 
     services_.diagnostics.set_stage(
@@ -386,6 +404,13 @@ bool ApplicationContext::stop_started_modules() noexcept
         stopped = result && stopped;
     }
     stopped = stop_motor_output() && stopped;
+    if (serial_config_started_) {
+        const bool result = module_manager_.stop(serial_config_) &&
+            serial_config_.state() ==
+                dima::middleware::lifecycle::ModuleState::Stopped;
+        serial_config_started_ = !result;
+        stopped = result && stopped;
+    }
     if (log_started_) {
         const bool result = module_manager_.stop(log_service_);
         log_started_ = !result;
@@ -420,6 +445,22 @@ bool ApplicationContext::shutdown() noexcept
     }
     runtime_state_ = RuntimeState::Stopped;
     return true;
+}
+
+bool ApplicationContext::watchdog_feed_allowed(
+    std::uint32_t previous_health_generation,
+    std::uint32_t &current_health_generation) const noexcept
+{
+    current_health_generation = boot_health_.health_generation();
+    if (runtime_state_ == RuntimeState::Running) {
+        return current_health_generation != 0U &&
+               current_health_generation != previous_health_generation;
+    }
+    /* A successfully stopped Runtime has already proved MotorOutput stopped
+     * both timers and restored all six GPIOs low. Keep IWDG alive in this
+     * intentional safe-idle state so a same-power Runtime restart remains
+     * possible. Error and partial lifecycle states deliberately stop feeding. */
+    return runtime_state_ == RuntimeState::Stopped;
 }
 
 ApplicationContext &application_context() noexcept

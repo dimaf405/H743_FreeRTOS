@@ -90,6 +90,8 @@ extern "C" bool dima_platform_early_init(void)
         boot_control,
         startup_diagnostics(),
         stm32h7::dma_memory(),
+        stm32h7::independent_watchdog(),
+        stm32h7::serial_ports(),
         stm32h7::sbus_input(),
         stm32h7::sensor_interrupts(),
         &stm32h7::actuator_pwm(),

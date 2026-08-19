@@ -168,13 +168,13 @@ Storage       128 KiB
 → manual_control_setpoint + action_request
 ```
 
-- `RC_INPUT_PROTO` 使用 `0=Disabled`、`2=SBUS`，默认 SBUS；`RC_PORT_CONFIG` 支持 1 UART4/PB8、2 UART7/PE7、3 UART8/PE0、4 USART2/PD6，值 0 只兼容旧配置的安全禁用语义。
+- `RC_INPUT_PROTO` 使用 `0=Disabled`、`2=SBUS`，默认 SBUS；端口按最新版 VCU-H7 硬件直接编号为 `SERIAL1..8=USART1/USART2/USART3/UART4/UART5/USART6/UART7/UART8`，每路由 `SERIALx_FUNCTION` 分配 Disabled/RC Input，默认 SERIAL6=USART6。旧 `RC_PORT_CONFIG` 和 Schema v1 只作一次性物理 UART 迁移，不再作为公开配置入口。
 - 原始反相 SBUS 自动使用 100000 bit/s、8E2、UART RXINV 和 RX pulldown，不再提供手动极性参数；接管前保存 UART/FIFO/RX GPIO，停用、失败回滚和 Runtime shutdown 均恢复普通 UART。
 - SRAM3 non-cacheable 64-byte 循环 DMA Buffer 只由 DMA 写入；ISR 记录真实到达时间并复制到 256 项 CPU-only Ring，再经 ISR-safe callback 唤醒 `wq:io`，业务层不执行 cache maintenance。
 - RC 参数由生成器扩展到 135 项总量，其中阶段 3 新增 111 项 RC 配置、18 通道校准、映射和失联参数。
 - `RC_CHAN_CNT=0` 时按实际接收通道数工作，仍可通过在线参数显式限制通道数；校准与映射在 `parameter_update` 后在线刷新。
-- SBUS 单帧丢失只累计丢帧统计，不误判为整条链路失联；Failsafe、显式 `rc_lost` 或 `COM_RC_LOSS_T` 超时才发布失联状态。
-- Arm/Kill 开关首个稳定样本只建立基线，之后仅在边沿发布 `action_request`；阶段 4 接入 Commander 前没有消费者。
+- SBUS 单帧丢失只累计丢帧统计，不误判为整条链路失联；无强 CRC 的 SBUS 在冷启动/Failsafe/UART 恢复后要求连续 3 个健康帧锁定，随后 `RCUpdate` 再要求连续健康 100 ms 才恢复控制。Failsafe、显式 `rc_lost` 或 `COM_RC_LOSS_T` 超时都会清除恢复窗口。
+- Arm/Kill 开关至少要求两份严格前进的一致样本并稳定 200 ms；启动、RC 恢复及映射/阈值变化后的首个稳定样本只建立基线，之后仅在边沿发布 `action_request`。
 - 阶段 3 没有连接 PWM、Mixer、Arming 或 Actuator 输出，因此完成后车辆仍不能移动。
 - Windows Arm GNU Toolchain 16.1.0 下的独立 `make verify BUILD_DIR=build-phase3-final` 已通过；未新增测试、SITL 或仿真。
 
@@ -184,8 +184,8 @@ Storage       128 KiB
 
 - 完整导入 `vehicle_status`、`vehicle_control_mode` 和 `actuator_armed` 公开消息契约，三个 Topic 深度为 1，`action_request` 保持深度 8。
 - Commander 复用 `wq:hp_default`，20 ms 检查 RC/参数，状态变化立即发布，静态状态至少每 500 ms 发布一次。
-- 冷启动 `DISARMED + MANUAL`；Arm 要求参数核心、Manual、新鲜有效 RC、throttle/yaw 中位以及未 Kill/Termination。
-- ARMED 时 RC/参数故障强制 Disarm；RC 恢复不自动 Arm。Kill/Unkill 可逆，Termination 锁存到 MCU 重启。
+- 冷启动 `DISARMED + MANUAL`；Arm 除参数核心、Manual、新鲜有效 RC、throttle/yaw 中位及未 Kill/Termination 外，还要求 `actuator_output_status` 新鲜且 sequence 严格前进、后端 ready、参数无 pending、至少一右一左映射，并已实际建立 `DISARMED_NEUTRAL`。
+- ARMED 时 RC/参数/执行器输出故障强制 Disarm；恢复后只清故障原因，不自动 Arm。Kill 固定为 Kill→Disarm→hard-off，Unkill 只清 Kill，必须重新产生 Arm 边沿；Termination 锁存到 MCU 重启。
 - 仅 Manual 可由用户选择；Termination 只作为内部状态，Position、Auto、Offboard、VTOL 等模式均拒绝。
 - Parameter Flash 保存和擦除在 ARMED 期间禁止，Autosave 保持 pending 并在 Disarm 后重试。
 - 启动顺序为基础服务、Parameter、Log、Commander、RC；停止顺序为 RC、Commander、Log、Parameter。RC 链失败不停止 Commander，Commander 启动失败则回滚应用服务。
@@ -203,13 +203,18 @@ Storage       128 KiB
 
 - 只保留前后 `longitudinal` 和左右 `steering/yaw` 两轴。`ManualMode` 发布 `rover_motion_request`，RoverDifferential 在 100 Hz 生成右、左两路 `actuator_motors`；其余十路保持 NaN。
 - `rover_motion_request` 同时预留 `SOURCE_NAVIGATION` 和 `MODE_SPEED_YAW_RATE`，但当前只接受 `SOURCE_MANUAL + MODE_NORMALIZED_AXES`。阶段 9 Navigation 必须复用该消息边界，不能直接依赖 DifferentialDrive、MotorOutput 或板级 PWM。
-- 差速混控采用 PX4 v1.17.0 的两轴/消息边界，并综合 ArduPilot Rover 的倒车车头方向、转向/油门饱和优先级、静摩擦补偿、反向推力不对称和左右独立换向延时行为；ArduPilot GPL 源码只作行为参考，没有复制。
-- 六路输出只提供 Disabled、MotorRight、MotorLeft 三种功能。默认全 Disabled；每路公开 `FUNC/MIN/CENT/MAX/REV`，零命令严格落在 CENT，允许同一 Motor function 映射多个物理口。
+- 差速混控采用 PX4 v1.17.0 的两轴/消息边界，并综合 ArduPilot Rover 的倒车车头方向、转向/油门饱和优先级、静摩擦补偿、反向推力不对称和左右独立换向延时行为；当 `MOT_THR_ASYM>1` 时先在 `[-1/asymmetry, 1]` 两侧电机可行域内应用 `RD_STR_THR_MIX`，再作反向补偿，避免倒车两侧同时裁到 -1 后丢失转向。ArduPilot GPL 源码只作行为参考，没有复制。
+- 六路输出只提供 Disabled、MotorRight、MotorLeft 三种功能。默认全 Disabled；每路公开 `FUNC/MIN/CENT/MAX/REV`，允许同一 Motor function 映射多个物理口。健康且左右映射完整的普通 Disarmed 仅在已配置通道持续输出各自 `CENT`，Disabled 通道始终无脉冲。
 - 固定物理映射为 S1/PB0/TIM8_CH2N、S2/PB1/TIM8_CH3N、S3～S6/PA0～PA3/TIM5_CH1～CH4。TIM8 Update TRGO 同步复位 TIM5，二者均为 1 MHz、ARR 19999、50 Hz。
-- MotorOutput 只有在完整、严格前进且新鲜的 Commander 安全快照、有效双向 Motor 命令和 `COM_ACT_LOSS_T` 双时间戳约束同时满足时才启动 PWM。所有负向安全事件、命令超时、参数/发布错误和后端异常均停止定时器并把六路切回 GPIO 低。
+- MotorOutput 只有在完整、严格前进且新鲜的 Commander 安全快照、有效双向 Motor 命令和 `COM_ACT_LOSS_T` 双时间戳约束同时满足时才进入 `ACTIVE`。启动、映射无效、Kill、Termination、Failsafe、Armed 命令超时、参数/发布错误、后端 Retry/Fault 和关闭均进入 `HARD_SAFE_OFF`；普通 Disarm 才进入 `DISARMED_NEUTRAL`。ACTIVE inhibit 与 hard-safe inhibit 分离，单条负向安全 Topic 先到即可 fail-closed。
+- 应用侧 IWDG 固定约 2048 ms、100 ms 检查，appMain 为唯一 feed owner；BootHealth 在镜像确认后继续以安全 Topic、MotorOutput 和 Runtime 生命周期推进健康 generation。MCUboot 对跨复位仍运行的 watchdog 临时扩展并在 Recovery/校验/swap/Flash/USB 长循环喂狗，原始 IWDG reset flags 跨应用桥接保留；实际复位时限和 GPIO 电气行为仍待板测。
 - USB CDC 已作为系统调试日志与维护命令口，移除周期性 HelloWorld 和示例心跳；控制/ISR 热路径只上报固定结构事件，不直接格式化或阻塞发送。
 
 Windows 原生 clean build、签名、Factory HEX、MCUboot 布局、应用 ELF 生命周期/执行器门禁和静态热路径检查已经通过。阶段状态为“源码及目标构建通过，板测待完成”；示波器确认六路频率、脉宽、相位、TIM8 N 极性、真实低电平以及 Arm/Disarm/Kill/Termination/超时波形之前，不得宣称执行器运行行为已经验收。详细数据见 [阶段 5 资源与验收基线](DIMA_PHASE5_RESOURCE_BASELINE_ZH.md)。
+
+2026-08-19 在 Windows 原生进程、Windows 路径和项目缓存 Arm GCC 10.3.1 下重新执行 `make clean` 后完整 `make -j4 NO_COLOR=1 dima_rover`，通过 `[212/212]`：Application `233772/12284/356176` bytes、未签名 BIN `246096` bytes，MCUboot `47712/380/10192` bytes、BIN `48100` bytes，向量 `0x08040400`；两份 ELF 未解析符号为空，SBUS/Commander/MotorOutput/IWDG 与 MCUboot watchdog prepare/feed 关键符号均实际链接。同一 image digest `601c65353ffebce20cea8f040d975000e3c4caa2b27aaa15dd409529740e26ce` 的 clean build 与后续重签分别得到 `247271/247270`-byte Signed BIN、`710861/710859`-byte Factory HEX；这是 imgtool 可变长度 ECDSA P-256 DER 签名带来的合法差异，Signed/Factory 文件长度及文件 SHA-256 不作为确定性合同。该结果只证明源码、静态门禁和目标构建，不证明 SBUS 电气、六路 PWM 波形、电调握手、IWDG 约 2 秒复位或车辆行为。
+
+同日实板首启排查修复两个串联问题：MCUboot 在无有效 D3 头时无法建立应用桥接，以及应用在 LSI/IWDG 启动前等待 SR 同步。真实记录为 `ERROR_HANDLER / APPLICATION_RUNNING / stacked_r0=2048`，无 Cortex-M fault 状态位。修复后的 Windows clean build 再次通过 `[212/212]`，Application 尺寸不变，MCUboot 为 `47864/380/10192` bytes、BIN `48252` bytes，image digest 为 `835947050b2df9062be4289bcb5b876abe0dee99b46792051827e79f123eeec3`；实板已通过冷启动双枚举和 `Dima Rover MAVLink` 身份验证。IWDG 实际复位时限、六路 PWM 和车辆行为仍待板测。
 
 ### 阶段 6：传感器层
 
