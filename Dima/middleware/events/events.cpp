@@ -4,7 +4,7 @@
 #include <cstring>
 #include <limits>
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/Execution.hpp"
 #include "platform/api/Time.hpp"
 
 namespace dima::events {

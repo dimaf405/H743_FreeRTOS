@@ -1,4 +1,5 @@
 #include "ParameterJournal.hpp"
+#include "platform/api/Execution.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -239,6 +240,8 @@ int ParameterJournal::scan_locked() noexcept
     latest_offset_ = 0U;
     has_snapshot_ = false;
 
+    /* 损坏或掉电中断的 flashword 也必须推进 high-water。Flash 不能把已写过的
+     * 0 位恢复成 1，复用“洞”会把新记录写进不可擦除的旧数据。 */
     std::size_t high_water = 0U;
     for (std::size_t offset = 0U;
          offset + kFlashWordBytes <= kStorageBytes;
@@ -364,6 +367,8 @@ int ParameterJournal::append_locked(const void *payload,
     marker.marker_crc32 =
         crc32(&marker, offsetof(CommitMarker, marker_crc32));
 
+    /* 掉电原子性依赖固定顺序：Header -> Payload -> 回读 CRC -> Commit Marker。
+     * Marker 最后写入，扫描器才不会把半写记录当作有效快照。 */
     const std::size_t record_offset = append_offset_;
     bool ok = program_flashword(record_offset, &header);
     const auto *payload_bytes = static_cast<const std::uint8_t *>(payload);
@@ -443,6 +448,8 @@ int ParameterJournal::load(void *payload, std::size_t capacity,
         return -EDEADLK;
     }
 
+    /* 缓存的 latest offset 每次 load 都重新验证。首次失败只允许全盘重扫一次，
+     * 以便回退上一条完整快照，同时避免损坏 Flash 导致无限重试。 */
     bool rescanned = false;
     for (;;) {
         if (!has_snapshot_) {

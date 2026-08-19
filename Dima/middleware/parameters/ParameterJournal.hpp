@@ -1,6 +1,7 @@
 #pragma once
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/Flash.hpp"
+#include "platform/api/Synchronization.hpp"
 
 #include <cstddef>
 #include <cstdint>

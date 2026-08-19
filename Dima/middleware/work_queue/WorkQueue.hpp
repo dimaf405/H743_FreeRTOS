@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/PlatformTypes.hpp"
 
 namespace px4 {
 

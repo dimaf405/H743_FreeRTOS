@@ -35,7 +35,8 @@
 
 #include "ParamLayer.h"
 #include "containers/atomic.h"
-#include "platform/api/Platform.hpp"
+#include "platform/api/Execution.hpp"
+#include "platform/api/Memory.hpp"
 
 #include <cstring>
 #include <cstdlib>

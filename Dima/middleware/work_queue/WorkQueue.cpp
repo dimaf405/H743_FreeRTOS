@@ -1,6 +1,9 @@
 #include "WorkQueue.hpp"
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/Execution.hpp"
+#include "platform/api/Services.hpp"
+#include "platform/api/Synchronization.hpp"
+#include "platform/api/TaskRuntime.hpp"
 
 #include <cstddef>
 #include <cstdint>

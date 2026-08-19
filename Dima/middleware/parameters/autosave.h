@@ -34,6 +34,7 @@
 #pragma once
 
 #include "containers/atomic.h"
+#include "platform/api/Flash.hpp"
 #include "platform/api/Time.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 

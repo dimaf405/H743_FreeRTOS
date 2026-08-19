@@ -7,43 +7,40 @@
 #include "param.h"
 
 #include "ConstLayer.h"
-#include "DynamicSparseLayer.h"
-#include "containers/AtomicBitset.hpp"
-#include "platform/api/Platform.hpp"
+#include "param_internal.hpp"
+#include "platform/api/Execution.hpp"
 
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 #include <new>
 #include <type_traits>
 
-namespace {
-constexpr size_t kCount = px4::param_info_count;
-ConstLayer g_firmware_defaults;
+namespace dima::parameters::internal {
+static ConstLayer g_firmware_defaults;
 using LayerStorage = typename std::aligned_storage<sizeof(DynamicSparseLayer),
                                                    alignof(DynamicSparseLayer)>::type;
-LayerStorage g_runtime_storage{};
-LayerStorage g_user_storage{};
+static LayerStorage g_runtime_storage{};
+static LayerStorage g_user_storage{};
 DynamicSparseLayer *g_runtime_defaults{};
 DynamicSparseLayer *g_user_config{};
-px4::AtomicBitset<kCount> g_active;
+static px4::AtomicBitset<kCount> g_active;
 px4::AtomicBitset<kCount> g_unsaved;
-uint32_t g_get_count{};
+static uint32_t g_get_count{};
 uint32_t g_set_count{};
-uint32_t g_find_count{};
+static uint32_t g_find_count{};
 uint32_t g_export_count{};
-uint32_t g_instance{};
+static uint32_t g_instance{};
 uint32_t g_default_generation{};
-unsigned g_transaction_depth{};
-bool g_notification_pending{};
-bool g_runtime_constructed{};
-bool g_user_constructed{};
+static unsigned g_transaction_depth{};
+static bool g_notification_pending{};
+static bool g_runtime_constructed{};
+static bool g_user_constructed{};
 bool g_initialized{};
-param_notify_callback_t g_notify{};
-void *g_notify_context{};
-param_lock_callback_t g_lock{};
-param_lock_callback_t g_unlock{};
-void *g_lock_context{};
+static param_notify_callback_t g_notify{};
+static void *g_notify_context{};
+static param_lock_callback_t g_lock{};
+static param_lock_callback_t g_unlock{};
+static void *g_lock_context{};
 const param_storage_backend_s *g_storage{};
 void *g_storage_context{};
 
@@ -73,7 +70,7 @@ param_value_u read_value(param_t param, const void *value) noexcept
     return result;
 }
 
-void write_value(param_t param, param_value_u value, void *destination) noexcept
+static void write_value(param_t param, param_value_u value, void *destination) noexcept
 {
     if (param_info[param].type == PARAM_TYPE_FLOAT) {
         *static_cast<float *>(destination) = value.f;
@@ -87,7 +84,7 @@ bool equal_value(param_t param, param_value_u lhs, param_value_u rhs) noexcept
     return param_info[param].type == PARAM_TYPE_FLOAT ? lhs.f == rhs.f : lhs.i == rhs.i;
 }
 
-parameter_update_s update_snapshot() noexcept
+static parameter_update_s update_snapshot() noexcept
 {
     parameter_update_s update{};
     update.instance = g_instance++;
@@ -106,7 +103,8 @@ void request_notification() noexcept
     g_notification_pending = true;
 }
 
-int set_internal(param_t param, const void *value, bool notify, bool mark_unsaved) noexcept
+static int set_internal(param_t param, const void *value, bool notify,
+                        bool mark_unsaved) noexcept
 {
     if (!g_initialized || !valid(param) || value == nullptr) {
         return -EINVAL;
@@ -134,60 +132,9 @@ int set_internal(param_t param, const void *value, bool notify, bool mark_unsave
     return 0;
 }
 
-int enumerate_changed(param_storage_visitor_t visitor, void *visitor_context,
-                      void *) noexcept
-{
-    if (!task_read_allowed() || visitor == nullptr) {
-        return -EPERM;
-    }
+} // namespace dima::parameters::internal
 
-    px4::AtomicTransaction transaction;
-    if (!g_initialized) {
-        return -EINVAL;
-    }
-
-    for (param_t param = 0U; param < kCount; ++param) {
-        if (!g_user_config->contains(param)) {
-            continue;
-        }
-        const param_value_u value = g_user_config->get(param);
-        const void *source = param_info[param].type == PARAM_TYPE_FLOAT
-                                 ? static_cast<const void *>(&value.f)
-                                 : static_cast<const void *>(&value.i);
-        const int result = visitor(param_info[param].name, param_info[param].type,
-                                   source, visitor_context);
-        if (result != 0) {
-            return result;
-        }
-    }
-    return 0;
-}
-
-int load_value_to_layer(const char *name, param_type_t type, const void *value,
-                        void *context) noexcept
-{
-    if (name == nullptr || value == nullptr || context == nullptr) {
-        return -EINVAL;
-    }
-
-    const param_t param = param_find_no_notification(name);
-    // 固件升级删除参数时忽略旧键；BSON 和记录 CRC 仍负责判断结构损坏。
-    if (!valid(param)) {
-        return 0;
-    }
-    if (param_info[param].type != type) {
-        return -EINVAL;
-    }
-
-    auto &layer = *static_cast<DynamicSparseLayer *>(context);
-    const param_value_u next = read_value(param, value);
-    const param_value_u current_default = g_runtime_defaults->get(param);
-    if (equal_value(param, next, current_default)) {
-        return 0;
-    }
-    return layer.store(param, next) ? 0 : -ENOMEM;
-}
-} // namespace
+using namespace dima::parameters::internal;
 
 namespace dima::parameters::detail {
 void transaction_lock() noexcept
@@ -558,79 +505,6 @@ void param_foreach(param_foreach_func_t callback, void *context,
     }
 }
 
-int param_save_default(bool)
-{
-    if (!service_write_allowed()) { return -EPERM; }
-
-    const param_storage_backend_s *backend{};
-    void *backend_context{};
-    uint32_t set_count_snapshot{};
-    {
-        px4::AtomicTransaction transaction;
-        if (!g_storage || !g_storage->save) { return -ENOSYS; }
-        backend = g_storage;
-        backend_context = g_storage_context;
-        set_count_snapshot = g_set_count;
-    }
-
-    const int result = backend->save(enumerate_changed, nullptr, backend_context);
-    if (result == 0) {
-        px4::AtomicTransaction transaction;
-        if (g_set_count == set_count_snapshot) {
-            g_unsaved.reset();
-        }
-        ++g_export_count;
-    }
-    return result;
-}
-
-int param_load_default(void)
-{
-    if (!service_write_allowed()) { return -EPERM; }
-
-    const param_storage_backend_s *backend{};
-    void *backend_context{};
-    uint32_t set_count_snapshot{};
-    uint32_t default_generation_snapshot{};
-    {
-        px4::AtomicTransaction transaction;
-        if (!g_initialized || !g_storage || !g_storage->load) { return -ENOSYS; }
-        backend = g_storage;
-        backend_context = g_storage_context;
-        set_count_snapshot = g_set_count;
-        default_generation_snapshot = g_default_generation;
-    }
-
-    DynamicSparseLayer staged(g_runtime_defaults);
-    if (!staged.valid()) { return -ENOMEM; }
-    const int result = backend->load(load_value_to_layer, &staged, backend_context);
-    if (result != 0) { return result; }
-
-    {
-        px4::AtomicTransaction transaction;
-        // 运行期加载期间若已有新设置，拒绝覆盖，调用方可稍后重试。
-        if (g_set_count != set_count_snapshot
-            || g_default_generation != default_generation_snapshot) {
-            return -EAGAIN;
-        }
-        g_user_config->swapContents(staged);
-        g_unsaved.reset();
-        request_notification();
-    }
-    return 0;
-}
-
-void param_print_status(void)
-{
-    if (!task_read_allowed()) { return; }
-    param_storage_status_s status{};
-    const int result = param_storage_get_status(&status);
-    std::printf("param: count=%u used=%u storage=%d seq=%lu free=%lu\n",
-                param_count(), param_count_used(), result,
-                static_cast<unsigned long>(status.sequence),
-                static_cast<unsigned long>(status.free_bytes));
-}
-
 void param_notify_changes(void) noexcept
 {
     if (!task_read_allowed()) { return; }
@@ -657,40 +531,4 @@ void param_register_lock_callbacks(param_lock_callback_t lock,
     g_lock_context = context;
 }
 
-int param_register_storage_backend(const param_storage_backend_s *backend,
-                                   void *context) noexcept
-{
-    if (!task_read_allowed()) { return -EPERM; }
-    px4::AtomicTransaction transaction;
-    g_storage = backend;
-    g_storage_context = context;
-    return 0;
-}
-
-int param_storage_get_status(param_storage_status_s *status) noexcept
-{
-    if (!service_write_allowed() || status == nullptr) { return -EPERM; }
-    const param_storage_backend_s *backend{};
-    void *backend_context{};
-    {
-        px4::AtomicTransaction transaction;
-        std::memset(status, 0, sizeof(*status));
-        backend = g_storage;
-        backend_context = g_storage_context;
-    }
-    return backend && backend->status ? backend->status(status, backend_context) : -ENOSYS;
-}
-
-int param_storage_erase(void) noexcept
-{
-    if (!service_write_allowed()) { return -EPERM; }
-    const param_storage_backend_s *backend{};
-    void *backend_context{};
-    {
-        px4::AtomicTransaction transaction;
-        backend = g_storage;
-        backend_context = g_storage_context;
-    }
-    return backend && backend->erase ? backend->erase(backend_context) : -ENOSYS;
-}
 } // extern "C"

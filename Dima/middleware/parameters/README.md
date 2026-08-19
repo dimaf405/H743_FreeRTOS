@@ -31,7 +31,7 @@ PX4 PARAM_DEFINE_* 参数定义
 - 官方 parser 只扫描 `make/project.mk` 显式列出的定义文件并输出 XML/JSON；Header renderer 只等价实现官方模板语义，不依赖 Jinja2。原 178 项 handle 顺序由 R331 基线哈希固定；11 项 QGC 合同与 17 项板级串口状态组成 28 项 stable tail，使 `SYS_AUTOSTART` 保持原 index 177，其余 27 项只追加到末尾。Header、类型表、`param_info` 和 JSON 使用同一顺序。
 - Component Metadata 生成器从同一 JSON 构造 QGC version 1 公开副本，过滤 `RC_PORT_CONFIG`/`DIMA_SER_VER` 后保留 203 项描述，XZ 压缩并计算 PX4 CRC；General JSON 只声明 Parameter type。两份 XZ 作为只读 Flash 数组由 MavlinkService/FTP 交付，Parameter Core 不感知传输层。
 - 参数生成器会确定性生成 `build/generated_include` 转发头；删除生成目录后可从源码重新构建。
-- Parameter Core 提供 `param_find/get/set/reset/save/load`、稀疏 Layer、AtomicTransaction、`px4::Param<T>` 和 `ModuleParams` 兼容接口。
+- Parameter Core 的运行期状态、事务及 get/set/reset 位于 `param.cpp`；持久化后端注册、save/load/status/erase 位于 `param_storage.cpp`，两者仅通过私有 `param_internal.hpp` 共享状态。公开兼容接口仍统一由 `param.h` 提供。
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
 - Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，失败最多重试 3 次。
 - ParameterService 不持有或读取 Console，只负责 Core、Journal、Autosave 和 Flash 事务；在线参数由 MavlinkService 通过 Classic/Ext 协议访问。
@@ -49,16 +49,8 @@ PX4 PARAM_DEFINE_* 参数定义
 - `param_shutdown()` 停止 Autosave，注销 notify/storage/lock callback，清除 ready、used、unsaved、动态 Layer、值 cache 和运行期同步对象；下一次 init 从未绑定状态开始。
 - `ParameterService::shutdown()` 在释放自身 Mutex 前依次关闭 Parameter Core 和 `ParameterJournal`。Journal shutdown 清除 append/latest/snapshot 和故障缓存，下一次 initialize/load 必须重新扫描 Flash。
 - Armed/Flash coordinator 仍独立于 Application Runtime，确保 ARMED 时 save/erase/confirm 延后、FlashBusy 时 Arm 被拒绝；pending 操作在 Disarm 后重试。
-- 以上是源码生命周期契约。2026-08-05 的 Windows 原生 clean build、最终 ELF 和同上电 `shutdown → init → start` 目标板验收尚未完成，不沿用下方历史资源数字作为当前证明。
+- 以上是源码生命周期契约。同上电 `shutdown → init → start`、掉电恢复、损坏回退和 ENOSPC 仍需目标板验收，不能由源码或主机生成结果代替。
 
-## 当前资源与验证
+## 当前验证边界
 
-```text
-.text       111020 bytes
-.data         2828 bytes
-.bss        325776 bytes
-Signed BIN  115064 bytes
-make verify PASS
-```
-
-以上仅代表当前目标构建、签名和镜像一致性验证通过。未新增或运行测试框架、测试文件、SITL 或仿真；尚未完成 MAVLink 在线调参、自动保存、掉电恢复、CRC 损坏回退和 ENOSPC 的实车验收。文本控制台和人工存储擦除不属于当前 Runtime 接口。
+参数生成链当前确定性产出 205 项固件参数和 203 项公开 Metadata；关键 stable-tail 索引、JSON/XZ 与 CRC 由正式生成链统一给出。整机 `.text/.data/.bss`、签名镜像和 Factory HEX 属于全项目构建结果，只在 `docs/DIMA_SOURCE_MANIFEST.md` 记录最新 Windows 原生 clean build，避免本模块 README 复制一份易陈旧的资源数字。未新增或运行测试框架、测试文件、SITL 或仿真；MAVLink 在线调参、自动保存、掉电恢复、CRC 损坏回退和 ENOSPC 仍为实板验收项。文本控制台和人工存储擦除不属于当前 Runtime 接口。
