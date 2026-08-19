@@ -49,7 +49,7 @@
 
 #if defined(H743_APPLICATION_IMAGE)
 #include "boot_diagnostics.h"
-#include "platform/stm32h7/early_memory.h"
+#include "platform/stm32h7/memory/early_memory.h"
 #endif
 
 #if !defined  (HSE_VALUE)

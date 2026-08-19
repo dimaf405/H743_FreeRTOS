@@ -26,7 +26,7 @@
 #include "board_init.h"
 #include "boot_diagnostics.h"
 #include "platform_composition.h"
-#include "platform/stm32h7/early_memory.h"
+#include "platform/stm32h7/memory/early_memory.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

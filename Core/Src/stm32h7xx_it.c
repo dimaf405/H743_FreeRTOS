@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "boot_diagnostics.h"
 #include "FreeRTOS.h"
+#include "platform/stm32h7/flash/flash_fault.h"
 #include "task.h"
 /* USER CODE END Includes */
 
@@ -49,7 +50,6 @@ static volatile uint32_t g_hal_tick_suspended;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
-__attribute__((weak)) int dima_flash_busfault_recover(uint32_t *stacked_frame);
 __attribute__((noreturn)) void NMI_Handler_C(uint32_t *stacked_frame,
                                              uint32_t exception_return);
 __attribute__((noreturn)) void HardFault_Handler_C(uint32_t *stacked_frame,

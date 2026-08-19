@@ -1,7 +1,7 @@
 #include "boot_platform.h"
 
 #include "boot_layout.h"
-#include "cache.h"
+#include "platform/stm32h7/memory/cache.h"
 #include "stm32h7xx_hal.h"
 
 static int stack_pointer_is_valid(uint32_t stack_pointer)

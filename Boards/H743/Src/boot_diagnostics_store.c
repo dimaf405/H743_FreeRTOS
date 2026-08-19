@@ -5,7 +5,7 @@
 
 #include "boot_diagnostics.h"
 #include "boot_layout.h"
-#include "flash_bank1.h"
+#include "platform/stm32h7/flash/flash_bank1.h"
 #include "stm32h7xx_hal.h"
 
 #define RECORD_COUNT \

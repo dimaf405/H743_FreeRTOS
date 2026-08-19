@@ -1,7 +1,9 @@
 #include "platform_composition.h"
 
 #include "boot_diagnostics.h"
-#include "platform/api/Platform.hpp"
+#include "platform/api/Boot.hpp"
+#include "platform/api/Flash.hpp"
+#include "platform/api/Services.hpp"
 #include "platform/freertos/Backend.hpp"
 #include "platform/stm32h7/HardwareServices.hpp"
 #include "usb_console/UsbConsole.hpp"
