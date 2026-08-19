@@ -1,0 +1,1 @@
+"""Modular Dima architecture checks."""

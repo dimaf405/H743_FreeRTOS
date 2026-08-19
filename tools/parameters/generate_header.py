@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Render PX4 px4_parameters.hpp template semantics without Jinja2."""
 
-import argparse
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -78,15 +77,3 @@ def generate(
     )
     (target / "px4_parameters.hpp").write_text(render(parameters), encoding="utf-8")
     return parameters
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--xml", required=True, type=Path)
-    parser.add_argument("--dest", default=Path("."), type=Path)
-    args = parser.parse_args()
-    generate(args.xml, args.dest)
-
-
-if __name__ == "__main__":
-    main()

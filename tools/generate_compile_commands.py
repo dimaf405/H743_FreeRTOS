@@ -220,10 +220,9 @@ def validate_contexts(entries: Sequence[dict[str, object]], root: pathlib.Path) 
             },
             {"Core/Inc", "Drivers/STM32H7xx_HAL_Driver/Inc"},
         ),
-        "Dima/platform/stm32h7/FlashDevice.cpp": (
+        "Dima/platform/stm32h7/flash/FlashDevice.cpp": (
             {
                 "Dima",
-                "Dima/platform/stm32h7",
                 "Core/Inc",
                 "Drivers/STM32H7xx_HAL_Driver/Inc",
             },
@@ -233,7 +232,6 @@ def validate_contexts(entries: Sequence[dict[str, object]], root: pathlib.Path) 
             {
                 "Dima/application",
                 "Dima/platform/freertos",
-                "Dima/platform/stm32h7",
                 "Middlewares/Third_Party/FreeRTOS/Source/include",
                 "Drivers/STM32H7xx_HAL_Driver/Inc",
             },

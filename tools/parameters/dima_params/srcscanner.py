@@ -1,33 +1,8 @@
-import os
-import re
 import codecs
-import sys
+
 
 class SourceScanner(object):
-    """
-    Traverses directory tree, reads all source files, and passes their contents
-    to the Parser.
-    """
-
-    def ScanDir(self, srcdirs, parser):
-        """
-        Scans provided path and passes all found contents to the parser using
-        parser.Parse method.
-        """
-        extensions1 = tuple([".h"])
-        extensions2 = tuple([".c"])
-        for srcdir in srcdirs:
-            for filename in os.listdir(srcdir):
-                if filename.endswith(extensions1):
-                    path = os.path.join(srcdir, filename)
-                    if not self.ScanFile(path, parser):
-                        return False
-            for filename in os.listdir(srcdir):
-                if filename.endswith(extensions2):
-                    path = os.path.join(srcdir, filename)
-                    if not self.ScanFile(path, parser):
-                        return False
-        return True
+    """Reads explicit source files and passes their contents to the parser."""
 
     def ScanFile(self, path, parser):
         """
@@ -35,11 +10,10 @@ class SourceScanner(object):
         parser.Parse method.
         """
 
-        with codecs.open(path, 'r', 'utf-8') as f:
+        with codecs.open(path, "r", "utf-8") as source:
             try:
-                contents = f.read()
-            except:
-                contents = ''
-                print('Failed reading file: %s, skipping content.' % path)
-                pass
+                contents = source.read()
+            except Exception:
+                contents = ""
+                print("Failed reading file: %s, skipping content." % path)
         return parser.Parse(contents)
