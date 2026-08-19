@@ -1,4 +1,5 @@
 #include "UsbConsole.hpp"
+#include "platform/api/Services.hpp"
 
 #include <cerrno>
 #include <cstdio>

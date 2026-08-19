@@ -3,7 +3,7 @@
 #include "board_serial_config.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/module_params.h"
-#include "platform/api/Platform.hpp"
+#include "platform/api/Serial.hpp"
 
 #include <cstdint>
 

@@ -8,10 +8,13 @@
 
 | 文件 | 职责 |
 |---|---|
-| `MavlinkService.hpp/cpp` | 唯一 Console data-plane owner；RX 分发、固定优先级 TX、5 Hz 原始 `input_rc`→`RC_CHANNELS`、ACK 重试、连接边沿和延迟 reboot |
+| `MavlinkService.hpp/cpp` | 唯一 Console data-plane owner；模块生命周期、RX 分发、固定优先级 TX、ACK 重试、连接边沿、STATUSTEXT 和延迟 reboot |
+| `MavlinkChannelState.cpp`、`lib/mavlink/mavlink_bridge.h` | 为全部 MAVLink 翻译单元提供单一 channel parser buffer 与 RX/TX sequence 状态，禁止生成 helper 在各 TU 复制状态 |
+| `MavlinkSystemMessages.cpp` | PROTOCOL_VERSION、AUTOPILOT_VERSION、COMPONENT_METADATA 与 deprecated COMPONENT_INFORMATION 系统发现回复 |
+| `MavlinkRcStream.cpp` | 参数刷新、原始 `input_rc` 新鲜度判定及 5 Hz `RC_CHANNELS` 流 |
 | `MavlinkIdentity.hpp/cpp`、`HeartbeatPacer.hpp/cpp` | 身份、正确 capability 位图、PX4 Manual/Termination custom mode、1 Hz HEARTBEAT 和 AUTOPILOT_VERSION |
 | `MavlinkCommands.hpp/cpp` | COMMAND_LONG/INT target 过滤；把 GCS `sysid/compid` 写入 `vehicle_command.source_*` |
-| `MavlinkParameters.hpp/cpp` | Classic LIST/READ/SET、EXT_REQUEST_READ、PARAM_VALUE/EXT_VALUE 流式发送；每次 LIST 前公开真实 RC/SER 参数及 11 项只读 QGC 关键兼容参数，在参数锁内冻结本轮 used 句柄/count/index；快照继续服务按 index 补读及快照内 READ/SET 回包，并校验端口、协议和波特率写入；未实现的模式/RTL 参数不进入协议面 |
+| `MavlinkParameters.hpp/cpp`、`MavlinkParameterExt.cpp` | 主文件负责 Classic LIST/READ/SET 与 PARAM_VALUE 流；Ext 文件负责 EXT_REQUEST_READ 与 PARAM_EXT_VALUE。每次 LIST 前公开真实 RC/SER 参数及 11 项只读 QGC 关键兼容参数，在参数锁内冻结本轮 used 句柄/count/index；快照继续服务按 index 补读及快照内 READ/SET 回包，并校验端口、协议和波特率写入；未实现的模式/RTL 参数不进入协议面 |
 | `MavlinkMetadataFtp.hpp/cpp` | 两个 Flash 虚拟文件的只读 MAVLink FTP；支持 Open/Burst/Read/Reset/Terminate、定向回复、完整请求重复缓存、仅 EAGAIN 的 4 次有界主动 TX 重试和 10 s session 超时 |
 | `MavlinkMission.hpp/cpp` | 空任务 LIST 返回 count 0，CLEAR_ALL 返回 ACCEPTED；不建立任务存储 |
 | `MavlinkTimesync.hpp/cpp`、`lib/timesync/Timesync.hpp/cpp` | TIMESYNC 回传和 PX4 Timesync filter；Runtime 重建时清空 filter |

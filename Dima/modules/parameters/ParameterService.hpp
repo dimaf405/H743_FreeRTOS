@@ -5,7 +5,9 @@
 #include "parameters/ParameterJournal.hpp"
 #include "parameters/autosave.h"
 #include "parameters/param.h"
-#include "platform/api/Platform.hpp"
+#include "platform/api/Execution.hpp"
+#include "platform/api/Flash.hpp"
+#include "platform/api/Synchronization.hpp"
 #include "uorb/Publication.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 

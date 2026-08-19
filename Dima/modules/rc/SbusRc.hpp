@@ -8,7 +8,7 @@
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
 #include "perf/perf_counter.h"
-#include "platform/api/Platform.hpp"
+#include "platform/api/Serial.hpp"
 #include "serial/SerialConfig.hpp"
 #include "uorb/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"

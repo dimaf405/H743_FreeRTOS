@@ -43,6 +43,12 @@
 #define MAVLINK_NO_CONVERSION_HELPERS 1
 #endif
 
+/* Keep generated framing/checksum helpers in one implementation TU. Without
+ * this, every split message owner emits another private helper copy. */
+#ifndef MAVLINK_SEPARATE_HELPERS
+#define MAVLINK_SEPARATE_HELPERS 1
+#endif
+
 /* Fixed PX4 Rover identity (sysid/compid 1/1). Use these constants
  * in encode calls; the MAVLINK_USE_CONVENIENCE_FUNCTIONS global
  * 'mavlink_system' object is intentionally not enabled. */
@@ -51,6 +57,36 @@
 #endif
 #ifndef MAVLINK_COMPONENT_ID
 #define MAVLINK_COMPONENT_ID 1
+#endif
+
+/* Generated helpers otherwise place RX/TX channel state in function-local
+ * statics, creating one sequence counter and parser buffer per translation
+ * unit. All MAVLink owners share the same USB channel, so bind every inline
+ * helper to one externally defined state pair. */
+#include "mavlink_types.h"
+
+#define MAVLINK_GET_CHANNEL_STATUS 1
+#define MAVLINK_GET_CHANNEL_BUFFER 1
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern mavlink_status_t dima_mavlink_channel_status[MAVLINK_COMM_NUM_BUFFERS];
+extern mavlink_message_t dima_mavlink_channel_buffer[MAVLINK_COMM_NUM_BUFFERS];
+
+static inline mavlink_status_t *mavlink_get_channel_status(uint8_t channel)
+{
+    return &dima_mavlink_channel_status[channel];
+}
+
+static inline mavlink_message_t *mavlink_get_channel_buffer(uint8_t channel)
+{
+    return &dima_mavlink_channel_buffer[channel];
+}
+
+#ifdef __cplusplus
+}
 #endif
 
 #include "dima/mavlink.h"

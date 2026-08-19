@@ -3,7 +3,8 @@
 #include "actuator_armed.hpp"
 #include "actuator_output_status.hpp"
 #include "lifecycle/module_base.hpp"
-#include "platform/api/Platform.hpp"
+#include "platform/api/Boot.hpp"
+#include "platform/api/Execution.hpp"
 #include "vehicle_control_mode.hpp"
 #include "vehicle_status.hpp"
 

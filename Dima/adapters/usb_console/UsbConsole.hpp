@@ -1,6 +1,9 @@
 #pragma once
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/Console.hpp"
+#include "platform/api/Execution.hpp"
+#include "platform/api/Synchronization.hpp"
+#include "platform/api/TaskRuntime.hpp"
 
 namespace dima::adapters {
 

@@ -4,16 +4,9 @@
 #include "board_serial_config.hpp"
 #include "logging/logging.hpp"
 
-#include <cstdio>
 #include <cstring>
 
 namespace dima::modules::mavlink {
-namespace {
-
-constexpr std::uint8_t kMavParamExtTypeFloat = 9U;
-constexpr std::uint8_t kMavParamExtTypeInt32 = 6U;
-
-} // namespace
 
 const MavlinkParameters::FixedInt32Parameter
     MavlinkParameters::kQgcFixedInt32Parameters[]{
@@ -303,6 +296,8 @@ void MavlinkParameters::snapshot_parameter_stream() noexcept
 {
     static_assert(px4::param_info_count <= 0xFFFFU,
                   "MAVLink parameter count exceeds uint16_t");
+    /* 一轮 LIST 必须冻结 used handle、count 和 index；中途新激活的参数只能
+     * 进入下一轮，否则 QGC 的缺包补读会落到不同参数。 */
     _send_all_count = 0U;
     param_foreach(&MavlinkParameters::append_used_parameter, this,
                   false, true);
@@ -539,116 +534,6 @@ int MavlinkParameters::send_param(param_t param, std::uint16_t count,
         return 0;
     }
     return 1;
-}
-
-void MavlinkParameters::handle_param_ext_request_read(
-    const mavlink_message_t *msg) noexcept
-{
-    mavlink_param_ext_request_read_t req;
-    mavlink_msg_param_ext_request_read_decode(msg, &req);
-
-    if (req.target_system != MAVLINK_SYSTEM_ID ||
-        (req.target_component != MAVLINK_COMPONENT_ID &&
-         req.target_component != MAV_COMP_ID_ALL)) {
-        return;
-    }
-
-    /* Only support lookup by name (param_index == -1). */
-    if (req.param_index >= 0) {
-        send_param_ext_not_found(req.param_id, 0);
-        return;
-    }
-
-    char name[MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN + 1];
-    std::strncpy(name, req.param_id,
-                 MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN);
-    name[MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN] = '\0';
-
-    if (is_internal_parameter(name)) {
-        send_param_ext_not_found(
-            req.param_id,
-            _send_all_count > 0U
-                ? static_cast<std::uint16_t>(_send_all_count)
-                : param_count_used());
-        return;
-    }
-
-    param_t param = param_find_no_notification(name);
-    if (param == PARAM_INVALID) {
-        send_param_ext_not_found(
-            req.param_id,
-            _send_all_count > 0U
-                ? static_cast<std::uint16_t>(_send_all_count)
-                : param_count_used());
-        return;
-    }
-
-    /* Format value as string (float preserves precision). */
-    char value_str[128];
-    std::memset(value_str, 0, sizeof(value_str));
-    uint8_t ext_type;
-
-    if (param_type(param) == PARAM_TYPE_INT32) {
-        int32_t v;
-        if (param_get(param, &v) != 0) {
-            return;
-        }
-        std::snprintf(value_str, sizeof(value_str), "%d",
-                      static_cast<int>(v));
-        ext_type = kMavParamExtTypeInt32;
-    } else {
-        float v;
-        if (param_get(param, &v) != 0) {
-            return;
-        }
-        std::snprintf(value_str, sizeof(value_str), "%.9g",
-                      static_cast<double>(v));
-        ext_type = kMavParamExtTypeFloat;
-    }
-
-    unsigned reply_count = param_count_used();
-    int reply_index = param_get_used_index(param);
-    const int snapshot_index = parameter_snapshot_index(param);
-    if (snapshot_index >= 0) {
-        reply_count = _send_all_count;
-        reply_index = snapshot_index;
-    }
-
-    mavlink_param_ext_value_t reply{};
-    reply.param_count = static_cast<std::uint16_t>(reply_count);
-    reply.param_index = static_cast<std::uint16_t>(reply_index);
-    reply.param_type = ext_type;
-    std::strncpy(reply.param_id, param_name(param),
-                 MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_ID_LEN);
-    std::strncpy(reply.param_value, value_str,
-                 MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_VALUE_LEN);
-
-    mavlink_message_t packet{};
-    mavlink_msg_param_ext_value_encode(MAVLINK_SYSTEM_ID,
-                                       MAVLINK_COMPONENT_ID,
-                                       &packet, &reply);
-    if (send_ != nullptr) {
-        send_(send_ctx_, packet);
-    }
-}
-
-void MavlinkParameters::send_param_ext_not_found(
-    const char param_id[16], uint16_t count) noexcept
-{
-    mavlink_param_ext_value_t reply{};
-    reply.param_count = count;
-    reply.param_index = 0xFFFF;
-    reply.param_type = 0;
-    std::memcpy(reply.param_id, param_id,
-                MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_ID_LEN);
-
-    mavlink_message_t packet{};
-    mavlink_msg_param_ext_value_encode(MAVLINK_SYSTEM_ID,
-                                       MAVLINK_COMPONENT_ID,
-                                       &packet, &reply);
-    if (send_ != nullptr) {
-        send_(send_ctx_, packet);
-    }
 }
 
 } // namespace dima::modules::mavlink

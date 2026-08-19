@@ -44,7 +44,7 @@
 #include "vehicle_status.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
-#include "platform/api/Platform.hpp"
+#include "platform/api/Flash.hpp"
 #include "uorb/Publication.hpp"
 #include "uorb/SubscriptionData.hpp"
 #include "work_queue/WorkQueue.hpp"
