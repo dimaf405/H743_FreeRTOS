@@ -2,11 +2,30 @@
 #include "MavlinkService.hpp"
 
 #include "logging/logging.hpp"
+#include "parameter_metadata_files.hpp"
 #include "platform/api/Time.hpp"
 
+#include <cerrno>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace dima::modules::mavlink {
+namespace {
+
+namespace metadata = dima::generated::parameter_metadata;
+
+static_assert(metadata::kGeneralFileSize <= UINT32_MAX);
+static_assert(metadata::kParameterFileSize <= UINT32_MAX);
+
+constexpr MavlinkMetadataFtp::VirtualFile kMetadataFiles[]{
+    {metadata::kGeneralPath, metadata::kGeneralFile,
+     static_cast<std::uint32_t>(metadata::kGeneralFileSize)},
+    {metadata::kParameterPath, metadata::kParameterFile,
+     static_cast<std::uint32_t>(metadata::kParameterFileSize)},
+};
+
+} // namespace
 
 MavlinkService::MavlinkService(
     dima::platform::Console &console,
@@ -14,6 +33,10 @@ MavlinkService::MavlinkService(
     : px4::ScheduledWorkItem("mavlink", px4::wq_configurations::lp_default),
       console_(console), boot_control_(boot_control)
 {
+    metadata_ftp_.init(
+        kMetadataFiles,
+        static_cast<std::uint8_t>(sizeof(kMetadataFiles) /
+                                  sizeof(kMetadataFiles[0])));
 }
 
 bool MavlinkService::start() noexcept
@@ -21,6 +44,7 @@ bool MavlinkService::start() noexcept
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
+    reset_runtime_state();
     if (!ScheduleEnable()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
@@ -32,16 +56,22 @@ bool MavlinkService::start() noexcept
         dima::platform::board_version(),
         dima::platform::board_hardware_uid());
     identity_.set_state(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, MAV_STATE_BOOT);
-    std::memset(&parse_status_, 0, sizeof(parse_status_));
-
-    /* Metadata file table is attached once the XZ arrays are linked. */
-    ftp_.init(nullptr, 0U);
-    statustext_id_ = 0U;
-    reboot_mode_pending_ = 0;
+    rc_loss_timeout_handle_ = param_find("COM_RC_LOSS_T");
+    mav_system_id_handle_ = param_find("MAV_SYS_ID");
+    if (rc_loss_timeout_handle_ == PARAM_INVALID ||
+        mav_system_id_handle_ == PARAM_INVALID ||
+        !refresh_protocol_parameters()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
+        reset_runtime_state();
+        PX4_ERR("MAVLink protocol parameters unavailable");
+        return false;
+    }
 
     if (!ScheduleOnInterval(kRunIntervalUs, kRunIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        reset_runtime_state();
         return false;
     }
     state_ = dima::middleware::lifecycle::ModuleState::Running;
@@ -53,7 +83,7 @@ void MavlinkService::stop() noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
-    reboot_mode_pending_ = 0;
+    reset_runtime_state();
 }
 
 dima::middleware::lifecycle::ModuleState MavlinkService::state()
@@ -62,24 +92,131 @@ dima::middleware::lifecycle::ModuleState MavlinkService::state()
     return state_;
 }
 
+void MavlinkService::reset_runtime_state() noexcept
+{
+    reset_parser_state();
+    identity_.set_state(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, MAV_STATE_BOOT);
+    heartbeat_pacer_.reset();
+    parameters_.reset();
+    timesync_.reset();
+    metadata_ftp_.reset();
+    pending_ack_ = mavlink_command_ack_t{};
+    pending_ack_valid_ = false;
+    pending_ack_is_reboot_ = false;
+    ack_retry_ = 0U;
+    statustext_id_ = 0U;
+    was_link_ready_ = false;
+    reboot_mode_pending_ = 0;
+    reboot_deadline_us_ = 0U;
+    latest_input_rc_ = input_rc_s{};
+    rc_loss_timeout_handle_ = PARAM_INVALID;
+    mav_system_id_handle_ = PARAM_INVALID;
+    rc_loss_timeout_s_ = 0.0F;
+    last_rc_channels_tx_us_ = 0U;
+    have_input_rc_ = false;
+    rc_stream_active_ = false;
+    rc_loss_timeout_valid_ = false;
+    transport_was_ready_ = false;
+}
+
+void MavlinkService::reset_parser_state() noexcept
+{
+    *mavlink_get_channel_status(MAVLINK_COMM_0) = mavlink_status_t{};
+    *mavlink_get_channel_buffer(MAVLINK_COMM_0) = mavlink_message_t{};
+    parse_message_ = mavlink_message_t{};
+    parse_status_ = mavlink_status_t{};
+    std::memset(rx_buffer_, 0, sizeof(rx_buffer_));
+    std::memset(tx_buffer_, 0, sizeof(tx_buffer_));
+}
+
+void MavlinkService::discard_rx() noexcept
+{
+    while (console_.available() != 0U) {
+        if (console_.read(rx_buffer_, sizeof(rx_buffer_)) == 0U) {
+            break;
+        }
+    }
+    std::memset(rx_buffer_, 0, sizeof(rx_buffer_));
+}
+
 void MavlinkService::Run()
 {
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
     }
     console_.service();
-
-    /* RX dispatch (responses are sent inline during handling). */
-    drain_rx();
-
-    /* TX priority: ACK -> Heartbeat -> Parameter stream / FTP -> STATUSTEXT. */
-    process_command_acks();
-
-    mavlink_message_t message{};
-    if (heartbeat_pacer_.tick(hrt_absolute_time(), message)) {
-        (void)send_message(message);
+    const bool transport_ready = console_.ready();
+    if (!transport_ready && transport_was_ready_) {
+        /* Track the physical USB edge independently from first-frame TX.
+         * Metadata requests can arrive while HEARTBEAT/AUTOPILOT_VERSION are
+         * still retrying, so was_link_ready_ is not a sufficient session
+         * lifetime boundary. */
+        discard_rx();
+        reset_parser_state();
+        metadata_ftp_.reset();
+    }
+    transport_was_ready_ = transport_ready;
+    if (!transport_ready) {
+        was_link_ready_ = false;
+    }
+    update_rc_input();
+    if (parameter_update_subscription_.update() &&
+        !refresh_protocol_parameters()) {
+        PX4_ERR("MAVLink protocol parameters invalid");
+    }
+    flush_pending_ack();
+    std::uint64_t now = hrt_absolute_time();
+    maybe_perform_reboot(now);
+    if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
+        return;
     }
 
+    /* RX handlers only freeze protocol replies; the fixed-priority TX path
+     * below owns their transmission. Never consume stale USB bytes while the
+     * physical link is down. */
+    if (transport_ready) {
+        drain_rx();
+    }
+
+    /* TX priority: ACK -> Heartbeat -> RC -> Metadata FTP -> Params -> Log. */
+    process_command_acks();
+    now = hrt_absolute_time();
+    maybe_perform_reboot(now);
+    if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
+        return;
+    }
+
+    const bool link_ready = transport_ready;
+    if (link_ready && !was_link_ready_) {
+        mavlink_message_t heartbeat{};
+        heartbeat_pacer_.pack_now(now, heartbeat);
+        const bool heartbeat_sent = send_message(heartbeat);
+        if (!heartbeat_sent) {
+            heartbeat_pacer_.reset();
+        }
+        const bool version_sent = send_autopilot_version();
+        if (heartbeat_sent && version_sent) {
+            was_link_ready_ = true;
+            last_rc_channels_tx_us_ = 0U;
+            rc_stream_active_ = false;
+            PX4_INFO("MAVLink USB link ready");
+        }
+    }
+
+    if (!link_ready || !was_link_ready_) {
+        return;
+    }
+
+    mavlink_message_t message{};
+    if (heartbeat_pacer_.tick(now, message)) {
+        if (!send_message(message)) {
+            heartbeat_pacer_.reset();
+        }
+    }
+    stream_rc_channels(now);
+    if (!metadata_ftp_.service(now)) {
+        return;
+    }
     parameters_.send();
     stream_statustext();
 }
@@ -102,6 +239,9 @@ void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
     switch (msg.msgid) {
 
     case MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
+        PX4_INFO("PARAM_REQUEST_LIST from sys=%u comp=%u", msg.sysid, msg.compid);
+        parameters_.handle_message(&msg);
+        break;
     case MAVLINK_MSG_ID_PARAM_REQUEST_READ:
     case MAVLINK_MSG_ID_PARAM_SET:
     case MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ:
@@ -109,12 +249,17 @@ void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
         break;
 
     case MAVLINK_MSG_ID_COMMAND_LONG:
-        record_reboot_mode(msg);
+    case MAVLINK_MSG_ID_COMMAND_INT:
         commands_.handle_message(&msg);
         break;
 
+    case MAVLINK_MSG_ID_MISSION_REQUEST_LIST:
+    case MAVLINK_MSG_ID_MISSION_CLEAR_ALL:
+        mission_.handle_message(&msg);
+        break;
+
     case MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL:
-        ftp_.handle_message(&msg);
+        metadata_ftp_.handle_message(&msg, hrt_absolute_time());
         break;
 
     case MAVLINK_MSG_ID_TIMESYNC:
@@ -154,19 +299,6 @@ void MavlinkService::handle_ping(const mavlink_message_t &msg) noexcept
     (void)send_message(frame);
 }
 
-void MavlinkService::record_reboot_mode(const mavlink_message_t &msg) noexcept
-{
-    mavlink_command_long_t cmd;
-    mavlink_msg_command_long_decode(&msg, &cmd);
-
-    if (cmd.command == MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN) {
-        const int mode = static_cast<int>(cmd.param1);
-        /* Remember the mode so the deferred reset uses the right
-         * BootControl entry point once the ACK has been delivered. */
-        reboot_mode_pending_ = (mode == 1 || mode == 3) ? mode : 0;
-    }
-}
-
 /* ── TX path ─────────────────────────────────────────────────────── */
 
 bool MavlinkService::send_message(mavlink_message_t &msg,
@@ -204,34 +336,48 @@ std::uint8_t MavlinkService::request_message(void *ctx,
 
     switch (message_id) {
     case MAVLINK_MSG_ID_AUTOPILOT_VERSION:
-        self.send_autopilot_version();
-        return vehicle_command_ack_s::RESULT_ACCEPTED;
+        return self.send_autopilot_version()
+            ? vehicle_command_ack_s::RESULT_ACCEPTED
+            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
 
     case MAVLINK_MSG_ID_PROTOCOL_VERSION:
-        self.send_protocol_version();
-        return vehicle_command_ack_s::RESULT_ACCEPTED;
+        return self.send_protocol_version()
+            ? vehicle_command_ack_s::RESULT_ACCEPTED
+            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
 
     case MAVLINK_MSG_ID_HEARTBEAT: {
         mavlink_message_t heartbeat{};
-        if (self.heartbeat_pacer_.tick(hrt_absolute_time(), heartbeat)) {
-            (void)self.send_message(heartbeat);
+        self.heartbeat_pacer_.pack_now(hrt_absolute_time(), heartbeat);
+        if (self.send_message(heartbeat)) {
+            return vehicle_command_ack_s::RESULT_ACCEPTED;
         }
-        return vehicle_command_ack_s::RESULT_ACCEPTED;
+        self.heartbeat_pacer_.reset();
+        return vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
     }
+
+    case MAVLINK_MSG_ID_COMPONENT_METADATA:
+        return self.send_component_metadata()
+            ? vehicle_command_ack_s::RESULT_ACCEPTED
+            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
+
+    case MAVLINK_MSG_ID_COMPONENT_INFORMATION:
+        return self.send_component_information()
+            ? vehicle_command_ack_s::RESULT_ACCEPTED
+            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
 
     default:
         return vehicle_command_ack_s::RESULT_UNSUPPORTED;
     }
 }
 
-void MavlinkService::send_autopilot_version() noexcept
+bool MavlinkService::send_autopilot_version() noexcept
 {
     mavlink_message_t message{};
     heartbeat_pacer_.pack_autopilot_version(message);
-    (void)send_message(message);
+    return send_message(message);
 }
 
-void MavlinkService::send_protocol_version() noexcept
+bool MavlinkService::send_protocol_version() noexcept
 {
     mavlink_protocol_version_t version{};
     version.version = 200;      /* MAVLink v2.0 */
@@ -245,40 +391,262 @@ void MavlinkService::send_protocol_version() noexcept
     mavlink_msg_protocol_version_encode(MAVLINK_SYSTEM_ID,
                                         MAVLINK_COMPONENT_ID,
                                         &message, &version);
-    (void)send_message(message);
+    return send_message(message);
+}
+
+bool MavlinkService::send_component_metadata() noexcept
+{
+    mavlink_component_metadata_t metadata_message{};
+    metadata_message.time_boot_ms = static_cast<std::uint32_t>(
+        hrt_absolute_time() / 1000ULL);
+    metadata_message.file_crc = metadata::kGeneralCrc;
+    std::strncpy(metadata_message.uri, metadata::kGeneralUri,
+                 sizeof(metadata_message.uri) - 1U);
+
+    mavlink_message_t message{};
+    mavlink_msg_component_metadata_encode(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+        &message, &metadata_message);
+    return send_message(message);
+}
+
+bool MavlinkService::send_component_information() noexcept
+{
+    mavlink_component_information_t information{};
+    information.time_boot_ms = static_cast<std::uint32_t>(
+        hrt_absolute_time() / 1000ULL);
+    information.general_metadata_file_crc = metadata::kGeneralCrc;
+    std::strncpy(information.general_metadata_uri, metadata::kGeneralUri,
+                 sizeof(information.general_metadata_uri) - 1U);
+
+    mavlink_message_t message{};
+    mavlink_msg_component_information_encode(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+        &message, &information);
+    return send_message(message);
+}
+
+void MavlinkService::update_rc_input() noexcept
+{
+    if (input_rc_subscription_.update()) {
+        latest_input_rc_ = input_rc_subscription_.get();
+        have_input_rc_ = true;
+    }
+}
+
+bool MavlinkService::refresh_protocol_parameters() noexcept
+{
+    float timeout_s = 0.0F;
+    std::int32_t system_id = 0;
+    rc_loss_timeout_valid_ =
+        rc_loss_timeout_handle_ != PARAM_INVALID &&
+        param_get(rc_loss_timeout_handle_, &timeout_s) == 0 &&
+        std::isfinite(timeout_s) && timeout_s >= 0.1F && timeout_s <= 35.0F &&
+        mav_system_id_handle_ != PARAM_INVALID &&
+        param_get(mav_system_id_handle_, &system_id) == 0 && system_id == 1;
+    if (rc_loss_timeout_valid_) {
+        rc_loss_timeout_s_ = timeout_s;
+    }
+    return rc_loss_timeout_valid_;
+}
+
+bool MavlinkService::rc_sample_streamable(std::uint64_t now) const noexcept
+{
+    /* Match PX4's RC_CHANNELS stream boundary: failsafe/lost flags gate
+     * control in RCUpdate/Commander, but must not hide a fresh raw channel
+     * sample from QGC calibration and diagnosis. */
+    if (!have_input_rc_ || latest_input_rc_.channel_count == 0U ||
+        latest_input_rc_.channel_count > input_rc_s::RC_INPUT_MAX_CHANNELS) {
+        return false;
+    }
+
+    if (!rc_loss_timeout_valid_) {
+        return false;
+    }
+
+    const std::uint64_t sample_time =
+        latest_input_rc_.timestamp_last_signal != 0U
+            ? latest_input_rc_.timestamp_last_signal
+            : latest_input_rc_.timestamp;
+    if (sample_time == 0U || sample_time > now) {
+        return false;
+    }
+
+    const std::uint64_t timeout_us = static_cast<std::uint64_t>(
+        static_cast<double>(rc_loss_timeout_s_) * 1000000.0);
+    return timeout_us > 0U && now - sample_time <= timeout_us;
+}
+
+bool MavlinkService::send_rc_channels(std::uint64_t now) noexcept
+{
+    const std::uint8_t channel_count = latest_input_rc_.channel_count;
+    const auto value = [this, channel_count](std::size_t index) {
+        if (index < channel_count) {
+            return latest_input_rc_.values[index];
+        }
+        return std::numeric_limits<std::uint16_t>::max();
+    };
+
+    mavlink_rc_channels_t channels{};
+    const std::uint64_t sample_time = latest_input_rc_.timestamp != 0U
+        ? latest_input_rc_.timestamp : now;
+    channels.time_boot_ms = static_cast<std::uint32_t>(sample_time / 1000U);
+    channels.chan1_raw = value(0U);
+    channels.chan2_raw = value(1U);
+    channels.chan3_raw = value(2U);
+    channels.chan4_raw = value(3U);
+    channels.chan5_raw = value(4U);
+    channels.chan6_raw = value(5U);
+    channels.chan7_raw = value(6U);
+    channels.chan8_raw = value(7U);
+    channels.chan9_raw = value(8U);
+    channels.chan10_raw = value(9U);
+    channels.chan11_raw = value(10U);
+    channels.chan12_raw = value(11U);
+    channels.chan13_raw = value(12U);
+    channels.chan14_raw = value(13U);
+    channels.chan15_raw = value(14U);
+    channels.chan16_raw = value(15U);
+    channels.chan17_raw = value(16U);
+    channels.chan18_raw = value(17U);
+    channels.chancount = channel_count;
+    channels.rssi = latest_input_rc_.rssi >= 0 &&
+                            latest_input_rc_.rssi <= input_rc_s::RSSI_MAX
+        ? static_cast<std::uint8_t>(latest_input_rc_.rssi)
+        : std::numeric_limits<std::uint8_t>::max();
+
+    mavlink_message_t message{};
+    mavlink_msg_rc_channels_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+                                   &message, &channels);
+    return send_message(message);
+}
+
+void MavlinkService::stream_rc_channels(std::uint64_t now) noexcept
+{
+    if (!rc_sample_streamable(now)) {
+        rc_stream_active_ = false;
+        return;
+    }
+
+    const bool due = !rc_stream_active_ || last_rc_channels_tx_us_ == 0U ||
+                     now < last_rc_channels_tx_us_ ||
+                     now - last_rc_channels_tx_us_ >= kRcChannelsIntervalUs;
+    if (!due) {
+        return;
+    }
+
+    if (send_rc_channels(now)) {
+        last_rc_channels_tx_us_ = now;
+        rc_stream_active_ = true;
+    }
 }
 
 void MavlinkService::process_command_acks() noexcept
 {
-    while (command_ack_subscription_.update()) {
-        const vehicle_command_ack_s &ack = command_ack_subscription_.get();
+    if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
+        return;
+    }
 
-        const bool is_reboot =
-            ack.command ==
-                vehicle_command_s::NAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN &&
-            ack.result == vehicle_command_ack_s::RESULT_ACCEPTED &&
-            reboot_mode_pending_ != 0;
+    while (command_ack_subscription_.update()) {
+        const vehicle_command_ack_s ack = command_ack_subscription_.get();
+        if (!ack.from_external) {
+            continue;
+        }
 
         mavlink_command_ack_t command_ack{};
         command_ack.command = ack.command;
         command_ack.result = ack.result;
         command_ack.progress = 0;
+        command_ack.result_param2 = static_cast<std::int32_t>(ack.result_param2);
         command_ack.target_system = ack.target_system;
         command_ack.target_component = ack.target_component;
 
-        mavlink_message_t message{};
-        mavlink_msg_command_ack_encode(MAVLINK_SYSTEM_ID,
-                                       MAVLINK_COMPONENT_ID,
-                                       &message, &command_ack);
-
-        /* Console::write waits for completion, so the reboot ACK reaches
-         * the host before USB disappears during the reset. */
-        (void)send_message(message, is_reboot ? kRebootAckTimeoutMs
-                                              : kTxTimeoutMs);
-
+        const bool is_reboot =
+            ack.command ==
+                vehicle_command_s::NAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN &&
+            ack.result == vehicle_command_ack_s::RESULT_ACCEPTED &&
+            (ack.result_param2 == 1U || ack.result_param2 == 3U);
         if (is_reboot) {
+            reboot_mode_pending_ = static_cast<int>(ack.result_param2);
+            reboot_deadline_us_ = hrt_absolute_time() + kRebootDeadlineUs;
+        }
+        send_command_ack(command_ack, is_reboot);
+        break;
+    }
+}
+
+void MavlinkService::send_command_ack(
+    const mavlink_command_ack_t &ack, bool reboot_ack) noexcept
+{
+    mavlink_message_t message{};
+    mavlink_msg_command_ack_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+                                   &message, &ack);
+
+    if (send_message(message)) {
+        if (reboot_ack) {
             perform_reboot();
         }
+        return;
+    }
+
+    const int error = errno;
+    if (error == EAGAIN || error == ETIMEDOUT) {
+        pending_ack_ = ack;
+        pending_ack_valid_ = true;
+        pending_ack_is_reboot_ = reboot_ack;
+        ack_retry_ = 0U;
+    } else {
+        PX4_ERR("COMMAND_ACK tx errno %d, dropped", error);
+    }
+}
+
+void MavlinkService::flush_pending_ack() noexcept
+{
+    if (!pending_ack_valid_) {
+        return;
+    }
+
+    mavlink_message_t message{};
+    mavlink_msg_command_ack_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+                                   &message, &pending_ack_);
+
+    if (send_message(message)) {
+        const bool reboot_ack = pending_ack_is_reboot_;
+        pending_ack_valid_ = false;
+        pending_ack_is_reboot_ = false;
+        ack_retry_ = 0U;
+        if (reboot_ack) {
+            perform_reboot();
+        }
+        return;
+    }
+
+    const int error = errno;
+    if (error == EAGAIN || error == ETIMEDOUT) {
+        ++ack_retry_;
+        if (ack_retry_ >= kMaxAckRetries) {
+            PX4_ERR("COMMAND_ACK retries exhausted, dropped");
+            pending_ack_valid_ = false;
+            pending_ack_is_reboot_ = false;
+            ack_retry_ = 0U;
+        }
+    } else {
+        PX4_ERR("COMMAND_ACK tx errno %d, dropped", error);
+        pending_ack_valid_ = false;
+        pending_ack_is_reboot_ = false;
+        ack_retry_ = 0U;
+    }
+}
+
+void MavlinkService::maybe_perform_reboot(std::uint64_t now) noexcept
+{
+    if (reboot_mode_pending_ != 0 && reboot_deadline_us_ != 0U &&
+        now >= reboot_deadline_us_) {
+        pending_ack_valid_ = false;
+        pending_ack_is_reboot_ = false;
+        ack_retry_ = 0U;
+        PX4_ERR("Reboot ACK deadline expired; executing approved reboot");
+        perform_reboot();
     }
 }
 
@@ -293,8 +661,8 @@ void MavlinkService::stream_statustext() noexcept
 
     std::size_t sent_records = 0U;
 
-    while (mavlink_log_subscription_.update() &&
-           sent_records < kMaxStatusTextPerRun) {
+    while (sent_records < kMaxStatusTextPerRun &&
+           mavlink_log_subscription_.update()) {
         const mavlink_log_s &mavlink_log = mavlink_log_subscription_.get();
 
         /* don't send stale messages */

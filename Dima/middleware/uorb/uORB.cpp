@@ -2,6 +2,8 @@
 
 #include "platform/api/Platform.hpp"
 
+#include <limits>
+
 namespace uORB {
 namespace {
 
@@ -66,7 +68,7 @@ bool initialize(const Allocator &allocator) noexcept
             }
             memset(instance.buffer, 0, bytes);
             instance.generation = 0U;
-            instance.advertised = false;
+            instance.publisher_count = 0U;
             for (auto &callback : instance.callbacks) {
                 callback = nullptr;
             }
@@ -94,7 +96,7 @@ void shutdown() noexcept
             }
             instance.buffer = nullptr;
             instance.generation = 0U;
-            instance.advertised = false;
+            instance.publisher_count = 0U;
             for (auto &callback : instance.callbacks) {
                 callback = nullptr;
             }
@@ -124,7 +126,7 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
     }
     orb_runtime_instance *const instance = runtime_for(metadata, instance_index);
     if (instance == nullptr || instance->buffer == nullptr ||
-        !instance->advertised) {
+        instance->publisher_count == 0U) {
         return false;
     }
 
@@ -219,8 +221,9 @@ bool orb_advertise(const orb_metadata *metadata, uint8_t instance_index) noexcep
     }
     bool accepted = false;
     dima::platform::CriticalGuard guard;
-    if (!instance->advertised) {
-        instance->advertised = true;
+    if (instance->publisher_count <
+        std::numeric_limits<uint16_t>::max()) {
+        ++instance->publisher_count;
         accepted = true;
     }
     return accepted;
@@ -236,7 +239,9 @@ void orb_unadvertise(const orb_metadata *metadata, uint8_t instance_index) noexc
         return;
     }
     dima::platform::CriticalGuard guard;
-    instance->advertised = false;
+    if (instance->publisher_count > 0U) {
+        --instance->publisher_count;
+    }
 }
 
 int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept
@@ -248,8 +253,8 @@ int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept
     dima::platform::CriticalGuard guard;
     for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
         auto &instance = metadata->instances[index];
-        if (!instance.advertised) {
-            instance.advertised = true;
+        if (instance.publisher_count == 0U) {
+            instance.publisher_count = 1U;
             result = static_cast<int8_t>(index);
             break;
         }

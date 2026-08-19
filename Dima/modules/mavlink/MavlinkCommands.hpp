@@ -3,7 +3,8 @@
  * MAVLink command reception — ported from PX4-Autopilot v1.17.0
  * src/modules/mavlink/mavlink_receiver.cpp (commit d6f12ad):
  * evaluate_target_ok / acknowledge / handle_message_command_long /
- * handle_message_command_both / handle_request_message_command.
+ * handle_message_command_int / handle_message_command_both /
+ * handle_request_message_command.
  *
  * Architecture is unchanged from PX4: the receiver does framing-level
  * target filtering and protocol translation, publishes vehicle_command
@@ -12,23 +13,29 @@
  * MAVLink COMMAND_ACK frames.
  *
  * Dima adaptations:
- *   - COMMAND_INT is not accepted (not in the allowlist).
+ *   - COMMAND_INT is accepted: handle_message_command_int is ported
+ *     1:1 from upstream and shares handle_message_command_both with
+ *     the COMMAND_LONG path (Phase-6 dialect extension).
  *   - Stream-interval commands are answered Unsupported until the
  *     periodic stream set gains interval control.
  *   - Autotune / failure injection / logging commands are omitted.
  *   - handle_request_message_command resolves via a caller callback
  *     instead of the PX4 stream list.
+ *
+ * 结果码语义矩阵（对 QGC 的可观测行为）：
+ *   UNSUPPORTED — 命令不在能力清单（Commander default 分支 /
+ *     REQUEST_MESSAGE 未知消息 id / SET·GET_MESSAGE_INTERVAL）。
+ *   DENIED — 安全策略拒绝（armed 时 reboot 由 Commander 裁决；
+ *     LONG 路径 param5/6、INT 路径 x/y 误用编码拒绝）。
+ *   target 不匹配 — 静默丢弃（协议规定不对非本机命令应答）。
  */
 
 #include "vehicle_command.hpp"
 #include "vehicle_command_ack.hpp"
 #include "lib/mavlink/mavlink_bridge.h"
-#include "logging/logging.hpp"
-#include "platform/api/Time.hpp"
 #include "uorb/Publication.hpp"
 
-#include <cmath>
-#include <cstring>
+#include <cstdint>
 
 namespace dima::modules::mavlink {
 
@@ -42,178 +49,37 @@ public:
                                               std::uint16_t message_id);
 
     MavlinkCommands(RequestMessageFn request_message,
-                    void *request_ctx) noexcept
-        : request_message_(request_message), request_ctx_(request_ctx)
-    {
-    }
+                    void *request_ctx) noexcept;
 
-    void handle_message(const mavlink_message_t *msg) noexcept
-    {
-        switch (msg->msgid) {
-        case MAVLINK_MSG_ID_COMMAND_LONG:
-            handle_message_command_long(msg);
-            break;
-
-        default:
-            break;
-        }
-    }
+    void handle_message(const mavlink_message_t *msg) noexcept;
 
 private:
     bool evaluate_target_ok(std::uint16_t command, std::uint8_t target_system,
-                            std::uint8_t target_component) const noexcept
-    {
-        /* evaluate if this system should accept this command */
-        bool target_ok = false;
-
-        switch (command) {
-
-        case MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES:
-        case MAV_CMD_REQUEST_PROTOCOL_VERSION:
-            /* broadcast and ignore component */
-            target_ok = (target_system == 0) ||
-                        (target_system == MAVLINK_SYSTEM_ID);
-            break;
-
-        default:
-            target_ok = (target_system == MAVLINK_SYSTEM_ID) &&
-                        ((target_component == MAVLINK_COMPONENT_ID) ||
-                         (target_component == MAV_COMP_ID_ALL));
-            break;
-        }
-
-        return target_ok;
-    }
+                            std::uint8_t target_component) const noexcept;
 
     void acknowledge(std::uint8_t sysid, std::uint8_t compid,
                      std::uint16_t command, std::uint8_t result,
-                     std::uint8_t progress = 0) noexcept
-    {
-        vehicle_command_ack_s command_ack{};
+                     std::uint8_t progress = 0) noexcept;
 
-        command_ack.timestamp = hrt_absolute_time();
-        command_ack.command = command;
-        command_ack.result = result;
-        command_ack.target_system = sysid;
-        command_ack.target_component = compid;
-        command_ack.result_param2 = progress;
+    std::uint8_t handle_request_message_command(
+        std::uint16_t message_id) noexcept;
 
-        _cmd_ack_pub.publish(command_ack);
-    }
+    void handle_message_command_long(const mavlink_message_t *msg) noexcept;
 
-    std::uint8_t handle_request_message_command(std::uint16_t message_id) noexcept
-    {
-        bool message_sent = false;
-
-        if (request_message_ != nullptr) {
-            message_sent = request_message_(request_ctx_, message_id);
-        }
-
-        return (message_sent ? vehicle_command_ack_s::RESULT_ACCEPTED :
-                vehicle_command_ack_s::RESULT_UNSUPPORTED);
-    }
-
-    void handle_message_command_long(const mavlink_message_t *msg) noexcept
-    {
-        /* command */
-        mavlink_command_long_t cmd_mavlink;
-        mavlink_msg_command_long_decode(msg, &cmd_mavlink);
-
-        vehicle_command_s vcmd{};
-
-        vcmd.timestamp = hrt_absolute_time();
-
-        const float before_int32_max = std::nextafter((float)INT32_MAX, 0.0f);
-        const float after_int32_max =
-            std::nextafter((float)INT32_MAX, (float)INFINITY);
-
-        if (cmd_mavlink.param5 >= before_int32_max &&
-            cmd_mavlink.param5 <= after_int32_max &&
-            cmd_mavlink.param6 >= before_int32_max &&
-            cmd_mavlink.param6 <= after_int32_max) {
-            // This looks suspiciously like INT32_MAX was sent in a COMMAND_LONG
-            // instead of a COMMAND_INT.
-            PX4_ERR("param5/param6 invalid of command %u", cmd_mavlink.command);
-            acknowledge(msg->sysid, msg->compid, cmd_mavlink.command,
-                        vehicle_command_ack_s::RESULT_DENIED);
-            return;
-        }
-
-        /* Copy the content of mavlink_command_long_t into vehicle_command_s,
-         * keeping the raw float bit patterns (Dima contract). */
-        std::memcpy(&vcmd.param1_raw, &cmd_mavlink.param1, sizeof(float));
-        std::memcpy(&vcmd.param2_raw, &cmd_mavlink.param2, sizeof(float));
-        std::memcpy(&vcmd.param3_raw, &cmd_mavlink.param3, sizeof(float));
-        std::memcpy(&vcmd.param4_raw, &cmd_mavlink.param4, sizeof(float));
-        std::memcpy(&vcmd.param5_raw, &cmd_mavlink.param5, sizeof(float));
-        std::memcpy(&vcmd.param6_raw, &cmd_mavlink.param6, sizeof(float));
-        std::memcpy(&vcmd.param7_raw, &cmd_mavlink.param7, sizeof(float));
-        vcmd.command = cmd_mavlink.command;
-        vcmd.target_system = cmd_mavlink.target_system;
-        vcmd.target_component = cmd_mavlink.target_component;
-        vcmd.source_component = msg->compid;
-        vcmd.confirmation = cmd_mavlink.confirmation;
-        vcmd.from_external = true;
-
-        handle_message_command_both(msg, cmd_mavlink, vcmd);
-    }
+    /* 移植自 PX4 v1.17.0 mavlink_receiver.cpp handle_message_command_int
+     * （与 handle_message_command_long 对偶）：NAN 误发为 int 检查
+     * （0x7ff80000，对应 LONG 路径的 INT32_MAX 误用检查）、x/y 按
+     * ×1e-7 缩放填 param5/6、INT32_MAX 表示未用→NAN、z 填 param7；
+     * confirmation 固定 false（COMMAND_INT 无该字段）。 */
+    void handle_message_command_int(const mavlink_message_t *msg) noexcept;
 
     void handle_message_command_both(const mavlink_message_t *msg,
-                                     const mavlink_command_long_t &cmd_mavlink,
-                                     const vehicle_command_s &vehicle_command) noexcept
-    {
-        bool target_ok = evaluate_target_ok(cmd_mavlink.command,
-                                            cmd_mavlink.target_system,
-                                            cmd_mavlink.target_component);
-        bool send_ack = true;
-        std::uint8_t result = vehicle_command_ack_s::RESULT_ACCEPTED;
-        std::uint8_t progress = 0;
-
-        if (!target_ok) {
-            PX4_INFO("Ignore command %d from %d/%d to %d/%d",
-                     cmd_mavlink.command, msg->sysid, msg->compid,
-                     cmd_mavlink.target_system, cmd_mavlink.target_component);
-            return;
-        }
-
-        // First we handle legacy support requests which were used before we had
-        // the generic MAV_CMD_REQUEST_MESSAGE.
-        if (cmd_mavlink.command == MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES) {
-            result = handle_request_message_command(MAVLINK_MSG_ID_AUTOPILOT_VERSION);
-
-        } else if (cmd_mavlink.command == MAV_CMD_REQUEST_PROTOCOL_VERSION) {
-            result = handle_request_message_command(MAVLINK_MSG_ID_PROTOCOL_VERSION);
-
-        } else if (cmd_mavlink.command == MAV_CMD_SET_MESSAGE_INTERVAL ||
-                   cmd_mavlink.command == MAV_CMD_GET_MESSAGE_INTERVAL) {
-            /* Stream interval control is not implemented yet. */
-            result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
-
-        } else if (cmd_mavlink.command == MAV_CMD_REQUEST_MESSAGE) {
-
-            std::uint16_t message_id = (std::uint16_t)std::lroundf(
-                cmd_mavlink.param1);
-            result = handle_request_message_command(message_id);
-
-        } else {
-            send_ack = false;
-
-            if (msg->sysid == MAVLINK_SYSTEM_ID &&
-                msg->compid == MAVLINK_COMPONENT_ID) {
-                PX4_WARN("ignoring CMD with same SYS/COMP (%d/%d) ID",
-                         MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID);
-                return;
-            }
-
-            /* Commander performs the sole safety arbitration and acks. */
-            _cmd_pub.publish(vehicle_command);
-        }
-
-        if (send_ack) {
-            acknowledge(msg->sysid, msg->compid, cmd_mavlink.command, result,
-                        progress);
-        }
-    }
+                                     std::uint16_t command,
+                                     std::uint8_t target_system,
+                                     std::uint8_t target_component,
+                                     float param1,
+                                     const vehicle_command_s &vehicle_command)
+        noexcept;
 
     RequestMessageFn request_message_{nullptr};
     void *request_ctx_{nullptr};

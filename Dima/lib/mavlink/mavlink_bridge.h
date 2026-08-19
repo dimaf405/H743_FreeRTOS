@@ -12,13 +12,19 @@
  *   submodule pointer of PX4-Autopilot v1.17.0 commit d6f12ad) via
  *   mavgen --lang C --wire-protocol 2.0.
  *
- * The dialect is TRIMMED (tmp/mavlink_gen/build_trimmed_dialect.py
- * builds dima.xml): only the messages the current firmware actually
- * supports are generated (HEARTBEAT, PROTOCOL_VERSION,
- * AUTOPILOT_VERSION, GLOBAL_POSITION_INT from standard/minimal, plus
- * PING, TIMESYNC, COMMAND_LONG/ACK, PARAM_* classic+ext subset,
- * FILE_TRANSFER_PROTOCOL, STATUSTEXT). New messages join the dialect
- * only when the corresponding capability is implemented.
+ * The dialect is TRIMMED (tools/mavlink/build_trimmed_dialect.py
+ * builds dima.xml under build/generated/mavlink from the pinned XMLs in
+ * tools/mavlink/message_definitions/):
+ * only the messages the current firmware actually supports are
+ * generated (HEARTBEAT, PROTOCOL_VERSION, AUTOPILOT_VERSION,
+ * GLOBAL_POSITION_INT from standard/minimal, plus PING, TIMESYNC,
+ * RC_CHANNELS, COMMAND_LONG/INT/ACK, PARAM_* classic+ext subset,
+ * STATUSTEXT, the empty-mission set
+ * MISSION_REQUEST_LIST/MISSION_COUNT/MISSION_CLEAR_ALL/MISSION_ACK, and the
+ * Parameter Metadata surface FILE_TRANSFER_PROTOCOL/COMPONENT_METADATA with
+ * deprecated COMPONENT_INFORMATION fallback — 24 messages in total). New
+ * messages join the dialect only when the corresponding capability is
+ * implemented.
  *
  * Platform adaptations:
  *   - Single communication buffer: the USB CDC link is the only
@@ -47,4 +53,4 @@
 #define MAVLINK_COMPONENT_ID 1
 #endif
 
-#include "c_library_v2/dima/mavlink.h"
+#include "dima/mavlink.h"

@@ -1,2 +1,6 @@
 # Ensure hooks always use LF line endings for bash compatibility
 /hooks/* text eol=lf
+
+# MAVLink XML inputs are byte-pinned to upstream SHA-256 values. Preserve
+# upstream whitespace instead of rewriting the locked source snapshots.
+tools/mavlink/message_definitions/*.xml whitespace=-trailing-space

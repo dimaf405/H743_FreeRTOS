@@ -235,7 +235,9 @@ const wq_config_t sensors{"wq:sensors", 6U, 4096U, true};
 const wq_config_t io{"wq:io", 5U, 4096U, false};
 const wq_config_t nav{"wq:nav", 4U, 4096U, false};
 const wq_config_t hp_default{"wq:hp_default", 3U, 2048U, false};
-const wq_config_t lp_default{"wq:lp_default", 2U, 2048U, false};
+/* Parameter, structured logging and MAVLink share this call stack.  A live
+ * QGC connection measured PSP 56 bytes below the former 2 KiB stack base. */
+const wq_config_t lp_default{"wq:lp_default", 2U, 4096U, false};
 } // namespace wq_configurations
 
 hrt_abstime work_queue_time_us() noexcept

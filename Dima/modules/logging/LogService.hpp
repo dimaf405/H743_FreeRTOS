@@ -16,8 +16,8 @@ namespace dima::modules::logging {
  * LogService — structured log producer.
  *
  * Responsibilities (USB transport is owned by MavlinkService):
- *   - Writes Event/SBUS debug records into the logging middleware ring.
- *   - Registers the structured sink of the logging middleware and
+ *   - Writes Event/SBUS debug records into the structured log path.
+ *   - Owns the structured sink of the logging middleware and
  *     publishes every formatted record as a mavlink_log uORB message,
  *     which MavlinkService converts to MAVLink STATUSTEXT.
  */
@@ -26,6 +26,8 @@ class LogService final : public dima::middleware::lifecycle::ModuleBase,
 public:
     LogService() noexcept;
 
+    bool initialize() noexcept;
+    void shutdown() noexcept;
     bool start() noexcept override;
     void stop() noexcept override;
     dima::middleware::lifecycle::ModuleState state() const noexcept override;
@@ -34,7 +36,7 @@ protected:
     void Run() override;
 
 private:
-    static void structured_sink(void *context, dima::logging::Level level,
+    static bool structured_sink(void *context, dima::logging::Level level,
                                 const char *text, std::size_t length) noexcept;
 
     void enqueue_sbus_data(std::uint64_t now_us) noexcept;
@@ -47,6 +49,7 @@ private:
     std::uint64_t last_sbus_sample_timestamp_us_{0U};
     std::uint64_t last_sbus_output_time_us_{0U};
     bool sbus_sample_pending_{false};
+    bool initialized_{false};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
 };

@@ -21,6 +21,7 @@ std::uint8_t mav_severity(dima::logging::Level level) noexcept
     case Level::Warning: return 4U;   /* MAV_SEVERITY_WARNING */
     case Level::Error:   return 3U;   /* MAV_SEVERITY_ERROR */
     case Level::Panic:   return 0U;   /* MAV_SEVERITY_EMERGENCY */
+    case Level::Off:     return 6U;   /* filtered before the sink */
     }
     return 3U;
 }
@@ -78,20 +79,34 @@ LogService::LogService() noexcept
 {
 }
 
+bool LogService::initialize() noexcept
+{
+    if (!initialized_) {
+        dima::logging::set_structured_sink(nullptr, &LogService::structured_sink);
+        initialized_ = true;
+    }
+    return true;
+}
+
+void LogService::shutdown() noexcept
+{
+    stop();
+    dima::logging::set_structured_sink(nullptr, nullptr);
+    initialized_ = false;
+}
+
 bool LogService::start() noexcept
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (!ScheduleEnable()) {
+    if (!initialized_ || !ScheduleEnable()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
     reset_debug_state();
-    dima::logging::set_structured_sink(nullptr, &LogService::structured_sink);
     if (!ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        dima::logging::set_structured_sink(nullptr, nullptr);
         ScheduleCancelAndDrain();
         return false;
     }
@@ -102,7 +117,6 @@ bool LogService::start() noexcept
 
 void LogService::stop() noexcept
 {
-    dima::logging::set_structured_sink(nullptr, nullptr);
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
     reset_debug_state();
@@ -113,12 +127,12 @@ dima::middleware::lifecycle::ModuleState LogService::state() const noexcept
     return state_;
 }
 
-void LogService::structured_sink(void *context, dima::logging::Level level,
+bool LogService::structured_sink(void *context, dima::logging::Level level,
                                  const char *text, std::size_t length) noexcept
 {
     (void)context;
     if (text == nullptr || length == 0U) {
-        return;
+        return false;
     }
 
     mavlink_log_s record{};
@@ -128,7 +142,7 @@ void LogService::structured_sink(void *context, dima::logging::Level level,
         std::min(length, static_cast<std::size_t>(mavlink_log_s::TEXT_LEN - 1U));
     std::memcpy(record.text, text, copy);
     record.text[copy] = '\0';
-    (void)mavlink_log_publication_.publish(record);
+    return mavlink_log_publication_.publish(record);
 }
 
 void LogService::reset_debug_state() noexcept

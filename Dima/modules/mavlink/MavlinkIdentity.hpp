@@ -10,7 +10,6 @@
  */
 
 #include <cstdint>
-#include <cstring>
 
 namespace dima::modules::mavlink {
 
@@ -46,12 +45,6 @@ public:
              |  static_cast<uint32_t>(type);
     }
 
-    /* ── Capability flags ─────────────────────────────────────────── */
-
-    static constexpr uint64_t CAPABILITY_PARAM_FLOAT     = 0x0002;
-    static constexpr uint64_t CAPABILITY_MAVLINK2        = 0x0200;
-    static constexpr uint64_t CAPABILITY_COMP_METADATA   = 0x2000;
-
     /* ── Constructor ──────────────────────────────────────────────── */
 
     MavlinkIdentity() = default;
@@ -67,23 +60,12 @@ public:
      */
     void configure(uint32_t version, uint32_t board_version,
                    uint64_t uid, uint16_t vendor_id = 0,
-                   uint16_t product_id = 0)
-    {
-        flight_sw_version_ = version;
-        board_version_     = board_version;
-        uid_               = uid;
-        vendor_id_         = vendor_id;
-        product_id_        = product_id;
-    }
+                   uint16_t product_id = 0);
 
     /**
      * Set the current system state for HEARTBEAT.
      */
-    void set_state(uint8_t base_mode, uint8_t system_status)
-    {
-        base_mode_    = base_mode;
-        system_status_ = system_status;
-    }
+    void set_state(uint8_t base_mode, uint8_t system_status);
 
     /* ── Accessors ────────────────────────────────────────────────── */
 
@@ -95,31 +77,15 @@ public:
     uint16_t vendor_id()     const noexcept { return vendor_id_; }
     uint16_t product_id()    const noexcept { return product_id_; }
 
-    uint64_t capabilities() const noexcept
-    {
-        return CAPABILITY_PARAM_FLOAT
-             | CAPABILITY_MAVLINK2
-             | CAPABILITY_COMP_METADATA;
-    }
+    uint64_t capabilities() const noexcept;
 
     /**
      * Get the git hash bytes (first 8 bytes) for custom version fields.
      * Currently returns zeros (no git hash embedded in this build).
      */
-    void get_flight_custom_version(uint8_t out[8]) const noexcept
-    {
-        std::memset(out, 0, 8);
-    }
-
-    void get_middleware_custom_version(uint8_t out[8]) const noexcept
-    {
-        std::memset(out, 0, 8);
-    }
-
-    void get_os_custom_version(uint8_t out[8]) const noexcept
-    {
-        std::memset(out, 0, 8);
-    }
+    void get_flight_custom_version(uint8_t out[8]) const noexcept;
+    void get_middleware_custom_version(uint8_t out[8]) const noexcept;
+    void get_os_custom_version(uint8_t out[8]) const noexcept;
 
 private:
     uint32_t flight_sw_version_{0};

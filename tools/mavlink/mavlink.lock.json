@@ -1,0 +1,30 @@
+{
+  "mavlink": {
+    "commit": "33af200d25ec6f0925b49b1ba82bbf1294ea5f72",
+    "xml_sha256": {
+      "common.xml": "bbc1c382a217209f2cb3922416539da3226878dd19c7549f928913a6f72b1498",
+      "minimal.xml": "dfc2e97198692dffab0fcdc7fbc0375f4dae37c661f0e2cab50cf2d2dba2a2ab",
+      "standard.xml": "baf3742c22ff8198d496215e1ba2d54281268edf5a1fcf3371b7e012407a4769"
+    }
+  },
+  "pymavlink": {
+    "version": "2.4.47",
+    "commit": "fcaa2c7d25e3169dc66155929c338487941555e9",
+    "archive": {
+      "filename": "pymavlink-2.4.47.tar.gz",
+      "size": 6459985,
+      "sha256": "c34de69f56e535c7fa3c651651b4a2b8e43752b68b7bda6af168dc327f33845d",
+      "urls": [
+        "https://pypi.tuna.tsinghua.edu.cn/packages/db/0a/c438772d1ef61eaed244ed638c8e3bf446e77fbf6a64c18893efdb1afa0b/pymavlink-2.4.47.tar.gz",
+        "https://files.pythonhosted.org/packages/db/0a/c438772d1ef61eaed244ed638c8e3bf446e77fbf6a64c18893efdb1afa0b/pymavlink-2.4.47.tar.gz"
+      ]
+    }
+  },
+  "dialect": {
+    "name": "dima",
+    "message_count": 24,
+    "forbidden_messages": [
+      "COMPONENT_INFORMATION_BASIC"
+    ]
+  }
+}

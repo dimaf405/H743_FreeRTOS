@@ -23,7 +23,7 @@ struct orb_runtime_instance {
     uint8_t *buffer;
     uint64_t generation;
     px4::WorkItem *callbacks[kMaximumCallbacksPerInstance];
-    bool advertised;
+    uint16_t publisher_count;
 };
 
 struct orb_metadata {

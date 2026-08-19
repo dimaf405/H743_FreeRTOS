@@ -67,6 +67,7 @@ struct vehicle_command_s {
     std::uint16_t command;
     std::uint8_t  target_system;
     std::uint8_t  target_component;
+    std::uint8_t  source_system;
     std::uint8_t  source_component;
     std::uint8_t  confirmation;
     bool          from_external;

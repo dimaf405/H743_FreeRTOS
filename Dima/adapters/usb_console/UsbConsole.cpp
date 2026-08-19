@@ -8,7 +8,10 @@ namespace dima::adapters {
 namespace {
 
 constexpr std::size_t kRxCapacity = 1024U;
-constexpr std::size_t kTxCapacity = 256U;
+/* MAVLink 2 FILE_TRANSFER_PROTOCOL is 266 bytes unsigned; retain the full
+ * generated MAVLINK_MAX_PACKET_LEN envelope without coupling this adapter to
+ * protocol headers. */
+constexpr std::size_t kTxCapacity = 280U;
 static_assert((kRxCapacity & (kRxCapacity - 1U)) == 0U);
 
 class UsbConsole final : public platform::Console {

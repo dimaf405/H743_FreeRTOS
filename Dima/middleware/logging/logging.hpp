@@ -33,8 +33,6 @@ void px4_log_initialize(void);
 
 namespace dima::logging {
 
-constexpr std::size_t kLogRingCapacity = 8U * 1024U;
-
 static_assert(static_cast<std::uint8_t>(Level::Debug) ==
               _PX4_LOG_LEVEL_DEBUG);
 static_assert(static_cast<std::uint8_t>(Level::Info) ==
@@ -58,30 +56,18 @@ struct LogStats {
     std::uint32_t records_written;
     std::uint32_t records_truncated;
     std::uint32_t formatting_rejections;
-    std::uint32_t overwritten_bytes;
-    std::uint32_t service_dropped_bytes;
-    std::size_t pending_bytes;
-};
-
-using ServiceWrite = std::size_t (*)(void *context,
-                                     const std::uint8_t *data,
-                                     std::size_t length);
-struct ServiceWriter {
-    void *context;
-    ServiceWrite write;
+    std::uint32_t sink_dropped_records;
 };
 
 /**
  * Structured record sink (dependency inversion hook).
  *
- * Called once per formatted, non-raw log record with the message body
- * (without the level/module prefix and trailing newline). Registered
- * by the logging module to publish mavlink_log uORB records; the
- * middleware itself stays free of any messages-layer dependency.
- * Invoked in the writing task's context; implementations must be
- * non-blocking.
+ * Called once per formatted log record with the message body (without a
+ * level/module prefix or trailing newline). PX4_INFO_RAW uses the supplied
+ * level and the same structured path. Invoked in the writing task's context;
+ * implementations must be non-blocking and report publication success.
  */
-using StructuredSink = void (*)(void *context, Level level,
+using StructuredSink = bool (*)(void *context, Level level,
                                 const char *text, std::size_t length);
 void set_structured_sink(void *context, StructuredSink sink) noexcept;
 
@@ -91,9 +77,6 @@ WriteResult writef(Level level, const char *format, ...) noexcept
 WriteResult write_module(Source source, Level level, const char *module_name,
                          const char *format, ...) noexcept
     __attribute__((format(printf, 4, 5)));
-WriteResult write_literal(const char *text, std::size_t length) noexcept;
-std::size_t service_flush(const ServiceWriter &writer,
-                          std::size_t max_bytes = kLogRingCapacity) noexcept;
 LogStats stats() noexcept;
 void reset() noexcept;
 

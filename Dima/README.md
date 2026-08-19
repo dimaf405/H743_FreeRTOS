@@ -43,6 +43,8 @@
 - 同目录头文件引用只写文件名。
 - 跨目录引用从职责层根目录开始，例如 `uorb/Publication.hpp`、`rc/SbusRc.hpp`。
 - 不使用完整的 `Dima/...` 或 `Boards/H743/Inc/...` include 写法。
+- 自有 `.hpp` 只保留声明、类型、模板、`constexpr` 和极短访问器；普通函数、协议状态机与算法实现放入同名 `.cpp`。
+- 只有模板、生成代码或经文档明确说明的上游合同可以采用 header-only；不得用 header-only 规避 `make/project.mk` 的显式翻译单元清单。
 
 ## 命名与来源
 
