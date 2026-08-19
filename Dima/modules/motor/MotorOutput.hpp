@@ -80,8 +80,14 @@ private:
     bool observed_snapshot_complete(std::uint64_t now_us) const noexcept;
     bool active_snapshot_fresh(std::uint64_t now_us) const noexcept;
     bool safety_permits_output(std::uint64_t now_us) const noexcept;
+    bool safety_permits_disarmed_neutral(
+        std::uint64_t now_us) const noexcept;
     bool motor_command_valid(std::uint64_t now_us) const noexcept;
     bool build_frame(dima::platform::ActuatorPwmFrame &frame) const noexcept;
+    bool build_neutral_frame(
+        dima::platform::ActuatorPwmFrame &frame) const noexcept;
+    dima::platform::ActuatorPwmResult apply_frame(
+        const dima::platform::ActuatorPwmFrame &frame) noexcept;
     dima::platform::ActuatorPwmResult force_safe_off() noexcept;
     bool publish_status(std::uint64_t now_us, std::uint8_t output_state,
                         bool command_valid) noexcept;
@@ -96,6 +102,10 @@ private:
     static bool safety_negative(const actuator_armed_s &armed) noexcept;
     static bool safety_negative(const vehicle_control_mode_s &control) noexcept;
     static bool safety_negative(const vehicle_status_s &status) noexcept;
+    static bool hard_safe_negative(const actuator_armed_s &armed) noexcept;
+    static bool hard_safe_negative(
+        const vehicle_control_mode_s &control) noexcept;
+    static bool hard_safe_negative(const vehicle_status_s &status) noexcept;
 
     dima::platform::ActuatorPwm *pwm_{nullptr};
     uORB::SubscriptionData<actuator_motors_s> actuator_motors_subscription_{
@@ -126,6 +136,7 @@ private:
     bool parameters_valid_{false};
     bool parameter_update_pending_{false};
     bool safety_inhibit_observed_{true};
+    bool hard_safe_inhibit_observed_{true};
     bool backend_ready_{false};
     bool safe_off_{false};
 };

@@ -29,10 +29,6 @@ bool BootHealthService::start()
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (confirmation_attempted_) {
-        state_ = dima::middleware::lifecycle::ModuleState::Running;
-        return true;
-    }
     if (commander_ == nullptr || motor_output_ == nullptr) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
@@ -82,27 +78,47 @@ dima::middleware::lifecycle::ModuleState BootHealthService::state() const
     return state_;
 }
 
+std::uint32_t BootHealthService::health_generation() const noexcept
+{
+    return __atomic_load_n(&health_generation_, __ATOMIC_ACQUIRE);
+}
+
 void BootHealthService::Run()
 {
-    if (state_ != dima::middleware::lifecycle::ModuleState::Running ||
-        confirmation_attempted_) {
+    if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
     }
 
-    const uint64_t now_us = clock_.now_us();
-    const uint64_t now_ms = clock_.now_ms();
+    const std::uint64_t now_us = clock_.now_us();
+    const std::uint64_t now_ms = clock_.now_ms();
 
     const bool safety_healthy = update_safety_health(now_us);
     const bool output_healthy = update_output_health(now_us);
-    const bool healthy = param_is_ready() && commander_ != nullptr &&
-                         commander_->state() ==
-                             dima::middleware::lifecycle::ModuleState::Running &&
-                         motor_output_ != nullptr &&
-                         motor_output_->state() ==
-                             dima::middleware::lifecycle::ModuleState::Running &&
-                         safety_healthy && output_healthy &&
-                         confirmation_state_safe();
-    if (!healthy) {
+    const bool runtime_healthy =
+        param_is_ready() && commander_ != nullptr &&
+        commander_->state() ==
+            dima::middleware::lifecycle::ModuleState::Running &&
+        motor_output_ != nullptr &&
+        motor_output_->state() ==
+            dima::middleware::lifecycle::ModuleState::Running &&
+        safety_healthy && output_healthy;
+    if (!runtime_healthy) {
+        reset_stable_window(now_ms);
+        return;
+    }
+
+    std::uint32_t generation = __atomic_add_fetch(
+        &health_generation_, 1U, __ATOMIC_RELEASE);
+    if (generation == 0U) {
+        (void)__atomic_add_fetch(&health_generation_, 1U, __ATOMIC_RELEASE);
+    }
+
+    if (confirmation_attempted_) {
+        return;
+    }
+
+    if (!confirmation_state_safe() ||
+        !output_status_confirmation_safe()) {
         reset_stable_window(now_ms);
         return;
     }
@@ -124,7 +140,6 @@ void BootHealthService::Run()
     case dima::platform::BootConfirmResult::AlreadyConfirmed:
     case dima::platform::BootConfirmResult::NotTestImage:
         confirmation_attempted_ = true;
-        ScheduleCancelAndDrain();
         break;
     case dima::platform::BootConfirmResult::Deferred:
         break;
@@ -137,7 +152,7 @@ void BootHealthService::Run()
     }
 }
 
-bool BootHealthService::update_safety_health(uint64_t now_us) noexcept
+bool BootHealthService::update_safety_health(std::uint64_t now_us) noexcept
 {
     const bool armed_updated = actuator_armed_subscription_.update();
     const bool control_updated = vehicle_control_mode_subscription_.update();
@@ -150,7 +165,8 @@ bool BootHealthService::update_safety_health(uint64_t now_us) noexcept
         return false;
     }
 
-    const uint64_t timestamp = actuator_armed_subscription_.get().timestamp;
+    const std::uint64_t timestamp =
+        actuator_armed_subscription_.get().timestamp;
     if (any_updated) {
         if (!all_updated ||
             (last_safety_timestamp_us_ != 0U &&
@@ -167,7 +183,8 @@ bool BootHealthService::update_safety_health(uint64_t now_us) noexcept
            now_us - last_safety_timestamp_us_ <= kSafetyTopicTimeoutUs;
 }
 
-bool BootHealthService::safety_topics_consistent(uint64_t now_us) const noexcept
+bool BootHealthService::safety_topics_consistent(
+    std::uint64_t now_us) const noexcept
 {
     const actuator_armed_s &armed = actuator_armed_subscription_.get();
     const vehicle_control_mode_s &control =
@@ -188,13 +205,14 @@ bool BootHealthService::safety_topics_consistent(uint64_t now_us) const noexcept
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL;
     const bool termination =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_TERMINATION;
-    const uint32_t manual_mask =
+    const std::uint32_t manual_mask =
         1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
-    const uint32_t termination_mask =
+    const std::uint32_t termination_mask =
         1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
 
     return (status_armed || status_disarmed) &&
            armed.armed == status_armed && control.flag_armed == armed.armed &&
+           (!armed.kill || status_disarmed) &&
            armed.ready_to_arm ==
                (status.pre_flight_checks_pass || armed.armed) &&
            !armed.prearmed && !armed.lockdown &&
@@ -220,12 +238,13 @@ bool BootHealthService::safety_topics_consistent(uint64_t now_us) const noexcept
            status.can_set_nav_states_mask == manual_mask;
 }
 
-bool BootHealthService::update_output_health(uint64_t now_us) noexcept
+bool BootHealthService::update_output_health(std::uint64_t now_us) noexcept
 {
     if (actuator_output_status_subscription_.update()) {
         const actuator_output_status_s &status =
             actuator_output_status_subscription_.get();
-        const uint32_t sequence_delta = status.sequence - last_output_sequence_;
+        const std::uint32_t sequence_delta =
+            status.sequence - last_output_sequence_;
         if (status.sequence == 0U ||
             (last_output_sequence_ != 0U &&
              (sequence_delta == 0U || sequence_delta >= 0x80000000U))) {
@@ -235,26 +254,104 @@ bool BootHealthService::update_output_health(uint64_t now_us) noexcept
         last_output_sequence_ = status.sequence;
         output_snapshot_observed_ = true;
     }
-    return output_snapshot_observed_ && output_status_safe(now_us);
+    return output_snapshot_observed_ && output_status_runtime_healthy(now_us);
 }
 
-bool BootHealthService::output_status_safe(uint64_t now_us) const noexcept
+bool BootHealthService::output_mapping_valid(
+    const actuator_output_status_s &output) const noexcept
 {
-    const actuator_output_status_s &status =
-        actuator_output_status_subscription_.get();
-    if (status.timestamp == 0U || status.timestamp > now_us ||
-        now_us - status.timestamp > kOutputStatusTimeoutUs ||
-        status.state != actuator_output_status_s::STATE_SAFE_OFF ||
-        !status.backend_ready || !status.safe_off ||
-        status.active_output_mask != 0U) {
+    const std::uint8_t supported = static_cast<std::uint8_t>(
+        (1U << actuator_output_status_s::NUM_OUTPUTS) - 1U);
+    return output.configured_output_mask != 0U &&
+           output.right_output_mask != 0U && output.left_output_mask != 0U &&
+           (output.configured_output_mask &
+            static_cast<std::uint8_t>(~supported)) == 0U &&
+           (output.right_output_mask & output.left_output_mask) == 0U &&
+           static_cast<std::uint8_t>(output.right_output_mask |
+                                     output.left_output_mask) ==
+               output.configured_output_mask;
+}
+
+bool BootHealthService::output_frame_valid(
+    const actuator_output_status_s &output) const noexcept
+{
+    if (output.active_output_mask != output.configured_output_mask) {
         return false;
     }
-    for (uint16_t pulse_us : status.pwm_us) {
-        if (pulse_us != 0U) {
+    for (std::uint8_t index = 0U;
+         index < actuator_output_status_s::NUM_OUTPUTS; ++index) {
+        const bool active = (output.active_output_mask &
+            static_cast<std::uint8_t>(1U << index)) != 0U;
+        const std::uint16_t pulse = output.pwm_us[index];
+        if ((active && (pulse < 800U || pulse > 2200U)) ||
+            (!active && pulse != 0U)) {
             return false;
         }
     }
     return true;
+}
+
+bool BootHealthService::output_status_runtime_healthy(
+    std::uint64_t now_us) const noexcept
+{
+    const actuator_output_status_s &output =
+        actuator_output_status_subscription_.get();
+    if (output.timestamp == 0U || output.timestamp > now_us ||
+        now_us - output.timestamp > kOutputStatusTimeoutUs ||
+        !output.backend_ready) {
+        return false;
+    }
+
+    const actuator_armed_s &armed = actuator_armed_subscription_.get();
+    const vehicle_status_s &status = vehicle_status_subscription_.get();
+    const bool hard_safe =
+        output.state == actuator_output_status_s::STATE_HARD_SAFE_OFF &&
+        output.safe_off && output.active_output_mask == 0U;
+    if (hard_safe) {
+        for (const std::uint16_t pulse : output.pwm_us) {
+            if (pulse != 0U) {
+                return false;
+            }
+        }
+    }
+
+    const bool forced_safe_state = armed.kill || armed.termination ||
+                                   armed.lockdown || status.failsafe;
+    if (forced_safe_state) {
+        return hard_safe;
+    }
+
+    if (armed.armed) {
+        const bool in_transition = status.armed_time != 0U &&
+            status.armed_time <= now_us &&
+            now_us - status.armed_time <= kActuatorArmTransitionUs;
+        if (in_transition && hard_safe) {
+            return true;
+        }
+        return output.state == actuator_output_status_s::STATE_ACTIVE &&
+               !output.safe_off && output.drive_available &&
+               output.command_valid && output_mapping_valid(output) &&
+               output_frame_valid(output);
+    }
+
+    if (output.drive_available) {
+        return output.state ==
+                   actuator_output_status_s::STATE_DISARMED_NEUTRAL &&
+               !output.safe_off && !output.parameter_update_pending &&
+               output_mapping_valid(output) &&
+               output_frame_valid(output);
+    }
+    return hard_safe;
+}
+
+bool BootHealthService::output_status_confirmation_safe() const noexcept
+{
+    const actuator_output_status_s &output =
+        actuator_output_status_subscription_.get();
+    return !output.parameter_update_pending &&
+           (output.state == actuator_output_status_s::STATE_HARD_SAFE_OFF ||
+            output.state ==
+                actuator_output_status_s::STATE_DISARMED_NEUTRAL);
 }
 
 bool BootHealthService::confirmation_state_safe() const noexcept
@@ -269,7 +366,7 @@ bool BootHealthService::confirmation_state_safe() const noexcept
            !status.failsafe;
 }
 
-void BootHealthService::reset_stable_window(uint64_t now_ms) noexcept
+void BootHealthService::reset_stable_window(std::uint64_t now_ms) noexcept
 {
     stable_window_active_ = false;
     stable_window_start_ms_ = now_ms;

@@ -163,8 +163,12 @@ void MotorOutput::Run()
     }
 
     const bool command_valid = motor_command_valid(now);
-    if (!parameters_valid_ || !parameters_.drive_available ||
-        !safety_permits_output(now) || !command_valid) {
+    const bool active_output = parameters_valid_ &&
+        parameters_.drive_available && safety_permits_output(now) &&
+        command_valid;
+    const bool disarmed_neutral = !active_output &&
+        safety_permits_disarmed_neutral(now);
+    if (!active_output && !disarmed_neutral) {
         const dima::platform::ActuatorPwmResult result = force_safe_off();
         if (result == dima::platform::ActuatorPwmResult::Fault) {
             enter_error(kEventBackendFault);
@@ -172,7 +176,7 @@ void MotorOutput::Run()
         }
         const std::uint8_t output_state =
             result == dima::platform::ActuatorPwmResult::Applied
-                ? actuator_output_status_s::STATE_SAFE_OFF
+                ? actuator_output_status_s::STATE_HARD_SAFE_OFF
                 : actuator_output_status_s::STATE_RETRY;
         if (!publish_status(now, output_state, command_valid)) {
             enter_error(kEventPublishFailure);
@@ -181,37 +185,16 @@ void MotorOutput::Run()
     }
 
     dima::platform::ActuatorPwmFrame frame{};
-    if (!build_frame(frame)) {
+    if (!(active_output ? build_frame(frame) : build_neutral_frame(frame))) {
         enter_error(kEventParameterInvalid);
         return;
     }
-
-    if (!pwm_->started()) {
-        const dima::platform::ActuatorPwmResult start_result = pwm_->start();
-        if (start_result == dima::platform::ActuatorPwmResult::Fault) {
-            enter_error(kEventBackendFault);
-            return;
-        }
-        if (start_result == dima::platform::ActuatorPwmResult::Retry) {
-            const dima::platform::ActuatorPwmResult stopped = force_safe_off();
-            if (stopped == dima::platform::ActuatorPwmResult::Fault) {
-                enter_error(kEventBackendFault);
-                return;
-            }
-            if (!publish_status(now, actuator_output_status_s::STATE_RETRY,
-                                command_valid)) {
-                enter_error(kEventPublishFailure);
-            }
-            return;
-        }
-    }
-
-    const dima::platform::ActuatorPwmResult write_result = pwm_->write(frame);
+    const dima::platform::ActuatorPwmResult write_result = apply_frame(frame);
     if (write_result == dima::platform::ActuatorPwmResult::Applied) {
-        applied_frame_ = frame;
-        backend_ready_ = true;
-        safe_off_ = false;
-        if (!publish_status(now, actuator_output_status_s::STATE_ACTIVE,
+        const std::uint8_t output_state = active_output
+            ? actuator_output_status_s::STATE_ACTIVE
+            : actuator_output_status_s::STATE_DISARMED_NEUTRAL;
+        if (!publish_status(now, output_state,
                             command_valid)) {
             enter_error(kEventPublishFailure);
         }
@@ -348,17 +331,26 @@ void MotorOutput::refresh_safety_snapshot(std::uint64_t now_us) noexcept
         if (safety_negative(observed_actuator_armed_)) {
             safety_inhibit_observed_ = true;
         }
+        if (hard_safe_negative(observed_actuator_armed_)) {
+            hard_safe_inhibit_observed_ = true;
+        }
     }
     if (vehicle_control_mode_subscription_.update()) {
         observed_control_mode_ = vehicle_control_mode_subscription_.get();
         if (safety_negative(observed_control_mode_)) {
             safety_inhibit_observed_ = true;
         }
+        if (hard_safe_negative(observed_control_mode_)) {
+            hard_safe_inhibit_observed_ = true;
+        }
     }
     if (vehicle_status_subscription_.update()) {
         observed_vehicle_status_ = vehicle_status_subscription_.get();
         if (safety_negative(observed_vehicle_status_)) {
             safety_inhibit_observed_ = true;
+        }
+        if (hard_safe_negative(observed_vehicle_status_)) {
+            hard_safe_inhibit_observed_ = true;
         }
     }
     if (!observed_snapshot_complete(now_us)) {
@@ -372,6 +364,10 @@ void MotorOutput::refresh_safety_snapshot(std::uint64_t now_us) noexcept
     safety_inhibit_observed_ = safety_negative(safety_.actuator_armed) ||
                                safety_negative(safety_.control_mode) ||
                                safety_negative(safety_.vehicle_status);
+    hard_safe_inhibit_observed_ =
+        hard_safe_negative(safety_.actuator_armed) ||
+        hard_safe_negative(safety_.control_mode) ||
+        hard_safe_negative(safety_.vehicle_status);
 }
 
 bool MotorOutput::observed_snapshot_complete(
@@ -430,6 +426,45 @@ bool MotorOutput::safety_permits_output(std::uint64_t now_us) const noexcept
            status.can_set_nav_states_mask == manual_mask && !status.failsafe;
 }
 
+bool MotorOutput::safety_permits_disarmed_neutral(
+    std::uint64_t now_us) const noexcept
+{
+    if (hard_safe_inhibit_observed_ || !parameters_valid_ ||
+        !parameters_.drive_available ||
+        parameter_update_pending_ || !active_snapshot_fresh(now_us)) {
+        return false;
+    }
+    const actuator_armed_s &armed = safety_.actuator_armed;
+    const vehicle_control_mode_s &control = safety_.control_mode;
+    const vehicle_status_s &status = safety_.vehicle_status;
+    const std::uint32_t manual_mask =
+        1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
+    const std::uint32_t termination_mask =
+        1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+    return !armed.armed && !armed.prearmed && !armed.lockdown && !armed.kill &&
+           !armed.termination && !armed.in_esc_calibration_mode &&
+           !control.flag_armed && control.flag_control_manual_enabled &&
+           !control.flag_control_termination_enabled &&
+           !control.flag_control_auto_enabled &&
+           !control.flag_control_offboard_enabled &&
+           !control.flag_control_position_enabled &&
+           !control.flag_control_velocity_enabled &&
+           !control.flag_control_altitude_enabled &&
+           !control.flag_control_climb_rate_enabled &&
+           !control.flag_control_acceleration_enabled &&
+           !control.flag_control_attitude_enabled &&
+           !control.flag_control_rates_enabled &&
+           !control.flag_control_allocation_enabled &&
+           control.source_id == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
+           status.arming_state == vehicle_status_s::ARMING_STATE_DISARMED &&
+           status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
+           status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROVER &&
+           status.failure_detector_status == vehicle_status_s::FAILURE_NONE &&
+           status.hil_state == vehicle_status_s::HIL_STATE_OFF &&
+           status.valid_nav_states_mask == (manual_mask | termination_mask) &&
+           status.can_set_nav_states_mask == manual_mask && !status.failsafe;
+}
+
 bool MotorOutput::motor_command_valid(std::uint64_t now_us) const noexcept
 {
     if (!parameters_valid_ || !have_motor_command_ ||
@@ -478,6 +513,45 @@ bool MotorOutput::build_frame(
     return frame.enabled_mask == parameters_.configured_mask;
 }
 
+bool MotorOutput::build_neutral_frame(
+    dima::platform::ActuatorPwmFrame &frame) const noexcept
+{
+    if (!parameters_valid_ || !parameters_.drive_available) {
+        return false;
+    }
+    frame = dima::platform::ActuatorPwmFrame{};
+    for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
+        const ChannelConfig &config = parameters_.channels[channel];
+        if (config.function == ChannelFunction::Disabled) {
+            continue;
+        }
+        frame.pulse_us[channel] = config.center_us;
+        frame.enabled_mask |= static_cast<std::uint8_t>(1U << channel);
+    }
+    return frame.enabled_mask == parameters_.configured_mask;
+}
+
+dima::platform::ActuatorPwmResult MotorOutput::apply_frame(
+    const dima::platform::ActuatorPwmFrame &frame) noexcept
+{
+    if (pwm_ == nullptr) {
+        return dima::platform::ActuatorPwmResult::Fault;
+    }
+    if (!pwm_->started()) {
+        const dima::platform::ActuatorPwmResult started = pwm_->start();
+        if (started != dima::platform::ActuatorPwmResult::Applied) {
+            return started;
+        }
+    }
+    const dima::platform::ActuatorPwmResult result = pwm_->write(frame);
+    if (result == dima::platform::ActuatorPwmResult::Applied) {
+        applied_frame_ = frame;
+        backend_ready_ = true;
+        safe_off_ = false;
+    }
+    return result;
+}
+
 dima::platform::ActuatorPwmResult MotorOutput::force_safe_off() noexcept
 {
     if (pwm_ == nullptr) {
@@ -512,6 +586,10 @@ bool MotorOutput::publish_status(std::uint64_t now_us,
         status.pwm_us[channel] = applied_frame_.pulse_us[channel];
     }
     status.active_output_mask = applied_frame_.enabled_mask;
+    status.configured_output_mask = parameters_valid_
+        ? parameters_.configured_mask : 0U;
+    status.right_output_mask = parameters_valid_ ? parameters_.right_mask : 0U;
+    status.left_output_mask = parameters_valid_ ? parameters_.left_mask : 0U;
     status.state = output_state;
     status.backend_ready = backend_ready_;
     status.drive_available = drive_available();
@@ -535,6 +613,7 @@ void MotorOutput::reset_runtime_state() noexcept
     parameters_valid_ = false;
     parameter_update_pending_ = false;
     safety_inhibit_observed_ = true;
+    hard_safe_inhibit_observed_ = true;
     backend_ready_ = false;
     safe_off_ = false;
     invalidate_parameter_bindings();
@@ -623,6 +702,45 @@ bool MotorOutput::safety_negative(const vehicle_status_s &status) noexcept
     return status.timestamp != 0U &&
            (status.arming_state != vehicle_status_s::ARMING_STATE_ARMED ||
             status.nav_state != vehicle_status_s::NAVIGATION_STATE_MANUAL ||
+            status.vehicle_type != vehicle_status_s::VEHICLE_TYPE_ROVER ||
+            status.failure_detector_status != vehicle_status_s::FAILURE_NONE ||
+            status.hil_state != vehicle_status_s::HIL_STATE_OFF ||
+            status.failsafe);
+}
+
+bool MotorOutput::hard_safe_negative(
+    const actuator_armed_s &armed) noexcept
+{
+    return armed.timestamp != 0U &&
+           (armed.prearmed || armed.kill || armed.termination ||
+            armed.lockdown || armed.in_esc_calibration_mode);
+}
+
+bool MotorOutput::hard_safe_negative(
+    const vehicle_control_mode_s &control) noexcept
+{
+    return control.timestamp != 0U &&
+           (control.flag_multicopter_position_control_enabled ||
+            !control.flag_control_manual_enabled ||
+            control.flag_control_termination_enabled ||
+            control.flag_control_auto_enabled ||
+            control.flag_control_offboard_enabled ||
+            control.flag_control_position_enabled ||
+            control.flag_control_velocity_enabled ||
+            control.flag_control_altitude_enabled ||
+            control.flag_control_climb_rate_enabled ||
+            control.flag_control_acceleration_enabled ||
+            control.flag_control_attitude_enabled ||
+            control.flag_control_rates_enabled ||
+            control.flag_control_allocation_enabled ||
+            control.source_id != vehicle_status_s::NAVIGATION_STATE_MANUAL);
+}
+
+bool MotorOutput::hard_safe_negative(
+    const vehicle_status_s &status) noexcept
+{
+    return status.timestamp != 0U &&
+           (status.nav_state != vehicle_status_s::NAVIGATION_STATE_MANUAL ||
             status.vehicle_type != vehicle_status_s::VEHICLE_TYPE_ROVER ||
             status.failure_detector_status != vehicle_status_s::FAILURE_NONE ||
             status.hil_state != vehicle_status_s::HIL_STATE_OFF ||

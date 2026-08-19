@@ -46,7 +46,8 @@ private:
     static float expo_curve(float magnitude, float expo) noexcept;
     static bool valid_config(const DifferentialDriveConfig &config) noexcept;
     static void prioritize_axes(float &longitudinal, float &steering,
-                                float priority) noexcept;
+                                float priority,
+                                float lower_motor_limit) noexcept;
     float shape_motor(float command) const noexcept;
     float apply_reversal_delay(float command, ReversalState &state,
                                std::uint64_t now_us) const noexcept;

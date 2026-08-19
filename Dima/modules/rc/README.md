@@ -5,27 +5,48 @@
 - **命名边界：** `RcManualInput` 是 RC 来源转换器，不是 Rover Manual 模式，也不拥有未来 MAVLink 输入；Rover 模式入口明确位于 `Dima/rover/modes/ManualMode.*`。
 - **上游 API 保留：** 保留上游 SBUS、RCUpdate、ManualControl 的 Topic、参数名和公开状态语义，仅对本地类名和 UART/DMA 平台外壳做适配。
 
-## SBUS 端口与电气配置
+## 板级串口编号与 SBUS 配置
 
-`RC_INPUT_PROTO` 是协议开关：`0=Disabled`、`2=SBUS`，默认值为 `2`。`RC_PORT_CONFIG` 选择接收端口：`1=UART4/PB8`、`2=UART7/PE7`、`3=UART8/PE0`、`4=USART2/PD6`；值 `0` 只兼容旧参数分区中的安全禁用配置，新配置统一使用 `RC_INPUT_PROTO=0`。
+`Boards/H743/serial_ports.json` 是唯一串口清单。编号直接对应最新版 VCU-H7 原理图与 `H743_FreeRTOS.ioc` 的 STM32 外设尾号；`SERIAL7` 必须表示 UART7，禁止再按旧 ArduPilot `SERIAL_ORDER` 重新排列：
 
-通过 USB 维护口选择 UART4/PB8 并启用 SBUS：
+| 固定序号 | STM32 外设 | TX / RX | 板级连接器角色 | 参数默认值 |
+|---:|---|---|---|---|
+| SERIAL0 | USB OTG1 | USB | MAVLink USB | MavlinkService 独占，无 UART 波特率参数 |
+| SERIAL1 | USART1 | PA9 / PA10 | 串口 1 | `SERIAL1_BAUD=921600`、Function Disabled |
+| SERIAL2 | USART2 | PD5 / PD6 | 串口 2 | `SERIAL2_BAUD=Auto`、Function Disabled |
+| SERIAL3 | USART3 | PD8 / PD9 | 串口 3 | `SERIAL3_BAUD=Auto`、Function Disabled |
+| SERIAL4 | UART4 | PB9 / PB8 | 串口 4 | `SERIAL4_BAUD=115200`、Function Disabled |
+| SERIAL5 | UART5 | PB13 / PB12 | 串口 5 | `SERIAL5_BAUD=115200`、Function Disabled |
+| SERIAL6 | USART6 | PC6 / PC7 | SBUS / 串口 6 | `SERIAL6_BAUD=Auto`、Function RC Input |
+| SERIAL7 | UART7 | PE8 / PE7 | 串口 7 | `SERIAL7_BAUD=57600`、Function Disabled |
+| SERIAL8 | UART8 | PE1 / PE0 | 串口 8 | `SERIAL8_BAUD=115200`、Function Disabled |
 
-```text
-param set RC_PORT_CONFIG 1
-param set RC_INPUT_PROTO 2
-param save
-```
+UART5 同时引到独立串口 5 插座和串口 5/I2C2 复合插座，两处共享同一个 PB13/PB12 外设，不能由两个设备同时驱动 RX。既有物理 UART 的普通 baud 默认随 Schema v1 原端口迁移，只为新增 UART5 使用 CubeMX 的 115200/8N1；这些默认值不代表尚未实现的 GPS、串口 MAVLink 或 RS485 服务。
 
-禁用 RC 输入：
+每个外部端口固定生成 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前只有 `0=Disabled`、`1=RC Input` 两个具有生产数据路径的 Function。重新分配 RC 时先把旧端口设为 Disabled，再把目标端口设为 RC Input；多个 RC owner 会在启动时 fail-closed。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
 
-```text
-param set RC_INPUT_PROTO 0
-param save
-```
+SerialConfig 在 RC driver 前应用普通 8N1 波特率。被唯一 `SERIALx_FUNCTION=RC Input` 选中的端口随后由 SBUS 临时接管为 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`，释放时恢复普通 UART、FIFO 和 GPIO。Auto/0 只表示最终波特率交给对应 Function driver；当前未实现的 GPS、串口 MAVLink、RS485 数据服务不会因连接器名称而被虚构。
 
-两项参数都要求 Runtime 重启或 MCU 重启后生效。项目不再提供手动极性参数；选择 SBUS 后后端固定接管为原始反相 SBUS 所需的 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`。
+旧 `RC_PORT_CONFIG` 只保留在参数存储迁移链中，不再进入 QGC 参数列表，也拒绝新写入。Schema v1→v2 按物理 UART 迁移旧 `SERIAL1..7_*`，新增 UART5/SERIAL5 使用板级默认值；迁移后由 `DIMA_SER_VER=2` 防止重复执行。旧 Schema 的 `SERIAL7` 实际是 USART1，因此会迁到新 `SERIAL1`，不会被静默改接到 UART7。
 
 接管前会保存 UART Init、AdvancedInit、FIFO 模式与阈值以及 RX GPIO 状态。协议禁用、模块停止、Runtime shutdown 或启动失败回滚时，DMA 和 IRQ 先关闭，再恢复保存的普通 UART 配置。恢复失败会保留接管上下文供下一次 stop 重试，并让 Application Runtime 保持 Error、禁止释放相关资源。主动禁用属于正常 Running 生命周期，不产生后端故障事件；Commander 仍会因为没有新鲜 RC 而保持不可解锁。
 
-UART/DMA ISR 只复制字节、记录 TIM2 HRT 到达时间并唤醒 `wq:io`。格式化状态和故障日志由任务上下文产生，连续通道数据只由低优先级 `LogService` 输出。
+UART/DMA ISR 只复制字节、记录 TIM2 HRT 到达时间并唤醒 `wq:io`。格式化状态和故障日志由任务上下文产生；对外原始通道流只能由 MavlinkService 从 `input_rc` 转为 `RC_CHANNELS`，其他模块不得直接写 USB。
+
+## 输入稳定与动作边界
+
+SBUS 属于无强 CRC 的弱协议，冷启动、Failsafe 清除、UART/DMA 恢复或重新扫描后必须连续收到 3 个健康帧才建立协议锁定。锁定前仍发布校准前通道供 QGC 观察，但 `input_rc.rc_lost=true`，不能进入控制链；`frame-lost` 只累计跳帧，不单独判定整条链路失联。
+
+协议锁定后，`RCUpdate` 还要求采样时间连续健康 100 ms 才把 `rc_channels.signal_lost` 清零。任何接收机 Failsafe、UART/DMA 故障、显式 lost 或 `COM_RC_LOSS_T` 无新帧超时都会清除恢复窗口。
+
+Arm/Kill 离散状态必须至少两份严格前进且一致的样本，并保持 200 ms 才能进入边沿转换。Runtime 启动、RC 恢复以及映射/阈值变化后的首个稳定状态只建立基线；Arm 仅由稳定 OFF→ON 触发，Disarm 仅由稳定 ON→OFF 触发。
+
+## QGC 校准与映射
+
+MavlinkService 在原始样本新鲜且通道数有效时，从校准前的 `input_rc` 以 5 Hz 发送 `RC_CHANNELS`；接收机 failsafe/lost 标志仍让 `RCUpdate`/Commander 拒绝控制，但不会隐藏同时存在的原始通道，便于 QGC 校准和诊断。完全无帧、零通道或样本超时期间停流，恢复后立即发送。QGC 写回 `RC1..18_MIN/TRIM/MAX/REV`、`RC_CHAN_CNT` 和四个主控制映射；`RCUpdate` 在 `parameter_update` 后重新加载并继续执行范围、方向和通道有效性门禁。
+
+默认只为差速 Rover 预设 `RC_MAP_THROTTLE=1`、`RC_MAP_YAW=2`，Roll/Pitch 默认未映射。Stock QGC 的校准向导仍固定识别四轴，因此保留 Roll/Pitch 参数和规范化消息字段；Rover 的 `manual_control_setpoint.valid`、解锁预检及运动控制只依赖中心双向 Throttle/Yaw，Roll/Pitch 不进入车辆输出。
+
+Arm 只实现二段开关。启用 QGC Advanced UI 后在 Parameters 页面配置 `RC_MAP_ARM_SW=1..18` 和 `RC_ARMSWITCH_TH=-1..1`；正阈值高端为 ON，负阈值反向。Runtime 启动、RC 恢复或 Arm/Kill 映射及阈值变化后的第一份状态只建立基线，随后 OFF→ON 请求 Arm、ON→OFF 请求 Disarm，配置过程不会合成解锁边沿。当前没有可选择模式：`COM_FLTMODE1..6` 不再定义，`RC_MAP_FLTMODE` 仅保留既有 QGC/参数 handle 兼容且固定为 `0=Disabled`，RCUpdate 与 Commander 不消费 mode-slot。瞬时按键、长按 Toggle 和完整多模式能力不在本阶段。
+
+`COM_RC_IN_MODE` 只允许 `0=RC only`，其他控制源模式在协议写入时拒绝、在存储加载时 fail-closed。`RC_MAP_FLAPS` 与已有 Aux 映射进入 `rc_channels`/`manual_control_setpoint`；`PARAM_MAP_RC` 在线参数调节不在本阶段。

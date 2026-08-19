@@ -29,7 +29,7 @@ constexpr std::uint32_t kEventSignalState = 0x52435503U;
 
 constexpr const char *kMappingNames[13] = {
     "RC_MAP_ROLL", "RC_MAP_PITCH", "RC_MAP_THROTTLE", "RC_MAP_YAW",
-    "RC_MAP_ARM_SW", "RC_MAP_KILL_SW", "RC_MAP_FLTMODE",
+    "RC_MAP_ARM_SW", "RC_MAP_KILL_SW", "RC_MAP_FLAPS",
     "RC_MAP_AUX1", "RC_MAP_AUX2", "RC_MAP_AUX3", "RC_MAP_AUX4",
     "RC_MAP_AUX5", "RC_MAP_AUX6",
 };
@@ -153,15 +153,35 @@ void RCUpdate::Run()
     const bool invalid_input = !have_input_ || latest_input_.rc_failsafe || latest_input_.rc_lost ||
                                latest_input_.channel_count < required_channels ||
                                latest_input_.channel_count > input_rc_s::RC_INPUT_MAX_CHANNELS;
-    const bool lost = !parameters_valid_ || timed_out || invalid_input;
+    const bool unhealthy = !parameters_valid_ || timed_out || invalid_input;
 
-    if (lost) {
+    if (unhealthy) {
+        recovery_start_time_us_ = 0U;
         if (input_changed || parameters_changed || !output_published_ || !signal_lost_) {
             publish_lost(now_us);
         }
         // uORB callback 的 ScheduleNow 会覆盖周期字段，因此每次运行后重新建立超时轮询。
         (void)ScheduleOnInterval(kPollIntervalUs);
         return;
+    }
+
+    if (signal_lost_) {
+        if (recovery_start_time_us_ == 0U ||
+            last_input_time_us_ < recovery_start_time_us_) {
+            recovery_start_time_us_ = last_input_time_us_;
+        }
+        const bool recovery_stable = input_changed &&
+            last_input_time_us_ >= recovery_start_time_us_ &&
+            last_input_time_us_ - recovery_start_time_us_ >=
+                kRecoveryStableUs;
+        if (!recovery_stable) {
+            if (input_changed || parameters_changed || !output_published_) {
+                publish_lost(now_us);
+            }
+            (void)ScheduleOnInterval(kPollIntervalUs);
+            return;
+        }
+        recovery_start_time_us_ = 0U;
     }
 
     if (input_changed || parameters_changed || signal_lost_) {
@@ -180,6 +200,7 @@ void RCUpdate::reset_runtime_state() noexcept
     arm_threshold_handle_ = PARAM_INVALID;
     kill_threshold_handle_ = PARAM_INVALID;
     loss_timeout_handle_ = PARAM_INVALID;
+    rc_input_mode_handle_ = PARAM_INVALID;
 
     calibration_.fill(Calibration{});
     calibration_valid_.fill(false);
@@ -199,8 +220,10 @@ void RCUpdate::reset_runtime_state() noexcept
     arm_threshold_ = 0.75F;
     kill_threshold_ = 0.75F;
     loss_timeout_s_ = 0.5F;
+    rc_input_mode_ = 0;
     last_input_time_us_ = 0U;
     last_valid_time_us_ = 0U;
+    recovery_start_time_us_ = 0U;
     parameter_handles_ready_ = false;
     parameters_valid_ = false;
     have_input_ = false;
@@ -229,9 +252,11 @@ bool RCUpdate::initialize_parameter_handles() noexcept
     arm_threshold_handle_ = param_find("RC_ARMSWITCH_TH");
     kill_threshold_handle_ = param_find("RC_KILLSWITCH_TH");
     loss_timeout_handle_ = param_find("COM_RC_LOSS_T");
+    rc_input_mode_handle_ = param_find("COM_RC_IN_MODE");
     return valid && channel_count_handle_ != PARAM_INVALID &&
            arm_threshold_handle_ != PARAM_INVALID && kill_threshold_handle_ != PARAM_INVALID &&
-           loss_timeout_handle_ != PARAM_INVALID;
+           loss_timeout_handle_ != PARAM_INVALID &&
+           rc_input_mode_handle_ != PARAM_INVALID;
 }
 
 bool RCUpdate::load_parameters() noexcept
@@ -241,6 +266,7 @@ bool RCUpdate::load_parameters() noexcept
     valid = valid && param_get(arm_threshold_handle_, &arm_threshold_) == 0;
     valid = valid && param_get(kill_threshold_handle_, &kill_threshold_) == 0;
     valid = valid && param_get(loss_timeout_handle_, &loss_timeout_s_) == 0;
+    valid = valid && param_get(rc_input_mode_handle_, &rc_input_mode_) == 0;
 
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
         Calibration loaded{};
@@ -258,10 +284,10 @@ bool RCUpdate::load_parameters() noexcept
 
     valid = valid && configured_channel_count_ >= 0 &&
             configured_channel_count_ <= static_cast<std::int32_t>(kChannelCount) &&
-            std::isfinite(arm_threshold_) && arm_threshold_ >= 0.0F && arm_threshold_ <= 1.0F &&
+            std::isfinite(arm_threshold_) && arm_threshold_ >= -1.0F && arm_threshold_ <= 1.0F &&
             std::isfinite(kill_threshold_) && kill_threshold_ >= 0.0F && kill_threshold_ <= 1.0F &&
             std::isfinite(loss_timeout_s_) && loss_timeout_s_ >= 0.1F &&
-            loss_timeout_s_ <= 35.0F;
+            loss_timeout_s_ <= 35.0F && rc_input_mode_ == 0;
 
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
         const Calibration &cal = calibration_[channel];
@@ -351,6 +377,7 @@ void RCUpdate::rebuild_functions(std::uint8_t channel_count) noexcept
     assign(Mapping::Yaw, rc_channels_s::FUNCTION_YAW);
     assign(Mapping::Arm, rc_channels_s::FUNCTION_ARMSWITCH);
     assign(Mapping::Kill, rc_channels_s::FUNCTION_KILLSWITCH);
+    assign(Mapping::Flaps, rc_channels_s::FUNCTION_FLAPS);
     assign(Mapping::Aux1, rc_channels_s::FUNCTION_AUX_1);
     assign(Mapping::Aux2, rc_channels_s::FUNCTION_AUX_2);
     assign(Mapping::Aux3, rc_channels_s::FUNCTION_AUX_3);
@@ -418,7 +445,6 @@ void RCUpdate::publish_switches(std::uint64_t sample_time) noexcept
     manual_control_switches_s switches{};
     switches.timestamp = hrt_absolute_time();
     switches.timestamp_sample = sample_time;
-    switches.mode_slot = mode_slot();
     switches.arm_switch = switch_position(rc_channels_s::FUNCTION_ARMSWITCH, arm_threshold_);
     switches.kill_switch = switch_position(rc_channels_s::FUNCTION_KILLSWITCH, kill_threshold_);
     switches.photo_switch = switch_position(rc_channels_s::FUNCTION_AUX_3, 0.5F);
@@ -445,22 +471,6 @@ std::uint8_t RCUpdate::switch_position(std::uint8_t function, float threshold) c
                                           : value > threshold;
     return active ? manual_control_switches_s::SWITCH_POS_ON :
                     manual_control_switches_s::SWITCH_POS_OFF;
-}
-
-std::uint8_t RCUpdate::mode_slot() const noexcept
-{
-    const std::int32_t mapping = mappings_[static_cast<std::size_t>(Mapping::FlightMode)];
-    if (mapping <= 0 || mapping > rc_.channel_count ||
-        !calibration_valid_[static_cast<std::size_t>(mapping - 1)]) {
-        return manual_control_switches_s::MODE_SLOT_NONE;
-    }
-
-    const float raw = rc_.channels[static_cast<std::size_t>(mapping - 1)];
-    if (!std::isfinite(raw)) return manual_control_switches_s::MODE_SLOT_NONE;
-    const float value = constrain(raw, -1.0F, 1.0F);
-    std::uint8_t slot = static_cast<std::uint8_t>(((value + 1.0F) * 3.0F)) + 1U;
-    return slot > manual_control_switches_s::MODE_SLOT_NUM ?
-           manual_control_switches_s::MODE_SLOT_NUM : slot;
 }
 
 bool RCUpdate::switches_equal(const manual_control_switches_s &lhs,

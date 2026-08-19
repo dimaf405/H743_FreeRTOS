@@ -551,6 +551,28 @@ def verify_lifecycle_symbols(elf: Elf32) -> None:
         lambda symbol: "RoverDifferential5startEv" in symbol.name and
         symbol.symbol_type == STT_FUNC,
     )
+    for description, fragment in (
+            ("SbusRc::start()", "SbusRc5startEv"),
+            ("RCUpdate::start()", "RCUpdate5startEv"),
+            ("RcManualInput::start()", "RcManualInput5startEv"),
+            ("Commander::start()", "Commander5startEv"),
+            ("DifferentialDrive::update()", "DifferentialDrive6updateE"),
+            ("BootHealthService::health_generation()",
+             "BootHealthService17health_generationEv"),
+            ("ApplicationContext::watchdog_feed_allowed()",
+             "ApplicationContext21watchdog_feed_allowedE"),
+            ("Stm32IndependentWatchdog::start()",
+             "Stm32IndependentWatchdog5startE"),
+            ("Stm32IndependentWatchdog::feed()",
+             "Stm32IndependentWatchdog4feedEv")):
+        require_symbol_match(
+            elf, description,
+            lambda symbol, fragment=fragment:
+                fragment in symbol.name and symbol.symbol_type == STT_FUNC,
+        )
+    app_main = elf.symbol("app_main_task")
+    if app_main.symbol_type != STT_FUNC:
+        raise ElfVerificationError("app_main_task is not a function")
 
 
 def verify_actuator_symbols(elf: Elf32) -> None:
@@ -607,6 +629,7 @@ def verify(elf_path: pathlib.Path) -> None:
     print(f"  init array: {len(INIT_ARRAY_ALLOWLIST)} allowed entries")
     print(f"  DMA region: 0x{DMA_BASE:08x}, {DMA_SIZE} bytes maximum")
     print("  six-channel safety-gated PWM chain: linked")
+    print("  SBUS/Commander/IWDG health chain: linked")
 
 
 def parse_args(arguments: Iterable[str] | None = None) -> argparse.Namespace:

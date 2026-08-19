@@ -75,28 +75,39 @@ bool DifferentialDrive::valid_config(
 }
 
 void DifferentialDrive::prioritize_axes(float &longitudinal, float &steering,
-                                        float priority) noexcept
+                                        float priority,
+                                        float lower_motor_limit) noexcept
 {
-    longitudinal = clamp(longitudinal, -1.0F, 1.0F);
+    const float lower = clamp(lower_motor_limit, -1.0F, -0.1F);
+    longitudinal = clamp(longitudinal, lower, 1.0F);
     steering = clamp(steering, -1.0F, 1.0F);
-    const float maximum = std::fabs(longitudinal) + std::fabs(steering);
-    if (maximum <= 1.0F) {
+    const float steering_magnitude = std::fabs(steering);
+    const float upper_output = longitudinal + steering_magnitude;
+    const float lower_output = longitudinal - steering_magnitude;
+    const float saturation = std::fmax(upper_output, lower_output / lower);
+    if (saturation <= 1.0F) {
         return;
     }
 
-    const float fair_scale = 1.0F / maximum;
+    const float fair_scale = 1.0F / saturation;
     const float fair_longitudinal = longitudinal * fair_scale;
     const float fair_steering = steering * fair_scale;
 
     const float throttle_priority_longitudinal = longitudinal;
+    const float throttle_priority_range = std::fmax(
+        0.0F,
+        std::fmin(1.0F - longitudinal, longitudinal - lower));
     const float throttle_priority_steering = clamp(
-        steering, -(1.0F - std::fabs(longitudinal)),
-        1.0F - std::fabs(longitudinal));
+        steering, -throttle_priority_range, throttle_priority_range);
 
-    const float steering_priority_steering = steering;
+    const float maximum_steering = 0.5F * (1.0F - lower);
+    const float steering_priority_steering = clamp(
+        steering, -maximum_steering, maximum_steering);
+    const float steering_priority_magnitude =
+        std::fabs(steering_priority_steering);
     const float steering_priority_longitudinal = clamp(
-        longitudinal, -(1.0F - std::fabs(steering)),
-        1.0F - std::fabs(steering));
+        longitudinal, lower + steering_priority_magnitude,
+        1.0F - steering_priority_magnitude);
 
     const float bounded_priority = clamp(priority, 0.0F, 1.0F);
     if (bounded_priority <= 0.5F) {
@@ -210,8 +221,9 @@ DifferentialDriveOutput DifferentialDrive::update(
     }
 
     float mixed_longitudinal = limited_longitudinal_;
+    const float lower_motor_limit = -1.0F / config_.thrust_asymmetry;
     prioritize_axes(mixed_longitudinal, adjusted_steering,
-                    config_.steering_throttle_mix);
+                    config_.steering_throttle_mix, lower_motor_limit);
 
     float right = shape_motor(mixed_longitudinal - adjusted_steering);
     float left = shape_motor(mixed_longitudinal + adjusted_steering);

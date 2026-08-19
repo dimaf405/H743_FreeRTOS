@@ -32,6 +32,7 @@ private:
     static constexpr std::size_t kCalibrationFieldCount = 5U;
     static constexpr std::size_t kMappingCount = 13U;
     static constexpr std::uint32_t kPollIntervalUs = 20000U;
+    static constexpr std::uint64_t kRecoveryStableUs = 100000ULL;
 
     struct Calibration {
         float minimum{0.0F};
@@ -48,7 +49,7 @@ private:
         Yaw,
         Arm,
         Kill,
-        FlightMode,
+        Flaps,
         Aux1,
         Aux2,
         Aux3,
@@ -69,7 +70,6 @@ private:
     void publish_lost(std::uint64_t now_us) noexcept;
     void publish_switches(std::uint64_t sample_time) noexcept;
     std::uint8_t switch_position(std::uint8_t function, float threshold) const noexcept;
-    std::uint8_t mode_slot() const noexcept;
     bool switches_equal(const manual_control_switches_s &lhs,
                         const manual_control_switches_s &rhs) const noexcept;
     void set_signal_lost(bool lost) noexcept;
@@ -85,6 +85,7 @@ private:
     param_t arm_threshold_handle_{PARAM_INVALID};
     param_t kill_threshold_handle_{PARAM_INVALID};
     param_t loss_timeout_handle_{PARAM_INVALID};
+    param_t rc_input_mode_handle_{PARAM_INVALID};
 
     std::array<Calibration, kChannelCount> calibration_{};
     std::array<bool, kChannelCount> calibration_valid_{};
@@ -98,8 +99,10 @@ private:
     float arm_threshold_{0.75F};
     float kill_threshold_{0.75F};
     float loss_timeout_s_{0.5F};
+    std::int32_t rc_input_mode_{0};
     std::uint64_t last_input_time_us_{0U};
     std::uint64_t last_valid_time_us_{0U};
+    std::uint64_t recovery_start_time_us_{0U};
     dima::middleware::lifecycle::ModuleState state_{dima::middleware::lifecycle::ModuleState::Stopped};
     bool parameter_handles_ready_{false};
     bool parameters_valid_{false};
