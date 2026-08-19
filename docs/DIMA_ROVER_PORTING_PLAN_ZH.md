@@ -59,7 +59,7 @@ Dima/
 ├── adapters/                       只依赖 capability 的外部协议编解码/适配
 ├── platform/api/                   OS/MCU 无关公共契约
 ├── platform/freertos/              Task、同步、Heap 与 transaction 后端
-├── platform/stm32h7/               MPU/cache/DMA/Flash/时钟/USB/串口后端
+├── platform/stm32h7/               system/memory/flash/serial/io 五组 MCU 后端
 ├── middleware/                     lifecycle、parameters、uORB、WorkQueue
 ├── modules/                        Parameter、Log、BootHealth、RC、MotorOutput、安全等已实现运行模块
 ├── lib/                            平台无关算法、容器和移植库

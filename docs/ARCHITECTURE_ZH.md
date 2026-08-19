@@ -16,7 +16,7 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── adapters/                 仅依赖公共 capability 的外部协议编解码/适配
 ├── platform/api/             OS/MCU 无关 capability 与 opaque handle
 ├── platform/freertos/        Task、同步、Heap 和 transaction 后端
-├── platform/stm32h7/         MPU/cache/DMA/Flash/时钟/USB/串口后端
+├── platform/stm32h7/         system/memory/flash/serial/io 五组 MCU 后端
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
 ├── modules/                  具有独立生命周期的运行模块
@@ -26,6 +26,7 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 │   ├── motor/                安全门控后的六路 MotorOutput
 │   ├── parameters/           ParameterService 参数持久化与在线管理
 │   ├── rc/                   SBUS、校准、通道映射与 RC 手动输入转换
+│   ├── serial/               板级串口参数绑定、校验与普通配置应用
 │   └── safety/               Commander 安全状态机（Arming、Failsafe、Termination）
 ├── lib/                      平台无关算法、容器和移植库
 │   ├── containers/           平台无关容器
@@ -45,11 +46,11 @@ Drivers/                      CMSIS 与 STM32 HAL 厂商代码
 Middlewares/                  FreeRTOS、MCUboot、ST USB 等第三方代码
 USB_DEVICE/                   CubeMX USB Device 集成层
 Bootloader/                   独立 MCUboot 固件镜像
-Linker/、make/、tools/        链接、构建、签名和升级工具
+Linker/、make/、tools/        链接、构建、签名和升级工具（project/release 分层）
 docs/                         计划、架构、ADR、来源和维护文档
 ```
 
-已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/Clock.cpp`。参数 Journal 与 STM32H7 raw Flash、USB Console 与 STM32 USB transport、SBUS 模块与 STM32 UART/DMA 驱动均已拆分，不再保留混合后端。源码树只呈现已经存在的实现；EKF2、PID、SlewRate 和阶段 8 控制器在正式导入前只保留于计划/ADR，不建立 README-only 占位目录或无消费者的预实现源码。
+已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/system/Clock.cpp`。参数 Journal 与 `flash/` raw Flash、USB Console 与 `io/` USB transport、SBUS 模块与 `serial/` UART/DMA 驱动均已拆分，不再保留混合后端。源码树只呈现已经存在的实现；EKF2、PID、SlewRate 和阶段 8 控制器在正式导入前只保留于计划/ADR，不建立 README-only 占位目录或无消费者的预实现源码。
 
 ## 3. 依赖规则
 
@@ -60,9 +61,11 @@ docs/                         计划、架构、ADR、来源和维护文档
 - `Dima/modules` 和 `Dima/middleware` 禁止反向依赖 `Dima/rover`。
 - `application/rover/modules/middleware/messages/lib/adapters` 只允许依赖标准库、内部公共契约和 `Dima/platform/api`，禁止 FreeRTOS、HAL、CMSIS、SCB/NVIC、Core、Board 与 USB 生成头。
 - `Dima/platform/api` 只定义整数、尺寸、opaque handle、callback 和窄 capability，不暴露 OS/MCU/厂商类型。
-- `Dima/platform/freertos` 只连接 `platform/api` 与 FreeRTOS；`Dima/platform/stm32h7` 只连接 `platform/api`、HAL/CMSIS 和板级定义，二者禁止互相包含。
+- `Dima/platform/api` 按 Execution、Synchronization、TaskRuntime、Memory、Flash、Console、Serial、Boot、ActuatorPwm 等 capability 分头提供契约；`Services` 只负责安装和取得组合后的 capability，不保留重新聚合全部接口的 umbrella 头。
+- `Dima/platform/freertos` 只连接 `platform/api` 与 FreeRTOS；`Dima/platform/stm32h7` 只连接 `platform/api`、HAL/CMSIS 和板级定义，二者禁止互相包含。STM32H7 根目录只保留 `HardwareServices.hpp` 工厂声明，具体实现按 `system/memory/flash/serial/io` 下沉。
 - `Boards/H743` 负责 MCU、引脚、DMA、PWM、Flash 和总线接线，不依赖上层控制模块。
 - `Core/` 与 `USB_DEVICE/` 的生成区只保留必要接线，禁止写入业务逻辑。
+- `Core/Src/stm32h7xx_hal_msp.c` 与 `USB_DEVICE/Target/usbd_conf.c` 分别由唯一 `H743_FreeRTOS.ioc` 的 MCU MSP/USB Device 配置集中生成，是当前单文件 600 行上限的必要生成区例外；禁止为追求行数而手工分源，也禁止借此例外加入业务逻辑。
 - `Core/Inc/FreeRTOSConfig.h` 只是 CubeMX/FreeRTOS 查找约定所需的转发头，唯一配置实现为 `Dima/platform/freertos/FreeRTOSConfig.h`；STM32H7 capability 工厂统一由 `HardwareServices.hpp` 声明。
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源；禁止第二份 `.ioc`、README-only 源码目录、Dima 同名源码文件和未列入 `make/project.mk` 的翻译单元。
 - `make check-architecture` 检查底层 include/API、cache/DMA/Flash 操作所有权、依赖方向和私有 include 集，并是 `firmware/verify/dima_rover` 的强制前置条件。
@@ -201,7 +204,7 @@ Storage       128 KiB
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
 - MAVLink XML 固定为 upstream `33af200d`，pymavlink 固定为 `fcaa2c7d`/2.4.47；`make clean` 删除 `build/generated/mavlink` 与 `build/generated/component_metadata`，正式构建从受校验共享缓存重新生成 24 条消息的方言和确定性 General/Parameter JSON、XZ、CRC及 Flash 数组，不读取源码树历史生成物。
 - `tools/check_architecture.py` 在源码阶段拒绝重复 Rover 根、逆向依赖、越权硬件访问、生命周期契约缺失、非零 PWM compare 和未授权执行器消费者；`tools/verify_application_elf.py` 在最终应用 ELF 上检查向量、ISR 强弱绑定、section 地址/容量、SBUS DMA/CPU Ring、生命周期符号、初始化数组白名单，并要求唯一六路安全 PWM 链的 HAL、board 和 MotorOutput 符号实际链接。源码扫描通过不等于 ELF、目标构建或板测通过。
-- VS Code 的 Microsoft C/C++ 插件只使用 `make intellisense` 从真实 Make 配方生成的主机本地 `compile_commands.json`。数据库同时覆盖 Application、MCUboot 和各层私有 include/define；源码清单或编译参数变化后必须重新生成。可移植的 `.vscode` 配置纳入源码，包含绝对路径的数据库和符号索引继续忽略。
+- VS Code 的 Microsoft C/C++ 插件只使用 `make intellisense` 从真实 Make 配方生成的主机本地 `compile_commands.json`。数据库同时覆盖 Application、MCUboot 和各层私有 include/define；源码清单或编译参数变化后必须重新生成。`.vscode/` 中的编译器绝对路径、数据库、符号索引和主机配置全部保持本地，不纳入源码。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。
 - 参数存储与 MCUboot confirm 共用 Flash transaction 和 Armed/Flash coordinator；锁顺序固定为存储/Journal → transaction → interlock，confirm 使用非阻塞 transaction 并保留 `DEFERRED`。
 - MCUboot 可在跳转前关闭 cache，每个应用镜像必须自行且幂等地重建 MPU/cache 契约。
@@ -212,6 +215,8 @@ Storage       128 KiB
 2026-08-19 又在 Windows 原生进程中使用 GNU Make 4.4.1 与项目缓存 Arm GCC 10.3.1 对当前 SBUS→PWM→电机安全链执行 `make clean` 后完整 `make -j4 NO_COLOR=1 dima_rover`，通过 225 文件架构门禁、Application/MCUboot 编译链接、签名、Factory HEX、`0x08040400`、两份 ELF 未解析符号以及 SBUS/Commander/MotorOutput/IWDG/MCUboot-feed 符号门禁。未签名 Application BIN 固定为 246096 bytes，MCUboot BIN 固定为 48100 bytes；同一 image digest `601c65353ffebce20cea8f040d975000e3c4caa2b27aaa15dd409529740e26ce` 的两次合法 ECDSA P-256 重签分别产生 247271/247270-byte Signed BIN 和 710861/710859-byte Factory HEX。imgtool 使用可变长度 DER 签名，因此 Signed/Factory 文件长度和文件 SHA-256 不是确定性构建合同，验收以未签名 ELF/BIN、image digest、签名校验、地址布局和未解析符号为准。该结果仍不替代目标板电气、波形、复位时限和车辆行为验收。
 
 同日 ROM DFU 首启实板暴露并修复两项启动缺陷：全片擦除后无有效 D3 头会令 MCUboot 应用桥接永久停在 Recovery；应用 IWDG 又曾在写 start key 前等待 SR 同步，导致冷启动 LSI 未运行时 `start(2048)` 主动 panic。真实持久记录为 `ERROR_HANDLER / APPLICATION_RUNNING / stacked_r0=2048 / CFSR=HFSR=ABFSR=0`。修复后的 Windows 原生 clean build 再次通过 `[212/212]`，Application `233772/12284/356176` bytes，MCUboot `47864/380/10192` bytes、BIN 48252 bytes，image digest `835947050b2df9062be4289bcb5b876abe0dee99b46792051827e79f123eeec3`；实板完成 MCUboot→bridge reset→Application 双枚举，并由只读 preflight 识别为 `Dima Rover MAVLink`。实际 IWDG 复位时限和 PWM/GPIO 行为仍属于 `BOARD PENDING`。
+
+同日继续把 STM32H7 扁平后端收敛为 `system/memory/flash/serial/io` 五个真实职责目录；`HardwareServices.hpp` 仍只是工厂声明，唯一组合根没有离开 `Boards/H743`，`flash/flash_fault.h` 则成为 Core 弱钩子与 Flash 强实现共同包含的唯一 C ABI 声明。迁移后 Windows 原生 clean build 通过 `[230/230]` 和 261 文件架构检查，Application/MCUboot 两份 BIN、program headers、定义符号表及参数/Metadata 生成树均与迁移前逐字节一致；仅 ELF 的 DWARF 源路径随目录变化。`make intellisense` 已同步为新路径，本次没有执行新的目标板电气或车辆行为验证。
 
 ```powershell
 make verify
