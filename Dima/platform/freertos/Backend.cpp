@@ -1,10 +1,10 @@
 #include "Backend.hpp"
+#include "BackendTimeout.hpp"
 
 #include "platform/api/platform_config.h"
 
 #include <atomic>
 #include <cstring>
-#include <new>
 
 extern "C" {
 #include "FreeRTOS.h"
@@ -25,41 +25,12 @@ constexpr std::size_t kTaskStackBlockBytes = 256U;
 constexpr std::size_t kTaskStackBlocks =
     kTaskStackPoolBytes / kTaskStackBlockBytes;
 constexpr std::size_t kTaskBitmapWords = (kTaskStackBlocks + 31U) / 32U;
-constexpr std::uint64_t kMicrosecondsPerSecond = 1000000ULL;
 
 extern "C" std::uint8_t __dima_heap_start__;
 extern "C" std::uint8_t __dima_heap_end__;
 
 alignas(32) std::uint8_t g_task_stack_pool[kTaskStackPoolBytes]
     __attribute__((section(".dima_task_pool")));
-
-TickType_t timeout_to_ticks(Timeout timeout) noexcept
-{
-    if (timeout.infinite) {
-        return portMAX_DELAY;
-    }
-    if (timeout.microseconds == 0U) {
-        return 0U;
-    }
-
-    constexpr TickType_t kMaximumFiniteTicks = portMAX_DELAY - 1U;
-    constexpr std::uint64_t kMaximumFiniteUs =
-        (static_cast<std::uint64_t>(kMaximumFiniteTicks) *
-         kMicrosecondsPerSecond) /
-        DIMA_KERNEL_TICK_HZ;
-    if (timeout.microseconds >= kMaximumFiniteUs) {
-        return kMaximumFiniteTicks;
-    }
-
-    std::uint64_t ticks =
-        (timeout.microseconds * DIMA_KERNEL_TICK_HZ +
-         kMicrosecondsPerSecond - 1U) /
-        kMicrosecondsPerSecond;
-    if (ticks == 0U) {
-        ticks = 1U;
-    }
-    return static_cast<TickType_t>(ticks);
-}
 
 bool pointer_in_range(std::uintptr_t pointer, std::uintptr_t begin,
                       std::uintptr_t end, std::size_t stride) noexcept
@@ -624,148 +595,3 @@ Heap &heap() noexcept { return backend(); }
 FlashTransactionManager &flash_transactions() noexcept { return backend(); }
 
 } // namespace dima::platform::freertos
-
-extern "C" void vApplicationMallocFailedHook(void)
-{
-    dima::platform::freertos::heap().record_failure();
-}
-
-namespace {
-
-void *allocate_aligned(std::size_t size, std::align_val_t requested) noexcept
-{
-    std::size_t alignment = static_cast<std::size_t>(requested);
-    if (alignment < alignof(void *)) {
-        alignment = alignof(void *);
-    }
-    if ((alignment & (alignment - 1U)) != 0U ||
-        size > SIZE_MAX - (alignment - 1U) - sizeof(void *)) {
-        dima::platform::freertos::heap().record_failure();
-        return nullptr;
-    }
-
-    void *const raw = dima::platform::freertos::heap().allocate(
-        size + alignment - 1U + sizeof(void *),
-        dima::platform::AllocationDomain::Service);
-    if (raw == nullptr) {
-        return nullptr;
-    }
-    const std::uintptr_t first =
-        reinterpret_cast<std::uintptr_t>(raw) + sizeof(void *);
-    const std::uintptr_t aligned =
-        (first + alignment - 1U) & ~(alignment - 1U);
-    auto **const header = reinterpret_cast<void **>(aligned);
-    header[-1] = raw;
-    return reinterpret_cast<void *>(aligned);
-}
-
-void deallocate_aligned(void *pointer) noexcept
-{
-    if (pointer == nullptr) {
-        return;
-    }
-    auto **const header = reinterpret_cast<void **>(pointer);
-    dima::platform::freertos::heap().deallocate(header[-1]);
-}
-
-} // namespace
-
-void *operator new(std::size_t size, const std::nothrow_t &) noexcept
-{
-    return dima::platform::freertos::heap().allocate(
-        size, dima::platform::AllocationDomain::Service);
-}
-
-void *operator new[](std::size_t size, const std::nothrow_t &) noexcept
-{
-    return dima::platform::freertos::heap().allocate(
-        size, dima::platform::AllocationDomain::Service);
-}
-
-void *operator new(std::size_t size)
-{
-    return dima::platform::freertos::heap().allocate(
-        size, dima::platform::AllocationDomain::Service);
-}
-
-void *operator new[](std::size_t size)
-{
-    return dima::platform::freertos::heap().allocate(
-        size, dima::platform::AllocationDomain::Service);
-}
-
-void *operator new(std::size_t size, std::align_val_t alignment)
-{
-    return allocate_aligned(size, alignment);
-}
-
-void *operator new[](std::size_t size, std::align_val_t alignment)
-{
-    return allocate_aligned(size, alignment);
-}
-
-void *operator new(std::size_t size, std::align_val_t alignment,
-                   const std::nothrow_t &) noexcept
-{
-    return allocate_aligned(size, alignment);
-}
-
-void *operator new[](std::size_t size, std::align_val_t alignment,
-                     const std::nothrow_t &) noexcept
-{
-    return allocate_aligned(size, alignment);
-}
-
-void operator delete(void *pointer) noexcept
-{
-    dima::platform::freertos::heap().deallocate(pointer);
-}
-
-void operator delete[](void *pointer) noexcept
-{
-    dima::platform::freertos::heap().deallocate(pointer);
-}
-
-void operator delete(void *pointer, std::size_t) noexcept
-{
-    dima::platform::freertos::heap().deallocate(pointer);
-}
-
-void operator delete[](void *pointer, std::size_t) noexcept
-{
-    dima::platform::freertos::heap().deallocate(pointer);
-}
-
-void operator delete(void *pointer, std::align_val_t) noexcept
-{
-    deallocate_aligned(pointer);
-}
-
-void operator delete[](void *pointer, std::align_val_t) noexcept
-{
-    deallocate_aligned(pointer);
-}
-
-void operator delete(void *pointer, std::size_t,
-                     std::align_val_t) noexcept
-{
-    deallocate_aligned(pointer);
-}
-
-void operator delete[](void *pointer, std::size_t,
-                       std::align_val_t) noexcept
-{
-    deallocate_aligned(pointer);
-}
-
-void operator delete(void *pointer, std::align_val_t,
-                     const std::nothrow_t &) noexcept
-{
-    deallocate_aligned(pointer);
-}
-
-void operator delete[](void *pointer, std::align_val_t,
-                       const std::nothrow_t &) noexcept
-{
-    deallocate_aligned(pointer);
-}

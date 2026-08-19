@@ -1,6 +1,10 @@
 #pragma once
 
-#include "platform/api/Platform.hpp"
+#include "platform/api/Execution.hpp"
+#include "platform/api/Flash.hpp"
+#include "platform/api/Memory.hpp"
+#include "platform/api/Synchronization.hpp"
+#include "platform/api/TaskRuntime.hpp"
 
 namespace dima::platform::freertos {
 

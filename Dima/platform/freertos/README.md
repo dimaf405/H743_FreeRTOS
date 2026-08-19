@@ -1,6 +1,6 @@
 # FreeRTOS 平台适配
 
-- **职责：** 只实现 `platform/api` 的 TaskRuntime、Synchronization、CriticalSection、ExecutionContext、Heap 和 FlashTransactionManager，不拥有任何 MCU 外设。
+- **职责：** `Backend.cpp` 只实现 `platform/api` 的 TaskRuntime、Synchronization、CriticalSection、ExecutionContext、Heap 和 FlashTransactionManager；私有 `BackendTimeout.hpp` 负责公共超时到 FreeRTOS tick 的饱和换算，`HeapOperators.cpp` 负责全局 C++ 分配 ABI 与 malloc-failed hook。该目录不拥有任何 MCU 外设。
 - **依赖边界：** 仅允许包含 `platform/api` 与 FreeRTOS；禁止 HAL、CMSIS、STM32 寄存器、Board/Core/USB 生成头和业务模块。
 - **固定资源：** 16 个 task slot、12 个 mutex slot、16 个 signal slot；任务栈来自 D1 中独立的 48 KiB `.dima_task_pool`，通用 `heap_5` 固定为 D1 中 256 KiB `.dima_heap`。
 - **时间与超时：** 公共层只传微秒/毫秒和 `Timeout`；本后端向上取整到 1 kHz tick，不向调用者暴露 `TickType_t`、`TaskHandle_t` 或 `portMAX_DELAY`。
