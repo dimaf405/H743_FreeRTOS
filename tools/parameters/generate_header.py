@@ -43,10 +43,39 @@ def render(parameters) -> str:
     return "\n".join(lines)
 
 
-def generate(xml_file: Path, destination: Path | str = "."):
+def order_with_stable_tail(parameters, tail_names: list[str] | None):
+    if not tail_names:
+        return parameters
+
+    by_name = {parameter.attrib["name"]: parameter for parameter in parameters}
+    if len(by_name) != len(parameters):
+        raise RuntimeError("parameter catalogue contains duplicate names")
+    if len(set(tail_names)) != len(tail_names):
+        raise RuntimeError("stable-tail source contains duplicate names")
+
+    unknown = sorted(set(tail_names) - set(by_name))
+    if unknown:
+        raise RuntimeError(
+            f"stable-tail parameters missing from catalogue: {unknown}"
+        )
+
+    tail_set = set(tail_names)
+    return (
+        [parameter for parameter in parameters
+         if parameter.attrib["name"] not in tail_set]
+        + [by_name[name] for name in tail_names]
+    )
+
+
+def generate(
+        xml_file: Path,
+        destination: Path | str = ".",
+        stable_tail_names: list[str] | None = None):
     target = Path(destination)
     target.mkdir(parents=True, exist_ok=True)
-    parameters = read_parameters(xml_file)
+    parameters = order_with_stable_tail(
+        read_parameters(xml_file), stable_tail_names
+    )
     (target / "px4_parameters.hpp").write_text(render(parameters), encoding="utf-8")
     return parameters
 

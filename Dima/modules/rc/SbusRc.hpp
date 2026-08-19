@@ -9,6 +9,7 @@
 #include "parameters/param.h"
 #include "perf/perf_counter.h"
 #include "platform/api/Platform.hpp"
+#include "serial/SerialConfig.hpp"
 #include "uorb/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"
 
@@ -27,7 +28,8 @@ public:
         std::uint32_t read_wakeups{0U};
     };
 
-    explicit SbusRc(dima::platform::SbusInput &backend) noexcept;
+    SbusRc(dima::platform::SbusInput &backend,
+           dima::modules::serial::SerialConfig &serial_config) noexcept;
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
@@ -36,6 +38,7 @@ public:
 
 private:
     static constexpr std::uint32_t kRetryDelayUs = 100000U;
+    static constexpr std::uint8_t kRequiredLockFrames = 3U;
     static constexpr std::size_t kReadBufferSize = 64U;
     void Run() override;
     static void notify_from_isr(void *context) noexcept;
@@ -44,15 +47,16 @@ private:
     bool schedule_signal_timeout() noexcept;
     void fail_scheduling(const char *reason) noexcept;
     bool publish_backend_loss(std::uint64_t now) noexcept;
+    void invalidate_parameters() noexcept;
     void allocate_perf_counters() noexcept;
     void free_perf_counters() noexcept;
     void publish(const dima::rc::SbusParser::Frame &frame,
                  std::uint64_t frame_arrival_us) noexcept;
 
     dima::platform::SbusInput &backend_;
+    dima::modules::serial::SerialConfig &serial_config_;
     dima::rc::SbusParser parser_{};
     uORB::Publication<input_rc_s> input_rc_pub_{ORB_ID(input_rc)};
-    px4::ParamInt<px4::params::RC_PORT_CONFIG> rc_port_{};
     px4::ParamInt<px4::params::RC_INPUT_PROTO> rc_protocol_{};
     px4::ParamFloat<px4::params::COM_RC_LOSS_T> rc_loss_timeout_{};
     dima::middleware::lifecycle::ModuleState state_{dima::middleware::lifecycle::ModuleState::Stopped};
@@ -61,6 +65,7 @@ private:
     bool backend_started_{false};
     bool signal_locked_{false};
     bool signal_seen_{false};
+    std::uint8_t consecutive_healthy_frames_{0U};
     bool failsafe_active_{false};
     bool backend_fault_reported_{false};
     std::uint32_t last_invalid_frames_{0U};

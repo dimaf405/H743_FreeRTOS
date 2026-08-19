@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -14,13 +15,23 @@ BSD_HEADER = """/***************************************************************
  ****************************************************************************/
 """
 
+PARAMETER_DEFINITION_RE = re.compile(
+    r"\bPARAM_DEFINE_(?:INT32|FLOAT)\s*\(\s*"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*,"
+)
+EXPECTED_PARAMETER_COUNT = 205
+EXPECTED_STABLE_TAIL_COUNT = 28
 
-def json_names(path: Path) -> list[str]:
+
+def json_names(path: Path, ordered_names: list[str]) -> list[str]:
     data = json.loads(path.read_text(encoding="utf-8"))
     items = data.get("parameters", [])
     if not isinstance(items, list):
         raise RuntimeError("official JSON has no parameters list")
-    items.sort(key=lambda item: item["name"])
+    by_name = {item["name"]: item for item in items}
+    if len(by_name) != len(items) or set(by_name) != set(ordered_names):
+        raise RuntimeError("JSON catalogue differs from generated handles")
+    items = [by_name[name] for name in ordered_names]
     data["parameters"] = items
     path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     return [item["name"] for item in items]
@@ -33,6 +44,16 @@ def float_literal(value: str) -> str:
     if "." not in text and "e" not in text.lower():
         text += ".0"
     return text + "f"
+
+
+def definition_names(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    names = PARAMETER_DEFINITION_RE.findall(text)
+    if not names:
+        raise RuntimeError(f"stable-tail source has no parameters: {path}")
+    if len(names) != len(set(names)):
+        raise RuntimeError(f"stable-tail source has duplicate parameters: {path}")
+    return names
 
 
 def write_metadata(path: Path, parameters) -> None:
@@ -66,9 +87,10 @@ def write_forward_header(path: Path, include_target: str) -> None:
 
 
 def write_include_forwarders(include_output: Path, generated_header: Path) -> None:
-    write_forward_header(include_output / "px4_platform_common" / "param.h", "parameters/param.h")
-    write_forward_header(include_output / "px4_platform_common" / "param_macros.h", "parameters/param_macros.h")
-    write_forward_header(include_output / "px4_platform_common" / "module_params.h", "parameters/module_params.h")
+    common = include_output / "px4_platform_common"
+    write_forward_header(common / "param.h", "parameters/param.h")
+    write_forward_header(common / "param_macros.h", "parameters/param_macros.h")
+    write_forward_header(common / "module_params.h", "parameters/module_params.h")
     # DrvFS 上的转发 include 会把 Windows 盘符写入 GCC .d 文件并破坏 GNU Make 解析。
     parameter_header = include_output / "parameters" / "px4_parameters.hpp"
     parameter_header.parent.mkdir(parents=True, exist_ok=True)
@@ -78,6 +100,9 @@ def write_include_forwarders(include_output: Path, generated_header: Path) -> No
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", action="append", required=True, type=Path)
+    parser.add_argument(
+        "--stable-tail-source", action="append", required=True, type=Path
+    )
     parser.add_argument("--output", type=Path, default=Path("build/generated/parameters"))
     parser.add_argument("--include-output", required=True, type=Path)
     return parser.parse_args()
@@ -87,17 +112,37 @@ def main() -> int:
     args = parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     process = Path(__file__).with_name("process_parameters.py")
-    source_dirs = sorted({str(path.parent) for path in args.source})
     xml_path = args.output / "parameters.xml"
     json_path = args.output / "parameters.json"
     subprocess.run([
-        sys.executable, str(process), "--src-path", *source_dirs,
+        sys.executable, str(process), "--src-file",
+        *(str(path) for path in args.source),
         "--xml", str(xml_path), "--json", str(json_path), "--board", "dima_rover",
     ], check=True)
 
-    parameters = generate(xml_path, args.output)
+    if any(source not in args.source for source in args.stable_tail_source):
+        raise RuntimeError("each stable-tail source must also be an explicit source")
+    stable_tail_names = [
+        name
+        for source in args.stable_tail_source
+        for name in definition_names(source)
+    ]
+    if (len(stable_tail_names) != EXPECTED_STABLE_TAIL_COUNT or
+            stable_tail_names[0] != "SYS_AUTOSTART" or
+            stable_tail_names[-1] != "DIMA_SER_VER"):
+        raise RuntimeError(
+            "stable-tail contract must contain SYS_AUTOSTART followed by "
+            "10 fixed QGC parameters, 16 board serial parameters, and the "
+            "internal serial migration version"
+        )
+    parameters = generate(xml_path, args.output, stable_tail_names)
+    if len(parameters) != EXPECTED_PARAMETER_COUNT:
+        raise RuntimeError(
+            f"expected {EXPECTED_PARAMETER_COUNT} parameters, "
+            f"generated {len(parameters)}"
+        )
     xml_names = [parameter.attrib["name"] for parameter in parameters]
-    generated_json_names = json_names(json_path)
+    generated_json_names = json_names(json_path, xml_names)
     if not parameters or xml_names != generated_json_names:
         raise RuntimeError(
             f"catalog mismatch: xml/header={len(parameters)} json={len(generated_json_names)}"
@@ -111,4 +156,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

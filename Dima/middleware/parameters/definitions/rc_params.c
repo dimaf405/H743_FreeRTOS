@@ -37,19 +37,6 @@
  * 并增加 STM32H743 SBUS UART 端口与按协议自动硬件反相配置。
  */
 
-/** RC 输入 UART 端口。0 仅兼容旧版禁用配置；新配置使用 RC_INPUT_PROTO=0。
- * @min 0
- * @max 4
- * @value 0 Disabled
- * @value 1 UART4 PB8
- * @value 2 UART7 PE7
- * @value 3 UART8 PE0
- * @value 4 USART2 PD6
- * @reboot_required true
- * @group Radio Configuration
- */
-PARAM_DEFINE_INT32(RC_PORT_CONFIG, 1);
-
 /** RC 输入协议：0 禁用，2 SBUS。
  * @min 0
  * @max 2
@@ -59,6 +46,20 @@ PARAM_DEFINE_INT32(RC_PORT_CONFIG, 1);
  * @group Radio Configuration
  */
 PARAM_DEFINE_INT32(RC_INPUT_PROTO, 2);
+
+/**
+ * Manual control input source policy.
+ *
+ * Dima currently has one production manual-control source: the local RC/SBUS
+ * pipeline.  Values which select MAVLink or disable RC are deliberately not
+ * accepted until those control-source paths exist.
+ *
+ * @min 0
+ * @max 0
+ * @value 0 RC only
+ * @group Commander
+ */
+PARAM_DEFINE_INT32(COM_RC_IN_MODE, 0);
 /** RC 通道 1 最小脉宽。
  * @unit us
  * @min 800
@@ -789,30 +790,125 @@ PARAM_DEFINE_INT32(RC_CHAN_CNT, 0);
 /** Roll 对应物理通道，0 表示未映射。
  * @min 0
  * @max 18
+ * @value 0 Unassigned
+ * @value 1 Channel 1
+ * @value 2 Channel 2
+ * @value 3 Channel 3
+ * @value 4 Channel 4
+ * @value 5 Channel 5
+ * @value 6 Channel 6
+ * @value 7 Channel 7
+ * @value 8 Channel 8
+ * @value 9 Channel 9
+ * @value 10 Channel 10
+ * @value 11 Channel 11
+ * @value 12 Channel 12
+ * @value 13 Channel 13
+ * @value 14 Channel 14
+ * @value 15 Channel 15
+ * @value 16 Channel 16
+ * @value 17 Channel 17
+ * @value 18 Channel 18
  * @group RC Mapping
  */
-PARAM_DEFINE_INT32(RC_MAP_ROLL, 1);
+PARAM_DEFINE_INT32(RC_MAP_ROLL, 0);
 /** Pitch 对应物理通道。
  * @min 0
  * @max 18
+ * @value 0 Unassigned
+ * @value 1 Channel 1
+ * @value 2 Channel 2
+ * @value 3 Channel 3
+ * @value 4 Channel 4
+ * @value 5 Channel 5
+ * @value 6 Channel 6
+ * @value 7 Channel 7
+ * @value 8 Channel 8
+ * @value 9 Channel 9
+ * @value 10 Channel 10
+ * @value 11 Channel 11
+ * @value 12 Channel 12
+ * @value 13 Channel 13
+ * @value 14 Channel 14
+ * @value 15 Channel 15
+ * @value 16 Channel 16
+ * @value 17 Channel 17
+ * @value 18 Channel 18
  * @group RC Mapping
  */
-PARAM_DEFINE_INT32(RC_MAP_PITCH, 2);
+PARAM_DEFINE_INT32(RC_MAP_PITCH, 0);
 /** Throttle 对应物理通道；Dima 保持中心双向语义。
  * @min 0
  * @max 18
+ * @value 0 Unassigned
+ * @value 1 Channel 1
+ * @value 2 Channel 2
+ * @value 3 Channel 3
+ * @value 4 Channel 4
+ * @value 5 Channel 5
+ * @value 6 Channel 6
+ * @value 7 Channel 7
+ * @value 8 Channel 8
+ * @value 9 Channel 9
+ * @value 10 Channel 10
+ * @value 11 Channel 11
+ * @value 12 Channel 12
+ * @value 13 Channel 13
+ * @value 14 Channel 14
+ * @value 15 Channel 15
+ * @value 16 Channel 16
+ * @value 17 Channel 17
+ * @value 18 Channel 18
  * @group RC Mapping
  */
-PARAM_DEFINE_INT32(RC_MAP_THROTTLE, 3);
+PARAM_DEFINE_INT32(RC_MAP_THROTTLE, 1);
 /** Yaw 对应物理通道。
  * @min 0
  * @max 18
+ * @value 0 Unassigned
+ * @value 1 Channel 1
+ * @value 2 Channel 2
+ * @value 3 Channel 3
+ * @value 4 Channel 4
+ * @value 5 Channel 5
+ * @value 6 Channel 6
+ * @value 7 Channel 7
+ * @value 8 Channel 8
+ * @value 9 Channel 9
+ * @value 10 Channel 10
+ * @value 11 Channel 11
+ * @value 12 Channel 12
+ * @value 13 Channel 13
+ * @value 14 Channel 14
+ * @value 15 Channel 15
+ * @value 16 Channel 16
+ * @value 17 Channel 17
+ * @value 18 Channel 18
  * @group RC Mapping
  */
-PARAM_DEFINE_INT32(RC_MAP_YAW, 4);
+PARAM_DEFINE_INT32(RC_MAP_YAW, 2);
 /** Arm 开关通道，默认不映射。
  * @min 0
  * @max 18
+ * @value 0 Unassigned
+ * @value 1 Channel 1
+ * @value 2 Channel 2
+ * @value 3 Channel 3
+ * @value 4 Channel 4
+ * @value 5 Channel 5
+ * @value 6 Channel 6
+ * @value 7 Channel 7
+ * @value 8 Channel 8
+ * @value 9 Channel 9
+ * @value 10 Channel 10
+ * @value 11 Channel 11
+ * @value 12 Channel 12
+ * @value 13 Channel 13
+ * @value 14 Channel 14
+ * @value 15 Channel 15
+ * @value 16 Channel 16
+ * @value 17 Channel 17
+ * @value 18 Channel 18
  * @group RC Mapping
  */
 PARAM_DEFINE_INT32(RC_MAP_ARM_SW, 0);
@@ -822,12 +918,19 @@ PARAM_DEFINE_INT32(RC_MAP_ARM_SW, 0);
  * @group RC Mapping
  */
 PARAM_DEFINE_INT32(RC_MAP_KILL_SW, 0);
-/** Flight mode 开关通道，默认不映射。
+/** Dima has no selectable flight modes; fixed PX4/QGC compatibility handle.
+ * @min 0
+ * @max 0
+ * @value 0 Disabled
+ * @group RC Mapping
+ */
+PARAM_DEFINE_INT32(RC_MAP_FLTMODE, 0);
+/** Flaps 对应物理通道，0 表示未映射。
  * @min 0
  * @max 18
  * @group RC Mapping
  */
-PARAM_DEFINE_INT32(RC_MAP_FLTMODE, 0);
+PARAM_DEFINE_INT32(RC_MAP_FLAPS, 0);
 /** Aux1 通道。
  * @min 0
  * @max 18
@@ -864,8 +967,8 @@ PARAM_DEFINE_INT32(RC_MAP_AUX5, 0);
  * @group RC Mapping
  */
 PARAM_DEFINE_INT32(RC_MAP_AUX6, 0);
-/** Arm 开关触发阈值。
- * @min 0
+/** Arm 开关触发阈值；负值表示反向比较。
+ * @min -1
  * @max 1
  * @increment 0.01
  * @group RC Mapping
@@ -886,8 +989,3 @@ PARAM_DEFINE_FLOAT(RC_KILLSWITCH_TH, 0.75f);
  * @group Commander
  */
 PARAM_DEFINE_FLOAT(COM_RC_LOSS_T, 0.5f);
-/** 摇杆解锁手势；首版默认禁用。
- * @boolean
- * @group Manual Control
- */
-PARAM_DEFINE_INT32(MAN_ARM_GESTURE, 0);

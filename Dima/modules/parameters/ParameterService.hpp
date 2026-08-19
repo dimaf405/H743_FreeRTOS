@@ -19,8 +19,6 @@ class ParameterService final : public dima::middleware::lifecycle::ModuleBase,
 public:
     ParameterService(
         dima::parameters::ParameterJournal &journal,
-        dima::platform::Console &console,
-        dima::platform::BootControl &boot_control,
         dima::platform::ArmedFlashCoordinator &armed_flash,
         dima::platform::Synchronization &synchronization,
         dima::platform::CriticalSection &critical) noexcept;
@@ -33,7 +31,6 @@ public:
 
 private:
     static constexpr std::uint32_t kPollUs = 10000U;
-    static constexpr std::size_t kLineCapacity = 192U;
     static constexpr std::size_t kPayloadCapacity =
         px4::parameter_storage_max_bytes;
 
@@ -53,17 +50,13 @@ private:
 
     void Run() override;
     bool flash_write_allowed() const noexcept;
-    bool consume_line() noexcept;
-    void execute_command(char *line) noexcept;
-    void write_control_response(const char *response) noexcept;
-    void reboot_to_bootloader() noexcept;
+    bool migrate_serial_configuration(bool existing_storage) noexcept;
+    bool migrate_serial_schema_v1() noexcept;
     void reset_runtime_state() noexcept;
 
     static const param_storage_backend_s storage_backend_;
 
     dima::parameters::ParameterJournal &journal_;
-    dima::platform::Console &console_;
-    dima::platform::BootControl &boot_control_;
     dima::platform::ArmedFlashCoordinator &armed_flash_;
     dima::platform::Synchronization &synchronization_;
     dima::platform::CriticalSection &critical_;
@@ -74,16 +67,19 @@ private:
         ORB_ID(parameter_update)};
     alignas(32) std::uint8_t payload_[kPayloadCapacity]{};
     parameter_update_s pending_update_{};
-    char line_[kLineCapacity + 1U]{};
-    std::size_t line_length_{0U};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
     bool initialized_{false};
     bool loading_{false};
     bool update_pending_{false};
     bool autosave_request_pending_{false};
-    bool discard_line_{false};
-    bool ignore_lf_{false};
+    std::int32_t stored_serial_schema_version_{0};
+    bool stored_legacy_rc_port_present_{false};
+    std::int32_t stored_legacy_rc_port_{0};
+    bool stored_legacy_baud_present_[8]{};
+    std::int32_t stored_legacy_baud_[8]{};
+    std::int32_t stored_schema1_baud_[7]{};
+    std::int32_t stored_schema1_function_[7]{};
 };
 
 } // namespace dima::modules::parameters

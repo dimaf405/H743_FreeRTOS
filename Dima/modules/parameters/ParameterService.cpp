@@ -1,70 +1,166 @@
 #define MODULE_NAME "param"
 #include "ParameterService.hpp"
 
+#include "board_serial_config.hpp"
 #include "logging/logging.hpp"
 #include "parameters/flashparams/flashparams.h"
 #include "platform/api/Time.hpp"
 
+#include <algorithm>
 #include <cerrno>
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 namespace dima::modules::parameters {
 namespace {
 
-constexpr char kIdentifyResponse[] = "DIMA_ROVER_APP_V1\n";
-constexpr char kRebootResponse[] = "DIMA_REBOOTING_BOOTLOADER\n";
-constexpr char kRebootDeniedResponse[] = "DIMA_REBOOT_DENIED_ARMED\n";
+constexpr const char *kQgcJournalIgnoredParameters[]{
+    "SYS_AUTOSTART",
+    "SYS_AUTOCONFIG",
+    "MAV_SYS_ID",
+    "CAL_GYRO0_ID",
+    "CAL_ACC0_ID",
+    "CAL_MAG0_ID",
+    "CAL_MAG1_ID",
+    "CAL_MAG2_ID",
+    "NAV_RCL_ACT",
+    "NAV_DLL_ACT",
+    "COM_LOW_BAT_ACT",
+};
 
-bool match_prefix(const char *name, const char *pattern) noexcept
-{
-    if (pattern == nullptr || *pattern == '\0') {
-        return true;
+constexpr std::size_t kSchema1SerialCount = 7U;
+constexpr std::int32_t kSchema1BaudDefaults[kSchema1SerialCount]{
+    0, 115200, 0, 115200, 0, 57600, 921600,
+};
+constexpr std::int32_t kSchema1FunctionDefaults[kSchema1SerialCount]{
+    0, 0, 1, 0, 0, 0, 0,
+};
+constexpr std::int32_t kSchema1ToDirectSerial[kSchema1SerialCount]{
+    2, 4, 6, 8, 3, 7, 1,
+};
+
+struct FilteredLoadContext {
+    param_storage_visitor_t visitor;
+    void *visitor_context;
+    bool migrate_schema1_serial;
+};
+
+struct SerialStorageScanContext {
+    std::int32_t schema_version{0};
+    bool rc_port_present{false};
+    std::int32_t rc_port{0};
+    bool baud_present[8]{};
+    std::int32_t baud[8]{};
+    std::int32_t schema1_baud[kSchema1SerialCount]{};
+    std::int32_t schema1_function[kSchema1SerialCount]{};
+
+    SerialStorageScanContext() noexcept
+    {
+        std::copy_n(kSchema1BaudDefaults, kSchema1SerialCount,
+                    schema1_baud);
+        std::copy_n(kSchema1FunctionDefaults, kSchema1SerialCount,
+                    schema1_function);
     }
-    const std::size_t length = std::strlen(pattern);
-    const std::size_t prefix =
-        pattern[length - 1U] == '*' ? length - 1U : length;
-    return std::strncmp(name, pattern, prefix) == 0 &&
-           (prefix != length || name[prefix] == '\0');
+};
+
+int scan_schema1_serial_parameter(const char *name, param_type_t type,
+                                  const void *value,
+                                  SerialStorageScanContext &scan) noexcept
+{
+    for (std::size_t index = 0U; index < kSchema1SerialCount; ++index) {
+        char baud_name[] = "SERIAL1_BAUD";
+        char function_name[] = "SERIAL1_FUNCTION";
+        baud_name[6] = static_cast<char>('1' + index);
+        function_name[6] = static_cast<char>('1' + index);
+        if (std::strcmp(name, baud_name) == 0) {
+            if (type != PARAM_TYPE_INT32) return -EINVAL;
+            std::memcpy(&scan.schema1_baud[index], value,
+                        sizeof(scan.schema1_baud[index]));
+            return 1;
+        }
+        if (std::strcmp(name, function_name) == 0) {
+            if (type != PARAM_TYPE_INT32) return -EINVAL;
+            std::memcpy(&scan.schema1_function[index], value,
+                        sizeof(scan.schema1_function[index]));
+            return 1;
+        }
+    }
+    return 0;
 }
 
-void print_param(param_t parameter) noexcept
+bool is_qgc_compatibility_parameter(const char *name) noexcept
 {
-    if (param_type(parameter) == PARAM_TYPE_FLOAT) {
-        float value{};
-        (void)param_get(parameter, &value);
-        PX4_INFO_RAW("%s %.9g\n", param_name(parameter),
-                     static_cast<double>(value));
+    if (name == nullptr) {
+        return false;
+    }
+    for (const char *const fixed_name : kQgcJournalIgnoredParameters) {
+        if (std::strcmp(name, fixed_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool is_disabled_mode_compatibility_parameter(const char *name) noexcept
+{
+    return name != nullptr && std::strcmp(name, "RC_MAP_FLTMODE") == 0;
+}
+
+int load_mutable_parameter(const char *name, param_type_t type,
+                           const void *value, void *context) noexcept
+{
+    if (context == nullptr) {
+        return -EINVAL;
+    }
+    auto &filtered = *static_cast<FilteredLoadContext *>(context);
+    if (is_qgc_compatibility_parameter(name) ||
+        is_disabled_mode_compatibility_parameter(name) ||
+        std::strcmp(name, "RC_PORT_CONFIG") == 0) {
+        return 0;
+    }
+    if (filtered.migrate_schema1_serial &&
+        (dima::board::serial_baud_parameter(name) ||
+         dima::board::serial_function_parameter(name))) {
+        return 0;
+    }
+
+    return filtered.visitor(name, type, value, filtered.visitor_context);
+}
+
+int scan_serial_storage(const char *name, param_type_t type,
+                        const void *value, void *context) noexcept
+{
+    if (name == nullptr || value == nullptr || context == nullptr) {
+        return -EINVAL;
+    }
+    auto &scan = *static_cast<SerialStorageScanContext *>(context);
+    if (std::strcmp(name, "DIMA_SER_VER") == 0) {
+        if (type != PARAM_TYPE_INT32) {
+            return -EINVAL;
+        }
+        std::memcpy(&scan.schema_version, value,
+                    sizeof(scan.schema_version));
+    } else if (std::strcmp(name, "RC_PORT_CONFIG") == 0) {
+        if (type != PARAM_TYPE_INT32) {
+            return -EINVAL;
+        }
+        std::memcpy(&scan.rc_port, value, sizeof(scan.rc_port));
+        scan.rc_port_present = true;
     } else {
-        std::int32_t value{};
-        (void)param_get(parameter, &value);
-        PX4_INFO_RAW("%s %ld\n", param_name(parameter),
-                     static_cast<long>(value));
+        const int schema1_serial =
+            scan_schema1_serial_parameter(name, type, value, scan);
+        if (schema1_serial < 0) return schema1_serial;
+        const std::int32_t serial =
+            dima::board::legacy_serial_for_baud_parameter(name);
+        if (serial > 0) {
+            if (type != PARAM_TYPE_INT32) {
+                return -EINVAL;
+            }
+            std::memcpy(&scan.baud[serial - 1], value,
+                        sizeof(scan.baud[serial - 1]));
+            scan.baud_present[serial - 1] = true;
+        }
     }
-}
-
-bool parse_value(param_t parameter, const char *text,
-                 param_value_u &value) noexcept
-{
-    if (text == nullptr) {
-        return false;
-    }
-    char *end{};
-    errno = 0;
-    if (param_type(parameter) == PARAM_TYPE_FLOAT) {
-        value.f = std::strtof(text, &end);
-        return errno == 0 && end != text && *end == '\0' &&
-               std::isfinite(value.f);
-    }
-    const long parsed = std::strtol(text, &end, 0);
-    if (errno != 0 || end == text || *end != '\0' || parsed < INT32_MIN ||
-        parsed > INT32_MAX) {
-        return false;
-    }
-    value.i = static_cast<std::int32_t>(parsed);
-    return true;
+    return 0;
 }
 
 } // namespace
@@ -78,15 +174,13 @@ const param_storage_backend_s ParameterService::storage_backend_{
 
 ParameterService::ParameterService(
     dima::parameters::ParameterJournal &journal,
-    dima::platform::Console &console,
-    dima::platform::BootControl &boot_control,
     dima::platform::ArmedFlashCoordinator &armed_flash,
     dima::platform::Synchronization &synchronization,
     dima::platform::CriticalSection &critical) noexcept
     : ScheduledWorkItem("param", px4::wq_configurations::lp_default),
-      journal_(journal), console_(console), boot_control_(boot_control),
-      armed_flash_(armed_flash), synchronization_(synchronization),
-      critical_(critical), autosave_(armed_flash)
+      journal_(journal), armed_flash_(armed_flash),
+      synchronization_(synchronization), critical_(critical),
+      autosave_(armed_flash)
 {
 }
 
@@ -162,14 +256,43 @@ int ParameterService::storage_load(param_storage_visitor_t visitor,
     if (!lock) {
         return -EDEADLK;
     }
+    self.stored_serial_schema_version_ = 0;
+    self.stored_legacy_rc_port_present_ = false;
+    self.stored_legacy_rc_port_ = 0;
+    std::memset(self.stored_legacy_baud_present_, 0,
+                sizeof(self.stored_legacy_baud_present_));
+    std::memset(self.stored_legacy_baud_, 0,
+                sizeof(self.stored_legacy_baud_));
     std::size_t payload_size{};
     std::uint32_t sequence{};
     const int loaded = self.journal_.load(
         self.payload_, sizeof(self.payload_), &payload_size, &sequence);
-    return loaded == 0
-               ? flashparams_decode_buffer(self.payload_, payload_size,
-                                           visitor, visitor_context)
-               : loaded;
+    if (loaded != 0) {
+        return loaded;
+    }
+
+    SerialStorageScanContext scan{};
+    const int scanned = flashparams_decode_buffer(
+        self.payload_, payload_size, scan_serial_storage, &scan);
+    if (scanned != 0) {
+        return scanned;
+    }
+    self.stored_serial_schema_version_ = scan.schema_version;
+    self.stored_legacy_rc_port_present_ = scan.rc_port_present;
+    self.stored_legacy_rc_port_ = scan.rc_port;
+    std::memcpy(self.stored_legacy_baud_present_, scan.baud_present,
+                sizeof(self.stored_legacy_baud_present_));
+    std::memcpy(self.stored_legacy_baud_, scan.baud,
+                sizeof(self.stored_legacy_baud_));
+    std::memcpy(self.stored_schema1_baud_, scan.schema1_baud,
+                sizeof(self.stored_schema1_baud_));
+    std::memcpy(self.stored_schema1_function_, scan.schema1_function,
+                sizeof(self.stored_schema1_function_));
+
+    FilteredLoadContext filtered{
+        visitor, visitor_context, scan.schema_version == 1};
+    return flashparams_decode_buffer(self.payload_, payload_size,
+                                     load_mutable_parameter, &filtered);
 }
 
 int ParameterService::storage_erase(void *backend_context) noexcept
@@ -208,6 +331,137 @@ int ParameterService::storage_status(param_storage_status_s *output,
 bool ParameterService::flash_write_allowed() const noexcept
 {
     return !armed_flash_.armed();
+}
+
+bool ParameterService::migrate_serial_schema_v1() noexcept
+{
+    unsigned rc_owner_count = 0U;
+    for (std::size_t index = 0U; index < kSchema1SerialCount; ++index) {
+        const std::int32_t baud = stored_schema1_baud_[index];
+        const std::int32_t function = stored_schema1_function_[index];
+        if (baud < 0 || !dima::board::serial_baud_supported(
+                static_cast<std::uint32_t>(baud)) ||
+            !dima::board::serial_function_supported(function)) {
+            PX4_ERR("invalid serial schema v1 value index=%u baud=%ld function=%ld",
+                    static_cast<unsigned>(index + 1U),
+                    static_cast<long>(baud), static_cast<long>(function));
+            return false;
+        }
+        if (function == dima::board::kSerialFunctionRcInput) {
+            ++rc_owner_count;
+        }
+    }
+    if (rc_owner_count > 1U) {
+        PX4_ERR("invalid serial schema v1 rc_owners=%u", rc_owner_count);
+        return false;
+    }
+
+    for (std::size_t index = 0U; index < kSchema1SerialCount; ++index) {
+        const std::int32_t direct_serial = kSchema1ToDirectSerial[index];
+        const dima::board::SerialPortDescriptor *const descriptor =
+            dima::board::serial_port(direct_serial);
+        if (descriptor == nullptr) return false;
+
+        const param_t baud = param_find_no_notification(
+            descriptor->parameter_name);
+        const param_t function = param_find_no_notification(
+            descriptor->function_parameter_name);
+        if (baud == PARAM_INVALID || function == PARAM_INVALID ||
+            param_set_no_notification(
+                baud, &stored_schema1_baud_[index]) != 0 ||
+            param_set_no_notification(
+                function, &stored_schema1_function_[index]) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ParameterService::migrate_serial_configuration(
+    bool existing_storage) noexcept
+{
+    const std::int32_t current_version = static_cast<std::int32_t>(
+        dima::board::kSerialSchemaVersion);
+    if (stored_serial_schema_version_ < 0 ||
+        stored_serial_schema_version_ > current_version) {
+        PX4_ERR("unsupported serial schema=%ld current=%ld",
+                static_cast<long>(stored_serial_schema_version_),
+                static_cast<long>(current_version));
+        return false;
+    }
+    if (stored_serial_schema_version_ == current_version) {
+        return true;
+    }
+
+    const auto store_current_version = [current_version]() noexcept {
+        const param_t version = param_find_no_notification("DIMA_SER_VER");
+        return version != PARAM_INVALID &&
+               param_set_no_notification(version, &current_version) == 0;
+    };
+
+    if (stored_serial_schema_version_ == 1) {
+        if (!migrate_serial_schema_v1() || !store_current_version()) {
+            return false;
+        }
+        PX4_INFO("serial config migrated schema=1->%ld by physical UART",
+                 static_cast<long>(current_version));
+        return true;
+    }
+
+    std::int32_t selected_port = existing_storage
+        ? dima::board::migrate_legacy_rc_port(1)
+        : dima::board::kDefaultRcPort;
+    if (stored_legacy_rc_port_present_) {
+        selected_port = dima::board::migrate_legacy_rc_port(
+            stored_legacy_rc_port_);
+        if (selected_port != 0 &&
+            !dima::board::serial_port_supported(selected_port)) {
+            selected_port = 0;
+        }
+    }
+    for (const dima::board::SerialPortDescriptor &descriptor :
+         dima::board::kSerialPorts) {
+        const param_t function = param_find_no_notification(
+            descriptor.function_parameter_name);
+        const std::int32_t value =
+            descriptor.port_id == selected_port
+                ? dima::board::kSerialFunctionRcInput
+                : dima::board::kSerialFunctionDisabled;
+        if (function == PARAM_INVALID ||
+            param_set_no_notification(function, &value) != 0) {
+            return false;
+        }
+
+        const std::size_t serial_index =
+            static_cast<std::size_t>(descriptor.port_id - 1);
+        if (stored_legacy_baud_present_[serial_index]) {
+            const std::int32_t baud_value = stored_legacy_baud_[serial_index];
+            if (baud_value < 0 || !dima::board::serial_baud_supported(
+                    static_cast<std::uint32_t>(baud_value))) {
+                PX4_WARN("discarding invalid legacy SERIAL%ld baud=%ld",
+                         static_cast<long>(descriptor.port_id),
+                         static_cast<long>(baud_value));
+            } else {
+                const param_t baud = param_find_no_notification(
+                    descriptor.parameter_name);
+                if (baud == PARAM_INVALID ||
+                    param_set_no_notification(baud, &baud_value) != 0) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (!store_current_version()) {
+        return false;
+    }
+
+    PX4_INFO("serial config migrated legacy_port=%ld selected_serial=%ld",
+             static_cast<long>(stored_legacy_rc_port_present_
+                                   ? stored_legacy_rc_port_
+                                   : -1),
+             static_cast<long>(selected_port));
+    return true;
 }
 
 bool ParameterService::init() noexcept
@@ -251,6 +505,10 @@ bool ParameterService::init() noexcept
     loading_ = false;
     if (loaded != 0 && loaded != -ENOENT) {
         PX4_ERR("load failed: %d", loaded);
+    }
+    if ((loaded == 0 || loaded == -ENOENT) &&
+        !migrate_serial_configuration(loaded == 0)) {
+        return fail_init();
     }
     initialized_ = true;
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
@@ -326,9 +584,6 @@ void ParameterService::stop() noexcept
     update_pending_ = false;
     autosave_request_pending_ = false;
     loading_ = false;
-    line_length_ = 0U;
-    discard_line_ = false;
-    ignore_lf_ = false;
 }
 
 dima::middleware::lifecycle::ModuleState ParameterService::state() const noexcept
@@ -341,235 +596,18 @@ void ParameterService::reset_runtime_state() noexcept
     dima::platform::CriticalGuard guard{critical_};
     std::memset(payload_, 0, sizeof(payload_));
     pending_update_ = {};
-    std::memset(line_, 0, sizeof(line_));
-    line_length_ = 0U;
     loading_ = false;
     update_pending_ = false;
     autosave_request_pending_ = false;
-    discard_line_ = false;
-    ignore_lf_ = false;
-}
-
-void ParameterService::write_control_response(const char *response) noexcept
-{
-    if (response != nullptr) {
-        (void)console_.write(
-            reinterpret_cast<const std::uint8_t *>(response),
-            std::strlen(response), 250U);
-    }
-}
-
-void ParameterService::reboot_to_bootloader() noexcept
-{
-    if (!flash_write_allowed()) {
-        write_control_response(kRebootDeniedResponse);
-        PX4_ERR("bootloader reboot is not allowed while armed");
-        return;
-    }
-    /* Console::write waits for the IN completion so the acknowledgement reaches
-     * the host before USB disappears during reset. */
-    write_control_response(kRebootResponse);
-    boot_control_.reboot_to_recovery();
-}
-
-void ParameterService::execute_command(char *line) noexcept
-{
-    char *save{};
-    char *command = ::strtok_r(line, " \t", &save);
-    if (command == nullptr) {
-        return;
-    }
-
-    if (std::strcmp(command, "dima") == 0) {
-        char *operation = ::strtok_r(nullptr, " \t", &save);
-        char *extra = ::strtok_r(nullptr, " \t", &save);
-        if (operation != nullptr &&
-            std::strcmp(operation, "identify") == 0 && extra == nullptr) {
-            write_control_response(kIdentifyResponse);
-        } else {
-            PX4_ERR("usage: dima identify");
-        }
-        return;
-    }
-
-    if (std::strcmp(command, "reboot") == 0) {
-        char *operation = ::strtok_r(nullptr, " \t", &save);
-        char *extra = ::strtok_r(nullptr, " \t", &save);
-        if (operation != nullptr && std::strcmp(operation, "-b") == 0 &&
-            extra == nullptr) {
-            reboot_to_bootloader();
-        } else {
-            PX4_ERR("usage: reboot -b");
-        }
-        return;
-    }
-
-    if (std::strcmp(command, "param") != 0) {
-        PX4_ERR("unknown command");
-        return;
-    }
-    char *operation = ::strtok_r(nullptr, " \t", &save);
-    if (operation == nullptr) {
-        PX4_ERR("missing subcommand");
-        return;
-    }
-
-    if (std::strcmp(operation, "show") == 0) {
-        char *pattern = ::strtok_r(nullptr, " \t", &save);
-        const bool changed_only =
-            pattern != nullptr && std::strcmp(pattern, "-c") == 0;
-        if (pattern != nullptr &&
-            (std::strcmp(pattern, "-a") == 0 || changed_only)) {
-            pattern = ::strtok_r(nullptr, " \t", &save);
-        }
-        for (param_t parameter = 0U; parameter < param_count(); ++parameter) {
-            if ((!changed_only || !param_value_is_default(parameter)) &&
-                match_prefix(param_name(parameter), pattern)) {
-                print_param(parameter);
-            }
-        }
-    } else if (std::strcmp(operation, "get") == 0) {
-        const param_t parameter =
-            param_find(::strtok_r(nullptr, " \t", &save));
-        if (parameter == PARAM_INVALID) {
-            PX4_ERR("parameter not found");
-        } else {
-            print_param(parameter);
-        }
-    } else if (std::strcmp(operation, "set") == 0) {
-        char *name = ::strtok_r(nullptr, " \t", &save);
-        char *text = ::strtok_r(nullptr, " \t", &save);
-        char *extra = ::strtok_r(nullptr, " \t", &save);
-        const param_t parameter = param_find(name);
-        param_value_u value{};
-        if (parameter == PARAM_INVALID || extra != nullptr ||
-            !parse_value(parameter, text, value)) {
-            PX4_ERR("invalid parameter or value");
-        } else {
-            void *const source = param_type(parameter) == PARAM_TYPE_FLOAT
-                                     ? static_cast<void *>(&value.f)
-                                     : static_cast<void *>(&value.i);
-            if (param_set(parameter, source) != 0) {
-                PX4_ERR("set failed");
-            } else {
-                print_param(parameter);
-            }
-        }
-    } else if (std::strcmp(operation, "save") == 0) {
-        if (!flash_write_allowed()) {
-            PX4_ERR("flash write is not allowed");
-            return;
-        }
-        const int result = autosave_.saveNow(true);
-        if (result == 0) {
-            PX4_INFO_RAW("saved\n");
-        } else {
-            PX4_ERR("save failed: %d", result);
-        }
-    } else if (std::strcmp(operation, "reset") == 0) {
-        bool any = false;
-        for (char *name = ::strtok_r(nullptr, " \t", &save); name != nullptr;
-             name = ::strtok_r(nullptr, " \t", &save)) {
-            const param_t parameter = param_find(name);
-            if (parameter == PARAM_INVALID) {
-                PX4_ERR("parameter not found: %s", name);
-            } else {
-                (void)param_reset(parameter);
-                any = true;
-            }
-        }
-        if (!any) {
-            PX4_ERR("missing parameter");
-        }
-    } else if (std::strcmp(operation, "reset_all") == 0) {
-        param_reset_all();
-    } else if (std::strcmp(operation, "status") == 0) {
-        param_storage_status_s status{};
-        const int status_result = param_storage_get_status(&status);
-        const char *autosave_state = !autosave_.enabled()
-                                         ? "disabled"
-                                         : (autosave_.pending() ? "pending"
-                                                                : "idle");
-        PX4_INFO("count=%u used=%u storage=%d seq=%lu used_bytes=%lu free_bytes=%lu crc=%lu write=%lu enospc=%lu last_save=%llu autosave=%s",
-                 param_count(), param_count_used(), status_result,
-                 static_cast<unsigned long>(status.sequence),
-                 static_cast<unsigned long>(status.used_bytes),
-                 static_cast<unsigned long>(status.free_bytes),
-                 static_cast<unsigned long>(status.crc_failures),
-                 static_cast<unsigned long>(status.write_failures),
-                 static_cast<unsigned long>(status.enospc_failures),
-                 static_cast<unsigned long long>(status.last_save_timestamp),
-                 autosave_state);
-    } else if (std::strcmp(operation, "storage") == 0) {
-        char *erase = ::strtok_r(nullptr, " \t", &save);
-        char *confirm = ::strtok_r(nullptr, " \t", &save);
-        if (erase == nullptr || std::strcmp(erase, "erase") != 0 ||
-            confirm == nullptr || std::strcmp(confirm, "CONFIRM") != 0) {
-            PX4_ERR("usage: param storage erase CONFIRM");
-        } else if (!flash_write_allowed()) {
-            PX4_ERR("flash write is not allowed");
-        } else {
-            PX4_INFO_RAW(
-                "WARNING: erasing parameter storage is not power-fail safe\n");
-            const int erased = param_storage_erase();
-            if (erased != 0) {
-                PX4_ERR("erase failed: %d", erased);
-            } else {
-                autosave_.enable(true);
-                const int saved = autosave_.saveNow(true);
-                if (saved != 0) {
-                    PX4_ERR("rewrite failed: %d", saved);
-                }
-            }
-        }
-    } else {
-        PX4_ERR("unknown subcommand: %s", operation);
-    }
-}
-
-bool ParameterService::consume_line() noexcept
-{
-    std::uint8_t byte{};
-    while (console_.read_byte(byte)) {
-        if (ignore_lf_ && byte == '\n') {
-            ignore_lf_ = false;
-            continue;
-        }
-        ignore_lf_ = false;
-        if (byte == '\r' || byte == '\n') {
-            if (byte == '\r') {
-                ignore_lf_ = true;
-            }
-            if (discard_line_) {
-                discard_line_ = false;
-                line_length_ = 0U;
-                PX4_ERR("command line too long");
-                return true;
-            }
-            if (line_length_ == 0U) {
-                continue;
-            }
-            line_[line_length_] = '\0';
-            execute_command(line_);
-            line_length_ = 0U;
-            return true;
-        }
-        if (byte == '\b' || byte == 0x7FU) {
-            if (!discard_line_ && line_length_ > 0U) {
-                --line_length_;
-            }
-            continue;
-        }
-        if (discard_line_) {
-            continue;
-        }
-        if (line_length_ >= kLineCapacity) {
-            discard_line_ = true;
-            continue;
-        }
-        line_[line_length_++] = static_cast<char>(byte);
-    }
-    return false;
+    stored_serial_schema_version_ = 0;
+    stored_legacy_rc_port_present_ = false;
+    stored_legacy_rc_port_ = 0;
+    std::memset(stored_legacy_baud_present_, 0,
+                sizeof(stored_legacy_baud_present_));
+    std::memset(stored_legacy_baud_, 0, sizeof(stored_legacy_baud_));
+    std::memset(stored_schema1_baud_, 0, sizeof(stored_schema1_baud_));
+    std::memset(stored_schema1_function_, 0,
+                sizeof(stored_schema1_function_));
 }
 
 void ParameterService::Run()
@@ -577,8 +615,6 @@ void ParameterService::Run()
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
     }
-    console_.service();
-
     parameter_update_s update{};
     bool publish_update = false;
     bool request_autosave = false;
@@ -598,7 +634,6 @@ void ParameterService::Run()
     if (request_autosave) {
         autosave_.request();
     }
-    (void)consume_line();
 }
 
 } // namespace dima::modules::parameters

@@ -56,8 +56,11 @@ void report_backend_failure(
 
 } // namespace
 
-SbusRc::SbusRc(dima::platform::SbusInput &backend) noexcept
-    : px4::ScheduledWorkItem("sbus_rc", px4::wq_configurations::io), backend_(backend)
+SbusRc::SbusRc(
+    dima::platform::SbusInput &backend,
+    dima::modules::serial::SerialConfig &serial_config) noexcept
+    : px4::ScheduledWorkItem("sbus_rc", px4::wq_configurations::io),
+      backend_(backend), serial_config_(serial_config)
 {
 }
 
@@ -76,35 +79,35 @@ bool SbusRc::start()
         return false;
     }
     reset_runtime_state();
-    if (!rc_port_.bind() || !rc_protocol_.bind() ||
-        !rc_loss_timeout_.bind()) {
-        rc_port_.invalidate();
-        rc_protocol_.invalidate();
-        rc_loss_timeout_.invalidate();
+    if (!rc_protocol_.bind() || !rc_loss_timeout_.bind()) {
+        invalidate_parameters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
         PX4_ERR("SBUS parameters unavailable");
         return false;
     }
     const std::int32_t protocol = rc_protocol_.get();
-    const std::int32_t port = rc_port_.get();
+    const std::int32_t port = serial_config_.rc_input_port();
     const float loss_timeout_s = rc_loss_timeout_.get();
-    if (protocol == 0 || (protocol == 2 && port == 0)) {
+    if (protocol == 0) {
         state_ = dima::middleware::lifecycle::ModuleState::Running;
         DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
                         dima::logging::Level::Info,
-                        "disabled protocol=%ld port=%ld; UART remains normal",
-                        static_cast<long>(protocol), static_cast<long>(port));
+                        "disabled protocol=%ld; serial ports remain normal",
+                        static_cast<long>(protocol));
         return true;
     }
-    if (protocol != 2 || port < 1 || port > 4 ||
+    const dima::board::SerialPortDescriptor *const descriptor =
+        dima::board::serial_port(port);
+    if (protocol != 2 || descriptor == nullptr ||
         !std::isfinite(loss_timeout_s) || loss_timeout_s < 0.1F ||
         loss_timeout_s > 35.0F ||
         !backend_.configure(port)) {
         ++stats_.start_failures;
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
-        PX4_ERR("SBUS configuration invalid");
+        PX4_ERR("SBUS configuration invalid protocol=%ld port=%ld",
+                static_cast<long>(protocol), static_cast<long>(port));
         (void)dima::events::report(kEventConfigInvalid, dima::events::Severity::Error);
         return false;
     }
@@ -114,8 +117,9 @@ bool SbusRc::start()
     state_ = dima::middleware::lifecycle::ModuleState::Running;
     DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
                     dima::logging::Level::Info,
-                    "port=%ld protocol=SBUS 100000 8E2 rxinv=auto",
-                    static_cast<long>(port));
+                    "SERIAL%ld %s %s/RX%s protocol=SBUS 100000 8E2 rxinv=auto",
+                    static_cast<long>(port), descriptor->role,
+                    descriptor->peripheral, descriptor->rx_pin);
     if (!ScheduleNow()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
@@ -141,13 +145,17 @@ void SbusRc::stop()
                         "released; UART normal configuration restored");
     }
     free_perf_counters();
-    rc_port_.invalidate();
-    rc_protocol_.invalidate();
-    rc_loss_timeout_.invalidate();
+    invalidate_parameters();
     reset_runtime_state();
 }
 
 dima::middleware::lifecycle::ModuleState SbusRc::state() const { return state_; }
+
+void SbusRc::invalidate_parameters() noexcept
+{
+    rc_protocol_.invalidate();
+    rc_loss_timeout_.invalidate();
+}
 
 void SbusRc::Run()
 {
@@ -190,6 +198,7 @@ void SbusRc::Run()
         }
         if (signal_locked_) PX4_WARN("SBUS signal lost after UART/DMA error");
         signal_locked_ = false;
+        consecutive_healthy_frames_ = 0U;
         if (!backend_fault_reported_) {
             report_backend_failure(backend_stats);
             backend_fault_reported_ = true;
@@ -236,8 +245,14 @@ void SbusRc::Run()
         for (std::size_t index = 0U; index < count; ++index) {
             perf_count(byte_count_);
             dima::rc::SbusParser::Frame frame{};
+            const std::uint32_t dropped_before =
+                parser_.stats().dropped_frames;
             if (!parser_.parse(arrival_timestamps_us[index], buffer[index],
                                frame)) {
+                if (!signal_locked_ &&
+                    parser_.stats().dropped_frames != dropped_before) {
+                    consecutive_healthy_frames_ = 0U;
+                }
                 continue;
             }
 
@@ -245,14 +260,26 @@ void SbusRc::Run()
             timestamp_last_signal_us_ = frame_arrival_us;
             /* Peripheral start is not recovery; a valid frame is. */
             backend_fault_reported_ = false;
-            if (!signal_locked_) {
+            bool just_locked = false;
+            if (frame.failsafe) {
+                consecutive_healthy_frames_ = 0U;
+                signal_locked_ = false;
+            } else if (!signal_locked_) {
+                if (consecutive_healthy_frames_ < kRequiredLockFrames) {
+                    ++consecutive_healthy_frames_;
+                }
+                if (consecutive_healthy_frames_ == kRequiredLockFrames) {
+                    signal_locked_ = true;
+                    just_locked = true;
+                }
+            }
+            if (just_locked) {
                 DIMA_LOG_SOURCE(
                     dima::logging::Source::Sbus,
                     dima::logging::Level::Info,
                     signal_seen_ ? "signal recovered channels=%u"
                                  : "signal locked channels=%u",
                     frame.channel_count);
-                signal_locked_ = true;
                 signal_seen_ = true;
             }
             publish(frame, frame_arrival_us);
@@ -272,6 +299,7 @@ void SbusRc::reset_runtime_state() noexcept
     backend_started_ = false;
     signal_locked_ = false;
     signal_seen_ = false;
+    consecutive_healthy_frames_ = 0U;
     failsafe_active_ = false;
     backend_fault_reported_ = false;
     last_invalid_frames_ = 0U;
@@ -327,6 +355,7 @@ bool SbusRc::schedule_signal_timeout() noexcept
                         static_cast<unsigned long long>(
                             signal_loss_timeout_us_));
         signal_locked_ = false;
+        consecutive_healthy_frames_ = 0U;
         return true;
     }
 
@@ -380,7 +409,7 @@ void SbusRc::publish(const dima::rc::SbusParser::Frame &frame,
     message.rssi = -1;
     message.rc_failsafe = frame.failsafe;
     // SBUS frame-lost 只表示跳帧，不能误判为整条 RC 链路失联。
-    message.rc_lost = message.channel_count == 0U;
+    message.rc_lost = !signal_locked_ || message.channel_count == 0U;
     message.rc_lost_frame_count = static_cast<std::uint16_t>(parser_.stats().frame_lost_flags);
     message.rc_total_frame_count = static_cast<std::uint16_t>(parser_.stats().valid_frames);
     message.rc_ppm_frame_length = 0U;

@@ -15,28 +15,32 @@ PX4 PARAM_DEFINE_* 参数定义
 → px4_parameters.hpp + parameter_metadata.c
 → Parameter Layer/Core + AtomicTransaction
 → px4::Param<T> / ModuleParams / parameter_update
-→ Autosave / USB Parameter Command Service
+→ Autosave / MAVLink Parameter Protocol
 → TinyBSON flashparams Buffer
 → 平台无关 ParameterJournal
 → STM32H7 FlashPartition
 ```
 
-`definitions/` 是参数生成器的集中 Schema 输入区，不是 Parameter 中间件对 Commander、RC、Rover 或 MotorOutput 业务的运行时所有权声明。文件按功能域命名并由 `make/project.mk` 显式排序；实际参数消费和生命周期仍归各自模块。集中保存可避免跨目录扫描隐式改变生成顺序，后续若改为模块就近定义，必须先证明生成元数据及持久化兼容性。
+`definitions/` 是固定功能参数的集中 Schema 输入区，不是 Parameter 中间件对 Commander、RC、Rover 或 MotorOutput 业务的运行时所有权声明。板级串口例外地由 `Boards/H743/serial_ports.json` 通过 `tools/serial/generate_config.py` 生成，避免参数、Runtime 和引脚表各写一份。全部输入仍由 `make/project.mk` 显式列出；实际参数消费和生命周期归各自模块。
 
 ## 当前实现
 
 - 参数数量完全由生成结果决定，不设置固定 64、128 等容量。
+- 当前 Schema 共 205 项。`qgc_compat_params.c` 只保留 11 项固定 QGC 身份、校准摘要与失联策略兼容合同；未实现的 `COM_FLTMODE1..6` 与 `RTL_*` 不进入固件或 Metadata。`Boards/H743/serial_ports.json` 另行生成八组 `SERIAL1..8_BAUD/FUNCTION` 和内部 `DIMA_SER_VER`。串口编号直接对应 VCU-H7 板载 USART/UART1..8，Function 当前只公开 Disabled/RC Input；CAL/低电量条目只是固定兼容值，不代表相关未来能力已实现。
 - 首批目录包含 24 项差速 Rover 参数：20 项 `RO_*` 和 4 项 `RD_*`。
-- 官方 parser 负责解析参数定义并输出官方 XML/JSON；Header renderer 只等价实现官方模板语义，不使用正则重新解析参数源码，也不依赖 Jinja2。
+- 官方 parser 只扫描 `make/project.mk` 显式列出的定义文件并输出 XML/JSON；Header renderer 只等价实现官方模板语义，不依赖 Jinja2。原 178 项 handle 顺序由 R331 基线哈希固定；11 项 QGC 合同与 17 项板级串口状态组成 28 项 stable tail，使 `SYS_AUTOSTART` 保持原 index 177，其余 27 项只追加到末尾。Header、类型表、`param_info` 和 JSON 使用同一顺序。
+- Component Metadata 生成器从同一 JSON 构造 QGC version 1 公开副本，过滤 `RC_PORT_CONFIG`/`DIMA_SER_VER` 后保留 203 项描述，XZ 压缩并计算 PX4 CRC；General JSON 只声明 Parameter type。两份 XZ 作为只读 Flash 数组由 MavlinkService/FTP 交付，Parameter Core 不感知传输层。
 - 参数生成器会确定性生成 `build/generated_include` 转发头；删除生成目录后可从源码重新构建。
 - Parameter Core 提供 `param_find/get/set/reset/save/load`、稀疏 Layer、AtomicTransaction、`px4::Param<T>` 和 `ModuleParams` 兼容接口。
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
 - Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，失败最多重试 3 次。
-- USB CDC RX 使用固定 1024-byte SPSC Ring；ISR 不解析命令、不访问参数或 Flash、不格式化日志、不分配内存。
+- ParameterService 不持有或读取 Console，只负责 Core、Journal、Autosave 和 Flash 事务；在线参数由 MavlinkService 通过 Classic/Ext 协议访问。
+- MavlinkService 在每次 LIST 开始前一次性激活全部 QGC 固定参数及 16 项公开 `SERIALx_BAUD/FUNCTION`，并在参数锁内冻结 used 句柄快照；整轮 PARAM_VALUE、按 index 缺帧补读以及快照内参数的 READ/SET 回包都复用该 count/index。`RC_PORT_CONFIG` 与 `DIMA_SER_VER` 只服务迁移，不进入 LIST。固定参数仅允许同值写回；串口 Function 只允许 Disabled/RC Input，并拒绝产生多个 RC owner。
 - 参数持久化使用 `0x081E0000～0x08200000` 单个 128 KiB 扇区追加 Journal；`ParameterJournal` 只负责 Sequence、Payload Length、CRC32、Commit Marker、扫描和回退，STM32H7 `FlashPartition` 负责 ECC 安全读、32-byte program、sector erase、回读和 cache 一致性。
 - 扫描不执行整段 cache invalidate；program/erase 成功后仅由 STM32 cache helper 失效实际修改范围，D-cache 关闭时 helper 防御性 no-op。
 - DBECC 只有在活动安全读窗口、地址属于参数分区且 Bank 2 标志匹配时才允许 BusFault 恢复；其他 BusFault 一律进入启动诊断和复位。
 - Journal v1 字节格式、分区地址和公开返回语义保持兼容；空间不足返回 ENOSPC且不自动擦除。
+- Journal 解码边界忽略 11 项 QGC 固定合同以及兼容占位 `RC_MAP_FLTMODE` 的旧存储值；16 项 `SERIALx_BAUD/FUNCTION` 与其他可配置参数一样恢复并由 Autosave 持久化。Schema v1 的七组旧参数先以旧默认值补全，再按物理 UART 迁移到直接编号的 v2；旧 `RC_PORT_CONFIG` 和旧功能命名 baud 值只在 Schema v0 时迁移一次，未来版本在降级时 fail-closed。
 - 每次 load 都重新读取并验证 Header CRC、最终 Commit Marker 和 payload CRC；缓存的最新记录失效时重新扫描整个 Journal，回退到上一条有效快照后再次复验。
 
 ## Application Runtime 生命周期
@@ -57,4 +61,4 @@ Signed BIN  115064 bytes
 make verify PASS
 ```
 
-以上仅代表当前目标构建、签名和镜像一致性验证通过。未新增或运行测试框架、测试文件、SITL 或仿真；尚未完成 USB 在线调参、自动保存、掉电恢复、CRC 损坏回退、ENOSPC 和人工擦除的实车验收。阶段 2 工作区改动已按功能拆分提交。
+以上仅代表当前目标构建、签名和镜像一致性验证通过。未新增或运行测试框架、测试文件、SITL 或仿真；尚未完成 MAVLink 在线调参、自动保存、掉电恢复、CRC 损坏回退和 ENOSPC 的实车验收。文本控制台和人工存储擦除不属于当前 Runtime 接口。

@@ -69,6 +69,11 @@ def main():
                         metavar="PATH",
                         nargs='*',
                         help="one or more paths to source files to scan for parameters")
+    parser.add_argument("--src-file",
+                        default=[],
+                        metavar="FILE",
+                        nargs='*',
+                        help="explicit source files to scan instead of directories")
     parser.add_argument("-x", "--xml",
                         nargs='?',
                         const="parameters.xml",
@@ -119,7 +124,11 @@ def main():
     if (args.verbose):
         print("Scanning source path " + str(args.src_path))
 
-    if not scanner.ScanDir(args.src_path, parser):
+    if args.src_file:
+        for source_file in args.src_file:
+            if not scanner.ScanFile(source_file, parser):
+                sys.exit(1)
+    elif not scanner.ScanDir(args.src_path, parser):
         sys.exit(1)
 
     if not parser.Validate():
