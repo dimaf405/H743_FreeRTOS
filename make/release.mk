@@ -59,7 +59,7 @@ __dima_prepare_generated: $(SERIAL_GENERATED_OUTPUTS) \
 		$(MAVLINK_LIBRARY_HEADER)
 	@:
 
-check-architecture: $(ARCHITECTURE_CHECK_TOOL)
+check-architecture: $(ARCHITECTURE_CHECK_TOOL) parameter-metadata-verify
 	$(DIMA_PROGRESS_RUN) --label ARCH --target "$@" -- \
 		$(PYTHON) $(ARCHITECTURE_CHECK_TOOL)
 
@@ -83,7 +83,6 @@ intellisense: $(COMPILE_COMMANDS_TOOL)
 		$(PYTHON) $(COMPILE_COMMANDS_TOOL) \
 		--output "$(COMPILE_COMMANDS_OUTPUT)" \
 		$(if $(strip $(GCC_PATH)),--gcc-path "$(GCC_PATH)",) \
-		--make-variable "BOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT)" \
 		--make-variable "DEBUG=$(DEBUG)"
 
 firmware: mavlink check-architecture \

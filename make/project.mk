@@ -5,13 +5,6 @@
 # the vector table away from 0x08040400.
 override LDSCRIPT := Linker/STM32H743VITx_MCUBOOT_APP.ld
 
-BOARD_SD_INIT_AT_BOOT ?= 0
-ifneq ($(BOARD_SD_INIT_AT_BOOT),0)
-ifneq ($(BOARD_SD_INIT_AT_BOOT),1)
-$(error BOARD_SD_INIT_AT_BOOT must be 0 or 1)
-endif
-endif
-
 # GCC assembler listings for C sources add tens of megabytes of text I/O to a
 # clean Windows build.  Keep them opt-in for low-level inspection.
 DIMA_LISTINGS ?= 0
@@ -32,8 +25,8 @@ DIMA_PROGRESS_NO_COLOR_FLAG = $(if $(strip $(NO_COLOR)),--no-color,)
 DIMA_PROGRESS_RUN = $(PYTHON) $(BUILD_PROGRESS_TOOL) run \
 	--state "$(DIMA_PROGRESS_STATE)" --plan-token DIMA_PROGRESS_STEP_V1 \
 	$(DIMA_PROGRESS_VERBOSE_FLAG) $(DIMA_PROGRESS_NO_COLOR_FLAG)
-C_DEFS += -DH743_APPLICATION_IMAGE \
-	-DBOARD_SD_INIT_AT_BOOT=$(BOARD_SD_INIT_AT_BOOT)
+DIMA_PRODUCT_DEFS := -DH743_APPLICATION_IMAGE
+C_DEFS += $(DIMA_PRODUCT_DEFS)
 DIMA_COMMON_HEADER_DIRS := \
 	Dima \
 	Dima/application \
@@ -64,6 +57,8 @@ DIMA_GENERATED_INCLUDES := \
 DIMA_COMMON_INCLUDES := \
 	$(addprefix -I,$(DIMA_COMMON_HEADER_DIRS)) \
 	$(DIMA_GENERATED_INCLUDES)
+DIMA_FATFS_INCLUDES := \
+	-IMiddlewares/Third_Party/FatFs/src
 DIMA_FREERTOS_INCLUDES := \
 	-IDima \
 	-IDima/platform/freertos \
@@ -111,11 +106,9 @@ SERIAL_PORT_MANIFEST := Boards/H743/serial_ports.json
 SERIAL_GENERATED_DIR := $(BUILD_DIR)/generated/serial
 SERIAL_GENERATED_STAMP := $(SERIAL_GENERATED_DIR)/.generated
 SERIAL_BAUD_PARAMETERS := $(SERIAL_GENERATED_DIR)/serial_baud_params.c
-SERIAL_CONFIG_PARAMETERS := $(SERIAL_GENERATED_DIR)/serial_config_params.c
 SERIAL_CONFIG_HEADER := $(SERIAL_GENERATED_DIR)/board_serial_config.hpp
 SERIAL_GENERATED_OUTPUTS := \
 	$(SERIAL_BAUD_PARAMETERS) \
-	$(SERIAL_CONFIG_PARAMETERS) \
 	$(SERIAL_CONFIG_HEADER)
 PARAMETER_DEFINITIONS := \
 	Dima/middleware/parameters/definitions/commander_params.c \
@@ -126,7 +119,6 @@ PARAMETER_DEFINITIONS := \
 	Dima/middleware/parameters/definitions/rc_calibration_1_9_params.c \
 	Dima/middleware/parameters/definitions/rc_calibration_10_18_params.c \
 	Dima/middleware/parameters/definitions/qgc_compat_params.c \
-	$(SERIAL_CONFIG_PARAMETERS) \
 	$(SERIAL_BAUD_PARAMETERS)
 PARAMETER_GENERATED_DIR := $(BUILD_DIR)/generated/parameters
 PARAMETER_INCLUDE_DIR := $(BUILD_DIR)/generated_include
@@ -149,6 +141,8 @@ PARAMETER_METADATA_OUTPUTS := \
 	$(PARAMETER_METADATA_DIR)/component_general.json.xz \
 	$(PARAMETER_METADATA_DIR)/parameters.json \
 	$(PARAMETER_METADATA_DIR)/parameters.json.xz \
+	$(PARAMETER_METADATA_DIR)/actuators.json \
+	$(PARAMETER_METADATA_DIR)/actuators.json.xz \
 	$(PARAMETER_METADATA_HEADER)
 $(SERIAL_GENERATED_STAMP): make/project.mk $(SERIAL_CONFIG_GENERATOR) $(SERIAL_PORT_MANIFEST)
 	$(DIMA_PROGRESS_RUN) --label SERIAL --target "$@" \
@@ -167,8 +161,6 @@ $(PARAMETER_GENERATED_STAMP): make/project.mk $(PARAMETER_GENERATOR_DEPS) \
 		--display "$(PARAMETER_GENERATED_DIR)" -- \
 		$(PYTHON) $(PARAMETER_GENERATOR) \
 		$(foreach source,$(PARAMETER_DEFINITIONS),--source $(source)) \
-		--stable-tail-source Dima/middleware/parameters/definitions/qgc_compat_params.c \
-		--stable-tail-source $(SERIAL_BAUD_PARAMETERS) \
 		--output $(PARAMETER_GENERATED_DIR) \
 		--include-output $(PARAMETER_INCLUDE_DIR)
 	@touch "$@"
@@ -191,8 +183,15 @@ $(PARAMETER_METADATA_STAMP): make/project.mk $(PARAMETER_METADATA_GENERATOR) \
 $(PARAMETER_METADATA_OUTPUTS): | $(PARAMETER_METADATA_STAMP)
 	@test -f $@
 
-.PHONY: parameter-metadata
+.PHONY: parameter-metadata parameter-metadata-verify
 parameter-metadata: $(PARAMETER_METADATA_OUTPUTS)
+
+parameter-metadata-verify: $(PARAMETER_METADATA_OUTPUTS) \
+		$(PARAMETER_METADATA_STAMP)
+	$(DIMA_PROGRESS_RUN) --label META_VERIFY --target "$@" -- \
+		$(PYTHON) $(PARAMETER_METADATA_GENERATOR) \
+			--parameters $(PARAMETER_GENERATED_DIR)/parameters.json \
+			--output $(PARAMETER_METADATA_DIR) --verify
 
 $(MAVLINK_GENERATED_STAMP): make/project.mk $(MAVLINK_GENERATOR_DEPS)
 	$(DIMA_PROGRESS_RUN) --label MAVLINK --target "$@" \
@@ -238,10 +237,15 @@ CUBEMX_OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(OBJECTS))
 override OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(CUBEMX_OBJECTS))
 DIMA_COMMON_C_SOURCES := \
 	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c
+DIMA_FATFS_FREERTOS_C_SOURCES := \
+	Middlewares/Third_Party/FatFs/src/ff.c
+DIMA_FATFS_BOARD_C_SOURCES := \
+	Boards/H743/Src/fatfs_diskio.c
 DIMA_FREERTOS_C_SOURCES := \
 	Dima/platform/freertos/libc/cpp_runtime.c \
 	Dima/platform/freertos/libc/no_heap.c \
-	Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_5.c
+	Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_5.c \
+	$(DIMA_FATFS_FREERTOS_C_SOURCES)
 DIMA_STM32_C_SOURCES := \
 	Dima/platform/stm32h7/memory/cache.c \
 	Dima/platform/stm32h7/memory/early_memory.c \
@@ -249,7 +253,8 @@ DIMA_STM32_C_SOURCES := \
 DIMA_BOARD_C_SOURCES := \
 	Boards/H743/Src/board_init.c \
 	Boards/H743/Src/boot_diagnostics.c \
-	Boards/H743/Src/motor_pwm.c
+	Boards/H743/Src/motor_pwm.c \
+	$(DIMA_FATFS_BOARD_C_SOURCES)
 PROJECT_C_SOURCES := \
 	$(DIMA_COMMON_C_SOURCES) \
 	$(DIMA_FREERTOS_C_SOURCES) \
@@ -286,7 +291,6 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/modules/motor/MotorOutputParameters.cpp \
 	Dima/modules/motor/MotorOutputSafety.cpp \
 	Dima/modules/parameters/ParameterService.cpp \
-	Dima/modules/parameters/SerialParameterMigration.cpp \
 	Dima/modules/serial/SerialConfig.cpp \
 	Dima/application/app_main.cpp \
 	Dima/lib/rover/DifferentialDrive.cpp \
@@ -298,15 +302,17 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/modules/safety/CommanderCommands.cpp \
 	Dima/modules/safety/CommanderSafety.cpp \
 	Dima/modules/boot_health/BootHealthService.cpp \
+	Dima/middleware/maintenance/RuntimeMaintenanceCoordinator.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uorb/uORB.cpp \
-	Dima/middleware/parameters/ParameterJournal.cpp \
 	Dima/middleware/parameters/param.cpp \
 	Dima/middleware/parameters/param_storage.cpp \
 	Dima/middleware/parameters/autosave.cpp \
 	Dima/lib/tinybson/tinybson.cpp \
 	Dima/middleware/parameters/flashparams/flashparams.cpp \
+	Dima/middleware/parameters/FileStorage.cpp \
+	Dima/middleware/parameters/flashfs.cpp \
 	Dima/modules/rc/RcManualInput.cpp \
 	Dima/messages/parameter_update.cpp \
 	Dima/messages/input_rc.cpp \
@@ -326,9 +332,12 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
+DIMA_FATFS_FREERTOS_CXX_SOURCES := \
+	Dima/platform/freertos/storage/FatFsParameterFileStore.cpp
 DIMA_FREERTOS_CXX_SOURCES := \
 	Dima/platform/freertos/Backend.cpp \
-	Dima/platform/freertos/HeapOperators.cpp
+	Dima/platform/freertos/HeapOperators.cpp \
+	$(DIMA_FATFS_FREERTOS_CXX_SOURCES)
 DIMA_STM32_CXX_SOURCES := \
 	Dima/platform/stm32h7/io/ActuatorPwm.cpp \
 	Dima/platform/stm32h7/system/BootControl.cpp \
@@ -363,6 +372,12 @@ DIMA_STM32_OBJECTS := \
 DIMA_BOARD_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_C_SOURCES:.c=.o)) \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_CXX_SOURCES:.cpp=.o))
+DIMA_FATFS_FREERTOS_CXX_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_FREERTOS_CXX_SOURCES:.cpp=.o))
+DIMA_FATFS_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_FREERTOS_C_SOURCES:.c=.o)) \
+	$(DIMA_FATFS_FREERTOS_CXX_OBJECTS) \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_BOARD_C_SOURCES:.c=.o))
 PROJECT_OBJECTS := $(PROJECT_C_OBJECTS) $(PROJECT_CXX_OBJECTS)
 $(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) $(PARAMETER_METADATA_STAMP) \
 	$(MAVLINK_GENERATED_STAMP) check-architecture
@@ -376,6 +391,7 @@ $(DIMA_STM32_OBJECTS): DIMA_PRIVATE_DEFS := $(C_DEFS)
 $(DIMA_STM32_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_STM32_INCLUDES)
 $(DIMA_BOARD_OBJECTS): DIMA_PRIVATE_DEFS := $(C_DEFS)
 $(DIMA_BOARD_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_BOARD_INCLUDES)
+$(DIMA_FATFS_OBJECTS): DIMA_PRIVATE_INCLUDES += $(DIMA_FATFS_INCLUDES)
 
 ifneq ($(strip $(CUBEMX_OBJECTS)),)
 $(CUBEMX_OBJECTS): GNUmakefile make/project.mk | check-architecture

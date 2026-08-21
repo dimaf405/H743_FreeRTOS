@@ -86,8 +86,8 @@ def verify_lifecycle_symbols(elf: Elf32) -> None:
         symbol.symbol_type == STT_FUNC,
     )
     require_symbol_match(
-        elf, "ParameterJournal::shutdown()",
-        lambda symbol: "16ParameterJournal8shutdownEv" in symbol.name and
+        elf, "FlashFS::initialize()",
+        lambda symbol: "7FlashFS10initializeEv" in symbol.name and
         symbol.symbol_type == STT_FUNC,
     )
     require_symbol_match(
