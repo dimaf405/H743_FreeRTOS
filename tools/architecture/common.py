@@ -120,6 +120,12 @@ CORE_GENERATED_HEADERS = {
     "tim.h",
     "usart.h",
 }
+FATFS_HEADERS = {
+    "diskio.h",
+    "ff.h",
+    "ffconf.h",
+    "integer.h",
+}
 MAKE_CONTRACT_PATHS = (
     ROOT / "make/project.mk",
     ROOT / "make/release.mk",
@@ -147,6 +153,24 @@ def strip_c_comments(text: str) -> str:
         return "\n" * match.group(2).count("\n")
 
     return C_COMMENT_RE.sub(replace, text)
+
+
+def strip_cpp_structure(text: str) -> list[str]:
+    """Strip comments and literals while retaining one output line per line."""
+    literal_re = re.compile(
+        r'"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\''
+    )
+    text = literal_re.sub('""', text)
+    text = re.sub(
+        r"/\*.*?\*/",
+        lambda match: "\n" * match.group(0).count("\n"),
+        text,
+        flags=re.DOTALL,
+    )
+    output: list[str] = []
+    for line in text.splitlines():
+        output.append(re.sub(r"//.*$", "", line))
+    return output
 
 
 @functools.lru_cache(maxsize=None)
@@ -188,6 +212,15 @@ def first_party_sources() -> list[pathlib.Path]:
     return sources_under(roots)
 
 
+def fatfs_include(include: str) -> bool:
+    lowered = include.lower()
+    basename = pathlib.PurePosixPath(lowered).name
+    return (
+        basename in FATFS_HEADERS
+        or lowered.startswith("middlewares/third_party/fatfs/")
+    )
+
+
 def low_level_include(include: str) -> bool:
     lowered = include.lower()
     basename = pathlib.PurePosixPath(lowered).name
@@ -200,6 +233,7 @@ def low_level_include(include: str) -> bool:
                                "drivers/", "middlewares/"))
         or lowered.startswith(("platform/freertos/",
                                "platform/stm32h7/"))
+        or fatfs_include(include)
         or basename in BOARD_HEADERS
         or basename in CORE_GENERATED_HEADERS
         or basename.startswith(("usb_device", "usbd_", "core_cm"))
@@ -251,8 +285,12 @@ def resolve_common_include(source: pathlib.Path,
             return candidate.resolve()
     return None
 
-def variable_block(lines: list[str], name: str) -> list[tuple[int, str]]:
-    start_re = re.compile(rf"^\s*{re.escape(name)}\s*:?=")
+def variable_blocks(lines: list[str],
+                    name: str) -> list[list[tuple[int, str]]]:
+    start_re = re.compile(
+        rf"^\s*{re.escape(name)}\s*(?::|\+|\?)?="
+    )
+    blocks: list[list[tuple[int, str]]] = []
     for index, line in enumerate(lines):
         if not start_re.match(line):
             continue
@@ -262,8 +300,73 @@ def variable_block(lines: list[str], name: str) -> list[tuple[int, str]]:
             if next_index >= len(lines):
                 break
             block.append((next_index + 1, lines[next_index]))
-        return block
-    return []
+        blocks.append(block)
+    return blocks
+
+
+def variable_block(lines: list[str], name: str) -> list[tuple[int, str]]:
+    blocks = variable_blocks(lines, name)
+    return blocks[0] if blocks else []
+
+
+def effective_variable_blocks(
+        lines: list[str], name: str) -> list[list[tuple[int, str]]]:
+    """Apply Make's replace/append/conditional assignment order for a variable."""
+    start_re = re.compile(
+        rf"^\s*(?:(?:override|export|private)\s+)*"
+        rf"{re.escape(name)}\s*(?P<operator>:=|\+=|\?=|=)"
+    )
+    effective: list[list[tuple[int, str]]] = []
+    defined = False
+    for index, line in enumerate(lines):
+        match = start_re.match(line)
+        if match is None:
+            continue
+        block = [(index + 1, line)]
+        while block[-1][1].rstrip().endswith("\\"):
+            next_index = index + len(block)
+            if next_index >= len(lines):
+                break
+            block.append((next_index + 1, lines[next_index]))
+        operator = match.group("operator")
+        if operator == "+=":
+            effective.append(block)
+            defined = True
+        elif operator == "?=":
+            if not defined:
+                effective = [block]
+                defined = True
+        else:
+            effective = [block]
+            defined = True
+    return effective
+
+
+MAKE_VARIABLE_REFERENCE_RE = re.compile(
+    r"\$\(([A-Za-z_][A-Za-z0-9_]*)\)|"
+    r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"
+)
+
+
+def transitive_variable_block(lines: list[str],
+                              name: str) -> list[tuple[int, str]]:
+    """Return one Make variable and all directly referenced variable blocks."""
+    output: list[tuple[int, str]] = []
+    visited: set[str] = set()
+
+    def visit(variable: str) -> None:
+        if variable in visited:
+            return
+        visited.add(variable)
+        for block in effective_variable_blocks(lines, variable):
+            output.extend(block)
+            for _line_number, text in block:
+                for match in MAKE_VARIABLE_REFERENCE_RE.finditer(text):
+                    dependency = match.group(1) or match.group(2)
+                    visit(dependency)
+
+    visit(name)
+    return output
 
 
 def line_for(text: str, needle: str) -> int:
@@ -321,3 +424,24 @@ def require_literals_in_owners(
     )
     if missing:
         require_literals(existing[0][0], missing, violations)
+
+
+def require_make_source_paths(
+        path: pathlib.Path,
+        requirements: Iterable[tuple[str, str, str]],
+        violations: list[Violation]) -> None:
+    """Require sources to be transitively reachable from PROJECT_*_SOURCES."""
+    if not path.is_file():
+        require_literals(path, requirements, violations)
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    reachable = transitive_variable_block(lines, "PROJECT_C_SOURCES")
+    reachable.extend(
+        transitive_variable_block(lines, "PROJECT_CXX_SOURCES")
+    )
+    for source, rule, message in requirements:
+        source_pattern = re.compile(
+            rf"(?<![A-Za-z0-9_.-]){re.escape(source)}(?=\s|\\|$)"
+        )
+        if not any(source_pattern.search(text) for _line, text in reachable):
+            violations.append(Violation(path, 1, rule, message))

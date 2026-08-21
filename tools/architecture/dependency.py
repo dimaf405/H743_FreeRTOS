@@ -28,8 +28,10 @@ from architecture.common import (
     freertos_include,
     protected_layer,
     resolve_common_include,
+    transitive_variable_block,
     variable_block,
     require_literals,
+    strip_cpp_structure,
     MAKE_CONTRACT_PATHS,
     owner_texts,
 )
@@ -80,9 +82,11 @@ def scan_layer_dependencies(violations: list[Violation]) -> None:
                 include = match.group(1)
                 allowed = {
                     "cstddef", "cstdint", "stdbool.h", "stddef.h", "stdint.h",
-                    "ActuatorPwm.hpp", "BoardIdentity.hpp", "Boot.hpp",
+                    "ActuatorPwm.hpp", "ActuatorPwmLimits.h",
+                    "BoardIdentity.hpp", "Boot.hpp",
                     "Console.hpp", "Execution.hpp", "Flash.hpp",
-                    "Memory.hpp", "PlatformTypes.hpp", "SensorInterrupts.hpp",
+                    "Memory.hpp", "ParameterFileStore.hpp",
+                    "PlatformTypes.hpp", "SensorInterrupts.hpp",
                     "Serial.hpp", "Services.hpp", "Synchronization.hpp",
                     "TaskRuntime.hpp", "Time.hpp", "platform_config.h",
                 }
@@ -165,7 +169,7 @@ def scan_build_isolation(violations: list[Violation]) -> None:
         "DIMA_COMMON_INCLUDES": (
             "R030",
             re.compile(r"(?:^|\s)-I\.(?:\s|\\|$)|Core/|Boards/|USB_DEVICE/|"
-                       r"Drivers/|Middlewares/|FreeRTOS|CMSIS|STM32"),
+                       r"Drivers/|Middlewares/|FatFs|FreeRTOS|CMSIS|STM32"),
             "common include set exposes a low-level search path",
         ),
         "DIMA_FREERTOS_INCLUDES": (
@@ -182,7 +186,12 @@ def scan_build_isolation(violations: list[Violation]) -> None:
     }
     for name, (rule, pattern, message) in checks.items():
         owner_blocks = [
-            (owner, variable_block(text.splitlines(), name))
+            (
+                owner,
+                transitive_variable_block(text.splitlines(), name)
+                if name == "DIMA_COMMON_INCLUDES"
+                else variable_block(text.splitlines(), name),
+            )
             for owner, text in make_owners
         ]
         owner_blocks = [
@@ -271,25 +280,6 @@ def scan_include_style(violations: list[Violation]) -> None:
                     f"include spelling '{include}' is not canonical; expected "
                     f"one of {sorted(spellings)}",
                 ))
-
-
-def strip_cpp_structure(text: str) -> list[str]:
-    """Strip comments and literals while retaining one output line per line."""
-    literal_re = re.compile(
-        r'"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\''
-    )
-    text = literal_re.sub('""', text)
-    text = re.sub(
-        r"/\*.*?\*/",
-        lambda match: "\n" * match.group(0).count("\n"),
-        text,
-        flags=re.DOTALL,
-    )
-    output: list[str] = []
-    for line in text.splitlines():
-        line = re.sub(r"//.*$", "", line)
-        output.append(line)
-    return output
 
 
 def scan_namespace_convention(violations: list[Violation]) -> None:

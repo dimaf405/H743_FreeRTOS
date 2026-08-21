@@ -25,9 +25,9 @@ def scan_board_serial_manifest(violations: list[Violation]) -> None:
         ))
         return
 
-    if manifest.get("schema_version") != 2:
+    if manifest.get("format_version") != 1:
         violations.append(Violation(
-            path, 1, "R196", "board serial manifest must use schema v2",
+            path, 1, "R196", "board serial manifest must use format version 1",
         ))
 
     expected_hardware_reference = {
@@ -96,10 +96,10 @@ def scan_board_serial_manifest(violations: list[Violation]) -> None:
             "serial parameter defaults or STM32 handle/DMA/IRQ/AF mapping changed",
         ))
     expected_default_sources = [
-        "Schema v1 USART1 default", "Schema v1 USART2 default",
-        "Schema v1 USART3 default", "Schema v1 UART4 default",
-        "CubeMX UART5 normal 8N1", "Schema v1 USART6 RC Auto",
-        "Schema v1 UART7 default", "Schema v1 UART8 default",
+        "VCU-H7 USART1 product default", "VCU-H7 USART2 product default",
+        "VCU-H7 USART3 product default", "VCU-H7 UART4 product default",
+        "CubeMX UART5 normal 8N1", "VCU-H7 USART6 RC product default",
+        "VCU-H7 UART7 product default", "VCU-H7 UART8 product default",
     ]
     actual_default_sources = [
         port.get("default_source") for port in ports[1:]
@@ -130,25 +130,6 @@ def scan_board_serial_manifest(violations: list[Violation]) -> None:
         violations.append(Violation(
             path, 1, "R196",
             "board serial baud whitelist differs from the approved common-rate subset",
-        ))
-
-    expected_legacy_rc = {
-        "0": 0, "1": 4, "2": 7, "3": 8, "4": 2,
-        "101": 7, "102": 8, "103": 2, "104": 5,
-        "201": 1, "202": 3, "203": 6, "300": 4,
-    }
-    expected_legacy_baud = {
-        "SER_RC_BAUD": 4, "SER_TEL1_BAUD": 7,
-        "SER_TEL2_BAUD": 8, "SER_TEL3_BAUD": 2,
-        "SER_TEL4_BAUD": 5, "SER_GPS1_BAUD": 1,
-        "SER_GPS2_BAUD": 3, "SER_GPS3_BAUD": 6,
-    }
-    if (manifest.get("legacy_rc_port_map") != expected_legacy_rc or
-            manifest.get("legacy_baud_parameter_map") !=
-            expected_legacy_baud):
-        violations.append(Violation(
-            path, 1, "R196",
-            "legacy serial migration must preserve physical UART ownership",
         ))
 
     if isinstance(ports, list):
@@ -217,12 +198,10 @@ def scan_board_serial_manifest(violations: list[Violation]) -> None:
             ))
 
     for source in first_party_sources():
-        if source == ROOT / "Dima/modules/parameters/ParameterService.cpp":
-            continue
         text = source.read_text(encoding="utf-8")
         match = re.search(r"\bSER_(?:TEL[1-4]|GPS[1-3]|RC)_BAUD\b", text)
         if match:
             violations.append(Violation(
                 source, line_for(text, match.group(0)), "R196",
-                "serial identity must use SERIAL1..SERIAL7, not assigned function names",
+                "serial identity must use SERIAL1..SERIAL8, not assigned function names",
             ))

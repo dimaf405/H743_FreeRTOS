@@ -12,6 +12,7 @@ from architecture.common import (
     is_vendored,
     line_for,
     require_literals,
+    require_make_source_paths,
     MAKE_CONTRACT_PATHS,
     owner_texts,
 )
@@ -152,6 +153,10 @@ def scan_repository_layout(violations: list[Violation]) -> None:
         ROOT / "Dima/platform/stm32h7/Backend.hpp",
         ROOT / "Dima/modules/boot_health/boot_health.cpp",
         ROOT / "Dima/modules/boot_health/boot_health.hpp",
+        ROOT / "Dima/modules/parameters/SerialMigrationSchema.hpp",
+        ROOT / "Dima/modules/parameters/SerialParameterMigration.cpp",
+        ROOT / "Middlewares/Third_Party/FatFs/src/diskio.c",
+        ROOT / "Middlewares/Third_Party/FatFs/src/syscall.c",
     )
     for path in retired_files:
         if path.exists():
@@ -159,6 +164,105 @@ def scan_repository_layout(violations: list[Violation]) -> None:
                 path, 1, "R221",
                 "retired or misleading source path has returned",
             ))
+
+    required_storage_paths = (
+        "Boards/H743/Src/fatfs_diskio.c",
+        "Dima/middleware/maintenance/RuntimeMaintenanceCoordinator.cpp",
+        "Dima/middleware/parameters/FileStorage.cpp",
+        "Dima/middleware/parameters/flashfs.cpp",
+        "Dima/modules/parameters/ParameterService.cpp",
+        "Dima/platform/api/ParameterFileStore.hpp",
+        "Dima/platform/freertos/storage/FatFsParameterFileStore.cpp",
+    )
+    for relative in required_storage_paths:
+        path = ROOT / relative
+        if not path.is_file():
+            violations.append(Violation(
+                path, 1, "R230",
+                "required parameter storage owner is missing",
+            ))
+
+    require_make_source_paths(
+        ROOT / "make/project.mk",
+        tuple(
+            (relative, "R231",
+             "parameter storage owner is absent from the build manifest")
+            for relative in required_storage_paths
+            if pathlib.PurePosixPath(relative).suffix in {".c", ".cpp"}
+        ),
+        violations,
+    )
+    project_mk_text = (ROOT / "make/project.mk").read_text(encoding="utf-8")
+    if "BOARD_SD_INIT_AT_BOOT" in project_mk_text:
+        violations.append(Violation(
+            ROOT / "make/project.mk", 1, "R231",
+            "mandatory SD support cannot be compiled out",
+        ))
+    board_init_path = ROOT / "Boards/H743/Src/board_init.c"
+    board_init_text = board_init_path.read_text(encoding="utf-8")
+    if "MX_SDMMC1_SD_Init" in board_init_text:
+        violations.append(Violation(
+            board_init_path, line_for(board_init_text, "MX_SDMMC1_SD_Init"),
+            "R230", "SD initialization must remain non-fatal and retryable",
+        ))
+    require_literals(
+        ROOT / "Boards/H743/Src/fatfs_diskio.c",
+        (
+            ("SD_Reinitialize", "R230",
+             "software SD reinitialization is missing"),
+            ("HAL_SD_DeInit(&hsd1)", "R230",
+             "SD removal must reset the HAL instance before retry"),
+            ("HAL_SD_Init(&hsd1)", "R230",
+             "SD insertion must reinitialize the HAL instance"),
+        ),
+        violations,
+    )
+    require_literals(
+        ROOT / "Dima/platform/freertos/storage/FatFsParameterFileStore.cpp",
+        (
+            ("disk_status(0)", "R230",
+             "mounted SD media must be probed in software"),
+            ("invalidate_mount()", "R230",
+             "FatFs media failures must invalidate the mount"),
+            ("continue_write()", "R230",
+             "FatFs parameter writes are not chunked"),
+            ("continue_verify()", "R230",
+             "FatFs parameter verification is not chunked"),
+        ),
+        violations,
+    )
+    require_literals(
+        ROOT / "Dima/modules/parameters/ParameterService.cpp",
+        (
+            ("kSnapshotMagic", "R230",
+             "parameter mirror snapshot identity is missing"),
+            ("storage_generation_", "R230",
+             "Flash/SD snapshot ordering is missing"),
+            ("payload_crc", "R230",
+             "equal-generation split-brain detection is missing"),
+            ("file_storage_poll(available)", "R230",
+             "periodic software SD probing is missing"),
+            ("resume_after_storage_available()", "R230",
+             "SD reinsertion cannot resume ENOSPC autosave"),
+            ("sd_mirror_required_", "R230",
+             "independent SD mirror retry is missing"),
+            ("begin_persistence(", "R230",
+             "runtime persistence is not maintenance-gated"),
+        ),
+        violations,
+    )
+    require_literals(
+        ROOT / "Dima/middleware/parameters/flashfs.cpp",
+        (
+            ("word_erased", "R230",
+             "FlashFS scan treats a blank magic as end-of-media"),
+            ("Operation::VerifyPayload", "R230",
+             "FlashFS writes are not incrementally verified"),
+            ("Operation::Commit", "R230",
+             "FlashFS has no final commit step"),
+        ),
+        violations,
+    )
 
     dima_root = ROOT / "Dima"
     for directory in sorted(
@@ -223,6 +327,12 @@ def scan_repository_layout(violations: list[Violation]) -> None:
         (("#include \"../../Dima/platform/freertos/FreeRTOSConfig.h\"",
           "R227", "CubeMX FreeRTOSConfig shim no longer forwards to the "
           "single Dima configuration"),),
+        violations,
+    )
+    require_literals(
+        ROOT / "Makefile",
+        (("ifneq ($(DIMA_BUILD_INTERNAL),1)", "R232",
+          "CubeMX Makefile can be invoked outside the GNUmakefile overlay"),),
         violations,
     )
 

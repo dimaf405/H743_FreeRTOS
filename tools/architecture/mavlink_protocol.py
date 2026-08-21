@@ -90,6 +90,10 @@ def scan_mavlink_protocol_contract(
              "parameter Metadata outputs must stay under build/generated"),
             ("$(PARAMETER_METADATA_STAMP)", "R334",
              "firmware objects must depend on generated parameter Metadata"),
+            ("parameter-metadata-verify", "R337",
+             "formal builds do not verify generated Metadata stamps"),
+            ("--output $(PARAMETER_METADATA_DIR) --verify", "R337",
+             "Metadata stamp verification is not invoked"),
         ),
         violations,
     )
@@ -107,45 +111,6 @@ def scan_mavlink_protocol_contract(
         ),
         violations,
     )
-    require_literals(
-        ROOT / "tools/mavlink/generate_parameter_metadata.py",
-        (
-            ('GENERAL_URI = "mftp://etc/extras/'
-             'component_general.json.xz"', "R337",
-             "General Metadata URI changed"),
-            ('PARAMETER_URI = "mftp://etc/extras/parameters.json.xz"',
-             "R337", "Parameter Metadata URI changed"),
-            ('INTERNAL_PARAMETERS = {"RC_PORT_CONFIG", "DIMA_SER_VER"}',
-             "R337", "internal parameters entered public Metadata"),
-            ('"type": 1', "R337",
-             "General Metadata must advertise parameters only"),
-            ('"version": 1', "R337",
-             "QGC parameter Metadata version must remain one"),
-            ("general_crc = mavlink_crc32(general_json)", "R337",
-             "General Metadata CRC must follow PX4 uncompressed semantics"),
-            ("parameter_crc = mavlink_crc32(parameter_xz)", "R337",
-             "Parameter Metadata CRC must cover the served XZ file"),
-            ("validate_parameter(parameter, index)", "R337",
-             "QGC parameter object validation is missing"),
-            ("lzma.decompress(parameter_xz) != parameter_json", "R337",
-             "Parameter Metadata XZ round-trip validation is missing"),
-            ("lzma.decompress(general_xz) != general_json", "R337",
-             "General Metadata XZ round-trip validation is missing"),
-        ),
-        violations,
-    )
-    metadata_generator_text = (
-        ROOT / "tools/mavlink/generate_parameter_metadata.py"
-    ).read_text(encoding="utf-8")
-    for forbidden in (
-            "COMP_METADATA_TYPE_ACTUATORS", "actuators.json",
-            "events.json", '"type": 4', '"type": 5'):
-        if forbidden in metadata_generator_text:
-            violations.append(Violation(
-                ROOT / "tools/mavlink/generate_parameter_metadata.py",
-                line_for(metadata_generator_text, forbidden), "R337",
-                "only Parameter Metadata may be generated",
-            ))
     require_literals(
         ROOT / "Dima/modules/mavlink/MavlinkService.hpp",
         (
@@ -342,8 +307,6 @@ def scan_mavlink_protocol_contract(
     require_literals_in_owners(
         mavlink_parameter_owners,
         (
-            ("kQgcFixedInt32Parameters", "R336",
-             "fixed QGC INT32 registry is missing"),
             ("is_qgc_fixed_parameter(name)", "R336",
              "QGC compatibility parameters must be active before LIST"),
             ("return value == fixed->value;", "R336",
@@ -352,8 +315,6 @@ def scan_mavlink_protocol_contract(
              "disabled flight-mode mapping compatibility guard is missing"),
             ("return mapping == 0;", "R336",
              "flight-mode mapping writes must remain disabled"),
-            ("std::strcmp(name, \"RC_PORT_CONFIG\") == 0", "R336",
-             "legacy RC_PORT_CONFIG must remain write-protected"),
             ("return protocol == 0 || protocol == 2;", "R336",
              "RC_INPUT_PROTO writes must be limited to Disabled or SBUS"),
             ("serial_baud_parameter(name)", "R336",
@@ -364,8 +325,6 @@ def scan_mavlink_protocol_contract(
              "serial baud writes must be limited to implemented rates"),
             ("serial_function_write_allowed(name, function)", "R336",
              "serial function writes must preserve single RC ownership"),
-            ("is_internal_parameter(name)", "R336",
-             "migration-only parameters must be hidden from named requests"),
             ("param_foreach(&MavlinkParameters::append_used_parameter",
              "R331", "PARAM_REQUEST_LIST must snapshot the used set"),
             ("msg.param_count = count;", "R331",
