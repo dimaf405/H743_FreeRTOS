@@ -1,23 +1,20 @@
-"""Recovery endpoint discovery and USB re-enumeration orchestration."""
+"""Wait for MCUboot Recovery and application USB re-enumeration."""
 
 from __future__ import annotations
 
-import pathlib
-import re
 import time
 
-from .application_recovery import (
+from .endpoint_errors import port_busy
+from .recovery_request import (
+    request_explicit_port_recovery,
     request_application_recovery,
-    request_px4_bootstrap_recovery,
     try_application_identify,
 )
 from .mavlink import MavlinkCodec
 from .mcumgr import try_image_list
 from .models import (
     ApplicationIdentity,
-    HostPlatform,
     McumgrRuntime,
-    SerialBackend,
     UploadError,
     stage,
 )
@@ -26,100 +23,6 @@ from .serial_discovery import (
     ports_matching_binding,
     serial_ports,
 )
-
-PORT_BUSY_RE = re.compile(
-    r"access is denied|permission denied|resource busy|being used by another process|"
-    r"device or resource busy|访问被拒绝",
-    re.IGNORECASE,
-)
-
-def port_busy(output: str) -> bool:
-    return PORT_BUSY_RE.search(output) is not None
-
-
-def endpoint_preflight(
-    runtime: McumgrRuntime,
-    codec: MavlinkCodec,
-    explicit_port: str | None,
-    wait_seconds: int,
-    baud: int,
-    mtu: int,
-) -> tuple[str, str]:
-    host_label = {
-        HostPlatform.WINDOWS_NATIVE: "Windows native",
-        HostPlatform.WSL: "WSL",
-        HostPlatform.POSIX: "POSIX",
-    }[runtime.host_platform]
-    transport_label = {
-        SerialBackend.WINDOWS_COM: "Windows COM",
-        SerialBackend.POSIX_TTY: "POSIX tty",
-    }[runtime.serial_backend]
-    print("[PREFLIGHT] USB upload", flush=True)
-    print(f"  Host       : {host_label}", flush=True)
-    print(f"  Transport  : {transport_label}", flush=True)
-    print(
-        f"  mcumgr     : {pathlib.Path(runtime.executable).name}",
-        flush=True,
-    )
-    print(f"  Scan limit : {wait_seconds}s", flush=True)
-    deadline = time.monotonic() + wait_seconds
-    last_error = "no serial ports detected"
-    probe_after: dict[str, float] = {}
-    while time.monotonic() < deadline:
-        ports = [explicit_port] if explicit_port else serial_ports(runtime)
-        matches: list[tuple[str, str]] = []
-        now = time.monotonic()
-        for port in ports:
-            if time.monotonic() >= deadline:
-                break
-            if port is None or now < probe_after.get(port, 0.0):
-                continue
-            probe_after[port] = now + 1.0
-            success, output = try_image_list(
-                runtime.executable, port, baud, mtu
-            )
-            if success:
-                matches.append((port, "MCUboot Recovery"))
-                continue
-            if output:
-                last_error = f"{port}: {output}"
-            if explicit_port and port_busy(output):
-                raise UploadError(
-                    f"PORT_BUSY: {port} is already open by another process ({output})"
-                )
-
-            _, identity, identify_output = try_application_identify(
-                codec, runtime.serial_backend, port, deadline
-            )
-            if identity is not None:
-                matches.append((port, identity.summary()))
-                continue
-            if identify_output:
-                last_error = f"{port}: {identify_output[-240:]}"
-            if explicit_port and port_busy(identify_output):
-                raise UploadError(
-                    f"PORT_BUSY: {port} is already open by another process "
-                    f"({identify_output})"
-                )
-
-        if len(matches) > 1:
-            raise UploadError(
-                "HOST_PREFLIGHT: multiple Dima protocol endpoints were identified: "
-                + ", ".join(port for port, _ in matches)
-                + "; set MCUMGR_PORT to the intended application port"
-            )
-        if matches:
-            port, endpoint = matches[0]
-            print(f"  Device     : {port} ({endpoint})", flush=True)
-            print("  Status     : ready\n", flush=True)
-            return port, endpoint
-        time.sleep(0.25)
-
-    raise UploadError(
-        f"HOST_PREFLIGHT: no compatible endpoint was found within "
-        f"{wait_seconds}s ({last_error})"
-    )
-
 
 def wait_for_recovery(
     runtime: McumgrRuntime,
@@ -187,14 +90,14 @@ def wait_for_recovery(
                     raise UploadError(
                         f"DEVICE_BINDING: unable to bind {port} to a physical USB device"
                     )
-                reboot_output = request_px4_bootstrap_recovery(
+                reboot_output = request_explicit_port_recovery(
                     runtime.serial_backend, port
                 )
                 print(reboot_output)
                 stage(
                     "REBOOT_REQUEST",
-                    "operator-selected port received the complete PX4 "
-                    "MAVLink/NSH reboot sequence; waiting for MCUboot on "
+                    "operator-selected port received the PX4 MAVLink reboot "
+                    "sequence; waiting for MCUboot on "
                     "the same physical USB device",
                 )
                 reboot_requested = True
@@ -261,7 +164,7 @@ def wait_for_recovery(
                 f"identified {application_identity.summary()} on {port}",
             )
             reboot_acknowledged, reboot_output = request_application_recovery(
-                codec, runtime.serial_backend, port, application_identity
+                codec, runtime.serial_backend, port
             )
             if reboot_output:
                 print(reboot_output)
@@ -284,8 +187,8 @@ def wait_for_recovery(
     if not reboot_requested:
         if incompatible_response_seen:
             last_error += (
-                "; the selected endpoint returned neither the Dima legacy console "
-                "identity nor the current Dima MAVLink identity; its application "
+                "; the selected endpoint did not return the current Dima MAVLink "
+                "identity; its application "
                 "runtime may be incompatible or unresponsive, so the uploader "
                 "will not issue a blind reboot"
             )
@@ -333,7 +236,6 @@ def wait_for_application(
             if identity is not None:
                 if (
                     expected_identity is not None
-                    and expected_identity.uid is not None
                     and identity.uid != expected_identity.uid
                 ):
                     last_error = (

@@ -6,7 +6,7 @@ import argparse
 import pathlib
 import time
 
-from .application_recovery import request_application_recovery
+from .recovery_request import request_application_recovery
 from .mavlink import resolve_mavlink_codec
 from .mcumgr import (
     has_active_confirmed_image,
@@ -25,8 +25,8 @@ from .models import (
     UploadError,
     stage,
 )
-from .recovery import (
-    endpoint_preflight,
+from .endpoint_preflight import endpoint_preflight
+from .endpoint_wait import (
     wait_for_application,
     wait_for_recovery,
     wait_for_recovery_endpoint,
@@ -218,7 +218,6 @@ def main() -> int:
         codec,
         runtime.serial_backend,
         application_port,
-        application_identity,
     )
     if reboot_output:
         print(reboot_output)

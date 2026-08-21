@@ -7,7 +7,7 @@ import pathlib
 import re
 import shutil
 
-from bootstrap_mcumgr import BootstrapError, ensure_mcumgr
+from mcumgr_bootstrap import BootstrapError, ensure_mcumgr
 
 from .models import (
     HostPlatform,
@@ -121,4 +121,3 @@ def resolve_mcumgr(
     raise UploadError(
         f"the requested mcumgr executable was not found: {requested}"
     )
-

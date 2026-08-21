@@ -63,22 +63,16 @@ class SerialSequenceResult:
 
 @dataclasses.dataclass(frozen=True)
 class ApplicationIdentity:
-    protocol: str
-    uid: int | None = None
-    flight_sw_version: int | None = None
-    board_version: int | None = None
+    uid: int
+    flight_sw_version: int
+    board_version: int
 
     def summary(self) -> str:
-        if self.protocol == "mavlink":
-            assert self.uid is not None
-            assert self.flight_sw_version is not None
-            assert self.board_version is not None
-            return (
-                "Dima Rover MAVLink "
-                f"version=0x{self.flight_sw_version:08x} "
-                f"board={self.board_version} uid=0x{self.uid:016x}"
-            )
-        return "Dima Rover legacy console"
+        return (
+            "Dima Rover MAVLink "
+            f"version=0x{self.flight_sw_version:08x} "
+            f"board={self.board_version} uid=0x{self.uid:016x}"
+        )
 
 def stage(name: str, message: str) -> None:
     print(f"[{name}] {message}", flush=True)

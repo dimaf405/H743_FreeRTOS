@@ -10,6 +10,7 @@ from .models import ApplicationIdentity, UploadError
 
 MAVLINK_GCS_SYSTEM_ID = 255
 MAVLINK_GCS_COMPONENT_ID = 190
+MAVLINK_PX4_UPLOADER_COMPONENT_ID = 0
 MAVLINK_APP_SYSTEM_ID = 1
 MAVLINK_APP_COMPONENT_ID = 1
 DIMA_FLIGHT_SW_VERSION = 0x00010000
@@ -106,7 +107,6 @@ class MavlinkCodec:
         ):
             return None
         return ApplicationIdentity(
-            protocol="mavlink",
             uid=int(version.uid),
             flight_sw_version=int(version.flight_sw_version),
             board_version=int(version.board_version),
@@ -123,20 +123,14 @@ class MavlinkCodec:
                 continue
             result = int(message.result)
             mode = int(message.result_param2)
-            # Current firmware directs the ACK to the PX4 frame's 255/0
-            # source and reports mode 3 in result_param2.  The already deployed
-            # Phase-3 firmware left the ACK target and result_param2 at zero;
-            # accept that legacy encoding on this point-to-point USB link.
-            if int(message.target_system) not in (0, MAVLINK_GCS_SYSTEM_ID):
+            # Current firmware directs the ACK to the fixed PX4 uploader
+            # frame's 255/0 source and reports Recovery mode 3.
+            if int(message.target_system) != MAVLINK_GCS_SYSTEM_ID:
                 continue
-            if int(message.target_component) not in (
-                0,
-                MAVLINK_GCS_COMPONENT_ID,
-            ):
+            if int(message.target_component) != MAVLINK_PX4_UPLOADER_COMPONENT_ID:
                 continue
-            if result == self._dialect.MAV_RESULT_ACCEPTED and mode in (0, 3):
-                suffix = "legacy mode field" if mode == 0 else "mode 3"
-                return True, f"MAVLink reboot ACK accepted ({suffix})"
+            if result == self._dialect.MAV_RESULT_ACCEPTED and mode == 3:
+                return True, "MAVLink reboot ACK accepted (mode 3)"
             return False, f"MAVLink reboot was rejected (result={result}, mode={mode})"
         return None, "no matching MAVLink reboot ACK was received"
 
@@ -189,4 +183,3 @@ def resolve_mavlink_codec(tools_cache: pathlib.Path) -> MavlinkCodec:
             "the imported pymavlink package did not come from the pinned tools cache"
         )
     return MavlinkCodec(common)
-
