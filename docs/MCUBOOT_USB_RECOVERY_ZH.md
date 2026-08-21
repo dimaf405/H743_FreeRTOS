@@ -69,12 +69,11 @@ make \
 按 VID/PID 或产品名排除端口，并按以下顺序进行协议识别：
 
 1. 先用短超时 `image list` 判断端口是否已经运行 MCUboot SMP；若是，立即开始烧写。
-2. 用户显式设置 `MCUMGR_PORT` 时，该端口就是本次操作授权。上传器先记录其物理 USB 绑定，再严格按
-   PX4 `Tools/px4_uploader.py` 的顺序执行三轮 bootloader kick：清空串口缓冲、发送 MAVLink v1
-   broadcast `0/0`、targeted `1/0`、NSH 前导 `\r\r\r` 和 `reboot -b\n`。该路径不先发送主动身份
-   请求，兼容身份请求会抢占旧固件 ACK Topic 的首次迁移场景。
-3. 未显式指定端口时继续使用安全自动发现：先兼容识别旧版 `DIMA_ROVER_APP_V1`，再使用固定版本
-   pymavlink 请求 `HEARTBEAT` 与 `AUTOPILOT_VERSION`。当前应用必须同时匹配 system/component
+2. 用户显式设置 `MCUMGR_PORT` 时，该端口就是本次操作授权。上传器先记录其物理 USB 绑定，再按
+   PX4 `Tools/px4_uploader.py` 的 MAVLink 顺序执行三轮 bootloader kick：清空串口缓冲、发送 MAVLink v1
+   broadcast `0/0` 和 targeted `1/0`。
+3. 未显式指定端口时使用安全自动发现：通过固定版本 pymavlink 请求 `HEARTBEAT` 与
+   `AUTOPILOT_VERSION`。当前应用必须同时匹配 system/component
    `1/1`、Ground Rover、PX4 autopilot、固件版本 `0.1.0`、板版本 `1`、能力位和非零硬件 UID；识别后
    发送三轮 broadcast/targeted MAVLink reboot。Windows 在一个 PowerShell `SerialPort` 实例内完成
    全部二进制写入，POSIX 在一个 raw file descriptor 内完成，避免每一帧重新开关端口。
@@ -83,9 +82,8 @@ make \
 5. MCUboot 读取该请求后持续运行 USB Recovery，不受普通 3 秒窗口限制；USB 初始化成功后请求被
    清除，因此上传结束时的 `mcumgr reset` 会正常启动应用。
 
-显式端口路径把 PX4 的 NSH `reboot -b` 作为旧固件兼容字节流一并发送；当前 MAVLink-only 应用不会
-解释该文本，其复位仍必须经过 Commander。自动发现路径只有精确识别为旧版 `DIMA_ROVER_APP_V1`
-文本控制台时才发送文本命令，并检查其 armed 拒绝响应。
+显式端口路径不先发送身份请求，因为明确端口本身就是操作授权；它仍只发送当前应用支持的 MAVLink
+重启命令，复位必须经过 Commander。自动发现路径必须先取得完整的当前 MAVLink 复合身份。
 
 软件重启后只接受与已选应用相同的物理 USB 身份进入 Recovery，禁止无约束扫描所有端口，以免并发
 接入另一块板时误写。Windows 原生进程从注册表优先绑定 Container ID，并用 Configuration Manager
@@ -94,15 +92,15 @@ make \
 同一完整 PnP 实例 ID。POSIX 绑定 USB serial、回退到物理总线拓扑，因此允许同一设备的 COM/tty
 名称变化。无法建立唯一物理绑定时命令会安全失败。
 
-PX4 uploader 不等待应用 ACK，而以重枚举后的 Bootloader 握手为准；显式端口兼容路径采用同一判据。
-安全自动发现路径还会解析当前固件的定向 accepted、`result_param2=3`，并兼容阶段 3 固件留下的零
-target/mode；明确的 DENIED/REJECTED ACK 立即终止。无论 ACK 是否到达，只有相同物理 USB 绑定重新
+PX4 uploader 不等待应用 ACK，而以重枚举后的 Bootloader 握手为准；显式端口路径采用同一判据。
+安全自动发现路径还会解析当前固件的定向 accepted 与 `result_param2=3`；明确的
+DENIED/REJECTED ACK 立即终止。无论 ACK 是否到达，只有相同物理 USB 绑定重新
 枚举且 `image list` 得到有效 MCUboot SMP 响应，才判定 Recovery 切换成功。软件入口无效时命令返回
 非零，不把仅完成串口写入误报为复位成功。
 
 普通上电且没有软件 Recovery 请求时仍保留原有 3 秒 SMP 窗口。Primary 镜像缺失、签名无效或
-向量表无效时，MCUboot 也会持续停留在 Recovery。正在运行且既不返回旧版身份、也不提供上述
-MAVLink 身份与重启命令的应用无法安全授权软件切换；首次迁移必须通过现有工厂/调试通道写入
+向量表无效时，MCUboot 也会持续停留在 Recovery。正在运行但不提供上述 MAVLink 身份与重启命令的
+应用无法安全授权软件切换；首次迁移必须通过现有工厂/调试通道写入
 `build/H743_FreeRTOS_factory.hex`。普通 `mcumgr` 只更新应用槽，不能更新 MCUboot 本身。从完整
 Factory 镜像部署完成后，后续升级不再需要断电或按键操作。
 
@@ -176,7 +174,7 @@ USB 预检。板上已运行相同 active/confirmed hash 时默认跳过重写�
 回滚副本；应先完成健康确认或复位回滚，再发起新的升级事务。
 
 需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、`TEST`，直接从 TEST 响应同时校验 Secondary
-完整 hash 与 pending 状态，再执行 `RESET`、MAVLink/旧版应用身份校验、`HEALTH_CONFIRM`、Primary
+完整 hash 与 pending 状态，再执行 `RESET`、MAVLink 应用身份校验、`HEALTH_CONFIRM`、Primary
 槽完整 hash 的 `active confirmed` 校验，最后再次复位并确认应用已经恢复运行。任何阶段不满足契约
 都会使命令返回非零，不会把只完成传输误报为烧写成功。仓库自举的是带 Dima USB CDC 快速通道的
 固定版本 `mcumgr`：在虚拟 921600 波特率下
@@ -188,7 +186,7 @@ USB 预检。板上已运行相同 active/confirmed hash 时默认跳过重写�
 Linux 会枚举 `/dev/serial/by-id/`、`/dev/ttyACM*` 和 `/dev/ttyUSB*`，并优先显示稳定的
 `by-id` 路径；WSL 使用 Windows .NET 串口 API 枚举当前 `COMx`，通过 PowerShell 访问应用，
 再使用自动缓存的 Windows `mcumgr.exe` 完成 Recovery 传输。VID/PID、COM 号和设备名称都不作为
-烧写授权，只有兼容的旧版精确标识、当前 MAVLink 复合身份或 MCUboot `image list` 协议响应才确认
+烧写授权，只有当前 MAVLink 复合身份或 MCUboot `image list` 协议响应才确认
 身份；MAVLink 的 64-bit hardware UID 用于约束复位前后的应用关联，但不作为密码学设备身份。普通
 端口打开失败或协议不匹配只会被跳过；
 若识别到多个 Dima 协议端点，命令会拒绝猜测目标，此时必须覆盖端口：

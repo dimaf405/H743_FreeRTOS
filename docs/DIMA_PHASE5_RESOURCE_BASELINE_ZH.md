@@ -64,7 +64,7 @@ TIM8 与 TIM5 的目标配置均为 240 MHz 输入、prescaler 239、1 MHz 计�
 每路公开 `PWM_Sn_FUNC/MIN/CENT/MAX/REV`：
 
 - 默认 `FUNC=Disabled`，因此默认配置即使车辆 ARMED 也不产生物理 PWM。
-- 默认 `MIN/CENT/MAX=1000/1500/2000 us`，有效配置必须满足 `MIN < CENT < MAX`，参数元数据允许 800～2200 us。
+- 默认 `MIN/CENT/MAX=1000/1500/2000 us`；2026-08-21 后续门禁把参数元数据和产品运行包络统一放宽为 500～2500 us。有效配置允许 `MIN <= CENT <= MAX`，`MIN/MAX` 反序只交换运行时有效端点而不改写原值。
 - 零命令严格映射到 `CENT`；负向在 `CENT→MIN` 区间映射，正向在 `CENT→MAX` 区间映射，`REV` 在通道映射前反转归一化方向。
 - 同一个 Motor function 可以映射到多个物理口；未启用通道的有效掩码和脉宽必须保持 0。
 
@@ -154,7 +154,7 @@ Signed App 占 768 KiB Primary Slot 约 25.73%，低于 85% 发布控制线。MC
 本文件证明当前源码通过静态检查，并可由 Windows 原生工具链完成编译、链接、签名、Factory HEX 和目标 ELF/镜像门禁。它不证明以下目标板事实：
 
 1. 六路实际频率均为 50 Hz，TIM8/TIM5 帧起点和更新相位符合设计。
-2. 默认和边界配置实际产生 1000/1500/2000 us 脉宽，且 TIM8 N 通道极性正确。
+2. 默认配置实际产生 1000/1500/2000 us，扩展边界实际产生 500/2500 us，且 TIM8 N 通道极性正确。
 3. 冷启动、Runtime 启动失败和 stop 后六路真实保持低电平，没有窄脉冲或残余输出。
 4. Arm/Disarm、Kill/Unkill、Termination、Failsafe、RC 丢失和命令超时波形符合 fail-closed 行为。
 5. 油门中位、正反向、倒车转向、静摩擦补偿、换向延时、slew、解锁 ramp 和左右多路映射符合实车驱动器要求。

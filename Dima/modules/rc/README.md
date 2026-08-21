@@ -21,13 +21,13 @@
 | SERIAL7 | UART7 | PE8 / PE7 | 串口 7 | `SERIAL7_BAUD=57600`、Function Disabled |
 | SERIAL8 | UART8 | PE1 / PE0 | 串口 8 | `SERIAL8_BAUD=115200`、Function Disabled |
 
-UART5 同时引到独立串口 5 插座和串口 5/I2C2 复合插座，两处共享同一个 PB13/PB12 外设，不能由两个设备同时驱动 RX。既有物理 UART 的普通 baud 默认随 Schema v1 原端口迁移，只为新增 UART5 使用 CubeMX 的 115200/8N1；这些默认值不代表尚未实现的 GPS、串口 MAVLink 或 RS485 服务。
+UART5 同时引到独立串口 5 插座和串口 5/I2C2 复合插座，两处共享同一个 PB13/PB12 外设，不能由两个设备同时驱动 RX。各路普通 baud 是当前板级清单的产品默认值；这些默认值不代表尚未实现的 GPS、串口 MAVLink 或 RS485 服务。
 
-每个外部端口固定生成 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前只有 `0=Disabled`、`1=RC Input` 两个具有生产数据路径的 Function。重新分配 RC 时先把旧端口设为 Disabled，再把目标端口设为 RC Input；多个 RC owner 会在启动时 fail-closed。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
+每个外部端口固定生成 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前只有 `0=Disabled`、`1=RC Input` 两个具有生产数据路径的 Function。通过 QGC 把目标端口设为 RC Input 时，固件会在同一参数事务中把旧 RC owner 设为 Disabled；如果存储数据本身异常地包含多个 RC owner，启动仍会 fail-closed。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
 
 SerialConfig 在 RC driver 前应用普通 8N1 波特率。被唯一 `SERIALx_FUNCTION=RC Input` 选中的端口随后由 SBUS 临时接管为 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`，释放时恢复普通 UART、FIFO 和 GPIO。Auto/0 只表示最终波特率交给对应 Function driver；当前未实现的 GPS、串口 MAVLink、RS485 数据服务不会因连接器名称而被虚构。
 
-旧 `RC_PORT_CONFIG` 只保留在参数存储迁移链中，不再进入 QGC 参数列表，也拒绝新写入。Schema v1→v2 按物理 UART 迁移旧 `SERIAL1..7_*`，新增 UART5/SERIAL5 使用板级默认值；迁移后由 `DIMA_SER_VER=2` 防止重复执行。旧 Schema 的 `SERIAL7` 实际是 USART1，因此会迁到新 `SERIAL1`，不会被静默改接到 UART7。
+当前板级固件不定义 `RC_PORT_CONFIG`、迁移版本参数或旧串口键，也不扫描、补全或迁移旧存储目录。持久化快照中出现未知键或类型不符时整份拒绝，重新按当前 `SERIAL1..8` 直接编号配置。
 
 接管前会保存 UART Init、AdvancedInit、FIFO 模式与阈值以及 RX GPIO 状态。协议禁用、模块停止、Runtime shutdown 或启动失败回滚时，DMA 和 IRQ 先关闭，再恢复保存的普通 UART 配置。恢复失败会保留接管上下文供下一次 stop 重试，并让 Application Runtime 保持 Error、禁止释放相关资源。主动禁用属于正常 Running 生命周期，不产生后端故障事件；Commander 仍会因为没有新鲜 RC 而保持不可解锁。
 

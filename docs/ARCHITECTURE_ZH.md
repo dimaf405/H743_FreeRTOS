@@ -15,7 +15,8 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── application/              启动壳、C ABI 入口和 appMainTask
 ├── adapters/                 仅依赖公共 capability 的外部协议编解码/适配
 ├── platform/api/             OS/MCU 无关 capability 与 opaque handle
-├── platform/freertos/        Task、同步、Heap 和 transaction 后端
+├── platform/freertos/        Task、同步、Heap、transaction 与 FatFs 文件后端
+│   └── storage/              ParameterFileStore 的 FatFs 文件后端
 ├── platform/stm32h7/         system/memory/flash/serial/io 五组 MCU 后端
 ├── middleware/               Parameter、uORB、WorkQueue、Event、Perf、Log
 │   ├── lifecycle/            Module 生命周期
@@ -40,7 +41,7 @@ Dima/                         唯一自研应用根、兼容层和产品装配
     ├── control/              RoverDifferential 消息/参数/安全运行适配
     └── modes/                ManualMode 等 Rover 产品模式
 
-Boards/H743/                  板级初始化、Flash 布局和外设适配
+Boards/H743/                  板级初始化、Flash 布局、外设和 FatFs SDMMC 适配
 Core/                         CubeMX/HAL 应用生成层
 Drivers/                      CMSIS 与 STM32 HAL 厂商代码
 Middlewares/                  FreeRTOS、MCUboot、ST USB 等第三方代码
@@ -50,7 +51,7 @@ Linker/、make/、tools/        链接、构建、签名和升级工具（projec
 docs/                         计划、架构、ADR、来源和维护文档
 ```
 
-已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/system/Clock.cpp`。参数 Journal 与 `flash/` raw Flash、USB Console 与 `io/` USB transport、SBUS 模块与 `serial/` UART/DMA 驱动均已拆分，不再保留混合后端。源码树只呈现已经存在的实现；EKF2、PID、SlewRate 和阶段 8 控制器在正式导入前只保留于计划/ADR，不建立 README-only 占位目录或无消费者的预实现源码。
+已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/system/Clock.cpp`。参数 FileStorage 与 FatFs file backend、FatFs disk ABI 与 H743 SDMMC、`flash/` raw Flash、USB Console 与 `io/` USB transport、SBUS 模块与 `serial/` UART/DMA 驱动均已拆分，不再保留混合后端。源码树只呈现已经存在的实现；EKF2、PID、SlewRate 和阶段 8 控制器在正式导入前只保留于计划/ADR，不建立 README-only 占位目录或无消费者的预实现源码。
 
 ## 3. 依赖规则
 
@@ -61,9 +62,9 @@ docs/                         计划、架构、ADR、来源和维护文档
 - `Dima/modules` 和 `Dima/middleware` 禁止反向依赖 `Dima/rover`。
 - `application/rover/modules/middleware/messages/lib/adapters` 只允许依赖标准库、内部公共契约和 `Dima/platform/api`，禁止 FreeRTOS、HAL、CMSIS、SCB/NVIC、Core、Board 与 USB 生成头。
 - `Dima/platform/api` 只定义整数、尺寸、opaque handle、callback 和窄 capability，不暴露 OS/MCU/厂商类型。
-- `Dima/platform/api` 按 Execution、Synchronization、TaskRuntime、Memory、Flash、Console、Serial、Boot、ActuatorPwm 等 capability 分头提供契约；`Services` 只负责安装和取得组合后的 capability，不保留重新聚合全部接口的 umbrella 头。
-- `Dima/platform/freertos` 只连接 `platform/api` 与 FreeRTOS；`Dima/platform/stm32h7` 只连接 `platform/api`、HAL/CMSIS 和板级定义，二者禁止互相包含。STM32H7 根目录只保留 `HardwareServices.hpp` 工厂声明，具体实现按 `system/memory/flash/serial/io` 下沉。
-- `Boards/H743` 负责 MCU、引脚、DMA、PWM、Flash 和总线接线，不依赖上层控制模块。
+- `Dima/platform/api` 按 Execution、Synchronization、TaskRuntime、Memory、Flash、ParameterFileStore、Console、Serial、Boot、ActuatorPwm 等 capability 分头提供契约；`Services` 只负责安装和取得组合后的 capability，不保留重新聚合全部接口的 umbrella 头。
+- `Dima/platform/freertos` 连接 `platform/api` 与 FreeRTOS；仅 `storage/` 额外连接对象私有的 FatFs API。`Dima/platform/stm32h7` 只连接 `platform/api`、HAL/CMSIS 和板级定义，二者禁止互相包含。STM32H7 根目录只保留 `HardwareServices.hpp` 工厂声明，具体实现按 `system/memory/flash/serial/io` 下沉。
+- `Boards/H743` 负责 MCU、引脚、DMA、PWM、Flash、总线接线和 FatFs `disk_*` 到 SDMMC/HAL 的板级端口，不依赖上层控制模块。
 - `Core/` 与 `USB_DEVICE/` 的生成区只保留必要接线，禁止写入业务逻辑。
 - `Core/Src/stm32h7xx_hal_msp.c` 与 `USB_DEVICE/Target/usbd_conf.c` 分别由唯一 `H743_FreeRTOS.ioc` 的 MCU MSP/USB Device 配置集中生成，是当前单文件 600 行上限的必要生成区例外；禁止为追求行数而手工分源，也禁止借此例外加入业务逻辑。
 - `Core/Inc/FreeRTOSConfig.h` 只是 CubeMX/FreeRTOS 查找约定所需的转发头，唯一配置实现为 `Dima/platform/freertos/FreeRTOSConfig.h`；STM32H7 capability 工厂统一由 `HardwareServices.hpp` 声明。
@@ -129,7 +130,7 @@ Runtime 初始化顺序固定为 `Console → WorkQueue → uORB → Log structu
 
 ### 4.2.1 IWDG 健康所有权
 
-- 应用 IWDG 固定为约 2048 ms，健康检查周期 100 ms，不提供运行期关闭参数。`appMainTask` 是应用侧唯一硬件喂狗 owner；BootHealth 只在 Parameter、Commander、安全三 Topic、MotorOutput 状态及模块生命周期持续健康时推进单调 generation。
+- 应用 IWDG 固定为约 2048 ms，健康检查周期 100 ms，不提供运行期关闭参数。`appMainTask` 是应用侧唯一硬件喂狗 owner；BootHealth 只依据 Parameter ready、安全三 Topic 与 MotorOutput 输出 Topic 的严格时间戳/sequence 进展推进单调 generation，不跨 WorkQueue 读取模块普通状态。运行期维护还必须满足 Disarmed 与 neutral/hard-safe 输出，且 `appMainTask` 完成一次真实 reload 后才激活票据。
 - Runtime 完整启动后立即启动或收窄 IWDG；只有观察到新 generation 才喂狗。BootHealth/WorkQueue 停滞、appMain 停滞、Runtime Error 或健康快照不再前进都会停止喂狗。受控 shutdown 只有在 MotorOutput 已确认物理 hard-safe-off 后才允许继续喂狗。
 - IWDG 不能由 MCU reset 关闭。MCUboot 入口会把已经运行的应用 watchdog 临时扩展到约 32 s，但不会在普通上电时主动启动一个原本未运行的 watchdog；Recovery、镜像校验、swap、Flash 和 USB 串行长循环统一调用 `boot_watchdog_feed()`。应用 Runtime 建立后先写 start key 启动冷上电时尚未运行的 LSI/IWDG，再写 PR/RLR/WINR 并等待同步，将窗口重新配置为约 2048 ms；跨复位已运行的 IWDG 允许重复 start key。
 - `RCC->RSR` 的 IWDG 原始复位原因先写入 D3 启动诊断；MCUboot 的一次性应用桥接软件复位和同次 hot handoff 不得覆盖该原始原因。冷上电、全片擦除或 ROM DFU 后 D3 尚无有效头时，MCUboot 必须先用当前 `RCC->RSR` 建立最小 v2 bridge 记录，再执行软件复位，禁止把“Application 尚未初始化 D3”误判成桥接失败而永久停在 Recovery。调试暂停通过 DBGMCU 冻结 IWDG。上述时限、复位后 TIM/GPIO 电气行为仍属于 `BOARD PENDING`。
@@ -151,7 +152,7 @@ manual_control_setpoint
 
 - Manual 和未来 Navigation 只能通过 `rover_motion_request` 进入控制层；当前只接受 `SOURCE_MANUAL + MODE_NORMALIZED_AXES`，Navigation 的 source/mode 只保留接口，不创建空模块，也不得绕过差速混控直接访问 `actuator_motors` 或 PWM。
 - MotorOutput 只有在 Commander 三 Topic 为同时间戳、严格前进、新鲜且完整表达 `ARMED + MANUAL + !kill + !termination + !lockdown + !failsafe`，两个 Motor 命令均有限、可逆并且发布/采样时间都不超过 `COM_ACT_LOSS_T` 时，才允许 `ACTIVE`。Commander 解锁前还必须从 `actuator_output_status` 观察到后端 ready、参数无 pending、至少一右一左映射以及实际 `DISARMED_NEUTRAL` 帧。
-- S1～S6 只允许 Disabled、MotorRight、MotorLeft；默认全部 Disabled。健康且左右映射完整的普通 Disarmed 仅在已配置通道持续输出各自 `CENT`，Disabled 通道保持无脉冲；启动、映射无效、Kill、Termination、Failsafe、Armed 命令超时、发布失败、后端 Retry/Fault、关闭和 watchdog 复位路径都进入 `HARD_SAFE_OFF`，停止 TIM5/TIM8、CCR 清零并拉低六路 GPIO。
+- S1～S6 只允许 Disabled、MotorRight、MotorLeft；默认全部 Disabled，普通 PWM 产品包络统一为 500～2500 us，默认 `MIN/CENT/MAX` 仍为 1000/1500/2000 us。参数协议保留普通有限原值，MotorOutput 在完整 Disarmed 快照中消费校验：未知 `FUNC` 或无效脉宽配置只禁用对应通道，`MIN/MAX` 反序只交换运行时有效端点。普通 Disarmed 在其余有效通道输出各自 `CENT`；至少一右一左仍有效时允许解锁，映射不完整时仅拒绝解锁。无任何有效通道、Kill、Termination、Failsafe、Armed 命令超时、发布失败、后端 Retry/Fault、关闭和 watchdog 复位路径进入 `HARD_SAFE_OFF`，停止 TIM5/TIM8、CCR 清零并拉低六路 GPIO。
 - MotorOutput 分离“禁止 ACTIVE”和“必须 HARD_SAFE_OFF”观察锁存：普通 Disarm 的任一新 Topic 立即阻断 ACTIVE，完整一致快照后才允许 neutral；任一 Kill/Termination/Failsafe Topic 先到即同时禁止 neutral。Kill 在 Commander 中固定为 Kill→Disarm，Unkill 不自动重新 Arm。
 - `board_init()` 在调度器和产品 Runtime 之前确认 TIM5/TIM8 已停止、CCR 为 0、六路 GPIO 为低；Application shutdown 只有在 MotorOutput 停止且 `safe_off_confirmed()` 成功后才能释放 Runtime 资源。
 - BootHealth 除 Commander 三 Topic 外还要求 `actuator_output_status` sequence 严格前进、新鲜且与当前安全状态一致：健康 Disarmed 为合法 `DISARMED_NEUTRAL` 帧，Armed 为命令有效的 `ACTIVE` 帧，Kill/Termination/Failsafe 为六路全零的 `HARD_SAFE_OFF`。镜像确认仍只允许健康 Disarmed、无 Kill/Termination/Failsafe 且输出为 neutral 或 hard-off 的完整 5 秒窗口；确认完成后 BootHealth 继续推进运行期健康 generation。
@@ -174,16 +175,16 @@ manual_control_setpoint
 ## 6. 消息、参数和状态估计边界
 
 - 生产消息接口统一采用 uORB 兼容 Publication/Subscription；启动健康观察 Commander 三个安全 Topic 和 `actuator_output_status`，不建立示例心跳 Topic。
-- 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定 64 项运行期上限。生成器只扫描 Make 显式输入；R331 用基线哈希固定原 178 项 handle，28 项 QGC/板级串口 stable tail 保持 `SYS_AUTOSTART` 的旧 index 177，并只在其后追加 27 项。
-- 单路 USB CDC 的 Application data plane 由 MavlinkService 独占；在线参数使用 MAVLink Classic/Ext 协议，ParameterService 不读取 Console，Flash 写入仍由非实时服务执行。MavlinkService 额外提供仅含 Parameter type 的 Component Metadata 和两个只读 FTP 虚拟文件，不提供目录、写操作、Actuator/Event/Peripheral Metadata；物理断线边沿由该唯一 owner 丢弃 Console RX 旧整帧/半帧并复位 MAVLink parser/channel 与 FTP session，旧请求不能跨重连。原始 RC 样本新鲜且通道数有效时把校准前 `input_rc` 以 5 Hz 发布为 `RC_CHANNELS`；failsafe/lost 标志只抑制控制，不隐藏仍存在的原始通道。完全无帧或样本超时才停流，恢复立即发送；MAVLink 手柄、`PARAM_MAP_RC` 和 Offboard 仍不声明。
-- 参数核心只依赖公共 execution/memory/synchronization 接口；`ParameterJournal` 与 STM32H7 raw Flash device 分离，保持 `0x081E0000/128 KiB`、Journal v1 字节格式和 ENOSPC 语义不变。ParameterService 在 Journal 解码边界忽略 11 项只读 QGC 关键兼容合同及 `RC_MAP_FLTMODE` 的旧占位值；16 项 `SERIALx_BAUD/FUNCTION` 正常加载、通知和 Autosave，旧 `RC_PORT_CONFIG` 与 Schema v1 只迁移一次后由 `DIMA_SER_VER=2` 封口。
+- 参数系统采用 PX4 Parameter + ModuleParams，参数数量由生成器产生，不设置固定运行期上限。生成器只扫描 Make 显式输入，当前 203 项按参数名排序；不保留旧固件 handle、stable-tail、旧键或迁移版本参数，固件目录与公开 Metadata 使用同一顺序。
+- 单路 USB CDC 的 Application data plane 由 MavlinkService 独占；在线参数使用 MAVLink Classic/Ext 协议。General Metadata 声明 Parameter type 1 和 Actuator type 5，MavlinkService 提供 General/Parameter/Actuator 三个只读 FTP 虚拟文件，不提供目录、写操作或 Event/Peripheral Metadata。Actuator Metadata 只开放六路 PWM 分配与参数编辑，MotorRight/MotorLeft 排除执行器测试；固件不实现 `MAV_CMD_ACTUATOR_TEST` 或 `SERVO_OUTPUT_RAW`。原始 RC 样本新鲜且通道数有效时把校准前 `input_rc` 以 5 Hz 发布为 `RC_CHANNELS`；完全无帧或样本超时才停流，恢复立即发送。MAVLink 手柄、`PARAM_MAP_RC` 和 Offboard 仍不声明。
+- 参数核心只依赖公共 execution/memory/synchronization/ParameterFileStore 接口。SD/FatFs 强制编译，FlashFS 为主存储，SD 为 generation 排序的镜像和恢复源；同 generation 以 payload CRC 识别分裂。运行期 Flash 按 32-byte、FatFs 按 512-byte 分步写入/回读，最终 commit/rename 前保持旧快照有效；维护票据的安全状态、硬截止时间或单调进度失效时停止健康 generation，存储层没有 IWDG capability。无卡检测 GPIO 时每 3 秒软件探测，插卡可恢复 ENOSPC Autosave 并独立重试 SD 镜像。当前快照只接受现有参数名和类型，未知旧键整份拒绝；固件不暴露无人驱动的恢复出厂 erase API，部署清除由显式维护流程负责。
 - 参数扫描不执行整段 cache invalidate；raw Flash 仅在 program/erase 成功后处理实际修改范围，D-cache 关闭时中央 helper no-op。
-- 每次 load 都重新验证 Header、Commit Marker 和 payload CRC；最新记录损坏时重扫并回退上一条有效快照。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。
+- 每次 load 都重新验证有效 payload 长度、条目 CRC 和最终 commit；最新记录损坏时回退到更早有效记录。FlashFS 物理格式不兼容 ParameterJournal v1，首次部署必须执行参数导出/迁移，初始化失败不得自动擦除旧扇区。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。
 - Estimator 采用 EKF2，首版即保留多实例与 Estimator Selector，至少支持两个 EKF 实例；实际激活数量由可用 IMU/Mag 组合和参数决定。控制器只消费 `vehicle_attitude`、`vehicle_local_position`、`vehicle_global_position` 和健康状态，不直接访问 EKF 内部对象。
 - Wheel Encoder 先通过 Dima Odometry Adapter 转为受支持的速度或里程计观测，不直接修改 EKF Core。
 - Arming 状态与 PWM 外设是否启动分离；RoverDifferential 只发布两路双向 Motor 命令，最终六路输出必须再经过 MotorOutput 的独立 Failsafe、命令新鲜度和板级 safe-off Gate。
-- 当前控制源只有 RC Manual，`COM_RC_IN_MODE` 只接受 `0=RC only`。板级唯一清单把 `SERIAL0` 固定为 USB OTG1，并让 `SERIAL1..8` 直接对应 STM32 USART/UART1..8；八路外部端口各自生成 `SERIALx_BAUD/FUNCTION`，Function 当前只允许 Disabled/RC Input，默认 `SERIAL6=USART6/PC7` 独占 RC。Schema v1→v2 按物理 UART 迁移旧编号并纳入 UART5。SerialConfig 先建立普通 8N1，SBUS 再把唯一 RC owner 临时切换为 100000/8E2/RXINV/RX-only，释放后恢复普通配置。默认 Throttle/Yaw 映射到物理通道 1/2，Roll/Pitch 仅保留 QGC 四轴校准兼容字段，不进入 Rover 控制。RC 与外部 MAVLink ARM 共用同一预检并要求 RC 新鲜、Throttle/Yaw 居中。Arm 只支持 Advanced Parameters 配置的二段开关；启动、RC 恢复及开关配置变化后先建立无动作基线。当前无可选择模式，`COM_FLTMODE1..6` 与 `RTL_*` 不进入固件，`RC_MAP_FLTMODE` 只保留为固定 Disabled 的兼容 handle，RC/Commander 不生成 mode-slot 动作；RC 丢失策略固定 `NAV_RCL_ACT=6`（Disarm），GCS 丢失策略固定 `NAV_DLL_ACT=0`（Disabled）。
-- MAVLink HEARTBEAT 从 Commander 的 `vehicle_status`/`vehicle_control_mode` 投影 PX4 custom mode；正常 Manual 使用 `0x00010000`，Disarmed/Armed 的 base mode 为 65/193，由 QGC 本地化显示 Manual/手动。稳定尾部共 28 项：11 项固定 QGC 关键兼容合同与 17 项板级串口参数/迁移状态。每次 `PARAM_REQUEST_LIST` 激活固定合同和 16 项公开串口参数后冻结 used 句柄快照；`RC_PORT_CONFIG`、`DIMA_SER_VER` 不进入 Classic LIST 或公开 Metadata。构建生成的 version 1 Parameter JSON 通过 Component Metadata/只读 FTP 交给 QGC，使 `SERIALx_*` 的 Serial group、描述和枚举来自同一参数源。
+- 当前控制源只有 RC Manual，`COM_RC_IN_MODE` 只接受 `0=RC only`。板级唯一清单把 `SERIAL0` 固定为 USB OTG1，并让 `SERIAL1..8` 直接对应 STM32 USART/UART1..8；八路外部端口各自生成 `SERIALx_BAUD/FUNCTION`，Function 当前只允许 Disabled/RC Input，默认 `SERIAL6=USART6/PC7` 独占 RC。SerialConfig 先建立普通 8N1，SBUS 再把唯一 RC owner 临时切换为 100000/8E2/RXINV/RX-only，释放后恢复普通配置。默认 Throttle/Yaw 映射到物理通道 1/2，Roll/Pitch 仅保留为 QGC Radio 通道映射页面兼容字段，不进入 Rover 控制；完整四轴校准流程不属于当前验收范围。RC 与外部 MAVLink ARM 共用同一预检并要求 RC 新鲜、Throttle/Yaw 居中。Arm 只支持 Advanced Parameters 配置的二段开关；启动、RC 恢复及开关配置变化后先建立无动作基线。当前无可选择模式，`COM_FLTMODE1..6` 与 `RTL_*` 不进入固件，`RC_MAP_FLTMODE` 只保留为固定 Disabled 的 QGC 兼容参数，RC/Commander 不生成 mode-slot 动作；RC 丢失策略固定 `NAV_RCL_ACT=6`（Disarm），GCS 丢失策略固定 `NAV_DLL_ACT=0`（Disabled）。
+- MAVLink HEARTBEAT 从 Commander 的 `vehicle_status`/`vehicle_control_mode` 投影 PX4 custom mode；正常 Manual 使用 `0x00010000`，Disarmed/Armed 的 base mode 为 65/193，由 QGC 本地化显示 Manual/手动。每次 `PARAM_REQUEST_LIST` 激活 11 项固定 QGC 合同和 16 项串口参数后冻结 used 句柄快照；构建生成的 version 1 Parameter JSON 通过 Component Metadata/只读 FTP 交给 QGC，使 `SERIALx_*` 的 Serial group、描述和枚举来自同一参数源。
 
 ## 7. Flash、构建与恢复边界
 
@@ -202,7 +203,7 @@ Storage       128 KiB
 - 阶段 0 不缩小升级 Slot，也不改变 MCUboot 地址。
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源。
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
-- MAVLink XML 固定为 upstream `33af200d`，pymavlink 固定为 `fcaa2c7d`/2.4.47；`make clean` 删除 `build/generated/mavlink` 与 `build/generated/component_metadata`，正式构建从受校验共享缓存重新生成 24 条消息的方言和确定性 General/Parameter JSON、XZ、CRC及 Flash 数组，不读取源码树历史生成物。
+- MAVLink XML 固定为 upstream `33af200d`，pymavlink 固定为 `fcaa2c7d`/2.4.47；`make clean` 删除 `build/generated/mavlink` 与 `build/generated/component_metadata`，正式构建从受校验共享缓存重新生成 24 条消息的方言和确定性 General/Parameter/Actuator JSON、XZ、CRC 及 Flash 数组，不读取源码树历史生成物。
 - `tools/check_architecture.py` 在源码阶段拒绝重复 Rover 根、逆向依赖、越权硬件访问、生命周期契约缺失、非零 PWM compare 和未授权执行器消费者；`tools/verify_application_elf.py` 在最终应用 ELF 上检查向量、ISR 强弱绑定、section 地址/容量、SBUS DMA/CPU Ring、生命周期符号、初始化数组白名单，并要求唯一六路安全 PWM 链的 HAL、board 和 MotorOutput 符号实际链接。源码扫描通过不等于 ELF、目标构建或板测通过。
 - VS Code 的 Microsoft C/C++ 插件只使用 `make intellisense` 从真实 Make 配方生成的主机本地 `compile_commands.json`。数据库同时覆盖 Application、MCUboot 和各层私有 include/define；源码清单或编译参数变化后必须重新生成。`.vscode/` 中的编译器绝对路径、数据库、符号索引和主机配置全部保持本地，不纳入源码。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。

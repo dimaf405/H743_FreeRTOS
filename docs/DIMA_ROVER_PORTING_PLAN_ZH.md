@@ -168,7 +168,7 @@ Storage       128 KiB
 → manual_control_setpoint + action_request
 ```
 
-- `RC_INPUT_PROTO` 使用 `0=Disabled`、`2=SBUS`，默认 SBUS；端口按最新版 VCU-H7 硬件直接编号为 `SERIAL1..8=USART1/USART2/USART3/UART4/UART5/USART6/UART7/UART8`，每路由 `SERIALx_FUNCTION` 分配 Disabled/RC Input，默认 SERIAL6=USART6。旧 `RC_PORT_CONFIG` 和 Schema v1 只作一次性物理 UART 迁移，不再作为公开配置入口。
+- `RC_INPUT_PROTO` 使用 `0=Disabled`、`2=SBUS`，默认 SBUS；端口按最新版 VCU-H7 硬件直接编号为 `SERIAL1..8=USART1/USART2/USART3/UART4/UART5/USART6/UART7/UART8`，每路由 `SERIALx_FUNCTION` 分配 Disabled/RC Input，默认 SERIAL6=USART6。当前板级固件不保留旧 `RC_PORT_CONFIG`、旧串口键或迁移版本参数；旧快照不迁移，开发阶段直接按当前目录重新配置。
 - 原始反相 SBUS 自动使用 100000 bit/s、8E2、UART RXINV 和 RX pulldown，不再提供手动极性参数；接管前保存 UART/FIFO/RX GPIO，停用、失败回滚和 Runtime shutdown 均恢复普通 UART。
 - SRAM3 non-cacheable 64-byte 循环 DMA Buffer 只由 DMA 写入；ISR 记录真实到达时间并复制到 256 项 CPU-only Ring，再经 ISR-safe callback 唤醒 `wq:io`，业务层不执行 cache maintenance。
 - RC 参数由生成器扩展到 135 项总量，其中阶段 3 新增 111 项 RC 配置、18 通道校准、映射和失联参数。
@@ -204,10 +204,10 @@ Storage       128 KiB
 - 只保留前后 `longitudinal` 和左右 `steering/yaw` 两轴。`ManualMode` 发布 `rover_motion_request`，RoverDifferential 在 100 Hz 生成右、左两路 `actuator_motors`；其余十路保持 NaN。
 - `rover_motion_request` 同时预留 `SOURCE_NAVIGATION` 和 `MODE_SPEED_YAW_RATE`，但当前只接受 `SOURCE_MANUAL + MODE_NORMALIZED_AXES`。阶段 9 Navigation 必须复用该消息边界，不能直接依赖 DifferentialDrive、MotorOutput 或板级 PWM。
 - 差速混控采用 PX4 v1.17.0 的两轴/消息边界，并综合 ArduPilot Rover 的倒车车头方向、转向/油门饱和优先级、静摩擦补偿、反向推力不对称和左右独立换向延时行为；当 `MOT_THR_ASYM>1` 时先在 `[-1/asymmetry, 1]` 两侧电机可行域内应用 `RD_STR_THR_MIX`，再作反向补偿，避免倒车两侧同时裁到 -1 后丢失转向。ArduPilot GPL 源码只作行为参考，没有复制。
-- 六路输出只提供 Disabled、MotorRight、MotorLeft 三种功能。默认全 Disabled；每路公开 `FUNC/MIN/CENT/MAX/REV`，允许同一 Motor function 映射多个物理口。健康且左右映射完整的普通 Disarmed 仅在已配置通道持续输出各自 `CENT`，Disabled 通道始终无脉冲。
+- 六路输出只提供 Disabled、MotorRight、MotorLeft 三种功能。默认全 Disabled；每路公开 `FUNC/MIN/CENT/MAX/REV`，产品包络统一为 500～2500 us，默认仍为 1000/1500/2000 us，并允许同一 Motor function 映射多个物理口。普通 Disarmed 在参数有效的通道持续输出各自 `CENT`，Disabled 或参数无效的通道始终无脉冲；至少一右一左仍有效时允许解锁，映射不完整时仅拒绝解锁。
 - 固定物理映射为 S1/PB0/TIM8_CH2N、S2/PB1/TIM8_CH3N、S3～S6/PA0～PA3/TIM5_CH1～CH4。TIM8 Update TRGO 同步复位 TIM5，二者均为 1 MHz、ARR 19999、50 Hz。
-- MotorOutput 只有在完整、严格前进且新鲜的 Commander 安全快照、有效双向 Motor 命令和 `COM_ACT_LOSS_T` 双时间戳约束同时满足时才进入 `ACTIVE`。启动、映射无效、Kill、Termination、Failsafe、Armed 命令超时、参数/发布错误、后端 Retry/Fault 和关闭均进入 `HARD_SAFE_OFF`；普通 Disarm 才进入 `DISARMED_NEUTRAL`。ACTIVE inhibit 与 hard-safe inhibit 分离，单条负向安全 Topic 先到即可 fail-closed。
-- 应用侧 IWDG 固定约 2048 ms、100 ms 检查，appMain 为唯一 feed owner；BootHealth 在镜像确认后继续以安全 Topic、MotorOutput 和 Runtime 生命周期推进健康 generation。MCUboot 对跨复位仍运行的 watchdog 临时扩展并在 Recovery/校验/swap/Flash/USB 长循环喂狗，原始 IWDG reset flags 跨应用桥接保留；实际复位时限和 GPIO 电气行为仍待板测。
+- MotorOutput 只有在完整、严格前进且新鲜的 Commander 安全快照、有效双向 Motor 命令和 `COM_ACT_LOSS_T` 双时间戳约束同时满足时才进入 `ACTIVE`。未知 `FUNC` 或无效 `MIN/CENT/MAX` 仅隔离对应通道，映射不完整由 Commander 拒绝解锁但 Runtime 与通信继续；启动、无任何有效通道、Kill、Termination、Failsafe、Armed 命令超时、发布错误、后端 Retry/Fault 和关闭进入 `HARD_SAFE_OFF`。ACTIVE inhibit 与 hard-safe inhibit 分离，单条负向安全 Topic 先到即可 fail-closed。
+- 应用侧 IWDG 固定约 2048 ms、100 ms 检查，appMain 为唯一 feed owner；BootHealth 以安全 Topic 与 MotorOutput 输出 Topic 的严格进展推进健康 generation，不跨 WorkQueue 读取模块普通状态。运行期存储仅在 Disarmed、neutral/hard-safe、appMain 已 reload 且维护进度持续前进时获批，并在整个事务中阻止 Arm。MCUboot 对跨复位仍运行的 watchdog 临时扩展并在 Recovery/校验/swap/Flash/USB 长循环喂狗，原始 IWDG reset flags 跨应用桥接保留；实际复位时限和 GPIO 电气行为仍待板测。
 - USB CDC 已作为系统调试日志与维护命令口，移除周期性 HelloWorld 和示例心跳；控制/ISR 热路径只上报固定结构事件，不直接格式化或阻塞发送。
 
 Windows 原生 clean build、签名、Factory HEX、MCUboot 布局、应用 ELF 生命周期/执行器门禁和静态热路径检查已经通过。阶段状态为“源码及目标构建通过，板测待完成”；示波器确认六路频率、脉宽、相位、TIM8 N 极性、真实低电平以及 Arm/Disarm/Kill/Termination/超时波形之前，不得宣称执行器运行行为已经验收。详细数据见 [阶段 5 资源与验收基线](DIMA_PHASE5_RESOURCE_BASELINE_ZH.md)。
