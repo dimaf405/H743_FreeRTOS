@@ -16,6 +16,7 @@ namespace {
 constexpr uint32_t kDebounceUs = 300000U;
 constexpr hrt_abstime kRateLimitUs = 2000000ULL;
 constexpr uint32_t kWriteBlockedRetryUs = 1000000U;
+constexpr uint32_t kAsyncProgressRetryUs = 10000U;
 constexpr uint32_t kStorageFullEventId = 0x50415201U;
 
 void reportStorageFull() noexcept
@@ -28,16 +29,19 @@ void reportStorageFull() noexcept
 } // namespace
 
 ParamAutosave::ParamAutosave(
-    dima::platform::ArmedFlashCoordinator &armed_flash) noexcept
+    dima::platform::ArmedFlashCoordinator &armed_flash,
+    CancelSaveFn cancel_save, void *cancel_context) noexcept
     : ScheduledWorkItem("param-autosave", px4::wq_configurations::lp_default),
-      _armed_flash(armed_flash)
+      _armed_flash(armed_flash), _cancel_save(cancel_save),
+      _cancel_context(cancel_context)
 {
 }
 
 void ParamAutosave::request() noexcept
 {
     px4::AtomicTransaction transaction;
-    if (_scheduled.load() || _disabled) {
+    if (_scheduled.load() ||
+        _disable_reason != DisableReason::None) {
         return;
     }
 
@@ -55,27 +59,39 @@ void ParamAutosave::request() noexcept
     }
 }
 
-void ParamAutosave::enable(bool enable) noexcept
+void ParamAutosave::enable() noexcept
 {
     px4::AtomicTransaction transaction;
-    _disabled = !enable;
-    if (enable) {
-        if (!ScheduleEnable()) {
-            _disabled = true;
-            return;
-        }
-        _retry_count = 0;
-    } else if (_scheduled.load()) {
-        _scheduled.store(false);
-        ScheduleClear();
+    _disable_reason = DisableReason::None;
+    if (!ScheduleEnable()) {
+        _disable_reason = DisableReason::Manual;
+        return;
     }
+    _retry_count = 0;
+}
+
+bool ParamAutosave::resume_after_storage_available() noexcept
+{
+    {
+        px4::AtomicTransaction transaction;
+        if (_disable_reason != DisableReason::StorageFull) {
+            return false;
+        }
+        if (!ScheduleEnable()) {
+            return false;
+        }
+        _disable_reason = DisableReason::None;
+        _retry_count = 0;
+    }
+    request();
+    return pending();
 }
 
 void ParamAutosave::stop() noexcept
 {
     {
         px4::AtomicTransaction transaction;
-        _disabled = true;
+        _disable_reason = DisableReason::Manual;
         _scheduled.store(false);
     }
     ScheduleCancelAndDrain();
@@ -88,7 +104,7 @@ void ParamAutosave::stop() noexcept
 bool ParamAutosave::enabled() const noexcept
 {
     px4::AtomicTransaction transaction;
-    return !_disabled;
+    return _disable_reason == DisableReason::None;
 }
 
 hrt_abstime ParamAutosave::lastAutosave() const noexcept
@@ -97,54 +113,11 @@ hrt_abstime ParamAutosave::lastAutosave() const noexcept
     return _last_success_timestamp;
 }
 
-int ParamAutosave::saveNow(bool blocking) noexcept
-{
-    {
-        px4::AtomicTransaction transaction;
-        if (_disabled) {
-            return -ECANCELED;
-        }
-        _scheduled.store(false);
-        ScheduleClear();
-        _last_attempt_timestamp = hrt_absolute_time();
-    }
-
-    if (!writeAllowed()) {
-        request();
-        return -EPERM;
-    }
-
-    const int result = param_save_default(blocking);
-    bool retry = false;
-    bool storage_full = false;
-    {
-        px4::AtomicTransaction transaction;
-        if (result == 0) {
-            _last_success_timestamp = hrt_absolute_time();
-            _retry_count = 0;
-        } else if (result == -ENOSPC) {
-            _disabled = true;
-            _retry_count = 0;
-            storage_full = true;
-        } else if (!_disabled) {
-            retry = true;
-        }
-    }
-
-    if (storage_full) {
-        reportStorageFull();
-        PX4_ERR("parameter storage full (%i), autosave disabled", result);
-    } else if (retry) {
-        request();
-    }
-    return result;
-}
-
 void ParamAutosave::Run()
 {
     {
         px4::AtomicTransaction transaction;
-        if (_disabled) {
+        if (_disable_reason != DisableReason::None) {
             _scheduled.store(false);
             return;
         }
@@ -162,21 +135,35 @@ void ParamAutosave::Run()
     bool retry = false;
     bool exhausted = false;
     bool storage_full = false;
+    bool snapshot_stale = false;
+    bool cancel_save = false;
     {
         px4::AtomicTransaction transaction;
         if (result == 0) {
             _last_success_timestamp = hrt_absolute_time();
             _retry_count = 0;
         } else if (result == -ENOSPC) {
-            _disabled = true;
+            _disable_reason = DisableReason::StorageFull;
             _retry_count = 0;
             storage_full = true;
-        } else if (result == -EAGAIN || result == -EPERM) {
+        } else if (result == -EAGAIN || result == -EBUSY) {
+            _retry_count = 0;
+            _scheduled.store(true);
+            if (!ScheduleDelayed(kAsyncProgressRetryUs)) {
+                _scheduled.store(false);
+                cancel_save = true;
+            }
+        } else if (result == -EPERM) {
             _retry_count = 0;
             _scheduled.store(true);
             if (!ScheduleDelayed(kWriteBlockedRetryUs)) {
                 _scheduled.store(false);
+                cancel_save = true;
             }
+        } else if (result == -ESTALE) {
+            _retry_count = 0;
+            retry = true;
+            snapshot_stale = true;
         } else if (_retry_count < 3) {
             ++_retry_count;
             retry = true;
@@ -186,9 +173,15 @@ void ParamAutosave::Run()
         }
     }
 
+    if (cancel_save && _cancel_save != nullptr) {
+        _cancel_save(_cancel_context);
+    }
     if (storage_full) {
         reportStorageFull();
-        PX4_ERR("parameter storage full (%i), autosave disabled", result);
+        PX4_ERR("parameter storage full (%i), autosave suspended", result);
+    } else if (snapshot_stale) {
+        PX4_INFO("parameters changed during save; scheduling fresh snapshot");
+        request();
     } else if (retry) {
         PX4_INFO("param auto save unavailable (%i), retrying..", result);
         request();

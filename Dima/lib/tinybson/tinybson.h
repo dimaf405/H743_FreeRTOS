@@ -69,15 +69,10 @@ typedef struct bson_encoder_s {
 } bson_encoder_s, *bson_encoder_t;
 int bson_decoder_init_buf(bson_decoder_t, const void *, size_t, bson_decoder_callback, void *);
 int bson_decoder_next(bson_decoder_t);
-int bson_decoder_copy_data(bson_decoder_t, void *, size_t);
-size_t bson_decoder_data_pending(bson_decoder_t);
 int bson_encoder_init_buf(bson_encoder_t, void *, size_t);
 int bson_encoder_fini(bson_encoder_t);
 size_t bson_encoder_buf_size(const bson_encoder_t);
-void *bson_encoder_buf_data(const bson_encoder_t);
-int bson_encoder_append_bool(bson_encoder_t, const char *, bool);
 int bson_encoder_append_int32(bson_encoder_t, const char *, int32_t);
-int bson_encoder_append_int64(bson_encoder_t, const char *, int64_t);
 int bson_encoder_append_double(bson_encoder_t, const char *, double);
 #ifdef __cplusplus
 }

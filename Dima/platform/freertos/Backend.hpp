@@ -3,6 +3,7 @@
 #include "platform/api/Execution.hpp"
 #include "platform/api/Flash.hpp"
 #include "platform/api/Memory.hpp"
+#include "platform/api/ParameterFileStore.hpp"
 #include "platform/api/Synchronization.hpp"
 #include "platform/api/TaskRuntime.hpp"
 
@@ -15,5 +16,6 @@ Synchronization &synchronization() noexcept;
 TaskRuntime &task_runtime() noexcept;
 Heap &heap() noexcept;
 FlashTransactionManager &flash_transactions() noexcept;
+ParameterFileStore &parameter_file_store() noexcept;
 
 } // namespace dima::platform::freertos

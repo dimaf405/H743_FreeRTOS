@@ -3,6 +3,7 @@
 #include "actuator_armed.hpp"
 #include "actuator_output_status.hpp"
 #include "lifecycle/module_base.hpp"
+#include "maintenance/RuntimeMaintenanceCoordinator.hpp"
 #include "platform/api/Boot.hpp"
 #include "platform/api/Execution.hpp"
 #include "vehicle_control_mode.hpp"
@@ -19,17 +20,15 @@ class BootHealthService final : public dima::middleware::lifecycle::ModuleBase,
                                 public px4::ScheduledWorkItem {
 public:
     BootHealthService(dima::platform::BootControl &boot_control,
-                      dima::platform::MonotonicClock &clock) noexcept;
+                      dima::platform::MonotonicClock &clock,
+                      dima::middleware::maintenance::
+                          RuntimeMaintenanceCoordinator &maintenance) noexcept;
     ~BootHealthService() = default;
 
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
     std::uint32_t health_generation() const noexcept;
-    void bind_commander(
-        const dima::middleware::lifecycle::ModuleBase &commander) noexcept;
-    void bind_motor_output(
-        const dima::middleware::lifecycle::ModuleBase &motor_output) noexcept;
 
 protected:
     void Run() override;
@@ -43,6 +42,8 @@ private:
 
     dima::platform::BootControl &boot_control_;
     dima::platform::MonotonicClock &clock_;
+    dima::middleware::maintenance::RuntimeMaintenanceCoordinator
+        &maintenance_;
     uORB::SubscriptionData<actuator_armed_s> actuator_armed_subscription_{
         ORB_ID(actuator_armed)};
     uORB::SubscriptionData<vehicle_control_mode_s>
@@ -51,8 +52,6 @@ private:
         ORB_ID(vehicle_status)};
     uORB::SubscriptionData<actuator_output_status_s>
         actuator_output_status_subscription_{ORB_ID(actuator_output_status)};
-    const dima::middleware::lifecycle::ModuleBase *commander_{nullptr};
-    const dima::middleware::lifecycle::ModuleBase *motor_output_{nullptr};
     std::uint64_t stable_window_start_ms_{0U};
     std::uint64_t last_safety_timestamp_us_{0U};
     std::uint32_t last_output_sequence_{0U};
@@ -69,8 +68,12 @@ private:
     bool safety_topics_consistent(std::uint64_t now_us) const noexcept;
     bool output_status_runtime_healthy(std::uint64_t now_us) const noexcept;
     bool output_status_confirmation_safe() const noexcept;
-    bool output_mapping_valid(const actuator_output_status_s &output) const noexcept;
-    bool output_frame_valid(const actuator_output_status_s &output) const noexcept;
+    bool output_mapping_consistent(
+        const actuator_output_status_s &output) const noexcept;
+    bool output_mapping_valid(
+        const actuator_output_status_s &output) const noexcept;
+    bool output_frame_valid(
+        const actuator_output_status_s &output) const noexcept;
     bool confirmation_state_safe() const noexcept;
     void reset_stable_window(std::uint64_t now_ms) noexcept;
 };

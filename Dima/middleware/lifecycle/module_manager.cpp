@@ -25,7 +25,7 @@ bool ModuleManager::stop(ModuleBase &module)
     }
 
     module.stop();
-    return true;
+    return module.state() == ModuleState::Stopped;
 }
 
 ModuleState ModuleManager::status(const ModuleBase &module) const

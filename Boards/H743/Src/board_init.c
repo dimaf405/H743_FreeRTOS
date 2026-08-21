@@ -7,15 +7,10 @@
 #include "gpio.h"
 #include "i2c.h"
 #include "motor_pwm.h"
-#include "sdmmc.h"
 #include "spi.h"
 #include "stm32h7xx.h"
 #include "tim.h"
 #include "usart.h"
-
-#ifndef BOARD_SD_INIT_AT_BOOT
-#define BOARD_SD_INIT_AT_BOOT 0
-#endif
 
 void board_vector_table_init(void)
 {
@@ -34,9 +29,6 @@ void board_init(void)
   MX_FDCAN1_Init();
   dima_boot_stage_set(DIMA_BOOT_STAGE_I2C2);
   MX_I2C2_Init();
-#if BOARD_SD_INIT_AT_BOOT
-  MX_SDMMC1_SD_Init();
-#endif
   dima_boot_stage_set(DIMA_BOOT_STAGE_SPI4);
   MX_SPI4_Init();
   dima_boot_stage_set(DIMA_BOOT_STAGE_UART4);

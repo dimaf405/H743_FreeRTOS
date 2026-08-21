@@ -54,9 +54,8 @@ int load_value_to_layer(const char *name, param_type_t type, const void *value,
     }
 
     const param_t param = param_find_no_notification(name);
-    // 固件升级删除参数时忽略旧键；BSON 和记录 CRC 仍负责判断结构损坏。
     if (!valid(param)) {
-        return 0;
+        return -ENOENT;
     }
     if (param_info[param].type != type) {
         return -EINVAL;
@@ -170,19 +169,6 @@ int param_storage_get_status(param_storage_status_s *status) noexcept
         backend_context = g_storage_context;
     }
     return backend && backend->status ? backend->status(status, backend_context) : -ENOSYS;
-}
-
-int param_storage_erase(void) noexcept
-{
-    if (!service_write_allowed()) { return -EPERM; }
-    const param_storage_backend_s *backend{};
-    void *backend_context{};
-    {
-        px4::AtomicTransaction transaction;
-        backend = g_storage;
-        backend_context = g_storage_context;
-    }
-    return backend && backend->erase ? backend->erase(backend_context) : -ENOSYS;
 }
 
 } // extern "C"

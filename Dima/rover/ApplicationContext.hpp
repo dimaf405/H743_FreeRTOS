@@ -4,7 +4,7 @@
 #include "logging/LogService.hpp"
 #include "mavlink/MavlinkService.hpp"
 #include "parameters/ParameterService.hpp"
-#include "parameters/ParameterJournal.hpp"
+#include "parameters/flashfs.h"
 #include "platform/api/PlatformTypes.hpp"
 #include "platform/api/Services.hpp"
 #include "control/RoverDifferential.hpp"
@@ -16,6 +16,7 @@
 #include "safety/Commander.hpp"
 #include "serial/SerialConfig.hpp"
 #include "lifecycle/module_manager.hpp"
+#include "maintenance/RuntimeMaintenanceCoordinator.hpp"
 
 namespace dima::rover {
 
@@ -29,6 +30,7 @@ public:
     bool watchdog_feed_allowed(
         std::uint32_t previous_health_generation,
         std::uint32_t &current_health_generation) const noexcept;
+    void watchdog_feed_completed() noexcept;
 
 private:
     enum class RuntimeState : std::uint8_t {
@@ -55,7 +57,9 @@ private:
     bool stop_motor_output() noexcept;
 
     dima::platform::Services &services_;
-    dima::parameters::ParameterJournal journal_;
+    dima::middleware::maintenance::RuntimeMaintenanceCoordinator
+        maintenance_;
+    dima::parameters::FlashFS flashfs_;
     dima::middleware::lifecycle::ModuleManager module_manager_{};
     dima::modules::boot_health::BootHealthService boot_health_;
     dima::modules::logging::LogService log_service_;

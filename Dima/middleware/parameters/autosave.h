@@ -38,29 +38,42 @@
 #include "platform/api/Time.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
+#include <cstdint>
+
 class ParamAutosave : public px4::ScheduledWorkItem
 {
 public:
+    using CancelSaveFn = void (*)(void *context) noexcept;
+
     explicit ParamAutosave(
-        dima::platform::ArmedFlashCoordinator &armed_flash) noexcept;
+        dima::platform::ArmedFlashCoordinator &armed_flash,
+        CancelSaveFn cancel_save, void *cancel_context) noexcept;
     void request() noexcept;
-    void enable(bool enable) noexcept;
+    void enable() noexcept;
+    bool resume_after_storage_available() noexcept;
     void stop() noexcept;
-    int saveNow(bool blocking = true) noexcept;
     bool enabled() const noexcept;
     bool pending() const noexcept { return _scheduled.load(); }
     hrt_abstime lastAutosave() const noexcept;
 
 private:
+    enum class DisableReason : std::uint8_t {
+        None,
+        Manual,
+        StorageFull,
+    };
+
     void Run() override;
     bool writeAllowed() const noexcept { return !_armed_flash.armed(); }
 
     dima::platform::ArmedFlashCoordinator &_armed_flash;
+    CancelSaveFn _cancel_save;
+    void *_cancel_context;
     hrt_abstime _last_attempt_timestamp{0};
     hrt_abstime _last_success_timestamp{0};
     px4::atomic_bool _scheduled{false};
     int _retry_count{0};
-    bool _disabled{false};
+    DisableReason _disable_reason{DisableReason::None};
 };
 
 // Upstream path: src/lib/parameters/autosave.h @ d6f12ad1

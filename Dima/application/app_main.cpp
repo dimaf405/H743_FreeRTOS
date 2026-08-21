@@ -56,6 +56,7 @@ extern "C" void app_main_task(void *argument)
             continue;
         }
         services.watchdog.feed();
+        application.watchdog_feed_completed();
         last_health_generation = health_generation;
     }
 }

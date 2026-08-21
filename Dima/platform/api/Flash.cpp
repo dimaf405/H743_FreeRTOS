@@ -26,49 +26,55 @@ ArmedFlashCoordinator::ArmedFlashCoordinator(
 bool ArmedFlashCoordinator::try_arm() noexcept
 {
     CriticalGuard guard{critical_};
-    if (state_ == State::FlashBusy) {
+    if (flash_busy_ || maintenance_busy_) {
         return false;
     }
-    state_ = State::Armed;
+    armed_ = true;
     return true;
 }
 
 void ArmedFlashCoordinator::disarm() noexcept
 {
     CriticalGuard guard{critical_};
-    if (state_ == State::Armed) {
-        state_ = State::Idle;
-    }
+    armed_ = false;
 }
 
 bool ArmedFlashCoordinator::begin_flash() noexcept
 {
     CriticalGuard guard{critical_};
-    if (state_ != State::Idle) {
+    if (armed_ || flash_busy_) {
         return false;
     }
-    state_ = State::FlashBusy;
+    flash_busy_ = true;
     return true;
 }
 
 void ArmedFlashCoordinator::end_flash() noexcept
 {
     CriticalGuard guard{critical_};
-    if (state_ == State::FlashBusy) {
-        state_ = State::Idle;
+    flash_busy_ = false;
+}
+
+bool ArmedFlashCoordinator::begin_maintenance() noexcept
+{
+    CriticalGuard guard{critical_};
+    if (armed_ || flash_busy_ || maintenance_busy_) {
+        return false;
     }
+    maintenance_busy_ = true;
+    return true;
+}
+
+void ArmedFlashCoordinator::end_maintenance() noexcept
+{
+    CriticalGuard guard{critical_};
+    maintenance_busy_ = false;
 }
 
 bool ArmedFlashCoordinator::armed() const noexcept
 {
     CriticalGuard guard{critical_};
-    return state_ == State::Armed;
-}
-
-bool ArmedFlashCoordinator::flash_busy() const noexcept
-{
-    CriticalGuard guard{critical_};
-    return state_ == State::FlashBusy;
+    return armed_;
 }
 
 FlashWriteLease::FlashWriteLease(

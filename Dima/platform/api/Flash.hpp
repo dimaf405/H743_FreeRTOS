@@ -49,16 +49,18 @@ public:
     void disarm() noexcept;
     bool begin_flash() noexcept;
     void end_flash() noexcept;
+    bool begin_maintenance() noexcept;
+    void end_maintenance() noexcept;
     bool armed() const noexcept;
-    bool flash_busy() const noexcept;
 
     ArmedFlashCoordinator(const ArmedFlashCoordinator &) = delete;
     ArmedFlashCoordinator &operator=(const ArmedFlashCoordinator &) = delete;
 
 private:
-    enum class State : std::uint8_t { Idle, Armed, FlashBusy };
     CriticalSection &critical_;
-    State state_{State::Idle};
+    bool armed_{false};
+    bool flash_busy_{false};
+    bool maintenance_busy_{false};
 };
 
 class FlashWriteLease final {

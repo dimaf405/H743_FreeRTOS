@@ -84,18 +84,8 @@ int bson_encoder_fini(bson_encoder_t e) {
 size_t bson_encoder_buf_size(const bson_encoder_t e) {
     return e ? e->offset : 0;
 }
-void *bson_encoder_buf_data(const bson_encoder_t e) {
-    return e ? e->buffer : nullptr;
-}
-int bson_encoder_append_bool(bson_encoder_t e, const char *n, bool v) {
-    uint8_t x = v;
-    return add(e, BSON_BOOL, n, &x, 1);
-}
 int bson_encoder_append_int32(bson_encoder_t e, const char *n, int32_t v) {
     return add(e, BSON_INT32, n, &v, 4);
-}
-int bson_encoder_append_int64(bson_encoder_t e, const char *n, int64_t v) {
-    return add(e, BSON_INT64, n, &v, 8);
 }
 int bson_encoder_append_double(bson_encoder_t e, const char *n, double v) {
     return add(e, BSON_DOUBLE, n, &v, 8);
@@ -147,16 +137,5 @@ int bson_decoder_next(bson_decoder_t d) {
             return r;
     }
     return 1;
-}
-int bson_decoder_copy_data(bson_decoder_t d, void *b, size_t z) {
-    if (!d || !b)
-        return -EINVAL;
-    if (d->node.data_size > z)
-        return -ENOBUFS;
-    std::memcpy(b, d->node.data, d->node.data_size);
-    return 0;
-}
-size_t bson_decoder_data_pending(bson_decoder_t d) {
-    return d ? d->node.data_size : 0;
 }
 }

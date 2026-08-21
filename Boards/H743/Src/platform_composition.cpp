@@ -87,6 +87,7 @@ extern "C" bool dima_platform_early_init(void)
         freertos::heap(),
         freertos::flash_transactions(),
         stm32h7::parameter_partition(),
+        freertos::parameter_file_store(),
         armed_flash,
         console,
         boot_control,

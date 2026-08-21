@@ -84,7 +84,6 @@ typedef struct param_storage_backend_s {
                 void *backend_context);
     int (*save)(param_storage_enumerator_t enumerate, void *enumerate_context,
                 void *backend_context);
-    int (*erase)(void *backend_context);
     int (*status)(param_storage_status_s *status, void *backend_context);
 } param_storage_backend_s;
 
@@ -131,7 +130,6 @@ void param_register_lock_callbacks(param_lock_callback_t lock, param_lock_callba
 int param_register_storage_backend(const param_storage_backend_s *backend,
                                    void *backend_context) PARAM_NOEXCEPT;
 int param_storage_get_status(param_storage_status_s *status) PARAM_NOEXCEPT;
-int param_storage_erase(void) PARAM_NOEXCEPT;
 
 #ifdef __cplusplus
 }

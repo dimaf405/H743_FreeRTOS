@@ -27,19 +27,20 @@ void *uorb_allocate(size_t size, size_t alignment) noexcept
 ApplicationContext::ApplicationContext(
     dima::platform::Services &services) noexcept
     : services_(services),
-      journal_(services.parameter_partition, services.flash_transactions,
+      maintenance_(services.critical),
+      flashfs_(services.parameter_partition, services.flash_transactions,
                services.armed_flash, services.synchronization),
-      boot_health_(services.boot_control, services.clock),
+      boot_health_(services.boot_control, services.clock, maintenance_),
       log_service_(),
       mavlink_service_(services.console, services.boot_control),
-      parameter_service_(journal_, services.armed_flash,
-                         services.synchronization, services.critical),
+      parameter_service_(flashfs_, services.parameter_files,
+                         services.armed_flash,
+                         services.synchronization, services.critical,
+                         maintenance_),
       serial_config_(services.serial_ports),
       motor_output_(services.actuator_pwm), commander_(services.armed_flash),
       sbus_rc_(services.sbus, serial_config_)
 {
-    boot_health_.bind_commander(commander_);
-    boot_health_.bind_motor_output(motor_output_);
 }
 
 bool ApplicationContext::owner_call(bool bind_if_unset) noexcept
@@ -465,6 +466,11 @@ bool ApplicationContext::watchdog_feed_allowed(
      * intentional safe-idle state so a same-power Runtime restart remains
      * possible. Error and partial lifecycle states deliberately stop feeding. */
     return runtime_state_ == RuntimeState::Stopped;
+}
+
+void ApplicationContext::watchdog_feed_completed() noexcept
+{
+    maintenance_.watchdog_fed(services_.clock.now_us());
 }
 
 ApplicationContext &application_context() noexcept

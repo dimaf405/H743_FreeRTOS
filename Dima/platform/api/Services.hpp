@@ -14,6 +14,7 @@ class FlashTransactionManager;
 class Heap;
 class IndependentWatchdog;
 class MonotonicClock;
+class ParameterFileStore;
 class SbusInput;
 class SensorInterrupts;
 class SerialPorts;
@@ -30,6 +31,7 @@ struct Services {
     Heap &heap;
     FlashTransactionManager &flash_transactions;
     FlashPartition &parameter_partition;
+    ParameterFileStore &parameter_files;
     ArmedFlashCoordinator &armed_flash;
     Console &console;
     BootControl &boot_control;

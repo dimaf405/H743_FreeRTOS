@@ -1,37 +1,25 @@
 #include "BootHealthService.hpp"
 
+#include "platform/api/ActuatorPwm.hpp"
+
 #include "parameters/param.h"
 
 namespace dima::modules::boot_health {
 
 BootHealthService::BootHealthService(
     dima::platform::BootControl &boot_control,
-    dima::platform::MonotonicClock &clock) noexcept
+    dima::platform::MonotonicClock &clock,
+    dima::middleware::maintenance::
+        RuntimeMaintenanceCoordinator &maintenance) noexcept
     : px4::ScheduledWorkItem("boot_health", px4::wq_configurations::hp_default),
-      boot_control_(boot_control), clock_(clock)
+      boot_control_(boot_control), clock_(clock), maintenance_(maintenance)
 {
-}
-
-void BootHealthService::bind_commander(
-    const dima::middleware::lifecycle::ModuleBase &commander) noexcept
-{
-    commander_ = &commander;
-}
-
-void BootHealthService::bind_motor_output(
-    const dima::middleware::lifecycle::ModuleBase &motor_output) noexcept
-{
-    motor_output_ = &motor_output;
 }
 
 bool BootHealthService::start()
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
-    }
-    if (commander_ == nullptr || motor_output_ == nullptr) {
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
-        return false;
     }
     if (!ScheduleEnable()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -63,8 +51,8 @@ bool BootHealthService::start()
 
 void BootHealthService::stop()
 {
-    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     stable_window_active_ = false;
     stable_window_start_ms_ = 0U;
     safety_snapshot_observed_ = false;
@@ -95,14 +83,12 @@ void BootHealthService::Run()
     const bool safety_healthy = update_safety_health(now_us);
     const bool output_healthy = update_output_health(now_us);
     const bool runtime_healthy =
-        param_is_ready() && commander_ != nullptr &&
-        commander_->state() ==
-            dima::middleware::lifecycle::ModuleState::Running &&
-        motor_output_ != nullptr &&
-        motor_output_->state() ==
-            dima::middleware::lifecycle::ModuleState::Running &&
-        safety_healthy && output_healthy;
-    if (!runtime_healthy) {
+        param_is_ready() && safety_healthy && output_healthy;
+    const bool maintenance_safe =
+        runtime_healthy && confirmation_state_safe() &&
+        output_status_confirmation_safe();
+    if (!maintenance_.boot_health_update(
+            now_us, runtime_healthy, maintenance_safe)) {
         reset_stable_window(now_ms);
         return;
     }
@@ -113,7 +99,8 @@ void BootHealthService::Run()
         (void)__atomic_add_fetch(&health_generation_, 1U, __ATOMIC_RELEASE);
     }
 
-    if (confirmation_attempted_) {
+    if (confirmation_attempted_ || maintenance_.in_progress()) {
+        reset_stable_window(now_ms);
         return;
     }
 
@@ -257,19 +244,28 @@ bool BootHealthService::update_output_health(std::uint64_t now_us) noexcept
     return output_snapshot_observed_ && output_status_runtime_healthy(now_us);
 }
 
-bool BootHealthService::output_mapping_valid(
+bool BootHealthService::output_mapping_consistent(
     const actuator_output_status_s &output) const noexcept
 {
     const std::uint8_t supported = static_cast<std::uint8_t>(
         (1U << actuator_output_status_s::NUM_OUTPUTS) - 1U);
+    const bool complete_drive_mapping =
+        output.right_output_mask != 0U && output.left_output_mask != 0U;
     return output.configured_output_mask != 0U &&
-           output.right_output_mask != 0U && output.left_output_mask != 0U &&
            (output.configured_output_mask &
             static_cast<std::uint8_t>(~supported)) == 0U &&
            (output.right_output_mask & output.left_output_mask) == 0U &&
            static_cast<std::uint8_t>(output.right_output_mask |
                                      output.left_output_mask) ==
-               output.configured_output_mask;
+                output.configured_output_mask &&
+           output.drive_available == complete_drive_mapping;
+}
+
+bool BootHealthService::output_mapping_valid(
+    const actuator_output_status_s &output) const noexcept
+{
+    return output_mapping_consistent(output) &&
+           output.right_output_mask != 0U && output.left_output_mask != 0U;
 }
 
 bool BootHealthService::output_frame_valid(
@@ -283,7 +279,9 @@ bool BootHealthService::output_frame_valid(
         const bool active = (output.active_output_mask &
             static_cast<std::uint8_t>(1U << index)) != 0U;
         const std::uint16_t pulse = output.pwm_us[index];
-        if ((active && (pulse < 800U || pulse > 2200U)) ||
+        if ((active &&
+             (pulse < dima::platform::kActuatorPwmMinimumPulseUs ||
+              pulse > dima::platform::kActuatorPwmMaximumPulseUs)) ||
             (!active && pulse != 0U)) {
             return false;
         }
@@ -341,7 +339,11 @@ bool BootHealthService::output_status_runtime_healthy(
                output_mapping_valid(output) &&
                output_frame_valid(output);
     }
-    return hard_safe;
+    const bool degraded_neutral =
+        output.state == actuator_output_status_s::STATE_DISARMED_NEUTRAL &&
+        !output.safe_off && !output.parameter_update_pending &&
+        output_mapping_consistent(output) && output_frame_valid(output);
+    return degraded_neutral || hard_safe;
 }
 
 bool BootHealthService::output_status_confirmation_safe() const noexcept
