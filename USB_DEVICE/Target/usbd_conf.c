@@ -200,13 +200,9 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
   {
     speed = USBD_SPEED_HIGH;
   }
-  else if ( hpcd->Init.speed == PCD_SPEED_FULL)
-  {
-    speed = USBD_SPEED_FULL;
-  }
   else
   {
-    Error_Handler();
+    speed = USBD_SPEED_FULL;
   }
     /* Set Speed. */
   USBD_LL_SetSpeed((USBD_HandleTypeDef*)hpcd->pData, speed);

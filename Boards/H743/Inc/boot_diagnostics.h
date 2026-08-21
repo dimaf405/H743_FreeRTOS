@@ -176,7 +176,6 @@ extern volatile dima_boot_diagnostics_t dima_boot_diagnostics;
 
 void dima_boot_diagnostics_early_init(void);
 void dima_boot_stage_set(uint32_t stage);
-void dima_boot_detail_set(uint32_t detail);
 
 __attribute__((noreturn)) void dima_boot_diagnostics_capture_fault(
     uint32_t failure_kind, const uint32_t *stacked_frame,

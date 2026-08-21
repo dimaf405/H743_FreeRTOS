@@ -30,23 +30,6 @@ static int cache_range(const void *address, size_t length,
     return 1;
 }
 
-bool dima_stm32_dcache_enabled(void)
-{
-    return (SCB->CCR & SCB_CCR_DC_Msk) != 0U;
-}
-
-void dima_stm32_cache_clean_range(const void *address, size_t length)
-{
-    uintptr_t aligned_address;
-    int32_t aligned_length;
-    if (!cache_range(address, length, &aligned_address, &aligned_length)) {
-        return;
-    }
-    SCB_CleanDCache_by_Addr((uint32_t *)aligned_address, aligned_length);
-    __DSB();
-    __ISB();
-}
-
 void dima_stm32_cache_invalidate_range(const void *address, size_t length)
 {
     uintptr_t aligned_address;
@@ -55,20 +38,6 @@ void dima_stm32_cache_invalidate_range(const void *address, size_t length)
         return;
     }
     SCB_InvalidateDCache_by_Addr((uint32_t *)aligned_address, aligned_length);
-    __DSB();
-    __ISB();
-}
-
-void dima_stm32_cache_clean_invalidate_range(const void *address,
-                                              size_t length)
-{
-    uintptr_t aligned_address;
-    int32_t aligned_length;
-    if (!cache_range(address, length, &aligned_address, &aligned_length)) {
-        return;
-    }
-    SCB_CleanInvalidateDCache_by_Addr((uint32_t *)aligned_address,
-                                     aligned_length);
     __DSB();
     __ISB();
 }

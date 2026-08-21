@@ -116,12 +116,6 @@ void dima_boot_stage_set(uint32_t stage)
     __DMB();
 }
 
-void dima_boot_detail_set(uint32_t detail)
-{
-    dima_boot_diagnostics.detail = detail;
-    __DMB();
-}
-
 static void capture_common(uint32_t failure_kind,
                            const uint32_t *stacked_frame,
                            uint32_t exception_return,
