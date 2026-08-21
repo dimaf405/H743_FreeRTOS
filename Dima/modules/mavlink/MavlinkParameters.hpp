@@ -21,6 +21,7 @@
 #include "parameter_update.hpp"
 #include "lib/mavlink/mavlink_bridge.h"
 #include "parameters/param.h"
+#include "parameters/QgcCompatibility.hpp"
 #include "platform/api/Time.hpp"
 #include "uorb/SubscriptionData.hpp"
 
@@ -49,19 +50,13 @@ public:
     void send() noexcept;
 
 private:
-    struct FixedInt32Parameter {
-        const char *name;
-        std::int32_t value;
-    };
-
-    static const FixedInt32Parameter kQgcFixedInt32Parameters[];
+    using FixedInt32Parameter =
+        dima::parameters::QgcFixedInt32Parameter;
 
     static const FixedInt32Parameter *fixed_int32_parameter(
         const char *name) noexcept;
 
     static bool is_qgc_fixed_parameter(const char *name) noexcept;
-
-    static bool is_internal_parameter(const char *name) noexcept;
 
     static bool is_serial_baud_parameter(const char *name) noexcept;
 
@@ -69,6 +64,12 @@ private:
 
     static bool serial_function_write_allowed(
         const char *name, std::int32_t value) noexcept;
+
+    bool write_and_acknowledge_parameter(
+        param_t param, float wire_value) noexcept;
+
+    bool set_serial_function(
+        param_t param, const char *name, std::int32_t value) noexcept;
 
     void mark_qgc_setup_parameters_used() noexcept;
 

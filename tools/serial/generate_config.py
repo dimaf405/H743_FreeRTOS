@@ -34,7 +34,7 @@ def require_identifier(value: object, field: str) -> str:
 
 def load_manifest(path: Path) -> tuple[dict, list[dict]]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("schema_version") != 2 or data.get("board") != "dimah743":
+    if data.get("format_version") != 1 or data.get("board") != "dimah743":
         raise RuntimeError("unsupported serial manifest identity")
     expected_hardware_reference = {
         "source": "H743_FreeRTOS.ioc",
@@ -107,31 +107,6 @@ def load_manifest(path: Path) -> tuple[dict, list[dict]]:
     if rc_defaults != [default_rc_port]:
         raise RuntimeError("exactly the real default RC port must own RC Input")
 
-    legacy = data.get("legacy_rc_port_map")
-    if not isinstance(legacy, dict):
-        raise RuntimeError("legacy_rc_port_map is missing")
-    for old_value, new_value in legacy.items():
-        if not old_value.isdigit() or not isinstance(new_value, int):
-            raise RuntimeError("legacy RC port map must contain integer values")
-        if new_value != 0 and new_value not in [port["serial"] for port in configurable]:
-            raise RuntimeError("legacy RC port maps to an unavailable serial port")
-
-    legacy_baud = data.get("legacy_baud_parameter_map")
-    expected_legacy_baud_names = {
-        "SER_RC_BAUD", "SER_TEL1_BAUD", "SER_TEL2_BAUD",
-        "SER_TEL3_BAUD", "SER_TEL4_BAUD", "SER_GPS1_BAUD",
-        "SER_GPS2_BAUD", "SER_GPS3_BAUD",
-    }
-    if (not isinstance(legacy_baud, dict) or
-            set(legacy_baud) != expected_legacy_baud_names):
-        raise RuntimeError("legacy baud parameter map is incomplete")
-    for name, serial in legacy_baud.items():
-        require_identifier(name, "legacy baud parameter")
-        if not isinstance(serial, int) or (
-                serial != 0 and
-                serial not in [port["serial"] for port in configurable]):
-            raise RuntimeError("legacy baud parameter maps to an unavailable port")
-
     return data, configurable
 
 
@@ -184,44 +159,6 @@ def generate_baud_parameters(data: dict, ports: list[dict]) -> str:
             "",
         ])
 
-    sections.extend([
-        "/** Internal persisted serial-schema migration version.",
-        " * This parameter is consumed by ParameterService and is not exposed to QGC.",
-        " */",
-        "PARAM_DEFINE_INT32(DIMA_SER_VER, 0);",
-        "",
-    ])
-    return "\n".join(sections)
-
-
-def generate_driver_parameters(data: dict, ports: list[dict]) -> str:
-    default_port = data["default_rc_port"]
-    sections = [
-        "/****************************************************************************",
-        " * Generated from Boards/H743/serial_ports.json. DO NOT EDIT.",
-        " ****************************************************************************/",
-        "",
-        "/**",
-        " * Serial Configuration for RC Input Driver.",
-        " *",
-        " * Deprecated compatibility input used only for one-time migration to",
-        " * SERIAL1_FUNCTION..SERIAL8_FUNCTION. New configurations must assign",
-        " * RC Input through exactly one SERIALx_FUNCTION parameter.",
-        " *",
-        f" * @value 0 Board default (SERIAL {default_port})",
-    ]
-    for port in ports:
-        sections.append(
-            f" * @value {port['serial']} SERIAL {port['serial']} - "
-            f"{port['role']} ({port['peripheral']} RX {port['rx']})"
-        )
-    sections.extend([
-        " * @group Serial",
-        " * @reboot_required true",
-        " */",
-        f"PARAM_DEFINE_INT32(RC_PORT_CONFIG, {default_port});",
-        "",
-    ])
     return "\n".join(sections)
 
 
@@ -249,21 +186,11 @@ def generate_header(data: dict, ports: list[dict]) -> str:
     ]
     descriptor_rows = [
         "    {" + ", ".join([
-            str(port["serial"]), str(port["default_baud"]),
-            str(port["default_function"]), json.dumps(port["parameter"]),
+            str(port["serial"]), json.dumps(port["parameter"]),
             json.dumps(port["function_parameter"]), json.dumps(port["role"]),
-            json.dumps(port["peripheral"]), json.dumps(port["tx"]),
-            json.dumps(port["rx"]),
+            json.dumps(port["peripheral"]), json.dumps(port["rx"]),
         ]) + "},"
         for port in ports
-    ]
-    migration_cases = [
-        f"    case {old_value}: return {new_value};"
-        for old_value, new_value in data["legacy_rc_port_map"].items()
-    ]
-    legacy_baud_lines = [
-        f"    if (std::strcmp(name, {json.dumps(old_name)}) == 0) return {serial};"
-        for old_name, serial in data["legacy_baud_parameter_map"].items()
     ]
     function_values = ", ".join(
         str(function["value"]) for function in data["functions"]
@@ -293,33 +220,20 @@ def generate_header(data: dict, ports: list[dict]) -> str:
         "",
         "struct SerialPortDescriptor {",
         "    std::int32_t port_id;",
-        "    std::uint32_t default_baud;",
-        "    std::int32_t default_function;",
         "    const char *parameter_name;",
         "    const char *function_parameter_name;",
         "    const char *role;",
         "    const char *peripheral;",
-        "    const char *tx_pin;",
         "    const char *rx_pin;",
         "};",
         "",
         "inline constexpr SerialPortDescriptor kSerialPorts[]{",
         *descriptor_rows,
         "};",
-        f"inline constexpr std::int32_t kDefaultRcPort = {data['default_rc_port']};",
-        f"inline constexpr std::uint32_t kSerialSchemaVersion = {data['schema_version']}U;",
         f"inline constexpr std::uint32_t kSupportedBaudrates[]{{{rates}}};",
         f"inline constexpr std::int32_t kSerialFunctionDisabled = {function_disabled};",
         f"inline constexpr std::int32_t kSerialFunctionRcInput = {function_rc};",
         f"inline constexpr std::int32_t kSupportedSerialFunctions[]{{{function_values}}};",
-        "",
-        "constexpr bool serial_port_supported(std::int32_t port) noexcept",
-        "{",
-        "    for (const SerialPortDescriptor &descriptor : kSerialPorts) {",
-        "        if (descriptor.port_id == port) return true;",
-        "    }",
-        "    return false;",
-        "}",
         "",
         "constexpr bool serial_baud_supported(std::uint32_t baudrate) noexcept",
         "{",
@@ -363,21 +277,6 @@ def generate_header(data: dict, ports: list[dict]) -> str:
         "    return nullptr;",
         "}",
         "",
-        "constexpr std::int32_t migrate_legacy_rc_port(std::int32_t port) noexcept",
-        "{",
-        "    switch (port) {",
-        *migration_cases,
-        "    default: return port;",
-        "    }",
-        "}",
-        "",
-        "inline std::int32_t legacy_serial_for_baud_parameter(const char *name) noexcept",
-        "{",
-        "    if (name == nullptr) return 0;",
-        *legacy_baud_lines,
-        "    return 0;",
-        "}",
-        "",
         "} // namespace dima::board",
         "",
     ]
@@ -390,9 +289,6 @@ def main() -> int:
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "serial_baud_params.c").write_text(
         generate_baud_parameters(data, ports), encoding="utf-8", newline="\n"
-    )
-    (args.output / "serial_config_params.c").write_text(
-        generate_driver_parameters(data, ports), encoding="utf-8", newline="\n"
     )
     (args.output / "board_serial_config.hpp").write_text(
         generate_header(data, ports), encoding="utf-8", newline="\n"

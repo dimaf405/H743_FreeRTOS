@@ -4,24 +4,10 @@
 #include "board_serial_config.hpp"
 #include "logging/logging.hpp"
 
+#include <cmath>
 #include <cstring>
 
 namespace dima::modules::mavlink {
-
-const MavlinkParameters::FixedInt32Parameter
-    MavlinkParameters::kQgcFixedInt32Parameters[]{
-        {"SYS_AUTOSTART", 50000},
-        {"SYS_AUTOCONFIG", 0},
-        {"MAV_SYS_ID", 1},
-        {"CAL_GYRO0_ID", 0},
-        {"CAL_ACC0_ID", 0},
-        {"CAL_MAG0_ID", 0},
-        {"CAL_MAG1_ID", 0},
-        {"CAL_MAG2_ID", 0},
-        {"NAV_RCL_ACT", 6},
-        {"NAV_DLL_ACT", 0},
-        {"COM_LOW_BAT_ACT", 0},
-    };
 
 MavlinkParameters::MavlinkParameters(SendFn send, void *send_ctx) noexcept
     : send_(send), send_ctx_(send_ctx)
@@ -85,10 +71,6 @@ void MavlinkParameters::handle_message(
                 /* No other action taken, return */
                 return;
             }
-            if (is_internal_parameter(name)) {
-                return;
-            }
-
             /* attempt to find parameter, set and send it */
             param_t param = param_find_no_notification(name);
 
@@ -105,11 +87,10 @@ void MavlinkParameters::handle_message(
                 PX4_ERR("unsupported param value: %s", name);
                 (void)send_param(param);
 
-            } else {
-                /* According to the mavlink spec we should always
-                 * acknowledge a write operation. */
-                param_set(param, &(set.param_value));
-                send_param(param);
+            } else if (!write_and_acknowledge_parameter(
+                           param, set.param_value)) {
+                PX4_ERR("param write failed: %s", name);
+                (void)send_param(param);
             }
         }
         break;
@@ -133,9 +114,7 @@ void MavlinkParameters::handle_message(
                 /* enforce null termination */
                 name[MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN] = '\0';
                 /* attempt to find parameter and send it */
-                if (!is_internal_parameter(name)) {
-                    send_param(param_find_no_notification(name));
-                }
+                send_param(param_find_no_notification(name));
 
             } else {
                 /* when index is >= 0, send this parameter again */
@@ -186,28 +165,12 @@ void MavlinkParameters::send() noexcept
 const MavlinkParameters::FixedInt32Parameter *
 MavlinkParameters::fixed_int32_parameter(const char *name) noexcept
 {
-    if (name == nullptr) {
-        return nullptr;
-    }
-    for (const FixedInt32Parameter &parameter :
-         kQgcFixedInt32Parameters) {
-        if (std::strcmp(name, parameter.name) == 0) {
-            return &parameter;
-        }
-    }
-    return nullptr;
+    return dima::parameters::qgc_fixed_int32_parameter(name);
 }
 
 bool MavlinkParameters::is_qgc_fixed_parameter(const char *name) noexcept
 {
     return fixed_int32_parameter(name) != nullptr;
-}
-
-bool MavlinkParameters::is_internal_parameter(const char *name) noexcept
-{
-    return name != nullptr &&
-        (std::strcmp(name, "RC_PORT_CONFIG") == 0 ||
-         std::strcmp(name, "DIMA_SER_VER") == 0);
 }
 
 bool MavlinkParameters::is_serial_baud_parameter(
@@ -225,24 +188,120 @@ bool MavlinkParameters::supported_serial_baud(std::int32_t value) noexcept
 bool MavlinkParameters::serial_function_write_allowed(
     const char *name, std::int32_t value) noexcept
 {
-    if (!dima::board::serial_function_supported(value)) {
+    return dima::board::serial_function_parameter(name) &&
+           dima::board::serial_function_supported(value);
+}
+
+bool MavlinkParameters::write_and_acknowledge_parameter(
+    param_t param, float wire_value) noexcept
+{
+    const char *const name = param_name(param);
+    if (dima::board::serial_function_parameter(name)) {
+        std::int32_t function = 0;
+        std::memcpy(&function, &wire_value, sizeof(function));
+        return set_serial_function(param, name, function);
+    }
+
+    int result = 0;
+    if (param_type(param) == PARAM_TYPE_INT32) {
+        std::int32_t value = 0;
+        std::memcpy(&value, &wire_value, sizeof(value));
+        result = param_set(param, &value);
+    } else {
+        result = param_set(param, &wire_value);
+    }
+    if (result != 0) {
         return false;
     }
-    if (value == dima::board::kSerialFunctionDisabled) {
-        return true;
-    }
-    for (const dima::board::SerialPortDescriptor &descriptor :
-         dima::board::kSerialPorts) {
-        if (std::strcmp(name, descriptor.function_parameter_name) == 0) {
-            continue;
-        }
-        const param_t other = param_find_no_notification(
-            descriptor.function_parameter_name);
-        std::int32_t other_value{};
-        if (other == PARAM_INVALID || param_get(other, &other_value) != 0 ||
-            other_value == dima::board::kSerialFunctionRcInput) {
+
+    /* The MAVLink parameter protocol requires an acknowledgement. */
+    (void)send_param(param);
+    return true;
+}
+
+bool MavlinkParameters::set_serial_function(
+    param_t param, const char *name, std::int32_t value) noexcept
+{
+    param_t owners[sizeof(dima::board::kSerialPorts) /
+                   sizeof(dima::board::kSerialPorts[0])]{};
+    unsigned owner_count = 0U;
+    {
+        /* QGC can enable the new RC port before disabling the old one. Keep the
+         * handoff invisible to readers and publish only the completed state. */
+        px4::AtomicTransaction transaction;
+        if (!serial_function_write_allowed(name, value)) {
             return false;
         }
+        if (value == dima::board::kSerialFunctionDisabled) {
+            if (param_set(param, &value) != 0) {
+                return false;
+            }
+        } else {
+            std::int32_t previous_target = 0;
+            if (param_get(param, &previous_target) != 0) {
+                return false;
+            }
+
+            for (const dima::board::SerialPortDescriptor &descriptor :
+                 dima::board::kSerialPorts) {
+                if (std::strcmp(
+                        name, descriptor.function_parameter_name) == 0) {
+                    continue;
+                }
+                const param_t other = param_find_no_notification(
+                    descriptor.function_parameter_name);
+                std::int32_t other_value = 0;
+                if (other == PARAM_INVALID ||
+                    param_get(other, &other_value) != 0 ||
+                    !dima::board::serial_function_supported(other_value)) {
+                    return false;
+                }
+                if (other_value == dima::board::kSerialFunctionRcInput) {
+                    owners[owner_count++] = other;
+                }
+            }
+
+            const bool target_changed = previous_target != value;
+            if (target_changed &&
+                param_set_no_notification(param, &value) != 0) {
+                return false;
+            }
+
+            const std::int32_t disabled =
+                dima::board::kSerialFunctionDisabled;
+            unsigned cleared_count = 0U;
+            for (; cleared_count < owner_count; ++cleared_count) {
+                if (param_set_no_notification(
+                        owners[cleared_count], &disabled) != 0) {
+                    bool rollback_ok = true;
+                    if (target_changed && param_set_no_notification(
+                            param, &previous_target) != 0) {
+                        rollback_ok = false;
+                    }
+                    for (unsigned rollback = 0U;
+                         rollback < cleared_count; ++rollback) {
+                        if (param_set_no_notification(
+                                owners[rollback], &value) != 0) {
+                            rollback_ok = false;
+                        }
+                    }
+                    if (!rollback_ok) {
+                        param_notify_changes();
+                        PX4_ERR("serial RC owner rollback failed");
+                    }
+                    return false;
+                }
+            }
+
+            if (target_changed || owner_count > 0U) {
+                param_notify_changes();
+            }
+        }
+    }
+
+    (void)send_param(param);
+    for (unsigned index = 0U; index < owner_count; ++index) {
+        (void)send_param(owners[index]);
     }
     return true;
 }
@@ -257,8 +316,7 @@ void MavlinkParameters::mark_qgc_setup_parameters_used() noexcept
         const param_t param = param_for_index(index);
         const char *const name = param_name(param);
         if (name != nullptr &&
-            ((std::strncmp(name, "RC", 2U) == 0 &&
-              std::strcmp(name, "RC_PORT_CONFIG") != 0) ||
+            (std::strncmp(name, "RC", 2U) == 0 ||
              dima::board::serial_baud_parameter(name) ||
              dima::board::serial_function_parameter(name) ||
              std::strcmp(name, "COM_RC_IN_MODE") == 0 ||
@@ -318,6 +376,14 @@ bool MavlinkParameters::write_value_allowed(param_t param,
                                             float wire_value) noexcept
 {
     const char *const name = param_name(param);
+    /* PX4 v1.17.0 (d6f12ad1) and ArduPilot Rover 4.7.0 treat
+     * min/max/enum metadata as GCS guidance rather than a generic write gate.
+     * Keep finite-value rejection at the protocol boundary; output-specific
+     * validation and arming inhibition belong to MotorOutput and Commander. */
+    if (param_type(param) == PARAM_TYPE_FLOAT &&
+        !std::isfinite(wire_value)) {
+        return false;
+    }
     if (name != nullptr && std::strcmp(name, "COM_RC_IN_MODE") == 0) {
         std::int32_t mode = 0;
         std::memcpy(&mode, &wire_value, sizeof(mode));
@@ -327,9 +393,6 @@ bool MavlinkParameters::write_value_allowed(param_t param,
         std::int32_t mapping = 0;
         std::memcpy(&mapping, &wire_value, sizeof(mapping));
         return mapping == 0;
-    }
-    if (name != nullptr && std::strcmp(name, "RC_PORT_CONFIG") == 0) {
-        return false;
     }
     if (name != nullptr && std::strcmp(name, "RC_INPUT_PROTO") == 0) {
         std::int32_t protocol = 0;
@@ -345,9 +408,6 @@ bool MavlinkParameters::write_value_allowed(param_t param,
         std::int32_t function = 0;
         std::memcpy(&function, &wire_value, sizeof(function));
         return serial_function_write_allowed(name, function);
-    }
-    if (name != nullptr && std::strcmp(name, "DIMA_SER_VER") == 0) {
-        return false;
     }
     if (const FixedInt32Parameter *const fixed =
             fixed_int32_parameter(name)) {

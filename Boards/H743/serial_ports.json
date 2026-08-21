@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "format_version": 1,
   "board": "dimah743",
   "hardware_reference": {
     "source": "H743_FreeRTOS.ioc",
@@ -52,7 +52,7 @@
       "function_parameter": "SERIAL1_FUNCTION",
       "default_function": 0,
       "default_baud": 921600,
-      "default_source": "Schema v1 USART1 default",
+      "default_source": "VCU-H7 USART1 product default",
       "uart_handle": "huart1",
       "dma_request": "DMA_REQUEST_USART1_RX",
       "irq": "USART1_IRQn",
@@ -71,7 +71,7 @@
       "function_parameter": "SERIAL2_FUNCTION",
       "default_function": 0,
       "default_baud": 0,
-      "default_source": "Schema v1 USART2 default",
+      "default_source": "VCU-H7 USART2 product default",
       "uart_handle": "huart2",
       "dma_request": "DMA_REQUEST_USART2_RX",
       "irq": "USART2_IRQn",
@@ -90,7 +90,7 @@
       "function_parameter": "SERIAL3_FUNCTION",
       "default_function": 0,
       "default_baud": 0,
-      "default_source": "Schema v1 USART3 default",
+      "default_source": "VCU-H7 USART3 product default",
       "uart_handle": "huart3",
       "dma_request": "DMA_REQUEST_USART3_RX",
       "irq": "USART3_IRQn",
@@ -109,7 +109,7 @@
       "function_parameter": "SERIAL4_FUNCTION",
       "default_function": 0,
       "default_baud": 115200,
-      "default_source": "Schema v1 UART4 default",
+      "default_source": "VCU-H7 UART4 product default",
       "uart_handle": "huart4",
       "dma_request": "DMA_REQUEST_UART4_RX",
       "irq": "UART4_IRQn",
@@ -147,7 +147,7 @@
       "function_parameter": "SERIAL6_FUNCTION",
       "default_function": 1,
       "default_baud": 0,
-      "default_source": "Schema v1 USART6 RC Auto",
+      "default_source": "VCU-H7 USART6 RC product default",
       "uart_handle": "huart6",
       "dma_request": "DMA_REQUEST_USART6_RX",
       "irq": "USART6_IRQn",
@@ -166,7 +166,7 @@
       "function_parameter": "SERIAL7_FUNCTION",
       "default_function": 0,
       "default_baud": 57600,
-      "default_source": "Schema v1 UART7 default",
+      "default_source": "VCU-H7 UART7 product default",
       "uart_handle": "huart7",
       "dma_request": "DMA_REQUEST_UART7_RX",
       "irq": "UART7_IRQn",
@@ -185,7 +185,7 @@
       "function_parameter": "SERIAL8_FUNCTION",
       "default_function": 0,
       "default_baud": 115200,
-      "default_source": "Schema v1 UART8 default",
+      "default_source": "VCU-H7 UART8 product default",
       "uart_handle": "huart8",
       "dma_request": "DMA_REQUEST_UART8_RX",
       "irq": "UART8_IRQn",
@@ -194,30 +194,5 @@
       "rx_af": "GPIO_AF8_UART8",
       "rx_index": 0
     }
-  ],
-  "legacy_rc_port_map": {
-    "0": 0,
-    "1": 4,
-    "2": 7,
-    "3": 8,
-    "4": 2,
-    "101": 7,
-    "102": 8,
-    "103": 2,
-    "104": 5,
-    "201": 1,
-    "202": 3,
-    "203": 6,
-    "300": 4
-  },
-  "legacy_baud_parameter_map": {
-    "SER_RC_BAUD": 4,
-    "SER_TEL1_BAUD": 7,
-    "SER_TEL2_BAUD": 8,
-    "SER_TEL3_BAUD": 2,
-    "SER_TEL4_BAUD": 5,
-    "SER_GPS1_BAUD": 1,
-    "SER_GPS2_BAUD": 3,
-    "SER_GPS3_BAUD": 6
-  }
+  ]
 }

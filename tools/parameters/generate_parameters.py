@@ -3,7 +3,6 @@
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -15,12 +14,7 @@ BSD_HEADER = """/***************************************************************
  ****************************************************************************/
 """
 
-PARAMETER_DEFINITION_RE = re.compile(
-    r"\bPARAM_DEFINE_(?:INT32|FLOAT)\s*\(\s*"
-    r"([A-Za-z_][A-Za-z0-9_]*)\s*,"
-)
-EXPECTED_PARAMETER_COUNT = 205
-EXPECTED_STABLE_TAIL_COUNT = 28
+EXPECTED_PARAMETER_COUNT = 203
 
 
 def json_names(path: Path, ordered_names: list[str]) -> list[str]:
@@ -44,16 +38,6 @@ def float_literal(value: str) -> str:
     if "." not in text and "e" not in text.lower():
         text += ".0"
     return text + "f"
-
-
-def definition_names(path: Path) -> list[str]:
-    text = path.read_text(encoding="utf-8")
-    names = PARAMETER_DEFINITION_RE.findall(text)
-    if not names:
-        raise RuntimeError(f"stable-tail source has no parameters: {path}")
-    if len(names) != len(set(names)):
-        raise RuntimeError(f"stable-tail source has duplicate parameters: {path}")
-    return names
 
 
 def write_metadata(path: Path, parameters) -> None:
@@ -100,9 +84,6 @@ def write_include_forwarders(include_output: Path, generated_header: Path) -> No
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", action="append", required=True, type=Path)
-    parser.add_argument(
-        "--stable-tail-source", action="append", required=True, type=Path
-    )
     parser.add_argument("--output", type=Path, default=Path("build/generated/parameters"))
     parser.add_argument("--include-output", required=True, type=Path)
     return parser.parse_args()
@@ -120,22 +101,7 @@ def main() -> int:
         "--xml", str(xml_path), "--json", str(json_path), "--board", "dima_rover",
     ], check=True)
 
-    if any(source not in args.source for source in args.stable_tail_source):
-        raise RuntimeError("each stable-tail source must also be an explicit source")
-    stable_tail_names = [
-        name
-        for source in args.stable_tail_source
-        for name in definition_names(source)
-    ]
-    if (len(stable_tail_names) != EXPECTED_STABLE_TAIL_COUNT or
-            stable_tail_names[0] != "SYS_AUTOSTART" or
-            stable_tail_names[-1] != "DIMA_SER_VER"):
-        raise RuntimeError(
-            "stable-tail contract must contain SYS_AUTOSTART followed by "
-            "10 fixed QGC parameters, 16 board serial parameters, and the "
-            "internal serial migration version"
-        )
-    parameters = generate(xml_path, args.output, stable_tail_names)
+    parameters = generate(xml_path, args.output)
     if len(parameters) != EXPECTED_PARAMETER_COUNT:
         raise RuntimeError(
             f"expected {EXPECTED_PARAMETER_COUNT} parameters, "

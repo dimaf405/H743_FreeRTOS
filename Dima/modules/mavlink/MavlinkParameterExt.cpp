@@ -34,15 +34,6 @@ void MavlinkParameters::handle_param_ext_request_read(
                  MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN);
     name[MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN] = '\0';
 
-    if (is_internal_parameter(name)) {
-        send_param_ext_not_found(
-            req.param_id,
-            _send_all_count > 0U
-                ? static_cast<std::uint16_t>(_send_all_count)
-                : param_count_used());
-        return;
-    }
-
     param_t param = param_find_no_notification(name);
     if (param == PARAM_INVALID) {
         send_param_ext_not_found(
