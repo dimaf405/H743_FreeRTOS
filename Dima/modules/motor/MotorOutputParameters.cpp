@@ -1,5 +1,10 @@
 #include "MotorOutput.hpp"
 
+#include "events/events.hpp"
+
+#include <cmath>
+#include <cstring>
+
 namespace dima::modules::motor {
 namespace {
 
@@ -26,6 +31,55 @@ constexpr const char *kParameterNames[6][5] = {
      "PWM_S6_REV"},
 };
 
+constexpr std::uint32_t kEventParameterInvalid = 0x524D4F01U;
+constexpr float kDefaultCommandTimeoutS = 0.10F;
+constexpr std::int32_t kMinimumPulseUs = static_cast<std::int32_t>(
+    dima::platform::kActuatorPwmMinimumPulseUs);
+constexpr std::int32_t kMaximumPulseUs = static_cast<std::int32_t>(
+    dima::platform::kActuatorPwmMaximumPulseUs);
+
+enum class ParameterIssue : std::uint32_t {
+    CommandTimeoutFallback = 1U,
+    UnsupportedFunction = 2U,
+    MinimumOutOfRange = 3U,
+    CenterOutOfRange = 4U,
+    MaximumOutOfRange = 5U,
+    EndpointsSwapped = 6U,
+    CenterBelowMinimum = 7U,
+    CenterAboveMaximum = 8U,
+    InvalidReversed = 9U,
+};
+
+bool command_timeout_valid(float value) noexcept
+{
+    return std::isfinite(value) && value >= 0.02F && value <= 1.0F;
+}
+
+bool pulse_in_output_envelope(std::int32_t value) noexcept
+{
+    return value >= kMinimumPulseUs && value <= kMaximumPulseUs;
+}
+
+std::uint32_t float_bits(float value) noexcept
+{
+    static_assert(sizeof(value) == sizeof(std::uint32_t));
+    std::uint32_t bits = 0U;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+void report_parameter_issue(ParameterIssue issue,
+                            std::uint32_t channel,
+                            std::uint32_t first_value,
+                            std::uint32_t second_value) noexcept
+{
+    const std::uint32_t arguments[4]{static_cast<std::uint32_t>(issue),
+                                     channel, first_value, second_value};
+    (void)dima::events::report(kEventParameterInvalid,
+                               dima::events::Severity::Warning, arguments,
+                               sizeof(arguments) / sizeof(arguments[0]));
+}
+
 } // namespace
 
 bool MotorOutput::bind_parameters() noexcept
@@ -46,7 +100,7 @@ bool MotorOutput::bind_parameters() noexcept
             parameter_handles_[channel][field] = handle;
         }
     }
-    return apply_parameter_snapshot();
+    return true;
 }
 
 void MotorOutput::invalidate_parameter_bindings() noexcept
@@ -83,32 +137,116 @@ bool MotorOutput::apply_parameter_snapshot() noexcept
         parameters_valid_ = false;
         return false;
     }
-    if (!finite(candidate.command_timeout_s) ||
-        candidate.command_timeout_s < 0.02F ||
-        candidate.command_timeout_s > 1.0F) {
-        parameters_valid_ = false;
-        return false;
+    if (!command_timeout_valid(candidate.command_timeout_s)) {
+        const float requested_timeout = candidate.command_timeout_s;
+        candidate.command_timeout_s =
+            command_timeout_valid(parameters_.command_timeout_s)
+                ? parameters_.command_timeout_s
+                : kDefaultCommandTimeoutS;
+        report_parameter_issue(ParameterIssue::CommandTimeoutFallback, 0U,
+                               float_bits(requested_timeout),
+                               float_bits(candidate.command_timeout_s));
     }
 
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
-        if (raw[channel][Minimum] < 800 || raw[channel][Minimum] > 2200 ||
-            raw[channel][Center] < 800 || raw[channel][Center] > 2200 ||
-            raw[channel][Maximum] < 800 || raw[channel][Maximum] > 2200) {
-            parameters_valid_ = false;
-            return false;
+        const std::uint32_t channel_number =
+            static_cast<std::uint32_t>(channel + 1U);
+        const std::int32_t raw_function = raw[channel][Function];
+        if (raw_function == static_cast<std::int32_t>(
+                                ChannelFunction::Disabled)) {
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
         }
+        if (raw_function != static_cast<std::int32_t>(
+                                ChannelFunction::MotorRight) &&
+            raw_function != static_cast<std::int32_t>(
+                                ChannelFunction::MotorLeft)) {
+            report_parameter_issue(ParameterIssue::UnsupportedFunction,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(raw_function),
+                                   0U);
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
+        }
+        if (raw[channel][Reversed] != 0 &&
+            raw[channel][Reversed] != 1) {
+            report_parameter_issue(ParameterIssue::InvalidReversed,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Reversed]),
+                                   0U);
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
+        }
+
+        if (!pulse_in_output_envelope(raw[channel][Minimum])) {
+            report_parameter_issue(ParameterIssue::MinimumOutOfRange,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Minimum]),
+                                   0U);
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
+        }
+        if (!pulse_in_output_envelope(raw[channel][Center])) {
+            report_parameter_issue(ParameterIssue::CenterOutOfRange,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Center]),
+                                   0U);
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
+        }
+        if (!pulse_in_output_envelope(raw[channel][Maximum])) {
+            report_parameter_issue(ParameterIssue::MaximumOutOfRange,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Maximum]),
+                                   0U);
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
+        }
+
+        std::int32_t effective_minimum = raw[channel][Minimum];
+        std::int32_t effective_maximum = raw[channel][Maximum];
+        if (effective_minimum > effective_maximum) {
+            const std::int32_t temporary = effective_minimum;
+            effective_minimum = effective_maximum;
+            effective_maximum = temporary;
+            report_parameter_issue(ParameterIssue::EndpointsSwapped,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Minimum]),
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Maximum]));
+        }
+        if (raw[channel][Center] < effective_minimum) {
+            report_parameter_issue(ParameterIssue::CenterBelowMinimum,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Center]),
+                                   static_cast<std::uint32_t>(
+                                       effective_minimum));
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
+        }
+        if (raw[channel][Center] > effective_maximum) {
+            report_parameter_issue(ParameterIssue::CenterAboveMaximum,
+                                   channel_number,
+                                   static_cast<std::uint32_t>(
+                                       raw[channel][Center]),
+                                   static_cast<std::uint32_t>(
+                                       effective_maximum));
+            candidate.channels[channel] = ChannelConfig{};
+            continue;
+        }
+
         ChannelConfig config{};
-        config.function =
-            static_cast<ChannelFunction>(raw[channel][Function]);
-        config.minimum_us = static_cast<std::uint16_t>(raw[channel][Minimum]);
+        config.function = static_cast<ChannelFunction>(raw_function);
+        config.minimum_us = static_cast<std::uint16_t>(effective_minimum);
         config.center_us = static_cast<std::uint16_t>(raw[channel][Center]);
-        config.maximum_us = static_cast<std::uint16_t>(raw[channel][Maximum]);
-        config.reversed = raw[channel][Reversed] != 0;
-        if (!valid_channel(config) ||
-            (raw[channel][Reversed] != 0 && raw[channel][Reversed] != 1)) {
-            parameters_valid_ = false;
-            return false;
-        }
+        config.maximum_us = static_cast<std::uint16_t>(effective_maximum);
+        config.reversed = raw[channel][Reversed] == 1;
 
         const std::uint8_t bit = static_cast<std::uint8_t>(1U << channel);
         candidate.channels[channel] = config;

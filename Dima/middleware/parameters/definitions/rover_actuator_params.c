@@ -151,8 +151,8 @@ PARAM_DEFINE_INT32(PWM_S1_FUNC, 0);
  * PWM S1 minimum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -161,8 +161,8 @@ PARAM_DEFINE_INT32(PWM_S1_MIN, 1000);
  * PWM S1 center pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -171,8 +171,8 @@ PARAM_DEFINE_INT32(PWM_S1_CENT, 1500);
  * PWM S1 maximum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -182,6 +182,8 @@ PARAM_DEFINE_INT32(PWM_S1_MAX, 2000);
  *
  * @value 0 Normal
  * @value 1 Reversed
+ * @min 0
+ * @max 1
  * @group PWM Outputs
  */
 PARAM_DEFINE_INT32(PWM_S1_REV, 0);
@@ -200,8 +202,8 @@ PARAM_DEFINE_INT32(PWM_S2_FUNC, 0);
  * PWM S2 minimum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -210,8 +212,8 @@ PARAM_DEFINE_INT32(PWM_S2_MIN, 1000);
  * PWM S2 center pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -220,8 +222,8 @@ PARAM_DEFINE_INT32(PWM_S2_CENT, 1500);
  * PWM S2 maximum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -231,6 +233,8 @@ PARAM_DEFINE_INT32(PWM_S2_MAX, 2000);
  *
  * @value 0 Normal
  * @value 1 Reversed
+ * @min 0
+ * @max 1
  * @group PWM Outputs
  */
 PARAM_DEFINE_INT32(PWM_S2_REV, 0);
@@ -249,8 +253,8 @@ PARAM_DEFINE_INT32(PWM_S3_FUNC, 0);
  * PWM S3 minimum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -259,8 +263,8 @@ PARAM_DEFINE_INT32(PWM_S3_MIN, 1000);
  * PWM S3 center pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -269,8 +273,8 @@ PARAM_DEFINE_INT32(PWM_S3_CENT, 1500);
  * PWM S3 maximum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -280,6 +284,8 @@ PARAM_DEFINE_INT32(PWM_S3_MAX, 2000);
  *
  * @value 0 Normal
  * @value 1 Reversed
+ * @min 0
+ * @max 1
  * @group PWM Outputs
  */
 PARAM_DEFINE_INT32(PWM_S3_REV, 0);
@@ -298,8 +304,8 @@ PARAM_DEFINE_INT32(PWM_S4_FUNC, 0);
  * PWM S4 minimum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -308,8 +314,8 @@ PARAM_DEFINE_INT32(PWM_S4_MIN, 1000);
  * PWM S4 center pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -318,8 +324,8 @@ PARAM_DEFINE_INT32(PWM_S4_CENT, 1500);
  * PWM S4 maximum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -329,6 +335,8 @@ PARAM_DEFINE_INT32(PWM_S4_MAX, 2000);
  *
  * @value 0 Normal
  * @value 1 Reversed
+ * @min 0
+ * @max 1
  * @group PWM Outputs
  */
 PARAM_DEFINE_INT32(PWM_S4_REV, 0);
@@ -347,8 +355,8 @@ PARAM_DEFINE_INT32(PWM_S5_FUNC, 0);
  * PWM S5 minimum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -357,8 +365,8 @@ PARAM_DEFINE_INT32(PWM_S5_MIN, 1000);
  * PWM S5 center pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -367,8 +375,8 @@ PARAM_DEFINE_INT32(PWM_S5_CENT, 1500);
  * PWM S5 maximum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -378,6 +386,8 @@ PARAM_DEFINE_INT32(PWM_S5_MAX, 2000);
  *
  * @value 0 Normal
  * @value 1 Reversed
+ * @min 0
+ * @max 1
  * @group PWM Outputs
  */
 PARAM_DEFINE_INT32(PWM_S5_REV, 0);
@@ -396,8 +406,8 @@ PARAM_DEFINE_INT32(PWM_S6_FUNC, 0);
  * PWM S6 minimum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -406,8 +416,8 @@ PARAM_DEFINE_INT32(PWM_S6_MIN, 1000);
  * PWM S6 center pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -416,8 +426,8 @@ PARAM_DEFINE_INT32(PWM_S6_CENT, 1500);
  * PWM S6 maximum pulse
  *
  * @unit us
- * @min 800
- * @max 2200
+ * @min 500
+ * @max 2500
  * @increment 1
  * @group PWM Outputs
  */
@@ -427,6 +437,8 @@ PARAM_DEFINE_INT32(PWM_S6_MAX, 2000);
  *
  * @value 0 Normal
  * @value 1 Reversed
+ * @min 0
+ * @max 1
  * @group PWM Outputs
  */
 PARAM_DEFINE_INT32(PWM_S6_REV, 0);

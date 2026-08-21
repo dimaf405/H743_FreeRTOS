@@ -34,7 +34,7 @@ bool MotorOutput::build_frame(
 bool MotorOutput::build_neutral_frame(
     dima::platform::ActuatorPwmFrame &frame) const noexcept
 {
-    if (!parameters_valid_ || !parameters_.drive_available) {
+    if (!parameters_valid_ || parameters_.configured_mask == 0U) {
         return false;
     }
     frame = dima::platform::ActuatorPwmFrame{};
@@ -122,18 +122,6 @@ bool MotorOutput::finite(float value) noexcept { return std::isfinite(value); }
 bool MotorOutput::normalized(float value) noexcept
 {
     return finite(value) && value >= -1.0F && value <= 1.0F;
-}
-
-bool MotorOutput::valid_channel(const ChannelConfig &channel) noexcept
-{
-    const bool function_valid =
-        channel.function == ChannelFunction::Disabled ||
-        channel.function == ChannelFunction::MotorRight ||
-        channel.function == ChannelFunction::MotorLeft;
-    return function_valid && channel.minimum_us >= 800U &&
-           channel.maximum_us <= 2200U &&
-           channel.minimum_us < channel.center_us &&
-           channel.center_us < channel.maximum_us;
 }
 
 std::uint16_t MotorOutput::map_normalized(const ChannelConfig &channel,

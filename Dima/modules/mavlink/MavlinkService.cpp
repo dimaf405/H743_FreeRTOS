@@ -16,12 +16,15 @@ namespace metadata = dima::generated::parameter_metadata;
 
 static_assert(metadata::kGeneralFileSize <= UINT32_MAX);
 static_assert(metadata::kParameterFileSize <= UINT32_MAX);
+static_assert(metadata::kActuatorFileSize <= UINT32_MAX);
 
 constexpr MavlinkMetadataFtp::VirtualFile kMetadataFiles[]{
     {metadata::kGeneralPath, metadata::kGeneralFile,
      static_cast<std::uint32_t>(metadata::kGeneralFileSize)},
     {metadata::kParameterPath, metadata::kParameterFile,
      static_cast<std::uint32_t>(metadata::kParameterFileSize)},
+    {metadata::kActuatorPath, metadata::kActuatorFile,
+     static_cast<std::uint32_t>(metadata::kActuatorFileSize)},
 };
 
 } // namespace

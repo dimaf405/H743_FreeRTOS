@@ -125,7 +125,7 @@ bool MotorOutput::safety_permits_disarmed_neutral(
     std::uint64_t now_us) const noexcept
 {
     if (hard_safe_inhibit_observed_ || !parameters_valid_ ||
-        !parameters_.drive_available ||
+        parameters_.configured_mask == 0U ||
         parameter_update_pending_ || !active_snapshot_fresh(now_us)) {
         return false;
     }

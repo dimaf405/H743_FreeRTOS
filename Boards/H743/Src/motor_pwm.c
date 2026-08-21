@@ -1,12 +1,16 @@
 #include "motor_pwm.h"
 
 #include "main.h"
+#include "platform/api/ActuatorPwmLimits.h"
 #include "tim.h"
 
 #define MOTOR_PWM_TIMER_CLOCK_HZ 240000000U
 #define MOTOR_PWM_COUNTER_HZ 1000000U
 #define MOTOR_PWM_PRESCALER (MOTOR_PWM_TIMER_CLOCK_HZ / MOTOR_PWM_COUNTER_HZ - 1U)
 #define MOTOR_PWM_PERIOD_TICKS 19999U
+
+_Static_assert(DIMA_ACTUATOR_PWM_MAX_PULSE_US <= MOTOR_PWM_PERIOD_TICKS,
+               "actuator PWM envelope exceeds timer period");
 
 static bool motor_pwm_started;
 
@@ -207,7 +211,9 @@ board_motor_pwm_result_t board_motor_pwm_write(
             continue;
         }
         const uint32_t period = index < 2U ? tim8_period : tim5_period;
-        if (pulse_us[index] == 0U || pulse_us[index] > period) {
+        if (pulse_us[index] < DIMA_ACTUATOR_PWM_MIN_PULSE_US ||
+            pulse_us[index] > DIMA_ACTUATOR_PWM_MAX_PULSE_US ||
+            pulse_us[index] > period) {
             return BOARD_MOTOR_PWM_FAULT;
         }
     }

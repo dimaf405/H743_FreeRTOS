@@ -1,10 +1,17 @@
 #pragma once
 
+#include "ActuatorPwmLimits.h"
 #include "PlatformTypes.hpp"
 
 namespace dima::platform {
 
 constexpr std::size_t kActuatorPwmChannelCount = 6U;
+constexpr std::uint16_t kActuatorPwmMinimumPulseUs =
+    DIMA_ACTUATOR_PWM_MIN_PULSE_US;
+constexpr std::uint16_t kActuatorPwmMaximumPulseUs =
+    DIMA_ACTUATOR_PWM_MAX_PULSE_US;
+
+static_assert(kActuatorPwmMinimumPulseUs <= kActuatorPwmMaximumPulseUs);
 
 enum class ActuatorPwmResult : std::uint8_t {
     Applied,

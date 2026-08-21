@@ -31,8 +31,6 @@ public:
     dima::middleware::lifecycle::ModuleState state() const override;
 
     bool safe_off_confirmed() const noexcept;
-    bool backend_ready() const noexcept;
-    bool drive_available() const noexcept;
 
 private:
     static constexpr std::uint32_t kRunIntervalUs = 10000U;
@@ -91,12 +89,13 @@ private:
     dima::platform::ActuatorPwmResult force_safe_off() noexcept;
     bool publish_status(std::uint64_t now_us, std::uint8_t output_state,
                         bool command_valid) noexcept;
+    bool enter_parameter_safe_off() noexcept;
+    bool drive_available() const noexcept;
     void reset_runtime_state() noexcept;
     void enter_error(std::uint32_t event_id) noexcept;
 
     static bool finite(float value) noexcept;
     static bool normalized(float value) noexcept;
-    static bool valid_channel(const ChannelConfig &channel) noexcept;
     static std::uint16_t map_normalized(const ChannelConfig &channel,
                                         float value) noexcept;
     static bool safety_negative(const actuator_armed_s &armed) noexcept;

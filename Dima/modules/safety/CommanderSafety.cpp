@@ -4,6 +4,8 @@
 #define MODULE_NAME "commander"
 #include "Commander.hpp"
 
+#include "platform/api/ActuatorPwm.hpp"
+
 #include "logging/logging.hpp"
 
 #include <cmath>
@@ -308,7 +310,9 @@ bool Commander::actuator_output_ready_for_arming(
             (actuator_output_status_.configured_output_mask &
              static_cast<std::uint8_t>(1U << index)) != 0U;
         const std::uint16_t pulse = actuator_output_status_.pwm_us[index];
-        if ((configured && (pulse < 800U || pulse > 2200U)) ||
+        if ((configured &&
+             (pulse < dima::platform::kActuatorPwmMinimumPulseUs ||
+              pulse > dima::platform::kActuatorPwmMaximumPulseUs)) ||
             (!configured && pulse != 0U)) {
             return false;
         }

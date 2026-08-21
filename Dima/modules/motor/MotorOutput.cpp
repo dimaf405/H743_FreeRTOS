@@ -56,9 +56,15 @@ bool MotorOutput::start()
         return false;
     }
 
+    const bool parameter_snapshot_valid = apply_parameter_snapshot();
     state_ = dima::middleware::lifecycle::ModuleState::Running;
     const std::uint64_t now = hrt_absolute_time();
-    if (!publish_status(now, actuator_output_status_s::STATE_SAFE_OFF, false)) {
+    if (!parameter_snapshot_valid) {
+        if (!enter_parameter_safe_off()) {
+            return false;
+        }
+    } else if (!publish_status(
+                   now, actuator_output_status_s::STATE_SAFE_OFF, false)) {
         enter_error(kEventPublishFailure);
         return false;
     }
@@ -104,8 +110,6 @@ bool MotorOutput::safe_off_confirmed() const noexcept
            (pwm_ == nullptr || !pwm_->started());
 }
 
-bool MotorOutput::backend_ready() const noexcept { return backend_ready_; }
-
 bool MotorOutput::drive_available() const noexcept
 {
     return parameters_valid_ && parameters_.drive_available;
@@ -133,7 +137,7 @@ void MotorOutput::Run()
     if (parameter_update_pending_ && fresh_disarmed_snapshot(now)) {
         parameter_update_pending_ = false;
         if (!apply_parameter_snapshot()) {
-            enter_error(kEventParameterInvalid);
+            (void)enter_parameter_safe_off();
             return;
         }
     }
@@ -209,6 +213,29 @@ void MotorOutput::reset_runtime_state() noexcept
     backend_ready_ = false;
     safe_off_ = false;
     invalidate_parameter_bindings();
+}
+
+bool MotorOutput::enter_parameter_safe_off() noexcept
+{
+    parameters_valid_ = false;
+    const dima::platform::ActuatorPwmResult stopped = force_safe_off();
+    if (stopped == dima::platform::ActuatorPwmResult::Fault) {
+        enter_error(kEventBackendFault);
+        return false;
+    }
+
+    const std::uint8_t output_state =
+        stopped == dima::platform::ActuatorPwmResult::Applied
+            ? actuator_output_status_s::STATE_HARD_SAFE_OFF
+            : actuator_output_status_s::STATE_RETRY;
+    if (!publish_status(hrt_absolute_time(), output_state, false)) {
+        enter_error(kEventPublishFailure);
+        return false;
+    }
+
+    (void)dima::events::report(kEventParameterInvalid,
+                               dima::events::Severity::Error);
+    return true;
 }
 
 void MotorOutput::enter_error(std::uint32_t event_id) noexcept
