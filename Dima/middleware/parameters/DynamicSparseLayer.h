@@ -39,7 +39,6 @@
 #include "platform/api/Memory.hpp"
 
 #include <cstring>
-#include <cstdlib>
 #include <utility>
 
 // Upstream path: src/lib/parameters/DynamicSparseLayer.h @ d6f12ad1
@@ -49,7 +48,11 @@ public:
     DynamicSparseLayer(ParamLayer *parent, int n_prealloc = 32, int n_grow = 4)
         : ParamLayer(parent), _n_slots(n_prealloc), _n_grow(n_grow > 0 ? n_grow : 4)
     {
-        if (_n_slots > 0 && allocation_allowed()) {
+        if (_n_slots > 0) {
+            if (!allocation_allowed()) {
+                _n_slots = 0;
+                return;
+            }
             auto *slots = static_cast<Slot *>(dima::platform::allocate(sizeof(Slot) * _n_slots,
                 dima::platform::AllocationDomain::Service));
             if (slots) { initialize(slots, 0, _n_slots); _slots.store(slots); }
@@ -61,12 +64,21 @@ public:
     bool store(param_t param, param_value_u value) override
     {
         px4::AtomicTransaction transaction;
-        int index = getIndex(param);
-        if (index < _next_slot) { _slots.load()[index].value = value; return true; }
+        const int index = lowerBound(param);
+        Slot *slots = _slots.load();
+        if (index < _next_slot && slots[index].param == param) { slots[index].value = value; return true; }
         if (_next_slot >= _n_slots && !grow()) { return false; }
-        _slots.load()[_next_slot++] = {param, value}; sort(); return true;
+        slots = _slots.load();
+        if (index < _next_slot) {
+            std::memmove(&slots[index + 1], &slots[index], sizeof(Slot) * (_next_slot - index));
+        }
+        slots[index] = {param, value}; ++_next_slot; return true;
     }
-    bool contains(param_t param) const override { px4::AtomicTransaction transaction; return getIndex(param) < _next_slot; }
+    bool contains(param_t param) const override
+    {
+        px4::AtomicTransaction transaction; const int index = lowerBound(param); Slot *slots = _slots.load();
+        return index < _next_slot && slots[index].param == param;
+    }
     px4::AtomicBitset<PARAM_COUNT> containedAsBitset() const override
     {
         px4::AtomicTransaction transaction; px4::AtomicBitset<PARAM_COUNT> set;
@@ -74,13 +86,18 @@ public:
     }
     param_value_u get(param_t param) const override
     {
-        px4::AtomicTransaction transaction; const int index = getIndex(param);
-        return index < _next_slot ? _slots.load()[index].value : _parent->get(param);
+        px4::AtomicTransaction transaction; const int index = lowerBound(param); Slot *slots = _slots.load();
+        return index < _next_slot && slots[index].param == param ? slots[index].value : _parent->get(param);
     }
     void reset(param_t param) override
     {
-        px4::AtomicTransaction transaction; const int index = getIndex(param);
-        if (index < _next_slot) { _slots.load()[index] = {UINT16_MAX, {}}; sort(); --_next_slot; }
+        px4::AtomicTransaction transaction; const int index = lowerBound(param); Slot *slots = _slots.load();
+        if (index < _next_slot && slots[index].param == param) {
+            if (index + 1 < _next_slot) {
+                std::memmove(&slots[index], &slots[index + 1], sizeof(Slot) * (_next_slot - index - 1));
+            }
+            slots[--_next_slot] = {UINT16_MAX, {}};
+        }
     }
     void refresh(param_t param) override { _parent->refresh(param); }
     int size() const override { return _next_slot; }
@@ -101,13 +118,15 @@ private:
     struct Slot { param_t param; param_value_u value; };
     static bool allocation_allowed() { return !dima::platform::in_realtime_context(); }
     static void initialize(Slot *slots, int begin, int end) { for (int i = begin; i < end; ++i) { slots[i] = {UINT16_MAX, {}}; } }
-    static int compare(const void *a, const void *b) { return static_cast<int>(static_cast<const Slot *>(a)->param) - static_cast<int>(static_cast<const Slot *>(b)->param); }
-    void sort() { std::qsort(_slots.load(), _n_slots, sizeof(Slot), compare); }
-    int getIndex(param_t param) const
+    int lowerBound(param_t param) const
     {
-        int left = 0, right = _next_slot - 1; Slot *slots = _slots.load();
-        while (left <= right) { const int mid = (left + right) / 2; if (slots[mid].param == param) return mid; if (slots[mid].param < param) left = mid + 1; else right = mid - 1; }
-        return _next_slot;
+        int left = 0, right = _next_slot; Slot *slots = _slots.load();
+        while (left < right) {
+            const int mid = left + (right - left) / 2;
+            if (slots[mid].param < param) { left = mid + 1; }
+            else { right = mid; }
+        }
+        return left;
     }
     bool grow()
     {

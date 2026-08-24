@@ -164,6 +164,21 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 
 许可证状态仅记录为 `PENDING`；延后处理项记录为 `DEFERRED`。该状态不阻塞当前内部移植、编译和板级调试工作。
 
+## 7.2 nanoprintf 格式化实现
+
+| 字段 | 内容 |
+|---|---|
+| 来源 | `https://github.com/charlesnicholson/nanoprintf` |
+| 正式版本 | `v0.8.0` |
+| 正式 commit | `115c916031ef51b73c5c373852fa550eaf134d49` |
+| 本地目录 | `Middlewares/Third_Party/nanoprintf/` |
+| 用途 | Application 日志与 MAVLink `PARAM_EXT_VALUE` 的固定容量格式化，替代 full newlib printf 转换链 |
+| 适配边界 | 上游 header/LICENSE 原样保留；项目配置和 `format_to`/`vformat_to` wrapper 位于 `Dima/lib/format/`；USB stdout/setvbuf 能力保持不变 |
+| 许可证状态 | `PENDING`；上游声明双许可 Unlicense/0BSD，本阶段不作为构建阻断项 |
+
+固定 header SHA-256 为
+`c7e445450ce496e61f15c1cbdaa5a93e741f8ac4718f4ab6bcfedae1dc81c47c`。
+
 ## 8. 许可证状态
 
 - PX4 v1.17.0 来源文件：`PENDING`。

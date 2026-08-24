@@ -17,6 +17,39 @@ constexpr std::uint32_t kEventConfigInvalid = 0x52435301U;
 constexpr std::uint32_t kEventBackendFailure = 0x52435302U;
 constexpr std::uint32_t kEventFailsafe = 0x52435303U;
 constexpr std::uint32_t kEventPublishFailure = 0x52435304U;
+constexpr std::uint32_t kEventBackendLineError = 0x52435305U;
+
+constexpr std::uint32_t kRecoverableLineErrorMask =
+    dima::platform::SbusInputErrorParity |
+    dima::platform::SbusInputErrorNoise |
+    dima::platform::SbusInputErrorFraming;
+
+constexpr bool is_recoverable_line_error(
+    const dima::platform::SbusInputStats &stats) noexcept
+{
+    return stats.receive_errors != 0U && stats.overwritten_bytes == 0U &&
+           stats.recovery_failures == 0U &&
+           (stats.receive_error_flags & kRecoverableLineErrorMask) != 0U &&
+           (stats.receive_error_flags & ~kRecoverableLineErrorMask) == 0U;
+}
+
+constexpr bool should_publish_frame(bool signal_locked,
+                                    bool receiver_failsafe) noexcept
+{
+    return signal_locked || receiver_failsafe;
+}
+
+static_assert(is_recoverable_line_error({0U, 0U, 1U, 0U,
+                                         dima::platform::SbusInputErrorNoise}));
+static_assert(!is_recoverable_line_error({0U, 1U, 1U, 0U,
+                                          dima::platform::SbusInputErrorNoise}));
+static_assert(!is_recoverable_line_error({0U, 0U, 1U, 1U,
+                                          dima::platform::SbusInputErrorNoise}));
+static_assert(!is_recoverable_line_error({0U, 0U, 1U, 0U,
+                                          dima::platform::SbusInputErrorDma}));
+static_assert(!should_publish_frame(false, false));
+static_assert(should_publish_frame(true, false));
+static_assert(should_publish_frame(false, true));
 
 void count_delta(perf_counter_t counter, std::uint32_t current,
                  std::uint32_t &previous) noexcept
@@ -51,6 +84,29 @@ void report_backend_failure(
             (flags & dima::platform::SbusInputErrorTimeout) != 0U ? 1U : 0U);
     (void)dima::events::report(kEventBackendFailure,
                                dima::events::Severity::Error,
+                               arguments, 4U);
+}
+
+void report_backend_line_error(
+    std::int32_t port, const dima::platform::SbusInputStats &stats) noexcept
+{
+    const std::uint32_t arguments[4]{
+        stats.receive_errors,
+        stats.overwritten_bytes,
+        stats.recovery_failures,
+        stats.receive_error_flags,
+    };
+    const std::uint32_t flags = stats.receive_error_flags;
+    PX4_WARN("SERIAL%ld SBUS line error; DMA restarting errors=%lu "
+             "flags=0x%08lx pe=%u ne=%u fe=%u",
+             static_cast<long>(port),
+             static_cast<unsigned long>(stats.receive_errors),
+             static_cast<unsigned long>(flags),
+             (flags & dima::platform::SbusInputErrorParity) != 0U ? 1U : 0U,
+             (flags & dima::platform::SbusInputErrorNoise) != 0U ? 1U : 0U,
+             (flags & dima::platform::SbusInputErrorFraming) != 0U ? 1U : 0U);
+    (void)dima::events::report(kEventBackendLineError,
+                               dima::events::Severity::Warning,
                                arguments, 4U);
 }
 
@@ -180,35 +236,56 @@ void SbusRc::Run()
     }
     if (!backend_.service() || !backend_.running()) {
         ++stats_.service_failures;
-        const auto backend_stats = backend_.stats();
+        const auto fault_stats = backend_.stats();
         count_delta(uart_error_count_,
-                    backend_stats.receive_errors +
-                        backend_stats.overwritten_bytes,
+                    fault_stats.receive_errors +
+                        fault_stats.overwritten_bytes,
                     last_backend_faults_);
-        const bool loss_published = publish_backend_loss(
-            hrt_absolute_time());
         parser_.reset();
+        const bool was_signal_locked = signal_locked_;
         const bool restored = backend_.stop();
         backend_started_ = false;
+        signal_locked_ = false;
+        consecutive_healthy_frames_ = 0U;
         if (!restored) {
             state_ = dima::middleware::lifecycle::ModuleState::Error;
             PX4_ERR("SBUS fault rollback failed; UART not restored");
             report_backend_failure(backend_.stats());
+            if (!publish_backend_loss(hrt_absolute_time())) {
+                PX4_ERR("SBUS stopped: RC loss publication failed");
+            }
             return;
         }
-        if (signal_locked_) PX4_WARN("SBUS signal lost after UART/DMA error");
-        signal_locked_ = false;
-        consecutive_healthy_frames_ = 0U;
-        if (!backend_fault_reported_) {
-            report_backend_failure(backend_stats);
-            backend_fault_reported_ = true;
+
+        const auto stopped_stats = backend_.stats();
+        const bool recoverable_line_error =
+            is_recoverable_line_error(stopped_stats);
+        if (recoverable_line_error) {
+            /* A PE/NE/FE invalidates the current byte, not the whole RC link.
+             * HAL aborts DMA, so restart it and withhold untrusted recovery
+             * frames. RCUpdate owns COM_RC_LOSS_T from the last published
+             * valid frame and declares loss only if recovery misses it. */
+            if (!backend_line_error_reported_) {
+                report_backend_line_error(serial_config_.rc_input_port(),
+                                          stopped_stats);
+                backend_line_error_reported_ = true;
+            }
+        } else {
+            if (was_signal_locked) {
+                PX4_WARN("SBUS signal lost after UART/DMA error");
+            }
+            if (!backend_fault_reported_) {
+                report_backend_failure(stopped_stats);
+                backend_fault_reported_ = true;
+            }
+            if (!publish_backend_loss(hrt_absolute_time())) {
+                state_ = dima::middleware::lifecycle::ModuleState::Error;
+                PX4_ERR("SBUS stopped: RC loss publication failed");
+                return;
+            }
         }
-        if (!loss_published) {
-            state_ = dima::middleware::lifecycle::ModuleState::Error;
-            PX4_ERR("SBUS stopped: RC loss publication failed");
-            return;
-        }
-        schedule_retry();
+        schedule_retry(recoverable_line_error ? kLineErrorRetryDelayUs
+                                              : kRetryDelayUs);
         return;
     }
 
@@ -260,6 +337,7 @@ void SbusRc::Run()
             timestamp_last_signal_us_ = frame_arrival_us;
             /* Peripheral start is not recovery; a valid frame is. */
             backend_fault_reported_ = false;
+            backend_line_error_reported_ = false;
             bool just_locked = false;
             if (frame.failsafe) {
                 consecutive_healthy_frames_ = 0U;
@@ -282,7 +360,9 @@ void SbusRc::Run()
                     frame.channel_count);
                 signal_seen_ = true;
             }
-            publish(frame, frame_arrival_us);
+            if (should_publish_frame(signal_locked_, frame.failsafe)) {
+                publish(frame, frame_arrival_us);
+            }
         }
         const auto &parser_stats = parser_.stats();
         count_delta(invalid_frame_count_,
@@ -302,6 +382,7 @@ void SbusRc::reset_runtime_state() noexcept
     consecutive_healthy_frames_ = 0U;
     failsafe_active_ = false;
     backend_fault_reported_ = false;
+    backend_line_error_reported_ = false;
     last_invalid_frames_ = 0U;
     last_backend_faults_ = 0U;
     signal_loss_timeout_us_ = 500000U;
@@ -330,9 +411,11 @@ void SbusRc::free_perf_counters() noexcept
     lost_frame_count_ = uart_error_count_ = publish_interval_ = nullptr;
 }
 
-void SbusRc::schedule_retry() noexcept
+void SbusRc::schedule_retry(std::uint32_t delay_us) noexcept
 {
-    if (!ScheduleDelayed(kRetryDelayUs)) state_ = dima::middleware::lifecycle::ModuleState::Error;
+    if (!ScheduleDelayed(delay_us)) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+    }
 }
 
 bool SbusRc::schedule_signal_timeout() noexcept

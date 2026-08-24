@@ -38,12 +38,13 @@ public:
 
 private:
     static constexpr std::uint32_t kRetryDelayUs = 100000U;
+    static constexpr std::uint32_t kLineErrorRetryDelayUs = 1000U;
     static constexpr std::uint8_t kRequiredLockFrames = 3U;
     static constexpr std::size_t kReadBufferSize = 64U;
     void Run() override;
     static void notify_from_isr(void *context) noexcept;
     void reset_runtime_state() noexcept;
-    void schedule_retry() noexcept;
+    void schedule_retry(std::uint32_t delay_us = kRetryDelayUs) noexcept;
     bool schedule_signal_timeout() noexcept;
     void fail_scheduling(const char *reason) noexcept;
     bool publish_backend_loss(std::uint64_t now) noexcept;
@@ -68,6 +69,7 @@ private:
     std::uint8_t consecutive_healthy_frames_{0U};
     bool failsafe_active_{false};
     bool backend_fault_reported_{false};
+    bool backend_line_error_reported_{false};
     std::uint32_t last_invalid_frames_{0U};
     std::uint32_t last_backend_faults_{0U};
     perf_counter_t byte_count_{nullptr};

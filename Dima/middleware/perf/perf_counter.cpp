@@ -9,8 +9,6 @@
 namespace {
 
 constexpr std::size_t kMaxCounters = 64U;
-constexpr std::uint64_t kUnsetMinimum =
-    std::numeric_limits<std::uint64_t>::max();
 
 using CriticalSection = dima::platform::CriticalGuard;
 
@@ -25,7 +23,7 @@ struct perf_ctr_header {
     const char *name{nullptr};
     std::uint64_t event_count{0U};
     std::uint64_t total{0U};
-    std::uint64_t minimum{kUnsetMinimum};
+    std::uint64_t minimum{0U};
     std::uint64_t maximum{0U};
     std::uint64_t last{0U};
     std::uint64_t begin_time{0U};
@@ -57,8 +55,13 @@ void add_saturated(std::uint64_t &target, std::uint64_t value) noexcept
 void update_measurement(perf_ctr_header &counter, std::uint64_t value) noexcept
 {
     counter.last = value;
-    counter.minimum = (value < counter.minimum) ? value : counter.minimum;
-    counter.maximum = (value > counter.maximum) ? value : counter.maximum;
+    if (counter.event_count == 0U) {
+        counter.minimum = value;
+        counter.maximum = value;
+    } else {
+        counter.minimum = (value < counter.minimum) ? value : counter.minimum;
+        counter.maximum = (value > counter.maximum) ? value : counter.maximum;
+    }
     add_saturated(counter.total, value);
     increment_saturated(counter.event_count);
 }
@@ -81,7 +84,7 @@ void reset_values(perf_ctr_header &counter) noexcept
 {
     counter.event_count = 0U;
     counter.total = 0U;
-    counter.minimum = kUnsetMinimum;
+    counter.minimum = 0U;
     counter.maximum = 0U;
     counter.last = 0U;
     counter.begin_time = 0U;
@@ -196,8 +199,7 @@ extern "C" bool perf_get_snapshot(perf_counter_t handle,
     snapshot->name = handle->name;
     snapshot->event_count = handle->event_count;
     snapshot->total = handle->total;
-    snapshot->minimum =
-        (handle->minimum == kUnsetMinimum) ? 0U : handle->minimum;
+    snapshot->minimum = handle->minimum;
     snapshot->maximum = handle->maximum;
     snapshot->last = handle->last;
     snapshot->active = handle->begin_active;

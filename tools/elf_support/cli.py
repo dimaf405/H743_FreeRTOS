@@ -19,8 +19,10 @@ from .layout import (
 from .reader import Elf32, ElfVerificationError
 from .symbols import (
     verify_actuator_symbols,
+    verify_formatting_symbols,
     verify_forbidden_symbols,
     verify_lifecycle_symbols,
+    verify_peripheral_initialization_symbols,
 )
 
 def verify(elf_path: pathlib.Path) -> None:
@@ -30,12 +32,17 @@ def verify(elf_path: pathlib.Path) -> None:
     verify_memory_layout(elf)
     verify_lifecycle_symbols(elf)
     verify_actuator_symbols(elf)
+    verify_peripheral_initialization_symbols(elf)
+    verify_formatting_symbols(elf)
     verify_forbidden_symbols(elf)
     print("application ELF lifecycle verification passed")
     print(f"  vector: 0x{APP_VECTOR:08x}")
     print(f"  init array: {len(INIT_ARRAY_ALLOWLIST)} allowed entries")
     print(f"  DMA region: 0x{DMA_BASE:08x}, {DMA_SIZE} bytes maximum")
+    print("  runtime counter/backend/FatFs state: zero initialized")
     print("  six-channel safety-gated PWM chain: linked")
+    print("  generated peripheral initialization chain: linked")
+    print("  lightweight Application formatter: linked")
     print("  SBUS/Commander/IWDG health chain: linked")
 
 
@@ -56,4 +63,3 @@ def main(arguments: Iterable[str] | None = None) -> int:
               file=sys.stderr)
         return 1
     return 0
-

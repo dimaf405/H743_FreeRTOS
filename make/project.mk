@@ -5,6 +5,16 @@
 # the vector table away from 0x08040400.
 override LDSCRIPT := Linker/STM32H743VITx_MCUBOOT_APP.ld
 
+# Application builds default to size optimization while retaining DWARF for
+# post-build inspection.  The independently-built MCUboot image does not
+# include this overlay and keeps its existing optimization policy.
+ifeq ($(DIMA_BUILD_PROFILE),release)
+override OPT := -Os
+else
+override OPT := -Og
+endif
+override DEBUG := 1
+
 # GCC assembler listings for C sources add tens of megabytes of text I/O to a
 # clean Windows build.  Keep them opt-in for low-level inspection.
 DIMA_LISTINGS ?= 0
@@ -59,6 +69,8 @@ DIMA_COMMON_INCLUDES := \
 	$(DIMA_GENERATED_INCLUDES)
 DIMA_FATFS_INCLUDES := \
 	-IMiddlewares/Third_Party/FatFs/src
+DIMA_NANOPRINTF_INCLUDES := \
+	-IMiddlewares/Third_Party/nanoprintf
 DIMA_FREERTOS_INCLUDES := \
 	-IDima \
 	-IDima/platform/freertos \
@@ -309,6 +321,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/parameters/param.cpp \
 	Dima/middleware/parameters/param_storage.cpp \
 	Dima/middleware/parameters/autosave.cpp \
+	Dima/lib/format/Format.cpp \
 	Dima/lib/tinybson/tinybson.cpp \
 	Dima/middleware/parameters/flashparams/flashparams.cpp \
 	Dima/middleware/parameters/FileStorage.cpp \
@@ -374,6 +387,8 @@ DIMA_BOARD_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_CXX_SOURCES:.cpp=.o))
 DIMA_FATFS_FREERTOS_CXX_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_FREERTOS_CXX_SOURCES:.cpp=.o))
+DIMA_FORMAT_CXX_OBJECT := \
+	$(BUILD_DIR)/Dima/lib/format/Format.o
 DIMA_FATFS_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_FREERTOS_C_SOURCES:.c=.o)) \
 	$(DIMA_FATFS_FREERTOS_CXX_OBJECTS) \
@@ -383,8 +398,21 @@ $(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) $(PARAMETER_METADATA_STAMP) \
 	$(MAVLINK_GENERATED_STAMP) check-architecture
 override OBJECTS += $(PROJECT_OBJECTS)
 
+# Object files share one Application build directory.  Keep a single profile
+# stamp so switching release <-> debug invalidates every CubeMX and project
+# object instead of allowing a mixed-profile ELF.
+DIMA_BUILD_PROFILE_STAMP := $(BUILD_DIR)/.application-profile-$(DIMA_BUILD_PROFILE)
+DIMA_OTHER_BUILD_PROFILE := $(if $(filter release,$(DIMA_BUILD_PROFILE)),debug,release)
+DIMA_OTHER_BUILD_PROFILE_STAMP := $(BUILD_DIR)/.application-profile-$(DIMA_OTHER_BUILD_PROFILE)
+$(DIMA_BUILD_PROFILE_STAMP): | $(BUILD_DIR)
+	@rm -f "$(DIMA_OTHER_BUILD_PROFILE_STAMP)"
+	@touch "$@"
+
+$(OBJECTS): $(DIMA_BUILD_PROFILE_STAMP)
+
 $(DIMA_COMMON_OBJECTS): DIMA_PRIVATE_DEFS := $(DIMA_PRODUCT_DEFS)
 $(DIMA_COMMON_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_COMMON_INCLUDES)
+$(DIMA_FORMAT_CXX_OBJECT): DIMA_PRIVATE_INCLUDES += $(DIMA_NANOPRINTF_INCLUDES)
 $(DIMA_FREERTOS_OBJECTS): DIMA_PRIVATE_DEFS :=
 $(DIMA_FREERTOS_OBJECTS): DIMA_PRIVATE_INCLUDES := $(DIMA_FREERTOS_INCLUDES)
 $(DIMA_STM32_OBJECTS): DIMA_PRIVATE_DEFS := $(C_DEFS)

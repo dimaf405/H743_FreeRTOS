@@ -17,6 +17,7 @@ FORBIDDEN_APPLICATION_SYMBOLS = {
     "dima_boot_diagnostics_capture_pending",
     "dima_boot_diagnostics_store_enable",
     "dima_boot_diagnostics_store_pending",
+    "qsort",
 }
 FORBIDDEN_APPLICATION_FRAGMENTS = {
     "HelloWorld",
@@ -37,6 +38,66 @@ FORBIDDEN_ACTUATOR_FRAGMENTS = {
     "FunctionMotors",
     "Mixer",
     "MixingOutput",
+}
+REQUIRED_PERIPHERAL_INITIALIZATION_SYMBOLS = {
+    "MX_DMA_Init",
+    "MX_FDCAN1_Init",
+    "MX_GPIO_Init",
+    "MX_I2C2_Init",
+    "MX_SPI4_Init",
+    "MX_TIM5_Init",
+    "MX_TIM8_Init",
+    "MX_UART4_Init",
+    "MX_UART5_Init",
+    "MX_UART7_Init",
+    "MX_UART8_Init",
+    "MX_USART1_UART_Init",
+    "MX_USART2_UART_Init",
+    "MX_USART3_UART_Init",
+    "MX_USART6_UART_Init",
+}
+FORBIDDEN_FORMATTING_SYMBOLS = {
+    "__sbprintf",
+    "__dtoa",
+    "_dtoa_r",
+    "_fprintf_r",
+    "_fiprintf_r",
+    "_iprintf_r",
+    "_ldtoa_r",
+    "_printf_common",
+    "_printf_float",
+    "_printf_i",
+    "_printf_r",
+    "_siprintf_r",
+    "_sniprintf_r",
+    "_snprintf_r",
+    "_sprintf_r",
+    "_svfiprintf_r",
+    "_svfprintf_r",
+    "_vfprintf_r",
+    "_vfiprintf_r",
+    "_viprintf_r",
+    "_vprintf_r",
+    "_vsiprintf_r",
+    "_vsniprintf_r",
+    "_vsnprintf_r",
+    "_vsprintf_r",
+    "fiprintf",
+    "fprintf",
+    "iprintf",
+    "printf",
+    "siprintf",
+    "sniprintf",
+    "snprintf",
+    "sprintf",
+    "vfprintf",
+    "vfiprintf",
+    "viprintf",
+    "vprintf",
+    "vsiprintf",
+    "vsniprintf",
+    "vsnprintf",
+    "vsprintf",
 }
 
 def symbol_section(elf: Elf32, symbol: Symbol) -> Section:
@@ -148,6 +209,34 @@ def verify_actuator_symbols(elf: Elf32) -> None:
     )
 
 
+def verify_peripheral_initialization_symbols(elf: Elf32) -> None:
+    for name in sorted(REQUIRED_PERIPHERAL_INITIALIZATION_SYMBOLS):
+        symbol = elf.symbol(name)
+        if symbol.symbol_type != STT_FUNC:
+            raise ElfVerificationError(
+                f"required peripheral initializer '{name}' is not a function"
+            )
+
+
+def verify_formatting_symbols(elf: Elf32) -> None:
+    formatter = elf.symbol("npf_vsnprintf")
+    if formatter.symbol_type != STT_FUNC:
+        raise ElfVerificationError("npf_vsnprintf is not a function")
+    require_symbol_match(
+        elf, "dima::format::vformat_to()",
+        lambda symbol: "6format10vformat_toE" in symbol.name and
+        symbol.symbol_type == STT_FUNC,
+    )
+    present = sorted({
+        symbol.name for symbol in elf.symbols
+        if symbol.defined and symbol.name in FORBIDDEN_FORMATTING_SYMBOLS
+    })
+    if present:
+        raise ElfVerificationError(
+            f"full newlib formatting symbols are linked: {present}"
+        )
+
+
 def verify_forbidden_symbols(elf: Elf32) -> None:
     present_names = sorted({
         symbol.name for symbol in elf.symbols
@@ -168,4 +257,3 @@ def verify_forbidden_symbols(elf: Elf32) -> None:
             "forbidden Application symbols are linked: "
             f"names={present_names}, fragments={present_fragments}"
         )
-

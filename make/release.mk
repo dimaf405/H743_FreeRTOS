@@ -83,6 +83,7 @@ intellisense: $(COMPILE_COMMANDS_TOOL)
 		$(PYTHON) $(COMPILE_COMMANDS_TOOL) \
 		--output "$(COMPILE_COMMANDS_OUTPUT)" \
 		$(if $(strip $(GCC_PATH)),--gcc-path "$(GCC_PATH)",) \
+		--make-variable "DIMA_BUILD_PROFILE=$(DIMA_BUILD_PROFILE)" \
 		--make-variable "DEBUG=$(DEBUG)"
 
 firmware: mavlink check-architecture \

@@ -18,6 +18,14 @@ $(error DIMA_DEFAULT_JOBS must be a positive job count)
 endif
 
 DIMA_BUILD_INTERNAL ?= 0
+DIMA_BUILD_PROFILE ?= release
+DIMA_VALID_BUILD_PROFILES := release debug
+ifneq ($(words $(DIMA_BUILD_PROFILE)),1)
+$(error DIMA_BUILD_PROFILE must be release or debug)
+endif
+ifeq ($(filter $(DIMA_BUILD_PROFILE),$(DIMA_VALID_BUILD_PROFILES)),)
+$(error DIMA_BUILD_PROFILE must be release or debug)
+endif
 
 ifeq ($(DIMA_BUILD_INTERNAL),1)
 
@@ -52,6 +60,7 @@ ifneq ($(DIMA_DRY_RUN),)
 __dima_dispatch:
 	+@$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -f GNUmakefile \
 		DIMA_BUILD_INTERNAL=1 \
+		DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
 		DIMA_PROGRESS_STATE=/tmp/dima-progress-dry-run-not-used \
 		$(DIMA_REQUESTED_GOALS)
 
@@ -80,6 +89,7 @@ __dima_dispatch:
 		if test -n "$(DIMA_STABILIZE_GENERATED_GOALS)"; then \
 			$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -s -f GNUmakefile \
 				DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE= \
+				DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
 				GCC_PATH="$$toolchain_path" \
 				__dima_prepare_generated; \
 		fi; \
@@ -87,6 +97,7 @@ __dima_dispatch:
 		state="$$progress_dir/state.json"; \
 		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -f GNUmakefile -n $(DIMA_OUTPUT_SYNC_FLAG) \
 			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE="$$state" \
+			DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
 			GCC_PATH="$$toolchain_path" \
 			$(DIMA_REQUESTED_GOALS) >"$$plan"; \
 		$(PYTHON) tools/build_progress.py prepare \
@@ -94,6 +105,7 @@ __dima_dispatch:
 			--goals "$(DIMA_REQUESTED_GOALS)" $(DIMA_NO_COLOR_FLAG); \
 		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -f GNUmakefile \
 			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE="$$state" \
+			DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
 			GCC_PATH="$$toolchain_path" \
 			$(DIMA_REQUESTED_GOALS); \
 		$(PYTHON) tools/build_progress.py finish \
@@ -101,6 +113,7 @@ __dima_dispatch:
 		if test -n "$(strip $(DIMA_SUMMARY_GOALS))"; then \
 			$(MAKE) --no-print-directory -s -f GNUmakefile \
 				DIMA_BUILD_INTERNAL=1 \
+				DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
 				GCC_PATH="$$toolchain_path" \
 				DIMA_SUMMARY_GOALS="$(DIMA_REQUESTED_GOALS)" \
 				__dima_summary; \

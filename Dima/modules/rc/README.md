@@ -35,9 +35,9 @@ UART/DMA ISR 只复制字节、记录 TIM2 HRT 到达时间并唤醒 `wq:io`。�
 
 ## 输入稳定与动作边界
 
-SBUS 属于无强 CRC 的弱协议，冷启动、Failsafe 清除、UART/DMA 恢复或重新扫描后必须连续收到 3 个健康帧才建立协议锁定。锁定前仍发布校准前通道供 QGC 观察，但 `input_rc.rc_lost=true`，不能进入控制链；`frame-lost` 只累计跳帧，不单独判定整条链路失联。
+SBUS 属于无强 CRC 的弱协议，冷启动、Failsafe 清除、UART/DMA 恢复或重新扫描后必须连续收到 3 个健康帧才建立协议锁定。锁定前的健康帧只用于重新同步，不发布为 `input_rc`；接收机显式 Failsafe 帧仍立即以 lost 发布。`frame-lost` 只累计跳帧，不单独判定整条链路失联。
 
-协议锁定后，`RCUpdate` 还要求采样时间连续健康 100 ms 才把 `rc_channels.signal_lost` 清零。任何接收机 Failsafe、UART/DMA 故障、显式 lost 或 `COM_RC_LOSS_T` 无新帧超时都会清除恢复窗口。
+协议锁定后，`RCUpdate` 还要求采样时间连续健康 100 ms 才把 `rc_channels.signal_lost` 清零。单次 UART PE/NE/FE 只丢弃可疑字节并重启 DMA，不立即发布 `rc_lost`；若从最后一份已发布健康帧起超过 `COM_RC_LOSS_T` 仍未恢复，`RCUpdate` 才判定 RC 丢失。接收机显式 Failsafe，以及 Ring 溢出、DMA/RTO/未知错误、重启或回滚失败等本机硬故障仍立即进入 lost/Error，不受 RC 断连延时掩盖。
 
 Arm/Kill 离散状态必须至少两份严格前进且一致的样本，并保持 200 ms 才能进入边沿转换。Runtime 启动、RC 恢复以及映射/阈值变化后的首个稳定状态只建立基线；Arm 仅由稳定 OFF→ON 触发，Disarm 仅由稳定 ON→OFF 触发。
 

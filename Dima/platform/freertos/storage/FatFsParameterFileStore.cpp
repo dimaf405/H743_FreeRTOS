@@ -60,17 +60,49 @@ bool media_failure(FRESULT result) noexcept
            result == FR_INVALID_OBJECT;
 }
 
+constexpr std::size_t kChunkBytes = 512U;
+
+enum class Operation : std::uint8_t {
+    Idle = 0U,
+    WriteData,
+    SyncWrite,
+    CloseWrite,
+    VerifyData,
+    CloseVerify,
+};
+
+static_assert(static_cast<std::uint8_t>(Operation::Idle) == 0U,
+              "FatFs idle operation must remain zero-initializable");
+
+struct FatFsParameterFileStoreState {
+    FATFS filesystem{};
+    FIL file{};
+    const std::uint8_t *operation_data{nullptr};
+    std::size_t operation_size{0U};
+    std::size_t operation_offset{0U};
+    Operation operation{Operation::Idle};
+    bool mounted{false};
+};
+
+FatFsParameterFileStoreState g_file_store_state{};
+
 class FatFsParameterFileStore final : public ParameterFileStore {
 public:
+    explicit FatFsParameterFileStore(
+        FatFsParameterFileStoreState &state) noexcept
+        : state_(state)
+    {
+    }
+
     int initialize() noexcept override
     {
-        if (mounted_ && disk_status(0) == 0U) {
+        if (state_.mounted && disk_status(0) == 0U) {
             return 0;
         }
 
         invalidate_mount();
 
-        FRESULT result = f_mount(&filesystem_, kVolumePath, 1);
+        FRESULT result = f_mount(&state_.filesystem, kVolumePath, 1);
         if (result != FR_OK) {
             invalidate_mount();
             return fatfs_error(result);
@@ -86,7 +118,7 @@ public:
             return fatfs_error(result);
         }
 
-        mounted_ = true;
+        state_.mounted = true;
         return 0;
     }
 
@@ -94,67 +126,70 @@ public:
                     std::size_t size) noexcept override
     {
         const char *path = file_path(file);
-        if (!mounted_) {
+        if (!state_.mounted) {
             return -ENODEV;
         }
         if (path == nullptr || data == nullptr || size == 0U) {
             return -EINVAL;
         }
-        if (operation_ != Operation::Idle) {
+        if (state_.operation != Operation::Idle) {
             return -EBUSY;
         }
 
         const FRESULT result =
-            f_open(&file_, path, FA_WRITE | FA_CREATE_ALWAYS);
+            f_open(&state_.file, path, FA_WRITE | FA_CREATE_ALWAYS);
         if (result != FR_OK) {
             return handle(result);
         }
 
-        operation_data_ = data;
-        operation_size_ = size;
-        operation_offset_ = 0U;
-        operation_ = Operation::WriteData;
+        state_.operation_data = data;
+        state_.operation_size = size;
+        state_.operation_offset = 0U;
+        state_.operation = Operation::WriteData;
         return 0;
     }
 
     int continue_write() noexcept override
     {
-        if (operation_ != Operation::WriteData &&
-            operation_ != Operation::SyncWrite &&
-            operation_ != Operation::CloseWrite) {
+        if (state_.operation != Operation::WriteData &&
+            state_.operation != Operation::SyncWrite &&
+            state_.operation != Operation::CloseWrite) {
             return -EINVAL;
         }
 
-        if (operation_ == Operation::WriteData) {
+        if (state_.operation == Operation::WriteData) {
             const UINT chunk = static_cast<UINT>(
-                std::min(kChunkBytes, operation_size_ - operation_offset_));
+                std::min(kChunkBytes,
+                         state_.operation_size - state_.operation_offset));
             UINT written{};
             const FRESULT result = f_write(
-                &file_, operation_data_ + operation_offset_, chunk, &written);
+                &state_.file,
+                state_.operation_data + state_.operation_offset,
+                chunk, &written);
             if (result != FR_OK || written != chunk) {
-                (void)f_close(&file_);
+                (void)f_close(&state_.file);
                 reset_operation();
                 return result == FR_OK ? -ENOSPC : handle(result);
             }
-            operation_offset_ += written;
-            if (operation_offset_ == operation_size_) {
-                operation_ = Operation::SyncWrite;
+            state_.operation_offset += written;
+            if (state_.operation_offset == state_.operation_size) {
+                state_.operation = Operation::SyncWrite;
             }
             return -EAGAIN;
         }
 
-        if (operation_ == Operation::SyncWrite) {
-            const FRESULT result = f_sync(&file_);
+        if (state_.operation == Operation::SyncWrite) {
+            const FRESULT result = f_sync(&state_.file);
             if (result != FR_OK) {
-                (void)f_close(&file_);
+                (void)f_close(&state_.file);
                 reset_operation();
                 return handle(result);
             }
-            operation_ = Operation::CloseWrite;
+            state_.operation = Operation::CloseWrite;
             return -EAGAIN;
         }
 
-        const FRESULT result = f_close(&file_);
+        const FRESULT result = f_close(&state_.file);
         reset_operation();
         if (result != FR_OK) {
             return handle(result);
@@ -168,31 +203,32 @@ public:
     {
         const char *path = file_path(file);
         output_size = 0U;
-        if (!mounted_) {
+        if (!state_.mounted) {
             return -ENODEV;
         }
         if (path == nullptr || destination == nullptr || capacity == 0U) {
             return -EINVAL;
         }
-        if (operation_ != Operation::Idle) {
+        if (state_.operation != Operation::Idle) {
             return -EBUSY;
         }
 
-        FRESULT result = f_open(&file_, path, FA_READ | FA_OPEN_EXISTING);
+        FRESULT result =
+            f_open(&state_.file, path, FA_READ | FA_OPEN_EXISTING);
         if (result != FR_OK) {
             return handle(result);
         }
 
-        const FSIZE_t file_size = f_size(&file_);
+        const FSIZE_t file_size = f_size(&state_.file);
         if (file_size == 0U || file_size > capacity) {
-            (void)f_close(&file_);
+            (void)f_close(&state_.file);
             return file_size == 0U ? -ENOENT : -EFBIG;
         }
 
         UINT read_size{};
-        result = f_read(&file_, destination, static_cast<UINT>(file_size),
-                        &read_size);
-        (void)f_close(&file_);
+        result = f_read(&state_.file, destination,
+                        static_cast<UINT>(file_size), &read_size);
+        (void)f_close(&state_.file);
         if (result != FR_OK) {
             return handle(result);
         }
@@ -207,71 +243,72 @@ public:
                      std::size_t size) noexcept override
     {
         const char *path = file_path(file);
-        if (!mounted_) {
+        if (!state_.mounted) {
             return -ENODEV;
         }
         if (path == nullptr || expected == nullptr || size == 0U) {
             return -EINVAL;
         }
-        if (operation_ != Operation::Idle) {
+        if (state_.operation != Operation::Idle) {
             return -EBUSY;
         }
 
         const FRESULT result =
-            f_open(&file_, path, FA_READ | FA_OPEN_EXISTING);
+            f_open(&state_.file, path, FA_READ | FA_OPEN_EXISTING);
         if (result != FR_OK) {
             return handle(result);
         }
-        if (f_size(&file_) != static_cast<FSIZE_t>(size)) {
-            (void)f_close(&file_);
+        if (f_size(&state_.file) != static_cast<FSIZE_t>(size)) {
+            (void)f_close(&state_.file);
             return -EIO;
         }
 
-        operation_data_ = expected;
-        operation_size_ = size;
-        operation_offset_ = 0U;
-        operation_ = Operation::VerifyData;
+        state_.operation_data = expected;
+        state_.operation_size = size;
+        state_.operation_offset = 0U;
+        state_.operation = Operation::VerifyData;
         return 0;
     }
 
     int continue_verify() noexcept override
     {
-        if (operation_ != Operation::VerifyData &&
-            operation_ != Operation::CloseVerify) {
+        if (state_.operation != Operation::VerifyData &&
+            state_.operation != Operation::CloseVerify) {
             return -EINVAL;
         }
 
-        if (operation_ == Operation::VerifyData) {
+        if (state_.operation == Operation::VerifyData) {
             std::uint8_t buffer[kChunkBytes]{};
             const UINT chunk = static_cast<UINT>(
                 std::min(sizeof(buffer),
-                         operation_size_ - operation_offset_));
+                         state_.operation_size - state_.operation_offset));
             UINT read_size{};
             const FRESULT result =
-                f_read(&file_, buffer, chunk, &read_size);
+                f_read(&state_.file, buffer, chunk, &read_size);
             if (result != FR_OK || read_size != chunk ||
-                std::memcmp(buffer, operation_data_ + operation_offset_,
+                std::memcmp(buffer,
+                            state_.operation_data + state_.operation_offset,
                             chunk) != 0) {
-                (void)f_close(&file_);
+                (void)f_close(&state_.file);
                 reset_operation();
                 return result == FR_OK ? -EIO : handle(result);
             }
-            operation_offset_ += read_size;
-            if (operation_offset_ == operation_size_) {
-                operation_ = Operation::CloseVerify;
+            state_.operation_offset += read_size;
+            if (state_.operation_offset == state_.operation_size) {
+                state_.operation = Operation::CloseVerify;
             }
             return -EAGAIN;
         }
 
-        const FRESULT result = f_close(&file_);
+        const FRESULT result = f_close(&state_.file);
         reset_operation();
         return result == FR_OK ? 0 : handle(result);
     }
 
     void cancel_operation() noexcept override
     {
-        if (operation_ != Operation::Idle) {
-            (void)f_close(&file_);
+        if (state_.operation != Operation::Idle) {
+            (void)f_close(&state_.file);
             reset_operation();
         }
     }
@@ -280,10 +317,10 @@ public:
     {
         const char *source = file_path(from);
         const char *destination = file_path(to);
-        if (!mounted_) {
+        if (!state_.mounted) {
             return -ENODEV;
         }
-        if (operation_ != Operation::Idle) {
+        if (state_.operation != Operation::Idle) {
             return -EBUSY;
         }
         if (source == nullptr || destination == nullptr || from == to) {
@@ -295,43 +332,32 @@ public:
     int erase(ParameterFile file) noexcept override
     {
         const char *path = file_path(file);
-        if (!mounted_) {
+        if (!state_.mounted) {
             return -ENODEV;
         }
-        if (operation_ != Operation::Idle) {
+        if (state_.operation != Operation::Idle) {
             return -EBUSY;
         }
         return path == nullptr ? -EINVAL : handle(f_unlink(path));
     }
 
 private:
-    static constexpr std::size_t kChunkBytes = 512U;
-
-    enum class Operation : std::uint8_t {
-        Idle,
-        WriteData,
-        SyncWrite,
-        CloseWrite,
-        VerifyData,
-        CloseVerify,
-    };
-
     void reset_operation() noexcept
     {
-        operation_data_ = nullptr;
-        operation_size_ = 0U;
-        operation_offset_ = 0U;
-        operation_ = Operation::Idle;
+        state_.operation_data = nullptr;
+        state_.operation_size = 0U;
+        state_.operation_offset = 0U;
+        state_.operation = Operation::Idle;
     }
 
     void invalidate_mount() noexcept
     {
-        if (operation_ != Operation::Idle) {
-            (void)f_close(&file_);
+        if (state_.operation != Operation::Idle) {
+            (void)f_close(&state_.file);
             reset_operation();
         }
         (void)f_mount(nullptr, kVolumePath, 0);
-        mounted_ = false;
+        state_.mounted = false;
     }
 
     int handle(FRESULT result) noexcept
@@ -342,20 +368,14 @@ private:
         return fatfs_error(result);
     }
 
-    FATFS filesystem_{};
-    FIL file_{};
-    const std::uint8_t *operation_data_{nullptr};
-    std::size_t operation_size_{0U};
-    std::size_t operation_offset_{0U};
-    Operation operation_{Operation::Idle};
-    bool mounted_{false};
+    FatFsParameterFileStoreState &state_;
 };
 
 } // namespace
 
 ParameterFileStore &parameter_file_store() noexcept
 {
-    static FatFsParameterFileStore instance;
+    static FatFsParameterFileStore instance{g_file_store_state};
     return instance;
 }
 

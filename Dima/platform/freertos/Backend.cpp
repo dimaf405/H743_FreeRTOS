@@ -39,6 +39,41 @@ bool pointer_in_range(std::uintptr_t pointer, std::uintptr_t begin,
            ((pointer - begin) % stride) == 0U;
 }
 
+struct MutexSlot {
+    StaticSemaphore_t storage{};
+    SemaphoreHandle_t native{nullptr};
+    bool recursive{false};
+    bool in_use{false};
+};
+
+struct SignalSlot {
+    StaticSemaphore_t storage{};
+    SemaphoreHandle_t native{nullptr};
+    bool in_use{false};
+};
+
+struct TaskSlot {
+    StaticTask_t storage{};
+    TaskHandle_t native{nullptr};
+    std::size_t first_block{0U};
+    std::size_t block_count{0U};
+    bool realtime{false};
+    bool in_use{false};
+};
+
+struct BackendState {
+    MutexSlot mutex_slots[kMutexCount]{};
+    SignalSlot signal_slots[kSignalCount]{};
+    TaskSlot task_slots[kTaskCount]{};
+    std::uint32_t task_stack_bitmap[kTaskBitmapWords]{};
+    std::atomic<std::uint32_t> allocation_failures{0U};
+    MutexHandle flash_mutex{};
+    bool heap_initialized{false};
+    bool initialized{false};
+};
+
+BackendState g_backend_state{};
+
 class Backend final : public ExecutionContext,
                       public CriticalSection,
                       public Synchronization,
@@ -46,17 +81,19 @@ class Backend final : public ExecutionContext,
                       public Heap,
                       public FlashTransactionManager {
 public:
+    explicit Backend(BackendState &state) noexcept : state_(state) {}
+
     bool initialize_backend() noexcept
     {
-        if (initialized_) {
+        if (state_.initialized) {
             return true;
         }
         if (!initialize()) {
             return false;
         }
-        flash_mutex_ = create_mutex(MutexKind::Recursive);
-        initialized_ = static_cast<bool>(flash_mutex_);
-        return initialized_;
+        state_.flash_mutex = create_mutex(MutexKind::Recursive);
+        state_.initialized = static_cast<bool>(state_.flash_mutex);
+        return state_.initialized;
     }
 
     bool in_interrupt() const noexcept override
@@ -81,7 +118,7 @@ public:
         auto &mutable_backend = const_cast<Backend &>(*this);
         const CriticalToken token = mutable_backend.enter();
         bool realtime = false;
-        for (const auto &slot : task_slots_) {
+        for (const auto &slot : state_.task_slots) {
             if (slot.in_use && slot.realtime && slot.native == current_task) {
                 realtime = true;
                 break;
@@ -119,7 +156,7 @@ public:
             return {};
         }
         CriticalToken token = enter();
-        for (auto &slot : mutex_slots_) {
+        for (auto &slot : state_.mutex_slots) {
             if (slot.in_use) {
                 continue;
             }
@@ -199,7 +236,7 @@ public:
             return {};
         }
         CriticalToken token = enter();
-        for (auto &slot : signal_slots_) {
+        for (auto &slot : state_.signal_slots) {
             if (slot.in_use) {
                 continue;
             }
@@ -290,7 +327,7 @@ public:
 
         CriticalToken token = enter();
         TaskSlot *slot = nullptr;
-        for (auto &candidate : task_slots_) {
+        for (auto &candidate : state_.task_slots) {
             if (!candidate.in_use) {
                 slot = &candidate;
                 break;
@@ -364,7 +401,7 @@ public:
         auto &mutable_backend = const_cast<Backend &>(*this);
         const CriticalToken token = mutable_backend.enter();
         TaskHandle handle{};
-        for (const auto &slot : task_slots_) {
+        for (const auto &slot : state_.task_slots) {
             if (slot.in_use && slot.native == current_task) {
                 handle = TaskHandle{
                     reinterpret_cast<std::uintptr_t>(&slot)};
@@ -392,7 +429,7 @@ public:
 
     bool initialize() noexcept override
     {
-        if (heap_initialized_) {
+        if (state_.heap_initialized) {
             return true;
         }
         auto *const begin = &__dima_heap_start__;
@@ -406,14 +443,14 @@ public:
             {nullptr, 0U},
         };
         vPortDefineHeapRegions(regions);
-        heap_initialized_ = true;
+        state_.heap_initialized = true;
         return true;
     }
 
     void *allocate(std::size_t size,
                    AllocationDomain domain) noexcept override
     {
-        if (!heap_initialized_ || size == 0U ||
+        if (!state_.heap_initialized || size == 0U ||
             domain == AllocationDomain::RealtimeForbidden ||
             in_realtime_task()) {
             record_failure();
@@ -436,7 +473,7 @@ public:
     HeapStats stats() const noexcept override
     {
         HeapStats_t native{};
-        if (heap_initialized_) {
+        if (state_.heap_initialized) {
             vPortGetHeapStats(&native);
         }
         return HeapStats{
@@ -444,7 +481,7 @@ public:
             native.xAvailableHeapSpaceInBytes,
             native.xMinimumEverFreeBytesRemaining,
             native.xSizeOfLargestFreeBlockInBytes,
-            allocation_failures_.load(std::memory_order_relaxed),
+            state_.allocation_failures.load(std::memory_order_relaxed),
         };
     }
 
@@ -455,50 +492,29 @@ public:
 
     void record_failure() noexcept override
     {
-        allocation_failures_.fetch_add(1U, std::memory_order_relaxed);
+        state_.allocation_failures.fetch_add(1U, std::memory_order_relaxed);
     }
 
     bool acquire(Timeout timeout) noexcept override
     {
-        return flash_mutex_ && lock(flash_mutex_, timeout);
+        return state_.flash_mutex && lock(state_.flash_mutex, timeout);
     }
 
     void release() noexcept override
     {
-        if (flash_mutex_) {
-            unlock(flash_mutex_);
+        if (state_.flash_mutex) {
+            unlock(state_.flash_mutex);
         }
     }
 
 private:
-    struct MutexSlot {
-        StaticSemaphore_t storage{};
-        SemaphoreHandle_t native{nullptr};
-        bool recursive{false};
-        bool in_use{false};
-    };
-
-    struct SignalSlot {
-        StaticSemaphore_t storage{};
-        SemaphoreHandle_t native{nullptr};
-        bool in_use{false};
-    };
-
-    struct TaskSlot {
-        StaticTask_t storage{};
-        TaskHandle_t native{nullptr};
-        std::size_t first_block{0U};
-        std::size_t block_count{0U};
-        bool realtime{false};
-        bool in_use{false};
-    };
-
     MutexSlot *mutex_slot(MutexHandle handle) noexcept
     {
         const std::uintptr_t begin =
-            reinterpret_cast<std::uintptr_t>(&mutex_slots_[0]);
+            reinterpret_cast<std::uintptr_t>(&state_.mutex_slots[0]);
         const std::uintptr_t end =
-            reinterpret_cast<std::uintptr_t>(&mutex_slots_[kMutexCount]);
+            reinterpret_cast<std::uintptr_t>(
+                &state_.mutex_slots[kMutexCount]);
         return pointer_in_range(handle.value, begin, end, sizeof(MutexSlot))
                    ? reinterpret_cast<MutexSlot *>(handle.value)
                    : nullptr;
@@ -507,9 +523,10 @@ private:
     SignalSlot *signal_slot(SignalHandle handle) noexcept
     {
         const std::uintptr_t begin =
-            reinterpret_cast<std::uintptr_t>(&signal_slots_[0]);
+            reinterpret_cast<std::uintptr_t>(&state_.signal_slots[0]);
         const std::uintptr_t end =
-            reinterpret_cast<std::uintptr_t>(&signal_slots_[kSignalCount]);
+            reinterpret_cast<std::uintptr_t>(
+                &state_.signal_slots[kSignalCount]);
         return pointer_in_range(handle.value, begin, end, sizeof(SignalSlot))
                    ? reinterpret_cast<SignalSlot *>(handle.value)
                    : nullptr;
@@ -518,9 +535,9 @@ private:
     TaskSlot *task_slot(TaskHandle handle) noexcept
     {
         const std::uintptr_t begin =
-            reinterpret_cast<std::uintptr_t>(&task_slots_[0]);
+            reinterpret_cast<std::uintptr_t>(&state_.task_slots[0]);
         const std::uintptr_t end =
-            reinterpret_cast<std::uintptr_t>(&task_slots_[kTaskCount]);
+            reinterpret_cast<std::uintptr_t>(&state_.task_slots[kTaskCount]);
         return pointer_in_range(handle.value, begin, end, sizeof(TaskSlot))
                    ? reinterpret_cast<TaskSlot *>(handle.value)
                    : nullptr;
@@ -528,7 +545,7 @@ private:
 
     bool block_used(std::size_t block) const noexcept
     {
-        return (task_stack_bitmap_[block / 32U] &
+        return (state_.task_stack_bitmap[block / 32U] &
                 (1UL << (block % 32U))) != 0U;
     }
 
@@ -550,9 +567,9 @@ private:
         for (std::size_t block = first; block < first + count; ++block) {
             const std::uint32_t mask = 1UL << (block % 32U);
             if (used) {
-                task_stack_bitmap_[block / 32U] |= mask;
+                state_.task_stack_bitmap[block / 32U] |= mask;
             } else {
-                task_stack_bitmap_[block / 32U] &= ~mask;
+                state_.task_stack_bitmap[block / 32U] &= ~mask;
             }
         }
     }
@@ -568,19 +585,12 @@ private:
         std::memset(&slot.storage, 0, sizeof(slot.storage));
     }
 
-    MutexSlot mutex_slots_[kMutexCount]{};
-    SignalSlot signal_slots_[kSignalCount]{};
-    TaskSlot task_slots_[kTaskCount]{};
-    std::uint32_t task_stack_bitmap_[kTaskBitmapWords]{};
-    std::atomic<std::uint32_t> allocation_failures_{0U};
-    MutexHandle flash_mutex_{};
-    bool heap_initialized_{false};
-    bool initialized_{false};
+    BackendState &state_;
 };
 
 Backend &backend() noexcept
 {
-    static Backend instance;
+    static Backend instance{g_backend_state};
     return instance;
 }
 

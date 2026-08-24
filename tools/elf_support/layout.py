@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 
 from .reader import (
+    SHT_NOBITS,
     STB_GLOBAL,
     STB_WEAK,
     STT_FUNC,
@@ -30,6 +31,11 @@ D3_DIAGNOSTICS_SIZE = 512
 PLATFORM_HEAP_SIZE = 256 * 1024
 TASK_POOL_BASE = RAM_D1_BASE + PLATFORM_HEAP_SIZE
 TASK_POOL_MAX_SIZE = 48 * 1024
+ZERO_INITIALIZED_STATE_SIZES = {
+    "g_counters": 64 * 72,
+    "g_backend_state": 4228,
+    "g_file_store_state": 1128,
+}
 
 # MAVLink module added 4 entries: orb_mavlink_log, orb_vehicle_command,
 # orb_vehicle_command_ack, and LogService::mavlink_log_publication_.
@@ -232,3 +238,16 @@ def verify_memory_layout(elf: Elf32) -> None:
     dma_buffer_section = symbol_section(elf, dma_buffer)
     if dma_buffer_section.index != dma.index:
         raise ElfVerificationError("g_dma_buffer is not in .dima_dma")
+
+    for fragment, expected_size in ZERO_INITIALIZED_STATE_SIZES.items():
+        state = unique_fragment_symbol(elf, fragment)
+        state_section = symbol_section(elf, state)
+        if state.symbol_type != STT_OBJECT or state.size != expected_size:
+            raise ElfVerificationError(
+                f"{fragment} must remain a {expected_size}-byte object"
+            )
+        if (state_section.name != ".bss" or
+                state_section.section_type != SHT_NOBITS):
+            raise ElfVerificationError(
+                f"{fragment} is not in zero-initialized .bss"
+            )

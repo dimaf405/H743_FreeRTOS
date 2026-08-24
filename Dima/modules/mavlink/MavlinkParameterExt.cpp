@@ -1,7 +1,8 @@
 #define MODULE_NAME "mavlink"
 #include "MavlinkParameters.hpp"
 
-#include <cstdio>
+#include "lib/format/Format.hpp"
+
 #include <cstring>
 
 namespace dima::modules::mavlink {
@@ -53,16 +54,16 @@ void MavlinkParameters::handle_param_ext_request_read(
         if (param_get(param, &value) != 0) {
             return;
         }
-        std::snprintf(value_str, sizeof(value_str), "%d",
-                      static_cast<int>(value));
+        (void)::dima::format::format_to(value_str, sizeof(value_str), "%d",
+                                        static_cast<int>(value));
         ext_type = kMavParamExtTypeInt32;
     } else {
         float value;
         if (param_get(param, &value) != 0) {
             return;
         }
-        std::snprintf(value_str, sizeof(value_str), "%.9g",
-                      static_cast<double>(value));
+        (void)::dima::format::format_to(value_str, sizeof(value_str), "%.9g",
+                                        static_cast<double>(value));
         ext_type = kMavParamExtTypeFloat;
     }
 

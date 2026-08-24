@@ -1,10 +1,10 @@
 #include "logging.hpp"
 
+#include "lib/format/Format.hpp"
 #include "platform/api/Execution.hpp"
 
 #include <algorithm>
 #include <cstdarg>
-#include <cstdio>
 #include <limits>
 
 extern "C" {
@@ -76,7 +76,7 @@ WriteResult write_v(Source source, Level level, const char *module_name, bool ra
     }
 
     char buffer[kFormatBufferSize]{};
-    const int body_result = std::vsnprintf(
+    const int body_result = ::dima::format::vformat_to(
         buffer, sizeof(buffer), format, arguments);
     if (body_result < 0) {
         return WriteResult::InvalidArgument;
