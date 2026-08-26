@@ -3,13 +3,15 @@
 #include <cstdint>
 #include <limits>
 
-#include "platform/api/Execution.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Execution.hpp"
+#include "api/Time.hpp"
 
 namespace {
 
 constexpr std::size_t kMaxCounters = 64U;
 
+/* perf 使用固定 64 槽池，不动态分配；PC_ELAPSED/PC_INTERVAL 的测量单位均为
+ * hrt_absolute_time 的微秒，PC_COUNT 的 last 等于累计次数。 */
 using CriticalSection = dima::platform::CriticalGuard;
 
 void update_measurement(struct perf_ctr_header &counter,
@@ -45,6 +47,7 @@ void increment_saturated(std::uint64_t &value) noexcept
 
 void add_saturated(std::uint64_t &target, std::uint64_t value) noexcept
 {
+    /* total/event_count 饱和到 UINT64_MAX，不允许溢出后破坏均值或健康监控。 */
     if (value > (std::numeric_limits<std::uint64_t>::max() - target)) {
         target = std::numeric_limits<std::uint64_t>::max();
     } else {
@@ -54,6 +57,8 @@ void add_saturated(std::uint64_t &target, std::uint64_t value) noexcept
 
 void update_measurement(perf_ctr_header &counter, std::uint64_t value) noexcept
 {
+    /* 第一笔样本同时初始化 min/max；后续维护 last/min/max/total/count。平均值由
+     * 读取方使用 total/event_count 计算，本层避免浮点和除法。 */
     counter.last = value;
     if (counter.event_count == 0U) {
         counter.minimum = value;
@@ -75,6 +80,7 @@ bool valid_handle(perf_counter_t handle) noexcept
     const auto address = reinterpret_cast<std::uintptr_t>(handle);
     const auto begin = reinterpret_cast<std::uintptr_t>(&g_counters[0]);
     const auto end = reinterpret_cast<std::uintptr_t>(&g_counters[kMaxCounters]);
+    /* handle 必须恰好指向池中某槽首地址且仍 allocated，拒绝野指针和槽内偏移。 */
     const bool in_pool = (address >= begin) && (address < end);
     const bool aligned = in_pool && (((address - begin) % sizeof(perf_ctr_header)) == 0U);
     return aligned && handle->allocated;
@@ -143,6 +149,7 @@ extern "C" void perf_end(perf_counter_t handle)
         return;
     }
 
+    /* 单调 64-bit 微秒自然相减；只有成对 begin_active 才产生一笔样本。 */
     const std::uint64_t elapsed = now - handle->begin_time;
     handle->begin_active = false;
     update_measurement(*handle, elapsed);
@@ -163,6 +170,7 @@ extern "C" void perf_count(perf_counter_t handle)
     }
 
     if (handle->type == PC_INTERVAL) {
+        /* 第一次事件只建立 previous 时间，不计 0 间隔；第二次起记录相邻事件差。 */
         if (handle->previous_event_time != 0U) {
             update_measurement(*handle, now - handle->previous_event_time);
         }

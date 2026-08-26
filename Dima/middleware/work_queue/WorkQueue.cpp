@@ -1,9 +1,9 @@
 #include "WorkQueue.hpp"
 
-#include "platform/api/Execution.hpp"
-#include "platform/api/Services.hpp"
-#include "platform/api/Synchronization.hpp"
-#include "platform/api/TaskRuntime.hpp"
+#include "api/Execution.hpp"
+#include "api/Services.hpp"
+#include "api/Synchronization.hpp"
+#include "api/TaskRuntime.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -42,6 +42,10 @@ enum class ManagerState : std::uint8_t {
 
 ManagerState g_state{ManagerState::Stopped};
 dima::platform::TaskHandle g_owner_task{};
+
+/* 管理器只能由 owner 任务执行 init/shutdown：
+ * Stopped -> Starting -> Running -> Stopping -> Stopped。
+ * 这样部分创建失败可由同一调用栈按逆序回收，不与 worker 自销毁交错。 */
 
 bool in_isr() noexcept
 {
@@ -117,6 +121,8 @@ bool WorkQueueManager::schedule(WorkItem &item, hrt_abstime deadline,
         return false;
     }
 
+    /* revision 标识本次调度所有权；Run 内重排/取消会推进 revision，使 worker
+     * 收尾阶段不会用旧 interval 覆盖新请求。 */
     ++item.schedule_revision_;
     item.deadline_ = deadline;
     item.interval_ = interval;
@@ -183,6 +189,8 @@ void WorkQueueManager::worker(void *argument)
             }
         }
 
+        /* 无到期项时等待“最近 deadline-now”或队列 signal；新调度会 signal 提前
+         * 唤醒并重新计算，forever 仅表示队列当前为空。 */
         if (ready == nullptr) {
             const auto timeout =
                 wait_us == UINT64_MAX
@@ -209,8 +217,9 @@ void WorkQueueManager::worker(void *argument)
                 ready->statistics_.maximum_execution_time = elapsed;
             }
             ready->running_ = false;
-            /* Run() may reschedule or clear the item.  A changed revision owns
-             * the new request and must not be overwritten here. */
+            /* Run 可能自行重排或清除；revision 未变且仍为周期项时，按原 deadline
+             * 跳过已经错过的周期：elapsed=(finished-deadline)/interval，
+             * next=deadline+(elapsed+1)*interval。锚定原节拍而非 finished，避免漂移。 */
             if (!ready->accepting_schedules_) {
                 detach_item(queue, *ready);
             } else if (ready->schedule_revision_ == revision &&
@@ -272,6 +281,8 @@ bool WorkItem::ScheduleEnable() noexcept
     {
         dima::platform::CriticalGuard guard;
         if (accepting_schedules_ || !running_) {
+            /* 从 disabled 重新启用时推进 revision，并清截止/周期/统计，确保上一代
+             * worker 收尾不能复活旧调度。 */
             if (!accepting_schedules_) {
                 ++schedule_revision_;
                 deadline_ = 0U;
@@ -322,6 +333,8 @@ void WorkItem::ScheduleCancelAndDrain() noexcept
         }
     }
 
+    /* 从自身 Run 调用若继续等待会死锁；此时仅标记不再接收调度，worker 收尾负责
+     * detach。外部调用以 1 ms 轮询等待 running 清除。 */
     if (called_from_run) {
         return;
     }
@@ -384,6 +397,8 @@ bool work_queue_init() noexcept
         configure_runtime();
     }
 
+    /* 每队列先建 signal 再建静态任务；任一失败统一进入 shutdown 回滚已创建项，
+     * 只有七个队列全部就绪才把全局状态发布为 Running。 */
     for (auto &queue : g_queues) {
         queue.signal = services.synchronization.create_signal();
         if (!queue.signal) {
@@ -442,6 +457,8 @@ bool work_queue_shutdown() noexcept
         g_state = ManagerState::Stopping;
     }
 
+    /* 先逐项 cancel+drain，保证没有 Run 再访问模块对象；随后销毁 worker，再销毁
+     * signal。若任一任务销毁失败，保持 Stopping 供调用方重试，不伪报 Stopped。 */
     for (auto &queue : g_queues) {
         for (;;) {
             WorkItem *item = nullptr;

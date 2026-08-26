@@ -6,23 +6,25 @@
 
 - `application/`：应用任务入口和启动胶水。
 - `rover/`：唯一 Rover 产品域；`control/` 放消费/发布消息的 Rover 控制运行模块，`modes/` 直接放 Manual、Navigation 等产品模式，`ApplicationContext.*` 只负责装配。
+- `drivers/`：设备驱动状态机与设备配置，当前按 GPS、IMU、磁力计和 RC 分类。
 - `modules/`：Parameter、Log、BootHealth、RC、Serial、MotorOutput 和安全等已有运行服务；它们具有独立生命周期，但不包含 Rover 专属模式或混控算法。尚未实现的 Estimator 等只记录在 `docs/`，不创建占位源码目录。
-- `adapters/`：只依赖公共 capability 的 USB Console 等外部协议适配。
+- `adapters/`：只依赖公共 capability 的 MAVLink、USB Console 等外部协议适配。
 - `middleware/`：生命周期、uORB、WorkQueue、Parameter、Event、Perf 和 Logging。
 - `platform/api/`：不暴露 OS、MCU 或厂商类型的公共 capability 契约，包括窄的 Parameter 文件存储接口。
+- `platform/common/`：MCU/OS 无关的 capability 实现，只依赖 `platform/api/` 与平台无关库，不拥有板级资源或产品生命周期。
 - `platform/freertos/`：Task、Mutex、Signal、Heap、Flash transaction 和 `storage/` FatFs 文件后端。
-- `platform/stm32h7/`：根部只保留硬件工厂声明；`system/`、`memory/`、`flash/`、`serial/`、`io/` 分别承载 MCU 基础服务、内存/cache、Flash、SBUS 和薄外设后端。
-- `messages/`：共享消息数据结构与 uORB 声明。
-- `lib/`：平台无关的算法、容器和移植库；`lib/rover/` 只放纯 Rover 算法，不拥有 WorkQueue、uORB 或 Parameter 生命周期。
+- `platform/stm32h7/`：根部只保留硬件工厂声明；`system/`、`memory/`、`flash/`、`serial/`、`can/`、`spi/`、`interrupts/`、`pwm/` 和 `usb/` 只承载 MCU 基础配置、读写、中断与统计。
+- `messages/`：uORB schema 与 ABI lock；Topic 头和 metadata 由工具生成。
+- `lib/`：平台无关的算法、容器、协议和移植库；`lib/protocols/` 只处理协议编解码，`lib/rover/` 只放纯 Rover 算法，不拥有 WorkQueue、uORB 或 Parameter 生命周期。
 
 ## 容易混淆的分层
 
-- `lib/rc/` 只解析 SBUS 字节与帧；`modules/rc/` 才负责 UART capability、调度、参数和 Topic 发布。
+- `lib/protocols/sbus/` 只解析 SBUS 字节与帧；`drivers/rc/sbus/` 负责串口线路配置、调度和原始 Topic 发布，`modules/rc/` 负责产品级 RC 转换。
 - `middleware/logging/` 提供日志宏、过滤策略和固定 Ring；`modules/logging/` 是低优先级、有生命周期的转储服务。
 - `middleware/parameters/` 提供 Parameter Core、生成输入、Autosave 和持久化策略；FileStorage 只依赖 `ParameterFileStore` capability，FatFs 类型和路径归 `platform/freertos/storage/`。
 - `modules/rc/RcManualInput.*` 只拥有 RC 来源转换；`rover/modes/ManualMode.*` 才是 Rover Manual 模式。二者通过 `manual_control_setpoint` 解耦，未来 MAVLink 不反向依赖 RC。
 - `lib/rover/` 提供当前已接入的纯差速算法；`rover/control/` 只放把消息、参数和安全状态接入算法的运行模块。未接入的闭环控制器不提前放进生产源码树。
-- `modules/motor/` 拥有输出策略与安全生命周期，`platform/api` 定义 capability，`platform/stm32h7/io/ActuatorPwm.cpp` 适配 capability，`Boards/H743/Src/motor_pwm.c` 才拥有具体定时器和引脚。
+- `modules/motor/` 拥有输出策略与安全生命周期，`platform/api` 定义 capability，`platform/stm32h7/pwm/ActuatorPwm.cpp` 适配 capability，`Boards/H743/Src/motor_pwm.c` 才拥有具体定时器和引脚。
 - `platform/freertos/Backend.*` 是 RTOS Backend 类；`platform/stm32h7/HardwareServices.hpp` 只声明各硬件 capability 的工厂，不再使用第二个含糊的 `Backend.hpp`。
 - `platform/freertos/storage/` 连接 `ParameterFileStore` 与 FatFs/FreeRTOS；`Boards/H743/Src/fatfs_diskio.c` 才连接 FatFs disk ABI 与 SDMMC/HAL。
 - MAVLink 接入时，纯协议编解码与 byte-stream 适配放在 `adapters/mavlink/`，uORB/Parameter/调度生命周期放在 `modules/mavlink/`，MCU UART/DMA 只留在 `platform/stm32h7/serial/`；在实现前不创建空目录或把 MAVLink 塞入 RC、Logging 或 Rover control。
@@ -42,11 +44,11 @@
 ## 头文件引用
 
 - 同目录头文件引用只写文件名。
-- 跨目录引用从职责层根目录开始，例如 `uorb/Publication.hpp`、`rc/SbusRc.hpp`。
-- 不使用完整的 `Dima/...` 或 `Boards/H743/Inc/...` include 写法。
+- 跨目录 include 最多保留一层职责名，例如 `uorb/Publication.hpp`、`sbus/SbusRc.hpp`。
+- 禁止两层及以上的首方 include；不得写 `platform/api/Execution.hpp`、完整 `Dima/...` 或 `Boards/H743/Inc/...` 路径。存在同名头时通过精确 include root 和一层职责名消歧，不扩大为仓库全局路径。
 - 自有 `.hpp` 只保留声明、类型、模板、`constexpr` 和极短访问器；普通函数、协议状态机与算法实现放入同名 `.cpp`。
 - 只有模板、生成代码或经文档明确说明的上游合同可以采用 header-only；不得用 header-only 规避 `make/project.mk` 的显式翻译单元清单。
-- 私有实现头只有 `platform/freertos/BackendTimeout.hpp` 与 `platform/stm32h7/serial/SbusUartPrivate.hpp`：前者只由 `Backend.cpp` 使用，后者只供两个 SBUS 后端翻译单元共享；二者均不属于公共 include 面。
+- 私有实现头只在所属后端目录内共享，不属于公共 include 面；同目录使用 basename，跨一个子域时也必须遵守最多一层规则。
 
 ## 命名与来源
 

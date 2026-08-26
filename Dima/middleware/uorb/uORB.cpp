@@ -1,20 +1,112 @@
 #include "uORB.hpp"
 
-#include "platform/api/Execution.hpp"
+#include "api/Execution.hpp"
 
+#include <cstdint>
 #include <limits>
 
 namespace uORB {
+
+extern "C" {
+#if defined(H743_APPLICATION_IMAGE)
+extern const orb_metadata __dima_orb_meta_start__[];
+extern const orb_metadata __dima_orb_meta_end__[];
+#else
+extern const orb_metadata __start_dima_orb_meta[] __attribute__((weak));
+extern const orb_metadata __stop_dima_orb_meta[] __attribute__((weak));
+#endif
+}
+
 namespace {
 
-orb_metadata *g_metadata_head{nullptr};
 Allocator g_allocator{nullptr, nullptr};
 bool g_initialized{false};
 uint64_t g_lifecycle_epoch{0U};
 
+/* metadata 目录由每个 ORB_DEFINE 放入链接 section 后形成，不维护手写消息表。
+ * 启动时必须验证 section 对齐、元素完整性、名称唯一性和运行态数组不别名。 */
+struct MetadataRange {
+    const orb_metadata *begin{nullptr};
+    size_t count{0U};
+};
+
 bool in_isr() noexcept
 {
     return dima::platform::in_interrupt_context();
+}
+
+bool metadata_range(MetadataRange &range) noexcept
+{
+#if defined(H743_APPLICATION_IMAGE)
+    const orb_metadata *const begin = __dima_orb_meta_start__;
+    const orb_metadata *const end = __dima_orb_meta_end__;
+#else
+    const orb_metadata *const begin = __start_dima_orb_meta;
+    const orb_metadata *const end = __stop_dima_orb_meta;
+    if (begin == nullptr || end == nullptr) {
+        if (begin == end) {
+            range = MetadataRange{};
+            return true;
+        }
+        return false;
+    }
+#endif
+
+    const uintptr_t begin_address = reinterpret_cast<uintptr_t>(begin);
+    const uintptr_t end_address = reinterpret_cast<uintptr_t>(end);
+    if ((begin_address % alignof(orb_metadata)) != 0U ||
+        end_address < begin_address) {
+        return false;
+    }
+    const uintptr_t bytes = end_address - begin_address;
+    if ((bytes % sizeof(orb_metadata)) != 0U) {
+        return false;
+    }
+    range.begin = begin;
+    range.count = static_cast<size_t>(bytes / sizeof(orb_metadata));
+    return true;
+}
+
+bool valid_topic_name(const char *name) noexcept
+{
+    constexpr size_t kMaximumTopicNameLength = 63U;
+    if (name == nullptr || name[0] == '\0') {
+        return false;
+    }
+    for (size_t index = 1U; index <= kMaximumTopicNameLength; ++index) {
+        if (name[index] == '\0') {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool valid_metadata(const orb_metadata &metadata) noexcept
+{
+    return valid_topic_name(metadata.name) && metadata.object_size != 0U &&
+           metadata.queue_size != 0U &&
+           metadata.max_instances == kMaximumInstances &&
+           metadata.instances != nullptr &&
+           (reinterpret_cast<uintptr_t>(metadata.instances) %
+            alignof(orb_runtime_instance)) == 0U;
+}
+
+bool validate_catalog(const MetadataRange &range) noexcept
+{
+    for (size_t index = 0U; index < range.count; ++index) {
+        const orb_metadata &metadata = range.begin[index];
+        if (!valid_metadata(metadata)) {
+            return false;
+        }
+        for (size_t prior = 0U; prior < index; ++prior) {
+            const orb_metadata &candidate = range.begin[prior];
+            if (strcmp(metadata.name, candidate.name) == 0 ||
+                metadata.instances == candidate.instances) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 orb_runtime_instance *runtime_for(const orb_metadata *metadata,
@@ -29,16 +121,6 @@ orb_runtime_instance *runtime_for(const orb_metadata *metadata,
 
 } // namespace
 
-void register_metadata(orb_metadata *metadata) noexcept
-{
-    if (metadata == nullptr) {
-        return;
-    }
-    // 注册发生在静态构造阶段，此时调度器尚未启动，无需进入 RTOS 临界区。
-    metadata->next = g_metadata_head;
-    g_metadata_head = metadata;
-}
-
 bool initialize(const Allocator &allocator) noexcept
 {
     if (g_initialized) {
@@ -48,15 +130,17 @@ bool initialize(const Allocator &allocator) noexcept
         return false;
     }
 
+    MetadataRange range{};
+    if (!metadata_range(range) || !validate_catalog(range)) {
+        return false;
+    }
+
+    /* 每实例缓冲字节数 = object_size * queue_size。任一分配失败调用 shutdown
+     * 回收此前全部实例，只有目录完整就绪后才发布 initialized 与新 epoch。 */
     g_allocator = allocator;
-    for (orb_metadata *metadata = g_metadata_head; metadata != nullptr;
-         metadata = metadata->next) {
-        if (metadata->object_size == 0U || metadata->queue_size == 0U ||
-            metadata->max_instances == 0U ||
-            metadata->max_instances > kMaximumInstances) {
-            shutdown();
-            return false;
-        }
+    for (size_t metadata_index = 0U; metadata_index < range.count;
+         ++metadata_index) {
+        const orb_metadata *const metadata = &range.begin[metadata_index];
         const size_t bytes = static_cast<size_t>(metadata->object_size) *
                              metadata->queue_size;
         for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
@@ -76,6 +160,7 @@ bool initialize(const Allocator &allocator) noexcept
     }
     {
         dima::platform::CriticalGuard guard;
+        /* epoch 0 保留给尚未同步的包装器；自然回绕到 0 时再跳一次。 */
         ++g_lifecycle_epoch;
         if (g_lifecycle_epoch == 0U) {
             ++g_lifecycle_epoch;
@@ -87,18 +172,27 @@ bool initialize(const Allocator &allocator) noexcept
 
 void shutdown() noexcept
 {
-    for (orb_metadata *metadata = g_metadata_head; metadata != nullptr;
-         metadata = metadata->next) {
-        for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
-            auto &instance = metadata->instances[index];
-            if (instance.buffer != nullptr && g_allocator.deallocate != nullptr) {
-                g_allocator.deallocate(instance.buffer);
+    MetadataRange range{};
+    if (metadata_range(range)) {
+        for (size_t metadata_index = 0U; metadata_index < range.count;
+             ++metadata_index) {
+            const orb_metadata *const metadata = &range.begin[metadata_index];
+            if (metadata->instances == nullptr ||
+                metadata->max_instances > kMaximumInstances) {
+                continue;
             }
-            instance.buffer = nullptr;
-            instance.generation = 0U;
-            instance.publisher_count = 0U;
-            for (auto &callback : instance.callbacks) {
-                callback = nullptr;
+            for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
+                auto &instance = metadata->instances[index];
+                if (instance.buffer != nullptr &&
+                    g_allocator.deallocate != nullptr) {
+                    g_allocator.deallocate(instance.buffer);
+                }
+                instance.buffer = nullptr;
+                instance.generation = 0U;
+                instance.publisher_count = 0U;
+                for (auto &callback : instance.callbacks) {
+                    callback = nullptr;
+                }
             }
         }
     }
@@ -133,6 +227,8 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
     px4::WorkItem *callbacks[kMaximumCallbacksPerInstance]{};
     {
         dima::platform::CriticalGuard guard;
+        /* 第 g 代存放槽 (g-1) % queue_size。先复制完整对象，再发布 generation；
+         * callback 指针在锁内快照，实际调度移到锁外，避免 Run/取消路径重入锁。 */
         const uint64_t next_generation = instance->generation + 1U;
         const size_t slot = static_cast<size_t>((next_generation - 1U) %
                                                 metadata->queue_size);
@@ -175,6 +271,8 @@ bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
     if (newest != generation) {
         uint64_t target = newest;
         if (metadata->queue_size > 1U) {
+            /* 环形队列当前最老代：oldest=max(1,newest-queue+1)。订阅首次读取、
+             * generation 越界或落后超过保留窗口时从 oldest 恢复，否则逐代读取。 */
             const uint64_t oldest = newest > metadata->queue_size
                                         ? newest - metadata->queue_size + 1U
                                         : 1U;
@@ -221,6 +319,8 @@ bool orb_advertise(const orb_metadata *metadata, uint8_t instance_index) noexcep
     }
     bool accepted = false;
     dima::platform::CriticalGuard guard;
+    /* publisher_count 是饱和前拒绝的引用计数；publish 要求至少一个活跃发布者，
+     * 防止已析构 Publication 继续借旧 metadata 发送。 */
     if (instance->publisher_count <
         std::numeric_limits<uint16_t>::max()) {
         ++instance->publisher_count;
@@ -251,6 +351,7 @@ int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept
     }
     int8_t result = -1;
     dima::platform::CriticalGuard guard;
+    /* 从最低编号查找 publisher_count==0 的空实例并原子占用，返回值固定在 int8。 */
     for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
         auto &instance = metadata->instances[index];
         if (instance.publisher_count == 0U) {
@@ -299,6 +400,7 @@ bool Subscription::registerCallback(px4::WorkItem &work_item) noexcept
 
     bool registered = false;
     dima::platform::CriticalGuard guard;
+    /* 同一 WorkItem 注册保持幂等；否则占用首个空槽，满 8 个时明确失败。 */
     for (auto *entry : instance->callbacks) {
         if (entry == &work_item) {
             callback_ = &work_item;

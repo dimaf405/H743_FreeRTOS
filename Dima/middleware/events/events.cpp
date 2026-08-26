@@ -4,13 +4,15 @@
 #include <cstring>
 #include <limits>
 
-#include "platform/api/Execution.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Execution.hpp"
+#include "api/Time.hpp"
 
 namespace dima::events {
 namespace {
 
 struct EventState {
+    /* 固定 128 槽事件环避免故障路径动态分配；head/count 表示逻辑队列，关键故障
+     * latch 独立保存首/末事件，即使消费或溢出淘汰也不会丢失安全状态。 */
     DimaEvent records[kEventCapacity]{};
     std::size_t head{0U};
     std::size_t count{0U};
@@ -30,6 +32,7 @@ constexpr bool is_critical(const DimaEvent &event) noexcept
 
 std::size_t physical_index(std::size_t logical_index) noexcept
 {
+    /* 逻辑第 i 项映射为 (head+i) % capacity，remove 时只移动有效 count 范围。 */
     return (g_state.head + logical_index) % kEventCapacity;
 }
 
@@ -68,6 +71,8 @@ bool make_room_for(const DimaEvent &incoming) noexcept
     }
 
     if (!is_critical(incoming)) {
+        /* 队列全为 Critical 时拒绝新非关键事件；新 Critical 则淘汰最旧 Critical，
+         * 保持“最新严重故障可见”，完整次数仍由 latch.occurrence_count 饱和累计。 */
         increment_saturated(g_state.dropped_count);
         return false;
     }
@@ -85,6 +90,7 @@ void update_critical_latch(const DimaEvent &event) noexcept
         return;
     }
 
+    /* first_event 只在 latch 从 inactive 进入 active 时写；last_event 每次更新。 */
     if (!g_state.critical.active) {
         g_state.critical.active = true;
         g_state.critical.first_event = event;
@@ -105,6 +111,8 @@ bool report(std::uint32_t id,
     event.timestamp = hrt_absolute_time();
     event.id = id;
     event.severity = static_cast<std::uint8_t>(severity);
+    /* 参数超过合同上限时截断到 kMaxArguments；空 arguments 与非零 count 也不会
+     * 解引用，剩余字段保持零初始化。 */
     event.argument_count = static_cast<std::uint8_t>(
         std::min(argument_count, kMaxArguments));
 
@@ -165,6 +173,8 @@ bool clear_critical_fault(std::uint32_t id) noexcept
         return true;
     }
 
+    /* id=0 表示显式清任意 latch；非零 id 必须匹配最新 Critical，防止旧确认误清
+     * 后续出现的不同故障。 */
     if ((id != 0U) && (g_state.critical.last_event.id != id)) {
         return false;
     }

@@ -1,7 +1,7 @@
 #include "logging.hpp"
 
-#include "lib/format/Format.hpp"
-#include "platform/api/Execution.hpp"
+#include "format/Format.hpp"
+#include "api/Execution.hpp"
 
 #include <algorithm>
 #include <cstdarg>
@@ -17,6 +17,8 @@ namespace {
 
 constexpr std::size_t kFormatBufferSize = 256U;
 
+/* 格式化固定使用栈上 256 B，不分配 heap。统计计数饱和而不回绕，避免长时间运行
+ * 后监控值从 UINT32_MAX 跳回 0。 */
 struct LogState {
     std::uint32_t records_written{0U};
     std::uint32_t records_truncated{0U};
@@ -41,6 +43,8 @@ void increment_saturated(std::uint32_t &value) noexcept
 
 bool formatting_allowed() noexcept
 {
+    /* printf 风格格式化有不可预测耗时，ISR 和 realtime 任务一律拒绝；调用者应
+     * 用计数/事件在普通任务中延后输出。 */
     return !::dima::platform::in_interrupt_context() &&
            !::dima::platform::in_realtime_context();
 }
@@ -55,6 +59,8 @@ void record_sink_drop() noexcept
 
 void set_structured_sink(void *context, StructuredSink sink) noexcept
 {
+    /* context 与函数指针在同一临界区成对发布，write_v 再快照到局部后锁外调用，
+     * 防止 sink 回调重入日志时死锁。 */
     ::dima::platform::CriticalGuard lock;
     g_sink.context = context;
     g_sink.sink = sink;
@@ -82,6 +88,8 @@ WriteResult write_v(Source source, Level level, const char *module_name, bool ra
         return WriteResult::InvalidArgument;
     }
 
+    /* vformat 返回所需总长度；>=buffer 表示已截断。实际投递长度最多 255，并去掉
+     * 尾部 CR/LF，让结构化下游统一负责记录边界。 */
     const bool truncated =
         static_cast<std::size_t>(body_result) >= sizeof(buffer);
     std::size_t length = std::min(
@@ -101,6 +109,8 @@ WriteResult write_v(Source source, Level level, const char *module_name, bool ra
         sink = g_sink;
     }
 
+    /* 无内容、未安装 sink 或 sink 背压均计入 dropped；格式化成功仍可返回 Ok，
+     * 投递丢失由独立统计暴露。 */
     if (length == 0U || sink.sink == nullptr ||
         !sink.sink(sink.context, level, buffer, length)) {
         record_sink_drop();

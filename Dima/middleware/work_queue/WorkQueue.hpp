@@ -3,13 +3,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "platform/api/PlatformTypes.hpp"
+#include "api/PlatformTypes.hpp"
 
 namespace px4 {
 
 using hrt_abstime = dima::platform::TimeUs;
 
 struct wq_config_t {
+    /* stack_size 单位为字节；realtime=true 会使平台拒绝该任务中的动态分配。 */
     const char *name;
     uint8_t priority;
     uint16_t stack_size;
@@ -17,6 +18,7 @@ struct wq_config_t {
 };
 
 struct WorkQueueStats {
+    /* 执行时间和 deadline 均为单调微秒；deadline_misses 只统计实际开始晚于截止。 */
     uint32_t executions;
     hrt_abstime last_execution_time;
     hrt_abstime maximum_execution_time;
@@ -42,6 +44,7 @@ public:
     bool ScheduleNowFromISR() noexcept;
     bool ScheduleEnable() noexcept;
     void ScheduleClear() noexcept;
+    /* 取消未来调度并等待在途 Run 退出；从自身 Run 调用时只取消、不自等待。 */
     void ScheduleCancelAndDrain() noexcept;
     const char *Name() const noexcept { return name_; }
     const WorkQueueStats &statistics() const noexcept { return statistics_; }

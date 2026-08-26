@@ -1,7 +1,7 @@
 #pragma once
 
-#include "platform/api/Execution.hpp"
-#include "platform/api/PlatformTypes.hpp"
+#include "api/Execution.hpp"
+#include "api/PlatformTypes.hpp"
 
 #include <cstdint>
 
@@ -34,6 +34,10 @@ public:
     bool in_progress() const noexcept;
 
 private:
+    /* 维护票据状态机：Idle --request--> Requested --健康/安全--> Approved
+     * --permit--> Active --complete/cancel/超时--> Idle/Cancelled。
+     * 15 s 是整笔硬截止，Active 每 750 ms 必须报告不同 progress，防止 Flash/SD
+     * 长操作在看门狗仍被喂养时无界卡住。 */
     enum class State : std::uint8_t {
         Idle,
         Requested,

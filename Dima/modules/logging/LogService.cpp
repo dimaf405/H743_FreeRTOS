@@ -1,7 +1,7 @@
 #include "LogService.hpp"
 
 #include "events/events.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -11,7 +11,8 @@ namespace {
 
 constexpr std::size_t kMaxEventsPerRun = 4U;
 
-/* PX4 Level -> MAV_SEVERITY mapping used for mavlink_log records. */
+/* 每轮最多搬运四个结构化事件，给同一低优先级 work queue 上的参数/存储任务
+ * 留出执行机会。Level -> MAV_SEVERITY 使用线协议固定数值，数值越小越严重。 */
 std::uint8_t mav_severity(dima::logging::Level level) noexcept
 {
     using dima::logging::Level;
@@ -31,6 +32,7 @@ dima::logging::Level event_level(std::uint8_t severity) noexcept
     using dima::events::Severity;
     using dima::logging::Level;
 
+    // 未知事件级别按 Error fail-closed，避免损坏的 severity 被降级为普通信息。
     switch (static_cast<Severity>(severity)) {
     case Severity::Debug:
         return Level::Debug;
@@ -48,6 +50,8 @@ dima::logging::Level event_level(std::uint8_t severity) noexcept
 
 void enqueue_structured_events() noexcept
 {
+    // pop 是有界队列消费；单轮上限只延后剩余事件，不丢弃也不在 work queue 中
+    // 无界清空积压。
     for (std::size_t count = 0U; count < kMaxEventsPerRun; ++count) {
         dima::events::DimaEvent event{};
         if (!dima::events::pop(event)) {
@@ -82,6 +86,7 @@ LogService::LogService() noexcept
 bool LogService::initialize() noexcept
 {
     if (!initialized_) {
+        // 全局 structured sink 只绑定本服务的静态桥接函数，不捕获对象或堆内存。
         dima::logging::set_structured_sink(nullptr, &LogService::structured_sink);
         initialized_ = true;
     }
@@ -90,6 +95,7 @@ bool LogService::initialize() noexcept
 
 void LogService::shutdown() noexcept
 {
+    // 先停止 ScheduledWorkItem，再解除全局 sink，封住停机中回调已释放状态的竞态。
     stop();
     dima::logging::set_structured_sink(nullptr, nullptr);
     initialized_ = false;
@@ -135,6 +141,8 @@ bool LogService::structured_sink(void *context, dima::logging::Level level,
         return false;
     }
 
+    // mavlink_log Topic 保存以 '\0' 结尾的定长文本；超长日志只截断 payload，
+    // severity 与本次单调时间仍完整保留，不尝试动态分配扩容。
     mavlink_log_s record{};
     record.timestamp = hrt_absolute_time();
     record.severity = mav_severity(level);
@@ -163,6 +171,8 @@ void LogService::enqueue_sbus_data(std::uint64_t now_us) noexcept
         return;
     }
 
+    // uORB 只保留最新样本：限流期间持续覆盖 pending 内容，最终输出最新一帧，
+    // 而不是把高频 SBUS 帧排成日志积压。
     if (input_rc_subscription_.update()) {
         const input_rc_s &latest = input_rc_subscription_.get();
         sbus_sample_pending_ = latest.timestamp != 0U &&
@@ -173,6 +183,7 @@ void LogService::enqueue_sbus_data(std::uint64_t now_us) noexcept
         return;
     }
 
+    // 配置单位为 ms，转换为 us 后用原始 now_us 做单调节流；0 表示每轮均可输出。
     constexpr std::uint64_t interval_us =
         static_cast<std::uint64_t>(kSbus.data_period_ms) * 1000ULL;
     if (last_sbus_output_time_us_ != 0U &&
@@ -219,6 +230,7 @@ void LogService::Run()
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
     }
+    // 先释放最多四个高价值事件，再处理可丢帧的 SBUS 调试样本。
     enqueue_structured_events();
     enqueue_sbus_data(hrt_absolute_time());
 }

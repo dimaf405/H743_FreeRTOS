@@ -19,6 +19,8 @@ struct Allocator {
 struct orb_metadata;
 
 struct orb_runtime_instance {
+    /* 每个实例拥有独立环形数据区、64-bit 发布代数、最多 8 个 WorkItem 回调和
+     * 发布者引用计数；这些字段由生成的 metadata 指向，业务不得手写目录。 */
     uint8_t *buffer;
     uint64_t generation;
     px4::WorkItem *callbacks[kMaximumCallbacksPerInstance];
@@ -26,15 +28,15 @@ struct orb_runtime_instance {
 };
 
 struct orb_metadata {
+    /* object_size/queue_size 来自权威 .msg 生成合同；max_instances 在当前运行时
+     * 固定为 4，instances 指向同一生成单元中的静态运行态数组。 */
     const char *name;
     uint16_t object_size;
     uint8_t queue_size;
     uint8_t max_instances;
     orb_runtime_instance *instances;
-    orb_metadata *next;
 };
 
-void register_metadata(orb_metadata *metadata) noexcept;
 bool initialize(const Allocator &allocator) noexcept;
 void shutdown() noexcept;
 bool initialized() noexcept;
@@ -50,14 +52,6 @@ bool orb_advertise(const orb_metadata *metadata, uint8_t instance) noexcept;
 void orb_unadvertise(const orb_metadata *metadata, uint8_t instance) noexcept;
 int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept;
 
-class MetadataRegistrar {
-public:
-    explicit MetadataRegistrar(orb_metadata *metadata) noexcept
-    {
-        register_metadata(metadata);
-    }
-};
-
 class Subscription {
 public:
     explicit Subscription(const orb_metadata *metadata,
@@ -72,6 +66,8 @@ public:
     void unregisterCallback() noexcept;
 
 protected:
+    /* uORB shutdown/reinitialize 会推进 epoch；旧订阅在下次使用时清 generation 与
+     * callback，避免把已释放实例缓冲区的状态带入新生命周期。 */
     bool synchronize_epoch() const noexcept;
     const orb_metadata *metadata_;
     uint8_t instance_;
@@ -100,13 +96,25 @@ private:
 
 } // namespace uORB
 
-#define ORB_DECLARE(_name) extern uORB::orb_metadata __orb_##_name
+#define ORB_DECLARE(_name) extern const uORB::orb_metadata __orb_##_name
 #define ORB_ID(_name) (&__orb_##_name)
+#if defined(H743_APPLICATION_IMAGE)
+#define DIMA_ORB_METADATA_SECTION ".dima_orb_meta"
+#else
+/* GNU host linker 只会为标识符形式的 section 合成 __start/__stop；固件则由链接
+ * 脚本显式导出带点号 section 的边界。 */
+#define DIMA_ORB_METADATA_SECTION "dima_orb_meta"
+#endif
 #define ORB_DEFINE(_name, _type, _queue_size)                                  \
+    static_assert((_queue_size) > 0U && (_queue_size) <= 0xFFU,                \
+                  "uORB queue size is outside metadata range");              \
+    static_assert(sizeof(_type) <= 0xFFFFU,                                    \
+                  "uORB object size is outside metadata range");             \
     static uORB::orb_runtime_instance __orb_runtime_##_name[                  \
         uORB::kMaximumInstances]{};                                            \
-    uORB::orb_metadata __attribute__((used, section(".dima_orb_meta")))       \
+    const uORB::orb_metadata __attribute__((                                   \
+        used, section(DIMA_ORB_METADATA_SECTION),                              \
+        aligned(alignof(uORB::orb_metadata))))                                 \
         __orb_##_name{#_name, static_cast<uint16_t>(sizeof(_type)),            \
                       static_cast<uint8_t>(_queue_size),                       \
-                      uORB::kMaximumInstances, __orb_runtime_##_name, nullptr};\
-    static uORB::MetadataRegistrar __orb_registrar_##_name(&__orb_##_name)
+                      uORB::kMaximumInstances, __orb_runtime_##_name}
