@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generate Dima serial parameters and board mappings from one board manifest.
+"""从单一板级 manifest 生成 Dima 串口参数合同和 STM32H7 私有资源映射。
 
-The generation model follows PX4 v1.17.0 Tools/serial/generate_config.py:
-the board declares its real serial ports once, and both SER/driver parameters
-and runtime port resolution are generated from that declaration.
+生成模型固定对照 PX4 v1.17.0 commit
+``d6f12ad1c4f70ad3230afd7d86e971421e02fef4`` 的
+``Tools/serial/generate_config.py``：板只声明一次真实端口；公共参数/所有权合同与
+私有 HAL/CMSIS 资源分别输出，防止 common 模块借生成头反向获得芯片标识符。
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ def require_identifier(value: object, field: str) -> str:
 
 
 def load_manifest(path: Path) -> tuple[dict, list[dict]]:
+    """校验板卡身份、物理顺序、引脚、波特率和唯一 RC 默认 owner。"""
     data = json.loads(path.read_text(encoding="utf-8"))
     if data.get("format_version") != 1 or data.get("board") != "dimah743":
         raise RuntimeError("unsupported serial manifest identity")
@@ -43,6 +45,16 @@ def load_manifest(path: Path) -> tuple[dict, list[dict]]:
     }
     if data.get("hardware_reference") != expected_hardware_reference:
         raise RuntimeError("board serial order lacks the locked hardware reference")
+
+    gps_port_parameter = data.get("gps_port_parameter")
+    if gps_port_parameter != {
+        "name": "GPS_1_CONFIG",
+        "default": 0,
+        "group": "GPS",
+    }:
+        raise RuntimeError(
+            "gps_port_parameter must retain the primary PX4 GPS port contract"
+        )
 
     ports = data.get("ports")
     if not isinstance(ports, list) or [port.get("serial") for port in ports] != EXPECTED_SERIALS:
@@ -58,8 +70,12 @@ def load_manifest(path: Path) -> tuple[dict, list[dict]]:
     if functions != [
         {"value": 0, "name": "Disabled"},
         {"value": 1, "name": "RC Input"},
+        {"value": 2, "name": "GPS"},
     ]:
-        raise RuntimeError("current product serial functions must be exactly Disabled/RC Input")
+        raise RuntimeError(
+            "current product serial functions must be exactly "
+            "Disabled/RC Input/GPS"
+        )
 
     configurable = []
     for port in ports:
@@ -79,7 +95,7 @@ def load_manifest(path: Path) -> tuple[dict, list[dict]]:
             raise RuntimeError(
                 f"SERIAL{serial} function must be named {expected_function}"
             )
-        if port.get("default_function") not in (0, 1):
+        if port.get("default_function") not in (0, 1, 2):
             raise RuntimeError(f"unsupported function for SERIAL{serial}")
         default_baud = port.get("default_baud")
         if default_baud not in rates:
@@ -117,12 +133,32 @@ def baud_value_lines(rates: list[int]) -> list[str]:
     ]
 
 
-def generate_baud_parameters(data: dict, ports: list[dict]) -> str:
+def generate_serial_parameters(data: dict, ports: list[dict]) -> str:
+    """由 manifest 生成 PARAM_DEFINE 源，参数名、默认值和枚举不在模板外复制。"""
     rates = data["supported_baudrates"]
+    gps_port_parameter = data["gps_port_parameter"]
     sections = [
         "/****************************************************************************",
         " * Generated from Boards/H743/serial_ports.json. DO NOT EDIT.",
         " ****************************************************************************/",
+        "",
+        "/**",
+        " * Serial connector used by the primary GPS receiver.",
+        " *",
+        " * The values are Dima board connector indexes, generated in the same role as",
+        " * PX4 GPS_1_CONFIG. A legacy SERIALx_FUNCTION=GPS assignment remains accepted",
+        " * when this parameter is Disabled.",
+        " *",
+        " * @value 0 Disabled",
+        *[
+            f" * @value {port['serial']} Serial {port['serial']}"
+            for port in ports
+        ],
+        f" * @group {gps_port_parameter['group']}",
+        " */",
+        "PARAM_DEFINE_INT32({name}, {default});".format(
+            **gps_port_parameter
+        ),
         "",
     ]
     value_lines = baud_value_lines(rates)
@@ -143,7 +179,6 @@ def generate_baud_parameters(data: dict, ports: list[dict]) -> str:
             " *",
             *value_lines,
             " * @group Serial",
-            " * @reboot_required true",
             " */",
             f"PARAM_DEFINE_INT32({port['parameter']}, {port['default_baud']});",
             "",
@@ -153,7 +188,6 @@ def generate_baud_parameters(data: dict, ports: list[dict]) -> str:
             " * Only functions with a production data path are selectable.",
             *function_value_lines,
             " * @group Serial",
-            " * @reboot_required true",
             " */",
             f"PARAM_DEFINE_INT32({port['function_parameter']}, {port['default_function']});",
             "",
@@ -170,18 +204,11 @@ def macro(name: str, rows: list[str]) -> list[str]:
     return output
 
 
-def generate_header(data: dict, ports: list[dict]) -> str:
+def generate_serial_contract(data: dict, ports: list[dict]) -> str:
+    """生成 HAL 无关的端口描述符、支持集合与唯一参数展开宏。"""
     rates = ", ".join(f"{rate}U" for rate in data["supported_baudrates"])
     port_rows = [
         f"{port['serial']}, {port['parameter']}, {port['function_parameter']}"
-        for port in ports
-    ]
-    stm32_rows = [
-        ", ".join([
-            str(port["serial"]), port["uart_handle"], port["dma_request"],
-            port["irq"], port["rx_gpio"], port["rx_pin"], port["rx_af"],
-            str(port["rx_index"]),
-        ])
         for port in ports
     ]
     descriptor_rows = [
@@ -203,18 +230,23 @@ def generate_header(data: dict, ports: list[dict]) -> str:
         function["value"] for function in data["functions"]
         if function["name"] == "RC Input"
     )
+    function_gps = next(
+        function["value"] for function in data["functions"]
+        if function["name"] == "GPS"
+    )
 
     lines = [
         "#pragma once",
         "",
-        "// Generated from Boards/H743/serial_ports.json. DO NOT EDIT.",
+        "// Generated serial contract from Boards/H743/serial_ports.json.",
+        "// DO NOT EDIT. This header must remain HAL/CMSIS independent.",
         "#include <cstddef>",
         "#include <cstdint>",
         "#include <cstring>",
         "",
-        *macro("DIMA_BOARD_SERIAL_PARAMETER_LIST", port_rows),
+        f"#define DIMA_PRIMARY_GPS_PORT_PARAMETER {data['gps_port_parameter']['name']}",
         "",
-        *macro("DIMA_STM32_SERIAL_PORT_LIST", stm32_rows),
+        *macro("DIMA_BOARD_SERIAL_PARAMETER_LIST", port_rows),
         "",
         "namespace dima::board {",
         "",
@@ -233,6 +265,7 @@ def generate_header(data: dict, ports: list[dict]) -> str:
         f"inline constexpr std::uint32_t kSupportedBaudrates[]{{{rates}}};",
         f"inline constexpr std::int32_t kSerialFunctionDisabled = {function_disabled};",
         f"inline constexpr std::int32_t kSerialFunctionRcInput = {function_rc};",
+        f"inline constexpr std::int32_t kSerialFunctionGps = {function_gps};",
         f"inline constexpr std::int32_t kSupportedSerialFunctions[]{{{function_values}}};",
         "",
         "constexpr bool serial_baud_supported(std::uint32_t baudrate) noexcept",
@@ -283,17 +316,57 @@ def generate_header(data: dict, ports: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def generate_uart_resources(ports: list[dict]) -> str:
+    """生成仅 STM32H7 backend 可见的 UART/DMA/IRQ/GPIO 资源宏。"""
+    stm32_rows = [
+        ", ".join([
+            str(port["serial"]), port["uart_handle"], port["dma_request"],
+            port["irq"], port["rx_gpio"], port["rx_pin"], port["rx_af"],
+            str(port["rx_index"]),
+        ])
+        for port in ports
+    ]
+    lines = [
+        "#pragma once",
+        "",
+        "// Generated STM32H7 UART resources from Boards/H743/serial_ports.json.",
+        "// DO NOT EDIT. Only the STM32H7 serial backend may include this header.",
+        "",
+        *macro("DIMA_STM32_SERIAL_PORT_LIST", stm32_rows),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def write_generated(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
 def main() -> int:
     args = parse_args()
     data, ports = load_manifest(args.manifest)
-    args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "serial_baud_params.c").write_text(
-        generate_baud_parameters(data, ports), encoding="utf-8", newline="\n"
+    if args.output.name.lower() != "serial":
+        raise RuntimeError(
+            "--output must name the generated serial contract directory"
+        )
+    stm32_output = args.output.parent / "stm32h7" / "serial"
+    write_generated(
+        args.output / "serial_baud_params.c",
+        generate_serial_parameters(data, ports),
     )
-    (args.output / "board_serial_config.hpp").write_text(
-        generate_header(data, ports), encoding="utf-8", newline="\n"
+    write_generated(
+        args.output / "SerialContract.hpp",
+        generate_serial_contract(data, ports),
     )
-    print(f"generated SERIAL0..SERIAL8 configuration for {data['board']}")
+    write_generated(
+        stm32_output / "BoardUartResources.hpp",
+        generate_uart_resources(ports),
+    )
+    print(
+        f"generated SERIAL0..SERIAL8 contract and STM32H7 resources "
+        f"for {data['board']}"
+    )
     return 0
 
 

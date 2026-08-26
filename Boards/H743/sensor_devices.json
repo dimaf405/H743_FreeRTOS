@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "px4_reference": {
+    "version": "1.17.0",
+    "commit": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4"
+  },
+  "devices": [
+    {
+      "symbol": "Icm42688p",
+      "name": "ICM42688P",
+      "bus_type": "SPI",
+      "bus": 4,
+      "address": 0,
+      "device_type": "0x26"
+    }
+  ]
+}
