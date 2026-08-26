@@ -1,5 +1,6 @@
+"""把 PX4 parser 模型输出为参数 XML，并保留 Dima 的 qgc_required 属性。"""
+
 import xml.etree.ElementTree as ET
-import codecs
 
 def indent(elem, level=0):
     i = "\n" + level*"  "
@@ -43,6 +44,9 @@ class XMLOutput():
                         xml_param.attrib["volatile"] = "true"
                     if param.GetBoolean():
                         xml_param.attrib["boolean"] = "true"
+                    if param.GetQgcRequired():
+                        # 该属性随后驱动生成的 QGC required 参数合同。
+                        xml_param.attrib["qgc_required"] = "true"
                     if (param.GetCategory()):
                         xml_param.attrib["category"] = param.GetCategory()
                     last_param_name = param.GetName()

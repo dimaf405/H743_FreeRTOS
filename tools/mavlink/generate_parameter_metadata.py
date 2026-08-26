@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the read-only PX4/QGC parameter Component Metadata payloads."""
+"""从生成参数目录构造只读 PX4/QGC Component Metadata、XZ 载荷与嵌入头。"""
 
 from __future__ import annotations
 
@@ -17,6 +17,14 @@ PARAMETER_URI = "mftp://etc/extras/parameters.json.xz"
 ACTUATOR_URI = "mftp://etc/extras/actuators.json.xz"
 PARAMETER_NAME = re.compile(r"^[.\-a-zA-Z0-9_{}]{1,16}$")
 PARAMETER_TYPES = {"Int32", "Float"}
+CALIBRATION_ROLE_NAME = re.compile(
+    r"^CAL_(?P<sensor>ACC|GYRO|MAG)(?P<instance>[0-9]+)_"
+    r"(?P<role>ID|ROT)$"
+)
+CALIBRATION_VALUE_NAME = re.compile(
+    r"^CAL_(?P<sensor>ACC|GYRO|MAG)(?P<instance>[0-9]+)_"
+    r"(?P<axis>[XYZ])(?P<role>OFF|SCALE)$"
+)
 PARAMETER_FIELDS = {
     "name", "type", "shortDesc", "longDesc", "units", "default",
     "decimalPlaces", "min", "max", "increment", "rebootRequired",
@@ -25,6 +33,7 @@ PARAMETER_FIELDS = {
 
 
 def validate_metadata_contract_constants() -> None:
+    """锁定 QGC URI 与 PX4 CRC 参考向量，防止生成器算法静默漂移。"""
     expected_uris = (
         "mftp://etc/extras/component_general.json.xz",
         "mftp://etc/extras/parameters.json.xz",
@@ -49,6 +58,7 @@ def sha256(data: bytes) -> str:
 
 
 def json_bytes(value: object) -> bytes:
+    """使用稳定排序和紧凑分隔符生成确定性 UTF-8；同一输入必须逐字节相同。"""
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -61,7 +71,7 @@ def compress_xz(data: bytes) -> bytes:
 
 
 def mavlink_crc32(data: bytes) -> int:
-    """PX4 component-information CRC32: initial zero, no final xor."""
+    """PX4 Component Metadata CRC32：初值为 0，不执行最终异或。"""
     table = []
     for value in range(256):
         current = value
@@ -210,6 +220,7 @@ def verify_generated_metadata(parameters_path: Path,
         raise RuntimeError("component Metadata parameter count mismatch")
     by_name = validate_parameter_catalogue(parameters)
     validate_serial_metadata(by_name)
+    validate_sensor_metadata(by_name)
 
     expected_parameter_json = json_bytes({
         "parameters": parameters,
@@ -352,9 +363,9 @@ def validate_parameter(parameter: object, index: int) -> None:
 
 
 def validate_parameter_catalogue(parameters: list[object]) -> dict[str, dict]:
-    if len(parameters) != 203:
+    if len(parameters) != 233:
         raise RuntimeError(
-            f"expected 203 firmware parameters, found {len(parameters)}"
+            f"expected 233 firmware parameters, found {len(parameters)}"
         )
     for index, parameter in enumerate(parameters):
         validate_parameter(parameter, index)
@@ -366,17 +377,109 @@ def validate_parameter_catalogue(parameters: list[object]) -> dict[str, dict]:
 
 def validate_serial_metadata(by_name: dict[str, dict]) -> None:
     for serial in range(1, 9):
-        for suffix, expected_values in (("BAUD", 16), ("FUNCTION", 2)):
+        for suffix, expected_values in (("BAUD", 16), ("FUNCTION", 3)):
             name = f"SERIAL{serial}_{suffix}"
             parameter = by_name.get(name)
             if (parameter is None or parameter.get("type") != "Int32" or
                     parameter.get("group") != "Serial" or
                     not parameter.get("shortDesc") or
-                    parameter.get("rebootRequired") is not True or
+                    parameter.get("rebootRequired", False) is not False or
                     len(parameter.get("values", [])) != expected_values):
                 raise RuntimeError(
                     f"QGC serial Metadata contract invalid for {name}"
                 )
+
+
+def validate_sensor_metadata(by_name: dict[str, dict]) -> None:
+    # 参数名只承担可解析的结构角色；实际实例集合完全由生成目录发现，新增
+    # ACC/GYRO/MAG 实例时无需在 Metadata 工具中同步维护参数清单。
+    calibration_roles = [
+        (name, parameter, match)
+        for name, parameter in by_name.items()
+        if (match := CALIBRATION_ROLE_NAME.fullmatch(name)) is not None
+    ]
+    calibration_values = [
+        (name, parameter, match)
+        for name, parameter in by_name.items()
+        if (match := CALIBRATION_VALUE_NAME.fullmatch(name)) is not None
+    ]
+    if not calibration_roles or not calibration_values:
+        raise RuntimeError("PX4 sensor calibration Metadata roles are empty")
+
+    for name, parameter, match in calibration_roles:
+        if (parameter.get("type") != "Int32" or
+                parameter.get("group") != "Sensor Calibration" or
+                parameter.get("category") != "System"):
+            raise RuntimeError(
+                f"PX4 sensor calibration Metadata contract invalid for {name}"
+            )
+        # 第二及后续磁力计当前未实现，固定 rotation=-1 明确告诉 QGC 不可校准；
+        # 该规则由结构化实例号推导，不复制 CAL_MAG1/2_ROT 名称。
+        if (match.group("sensor") == "MAG" and
+                int(match.group("instance")) > 0 and
+                match.group("role") == "ROT" and
+                (parameter.get("default") != -1 or
+                 parameter.get("min") != -1 or
+                 parameter.get("max") != -1)):
+            raise RuntimeError(
+                f"PX4 fixed magnetometer rotation Metadata invalid for {name}"
+            )
+
+    differential_pressure = by_name.get("SENS_DPRES_OFF")
+    if (differential_pressure is None or
+            differential_pressure.get("type") != "Float" or
+            differential_pressure.get("default") != 0.0 or
+            differential_pressure.get("group") != "Sensor Calibration" or
+            differential_pressure.get("category") != "System" or
+            differential_pressure.get("volatile") is not True):
+        raise RuntimeError("SENS_DPRES_OFF Metadata contract invalid")
+
+    for name, parameter, match in calibration_values:
+        if (parameter.get("type") != "Float" or
+                parameter.get("group") != "Sensor Calibration" or
+                parameter.get("category") != "System" or
+                parameter.get("decimalPlaces") != 3 or
+                parameter.get("volatile", False)):
+            raise RuntimeError(
+                f"PX4 calibration value Metadata contract invalid for {name}"
+            )
+        if match.group("role") == "SCALE" and (
+                parameter.get("default") != 1.0 or
+                parameter.get("min") != 0.1 or
+                parameter.get("max") != 3.0):
+            raise RuntimeError(
+                f"PX4 calibration scale range invalid for {name}"
+            )
+        if (match.group("role") == "OFF" and
+                parameter.get("default") != 0.0):
+            raise RuntimeError(
+                f"PX4 calibration offset default invalid for {name}"
+            )
+
+    integration = by_name.get("IMU_INTEG_RATE")
+    if (integration is None or integration.get("type") != "Int32" or
+            integration.get("group") != "Sensors" or
+            integration.get("default") != 200 or
+            integration.get("min") != 100 or integration.get("max") != 400 or
+            {entry.get("value") for entry in integration.get("values", [])} !=
+            {100, 200, 250, 400}):
+        raise RuntimeError("IMU_INTEG_RATE Metadata contract invalid")
+
+    clipping = by_name.get("SENS_IMU_CLPNOTI")
+    if (clipping is None or clipping.get("type") != "Int32" or
+            clipping.get("group") != "Sensors" or
+            clipping.get("category") != "System" or
+            clipping.get("default") != 1 or
+            {entry.get("value") for entry in clipping.get("values", [])} !=
+            {0, 1}):
+        raise RuntimeError("SENS_IMU_CLPNOTI Metadata contract invalid")
+
+    mag_rate = by_name.get("SENS_MAG_RATE")
+    if (mag_rate is None or mag_rate.get("type") != "Float" or
+            mag_rate.get("group") != "Sensors" or
+            mag_rate.get("default") != 15.0 or
+            mag_rate.get("min") != 1 or mag_rate.get("max") != 200):
+        raise RuntimeError("SENS_MAG_RATE Metadata contract invalid")
 
 
 def array_lines(data: bytes) -> list[str]:
@@ -577,6 +680,7 @@ def main() -> int:
 
     by_name = validate_parameter_catalogue(parameters)
     validate_serial_metadata(by_name)
+    validate_sensor_metadata(by_name)
 
     parameter_json = json_bytes({
         "parameters": parameters,

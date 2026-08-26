@@ -117,28 +117,33 @@ ASM_SOURCES := startup_stm32h743xx.s
 
 MCU := -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
 C_DEFS := -DUSE_HAL_DRIVER -DSTM32H743xx
-C_INCLUDES := \
--I. \
--IBoards/H743/Inc \
--IDima \
--IBootloader/Inc \
--ICore/Inc \
--IUSB_DEVICE/Target \
--IDrivers/STM32H7xx_HAL_Driver/Inc \
--IDrivers/STM32H7xx_HAL_Driver/Inc/Legacy \
--IDrivers/CMSIS/Device/ST/STM32H7xx/Include \
--IDrivers/CMSIS/Include \
--IMiddlewares/ST/STM32_USB_Device_Library/Core/Inc \
--IMiddlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc \
--I$(MCUBOOT_ROOT)/boot/bootutil/include \
--I$(MCUBOOT_ROOT)/boot/bootutil/src \
--I$(MCUBOOT_ROOT)/boot/boot_serial/include \
--I$(MCUBOOT_ROOT)/boot/boot_serial/src \
--I$(MCUBOOT_ROOT)/boot/zcbor/include \
--I$(MCUBOOT_ROOT)/ext/tinycrypt/lib/include \
--I$(MCUBOOT_ROOT)/ext/mbedtls-asn1/include
+# 每类目标仅获得其实际需要的头文件根目录。该闭包既避免同名头被宽泛 -I
+# 意外遮蔽，也让架构检查能够从目标级 C_INCLUDES 还原真实依赖边界。
+C_INCLUDES :=
+DIMA_BOARD_INCLUDES := -IBoards/H743/Inc
+DIMA_STM32_PLATFORM_INCLUDES := -IDima/platform/stm32h7
+DIMA_BOOTLOADER_INCLUDES := -IBootloader/Inc
+DIMA_STM32_INCLUDES := \
+	-ICore/Inc \
+	-IDrivers/STM32H7xx_HAL_Driver/Inc \
+	-IDrivers/STM32H7xx_HAL_Driver/Inc/Legacy \
+	-IDrivers/CMSIS/Device/ST/STM32H7xx/Include \
+	-IDrivers/CMSIS/Include
+DIMA_USB_INCLUDES := \
+	-IUSB_DEVICE/Target \
+	-IMiddlewares/ST/STM32_USB_Device_Library/Core/Inc \
+	-IMiddlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc
+DIMA_MCUBOOT_INCLUDES := \
+	-I$(MCUBOOT_ROOT)/boot/bootutil/include \
+	-I$(MCUBOOT_ROOT)/boot/bootutil/src
+DIMA_BOOT_SERIAL_INCLUDES := \
+	-I$(MCUBOOT_ROOT)/boot/boot_serial/include \
+	-I$(MCUBOOT_ROOT)/boot/boot_serial/src
+DIMA_ZCBOR_INCLUDES := -I$(MCUBOOT_ROOT)/boot/zcbor/include
+DIMA_TINYCRYPT_INCLUDES := -I$(MCUBOOT_ROOT)/ext/tinycrypt/lib/include
+DIMA_ASN1_INCLUDES := -I$(MCUBOOT_ROOT)/ext/mbedtls-asn1/include
 
-CFLAGS := $(MCU) $(C_DEFS) $(C_INCLUDES) -std=gnu11 -Os -g3 -Wall -Wextra -Werror \
+CFLAGS = $(MCU) $(C_DEFS) $(C_INCLUDES) -std=gnu11 -Os -g3 -Wall -Wextra -Werror \
           -ffunction-sections -fdata-sections -MMD -MP
 ASFLAGS := $(MCU) -Os -g3 -Wall -ffunction-sections -fdata-sections
 LDSCRIPT := Bootloader/Linker/STM32H743_MCUBOOT.ld
@@ -147,6 +152,83 @@ LDFLAGS := $(MCU) -specs=nano.specs -T$(LDSCRIPT) -lc -lm -lnosys \
 
 OBJECTS := $(addprefix $(BUILD_DIR)/obj/,$(notdir $(C_SOURCES:.c=.o)))
 OBJECTS += $(addprefix $(BUILD_DIR)/obj/,$(notdir $(ASM_SOURCES:.s=.o)))
+# 本工程对象名扁平化到 obj/；各源目录不得出现同名 .c，否则映射会冲突。
+# DIMA_OBJECTS_FOR 只负责把已由 C_SOURCES 锁定的源映射为对应目标，不生成源列表。
+DIMA_OBJECTS_FOR = $(addprefix $(BUILD_DIR)/obj/,$(notdir $(1:.c=.o)))
+DIMA_BOOTLOADER_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter Bootloader/Src/%,$(C_SOURCES)))
+DIMA_BOARD_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter Boards/H743/Src/%,$(C_SOURCES)))
+DIMA_STM32_PLATFORM_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter Dima/platform/stm32h7/%,$(C_SOURCES)))
+DIMA_CORE_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter Core/Src/%,$(C_SOURCES)))
+DIMA_HAL_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter Drivers/STM32H7xx_HAL_Driver/%,$(C_SOURCES)))
+DIMA_USB_TARGET_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter USB_DEVICE/Target/%,$(C_SOURCES)))
+DIMA_USB_STACK_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter Middlewares/ST/%,$(C_SOURCES)))
+DIMA_MCUBOOT_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter $(MCUBOOT_ROOT)/boot/bootutil/%,$(C_SOURCES)))
+DIMA_BOOT_SERIAL_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter $(MCUBOOT_ROOT)/boot/boot_serial/%,$(C_SOURCES)))
+DIMA_ZCBOR_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter $(MCUBOOT_ROOT)/boot/zcbor/%,$(C_SOURCES)))
+DIMA_TINYCRYPT_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter $(MCUBOOT_ROOT)/ext/tinycrypt/%,$(C_SOURCES)))
+DIMA_ASN1_OBJECTS := \
+	$(call DIMA_OBJECTS_FOR,$(filter $(MCUBOOT_ROOT)/ext/mbedtls-asn1/%,$(C_SOURCES)))
+DIMA_PUBLIC_KEY_OBJECT := $(BUILD_DIR)/obj/ecdsa_pub_key.o
+
+DIMA_BOOTLOADER_STM32_OBJECTS := $(addprefix $(BUILD_DIR)/obj/, \
+	main.o boot_compat.o boot_platform.o boot_watchdog.o boot_usb.o \
+	flash_map_backend.o stm32h7xx_it.o usbd_desc.o)
+DIMA_BOOTLOADER_BOARD_OBJECTS := $(addprefix $(BUILD_DIR)/obj/, \
+	main.o boot_platform.o boot_primary.o flash_map_backend.o)
+DIMA_BOOTLOADER_PLATFORM_OBJECT := $(BUILD_DIR)/obj/boot_platform.o
+DIMA_BOOTLOADER_USB_OBJECTS := $(addprefix $(BUILD_DIR)/obj/, \
+	boot_usb.o usbd_desc.o)
+DIMA_BOOTLOADER_MCUBOOT_OBJECTS := $(addprefix $(BUILD_DIR)/obj/, \
+	main.o boot_primary.o keys.o)
+DIMA_BOOTLOADER_SERIAL_OBJECT := $(BUILD_DIR)/obj/main.o
+
+# 先清空全局包含路径，再通过 GNU make 的 target-specific variable 为对象授予
+# 最小可见集合；依赖会沿目标先决关系传播，因此特殊对象的补充项必须保持窄化。
+$(OBJECTS): C_INCLUDES :=
+$(DIMA_BOOTLOADER_OBJECTS): C_INCLUDES += $(DIMA_BOOTLOADER_INCLUDES)
+$(DIMA_BOOTLOADER_STM32_OBJECTS): C_INCLUDES += $(DIMA_STM32_INCLUDES)
+$(DIMA_BOOTLOADER_BOARD_OBJECTS): C_INCLUDES += $(DIMA_BOARD_INCLUDES)
+$(DIMA_BOOTLOADER_PLATFORM_OBJECT): C_INCLUDES += \
+	$(DIMA_STM32_PLATFORM_INCLUDES)
+$(DIMA_BOOTLOADER_USB_OBJECTS): C_INCLUDES += $(DIMA_USB_INCLUDES)
+$(DIMA_BOOTLOADER_MCUBOOT_OBJECTS): C_INCLUDES += $(DIMA_MCUBOOT_INCLUDES)
+$(DIMA_BOOTLOADER_SERIAL_OBJECT): C_INCLUDES += $(DIMA_BOOT_SERIAL_INCLUDES)
+
+$(DIMA_BOARD_OBJECTS): C_INCLUDES += \
+	$(DIMA_BOARD_INCLUDES) $(DIMA_STM32_PLATFORM_INCLUDES) \
+	$(DIMA_STM32_INCLUDES)
+$(DIMA_STM32_PLATFORM_OBJECTS): C_INCLUDES += \
+	$(DIMA_BOARD_INCLUDES) $(DIMA_STM32_PLATFORM_INCLUDES) \
+	$(DIMA_STM32_INCLUDES)
+$(DIMA_CORE_OBJECTS): C_INCLUDES += \
+	$(DIMA_BOARD_INCLUDES) $(DIMA_STM32_PLATFORM_INCLUDES) \
+	$(DIMA_STM32_INCLUDES)
+$(DIMA_HAL_OBJECTS): C_INCLUDES += $(DIMA_STM32_INCLUDES)
+$(DIMA_USB_TARGET_OBJECTS): C_INCLUDES += \
+	$(DIMA_USB_INCLUDES) $(DIMA_STM32_INCLUDES)
+$(DIMA_USB_STACK_OBJECTS): C_INCLUDES += \
+	$(DIMA_USB_INCLUDES) $(DIMA_STM32_INCLUDES)
+$(DIMA_MCUBOOT_OBJECTS): C_INCLUDES += \
+	$(DIMA_BOOTLOADER_INCLUDES) $(DIMA_MCUBOOT_INCLUDES) \
+	$(DIMA_TINYCRYPT_INCLUDES) $(DIMA_ASN1_INCLUDES)
+$(DIMA_BOOT_SERIAL_OBJECTS): C_INCLUDES += \
+	$(DIMA_BOOTLOADER_INCLUDES) $(DIMA_MCUBOOT_INCLUDES) \
+	$(DIMA_BOOT_SERIAL_INCLUDES) $(DIMA_ZCBOR_INCLUDES)
+$(DIMA_ZCBOR_OBJECTS): C_INCLUDES += $(DIMA_ZCBOR_INCLUDES)
+$(DIMA_TINYCRYPT_OBJECTS): C_INCLUDES += $(DIMA_TINYCRYPT_INCLUDES)
+$(DIMA_ASN1_OBJECTS): C_INCLUDES += $(DIMA_ASN1_INCLUDES)
+$(DIMA_PUBLIC_KEY_OBJECT): C_INCLUDES += $(DIMA_MCUBOOT_INCLUDES)
 vpath %.c $(sort $(dir $(C_SOURCES)))
 vpath %.s $(sort $(dir $(ASM_SOURCES)))
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a host-native compilation database from the real Make recipes."""
+"""从真实 GNU Make recipes 生成 Windows 主机原生 compilation database。"""
 
 from __future__ import annotations
 
@@ -13,19 +13,21 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from collections.abc import Iterator, Sequence
 
+from architecture.build_closure import BuildClosureError, load_build_closure
 
-SOURCE_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
+SOURCE_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".s"})
 COMPILER_PATTERN = re.compile(r"arm-none-eabi-(gcc|g\+\+)(?:\.exe)?$")
 
 
 class DatabaseError(RuntimeError):
-    """The Make plan could not be converted into a trustworthy database."""
+    """Make 计划无法无损转换为可信 compilation database。"""
 
 
 def logical_lines(text: str) -> Iterator[str]:
-    """Join Make recipe continuations without changing their shell quoting."""
+    """合并 Make recipe 续行但不改变 shell 引号语义。"""
     parts: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
@@ -77,7 +79,8 @@ def make_plan(
     gcc_path: pathlib.Path,
     make_variables: Sequence[str],
 ) -> str:
-    python = pathlib.Path(sys.executable).resolve().as_posix()
+    # Windows Store execution alias 可能触发 WinError 1920；dry-run 直接复用当前解释器。
+    python = pathlib.Path(sys.executable).as_posix()
     command = [
         make_program,
         "--no-print-directory",
@@ -94,8 +97,7 @@ def make_plan(
         "firmware",
     ]
     environment = os.environ.copy()
-    # The generator is normally called by Make. Do not leak the outer dry-run,
-    # jobserver, or goal state into the read-only Make instance used here.
+    # 生成器通常由 Make 调用；清除外层 dry-run/jobserver/递归状态，避免污染只读子 Make。
     for name in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL"):
         environment.pop(name, None)
 
@@ -145,7 +147,9 @@ def absolute_path(root: pathlib.Path, value: str) -> pathlib.Path:
 def parse_commands(
     plan: str, root: pathlib.Path, gcc_path: pathlib.Path
 ) -> list[dict[str, object]]:
+    """只保留 Arm 编译命令并替换为主机可执行编译器，拒绝丢失 source/output。"""
     entries: list[dict[str, object]] = []
+    arm_compile_commands = 0
     for line in logical_lines(plan):
         try:
             tokens = shlex.split(line, posix=True)
@@ -156,10 +160,15 @@ def parse_commands(
         kind = compiler_kind(tokens[0])
         if kind is None:
             continue
+        arm_compile_commands += 1
         paths = source_and_output(tokens)
         if paths is None:
-            continue
+            raise DatabaseError(
+                f"Arm compile command has no recognized source file: {line}"
+            )
         source_value, output_value = paths
+        if output_value is None:
+            raise DatabaseError(f"Arm compile command has no output: {line}")
         source = absolute_path(root, source_value)
         try:
             relative_source = source.relative_to(root)
@@ -175,12 +184,15 @@ def parse_commands(
             "file": str(source),
             "arguments": arguments,
         }
-        if output_value is not None:
-            entry["output"] = str(absolute_path(root, output_value))
+        entry["output"] = str(absolute_path(root, output_value))
         entries.append(entry)
 
     if not entries:
-        raise DatabaseError("Make dry-run contained no C/C++ compile commands")
+        raise DatabaseError("Make dry-run contained no compile commands")
+    if len(entries) != arm_compile_commands:
+        raise DatabaseError(
+            "not every Arm compile command was preserved in the database"
+        )
     return entries
 
 
@@ -190,52 +202,154 @@ def relative_file(entry: dict[str, object], root: pathlib.Path) -> str:
 
 
 def include_paths(entry: dict[str, object]) -> set[str]:
+    return set(include_path_list(entry))
+
+
+def include_path_list(entry: dict[str, object]) -> list[str]:
     arguments = entry["arguments"]
     assert isinstance(arguments, list)
-    includes: set[str] = set()
+    includes: list[str] = []
     for index, value in enumerate(arguments):
         token = str(value)
         if token == "-I" and index + 1 < len(arguments):
-            includes.add(str(arguments[index + 1]).replace("\\", "/"))
+            includes.append(str(arguments[index + 1]).replace("\\", "/"))
         elif token.startswith("-I") and len(token) > 2:
-            includes.add(token[2:].replace("\\", "/"))
+            includes.append(token[2:].replace("\\", "/"))
     return includes
 
 
+def validate_closure(
+    entries: Sequence[dict[str, object]],
+    root: pathlib.Path,
+    make_program: str,
+) -> None:
+    """将数据库 source/output 双向比对求值 Make 闭包，并拒绝重复 include 与对象碰撞。"""
+    pairs: list[tuple[str, str]] = []
+    outputs: list[str] = []
+    for entry in entries:
+        output = pathlib.Path(str(entry["output"]))
+        try:
+            relative_output = output.relative_to(root).as_posix()
+        except ValueError as error:
+            raise DatabaseError(
+                f"compile output is outside the workspace: {output}"
+            ) from error
+        pair = (relative_file(entry, root), relative_output)
+        pairs.append(pair)
+        outputs.append(relative_output)
+
+        includes = include_path_list(entry)
+        duplicate_includes = sorted(
+            include for include, count in Counter(includes).items() if count > 1
+        )
+        if duplicate_includes:
+            raise DatabaseError(
+                f"duplicate include roots for {pair[0]}: "
+                f"{', '.join(duplicate_includes)}"
+            )
+
+    duplicate_pairs = sorted(
+        pair for pair, count in Counter(pairs).items() if count > 1
+    )
+    if duplicate_pairs:
+        raise DatabaseError(
+            f"duplicate source/output compile contexts: {duplicate_pairs}"
+        )
+    duplicate_outputs = sorted(
+        output for output, count in Counter(outputs).items() if count > 1
+    )
+    if duplicate_outputs:
+        raise DatabaseError(f"duplicate compile outputs: {duplicate_outputs}")
+
+    try:
+        closure = load_build_closure(root, make_program)
+    except BuildClosureError as error:
+        raise DatabaseError(f"cannot verify Make build closure: {error}") from error
+    actual = set(pairs)
+    expected = set(closure.source_outputs)
+    if actual != expected or len(pairs) != len(closure.units):
+        missing = sorted(expected - actual)
+        unexpected = sorted(actual - expected)
+        raise DatabaseError(
+            "compilation database differs from the evaluated Make closure: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+
 def validate_contexts(entries: Sequence[dict[str, object]], root: pathlib.Path) -> None:
+    """抽查关键层的必需/禁止 include 根，证明 target-private 上下文没有泄漏。"""
     by_source: dict[str, list[dict[str, object]]] = {}
     for entry in entries:
         by_source.setdefault(relative_file(entry, root), []).append(entry)
 
     contexts = {
         "Dima/application/app_main.cpp": (
-            {"Dima", "build/generated_include", "build/generated/parameters"},
-            {"Middlewares/Third_Party/FreeRTOS/Source/include", "Core/Inc"},
+            {
+                "Dima/rover",
+                "Dima/drivers/gps",
+                "Dima/modules",
+                "Dima/middleware",
+                "Dima/lib",
+                "Dima/platform",
+                "build/generated_include",
+                "build/generated/messages",
+            },
+            {
+                "Dima",
+                "Middlewares/Third_Party/FreeRTOS/Source/include",
+                "Core/Inc",
+            },
         ),
         "Dima/platform/freertos/Backend.cpp": (
             {
-                "Dima",
+                "Dima/platform",
                 "Dima/platform/freertos",
                 "Middlewares/Third_Party/FreeRTOS/Source/include",
             },
-            {"Core/Inc", "Drivers/STM32H7xx_HAL_Driver/Inc"},
+            {"Dima", "Core/Inc", "Drivers/STM32H7xx_HAL_Driver/Inc"},
         ),
         "Dima/platform/stm32h7/flash/FlashDevice.cpp": (
             {
-                "Dima",
+                "Dima/platform",
+                "Dima/platform/stm32h7",
                 "Core/Inc",
                 "Drivers/STM32H7xx_HAL_Driver/Inc",
             },
-            {"Middlewares/Third_Party/FreeRTOS/Source/include"},
+            {"Dima", "Middlewares/Third_Party/FreeRTOS/Source/include"},
         ),
         "Boards/H743/Src/platform_composition.cpp": (
             {
-                "Dima/application",
-                "Dima/platform/freertos",
-                "Middlewares/Third_Party/FreeRTOS/Source/include",
+                "Dima/adapters",
+                "Dima/platform",
+                "Dima/platform/stm32h7",
                 "Drivers/STM32H7xx_HAL_Driver/Inc",
             },
-            set(),
+            {"Dima", "Middlewares/Third_Party/FreeRTOS/Source/include"},
+        ),
+        "Boards/H743/Src/boot_diagnostics.c": (
+            {
+                "Dima/platform",
+                "Dima/platform/freertos",
+                "Middlewares/Third_Party/FreeRTOS/Source/include",
+            },
+            {"Dima"},
+        ),
+        "USB_DEVICE/App/usbd_cdc_if.c": (
+            {"Dima/adapters", "Dima/platform", "Dima/platform/stm32h7"},
+            {"Dima", "Dima/modules", "build/generated/messages"},
+        ),
+        "build/generated/messages/uorb_topics.cpp": (
+            {
+                "Dima/middleware",
+                "Dima/platform",
+                "build/generated_include",
+                "build/generated/messages",
+            },
+            {
+                "Dima",
+                "Core/Inc",
+                "Middlewares/Third_Party/FreeRTOS/Source/include",
+            },
         ),
     }
     for source, (required, forbidden) in contexts.items():
@@ -255,6 +369,7 @@ def validate_contexts(entries: Sequence[dict[str, object]], root: pathlib.Path) 
 
 
 def write_database(path: pathlib.Path, entries: Sequence[dict[str, object]]) -> None:
+    """同目录写临时 JSON、fsync 后原子替换，避免 clangd 读取半写数据库。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
     try:
@@ -299,6 +414,7 @@ def main() -> int:
     gcc_path = find_gcc_path(arguments.gcc_path)
     plan = make_plan(root, arguments.make, gcc_path, arguments.make_variable)
     entries = parse_commands(plan, root, gcc_path)
+    validate_closure(entries, root, arguments.make)
     validate_contexts(entries, root)
     write_database(output, entries)
 

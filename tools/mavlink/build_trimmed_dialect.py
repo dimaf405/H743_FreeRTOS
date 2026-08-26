@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Generate the deterministic 24-message Dima MAVLink v2 dialect."""
+"""生成可复现的 Dima MAVLink v2 dialect 与运行时消息合同。
+
+消息、枚举、命令和流调度均以 ``mavlink.lock.json`` 为权威输入；本文件只负责
+校验、裁剪和生成，不能再维护第二份消息列表或 ID 映射。
+"""
 
 from __future__ import annotations
 
@@ -26,56 +30,7 @@ from bootstrap_pymavlink import (
 )
 
 
-MESSAGES_FROM_COMMON = {
-    "PING",
-    "PARAM_REQUEST_READ",
-    "PARAM_REQUEST_LIST",
-    "PARAM_VALUE",
-    "PARAM_SET",
-    "COMMAND_LONG",
-    "COMMAND_ACK",
-    "COMMAND_INT",
-    "FILE_TRANSFER_PROTOCOL",
-    "MISSION_REQUEST_LIST",
-    "MISSION_COUNT",
-    "MISSION_CLEAR_ALL",
-    "MISSION_ACK",
-    "RC_CHANNELS",
-    "TIMESYNC",
-    "STATUSTEXT",
-    "PARAM_EXT_REQUEST_READ",
-    "PARAM_EXT_VALUE",
-    "COMPONENT_INFORMATION",
-    "COMPONENT_METADATA",
-}
-
-INHERITED_MESSAGES = {
-    "AUTOPILOT_VERSION",
-    "GLOBAL_POSITION_INT",
-    "HEARTBEAT",
-    "PROTOCOL_VERSION",
-}
-
-ENUMS_FROM_COMMON_FULL = {
-    "MAV_RESULT",
-    "MAV_SEVERITY",
-    "MAV_PARAM_TYPE",
-    "MAV_FRAME",
-    "MAV_MISSION_RESULT",
-    "MAV_MISSION_TYPE",
-}
-
-MAV_CMD_ENTRIES = {
-    "MAV_CMD_PREFLIGHT_CALIBRATION",
-    "MAV_CMD_DO_SET_MODE",
-    "MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN",
-    "MAV_CMD_COMPONENT_ARM_DISARM",
-    "MAV_CMD_REQUEST_MESSAGE",
-    "MAV_CMD_SET_MESSAGE_INTERVAL",
-    "MAV_CMD_GET_MESSAGE_INTERVAL",
-    "MAV_CMD_REQUEST_PROTOCOL_VERSION",
-    "MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES",
-}
+IDENTIFIER_PATTERN = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 
 
 class GenerationError(RuntimeError):
@@ -84,7 +39,7 @@ class GenerationError(RuntimeError):
 
 def install_generated_tree(source: pathlib.Path,
                            destination: pathlib.Path) -> None:
-    """Atomically install a generated tree, tolerating short Windows locks."""
+    """原子安装生成树，并对 Windows 杀毒/索引造成的短暂句柄占用做有界重试。"""
     attempts = 5 if os.name == "nt" else 1
     for attempt in range(attempts):
         try:
@@ -99,18 +54,28 @@ def install_generated_tree(source: pathlib.Path,
             time.sleep(0.05 * (attempt + 1))
 
 
-def extract(source_path: pathlib.Path) -> tuple[list[ET.Element], list[ET.Element]]:
+def extract(
+    source_path: pathlib.Path,
+    messages_from_common: set[str],
+    enums_from_common_full: set[str],
+    mav_cmd_entries: set[str],
+) -> tuple[list[ET.Element], list[ET.Element]]:
+    """按 lock 传入的集合从 pinned common.xml 提取消息和枚举。
+
+    ``MAV_CMD`` 只复制合同列出的 entry；其余完整枚举按名称复制。调用方传入
+    集合而非模块常量，确保 XML 裁剪与运行时合同共用同一权威来源。
+    """
     root = ET.parse(source_path).getroot()
     messages = [
         copy.deepcopy(message)
         for message in root.findall("./messages/message")
-        if message.get("name") in MESSAGES_FROM_COMMON
+        if message.get("name") in messages_from_common
     ]
 
     enums: list[ET.Element] = []
     for enum in root.findall("./enums/enum"):
         name = enum.get("name")
-        if name in ENUMS_FROM_COMMON_FULL:
+        if name in enums_from_common_full:
             enums.append(copy.deepcopy(enum))
         elif name == "MAV_CMD":
             filtered = ET.Element("enum", enum.attrib)
@@ -118,7 +83,7 @@ def extract(source_path: pathlib.Path) -> tuple[list[ET.Element], list[ET.Elemen
             if description is not None:
                 filtered.append(copy.deepcopy(description))
             for entry in enum.findall("entry"):
-                if entry.get("name") in MAV_CMD_ENTRIES:
+                if entry.get("name") in mav_cmd_entries:
                     filtered.append(copy.deepcopy(entry))
             enums.append(filtered)
     return messages, enums
@@ -137,6 +102,7 @@ def indent(element: ET.Element, level: int = 0) -> None:
 
 
 def validate_inputs(xml_dir: pathlib.Path, lock: dict) -> None:
+    """在解析前核对每个上游 XML 的 SHA-256，拒绝静默版本漂移。"""
     expected = lock["mavlink"]["xml_sha256"]
     for filename, expected_sha in expected.items():
         path = xml_dir / filename
@@ -156,9 +122,176 @@ def source_message_names(path: pathlib.Path) -> set[str]:
     }
 
 
-def validate_allowlist(xml_dir: pathlib.Path, lock: dict) -> None:
+def required_string_set(mapping: dict, key: str) -> set[str]:
+    """读取非空且无重复的字符串数组，同时消除后续查找的顺序依赖。"""
+    values = mapping.get(key)
+    if not isinstance(values, list) or not values:
+        raise GenerationError(f"dialect.{key} must be a non-empty array")
+    if any(not isinstance(value, str) or not value for value in values):
+        raise GenerationError(f"dialect.{key} entries must be non-empty strings")
+    result = set(values)
+    if len(result) != len(values):
+        raise GenerationError(f"dialect.{key} contains duplicate entries")
+    return result
+
+
+def source_message_ids(paths: tuple[pathlib.Path, ...]) -> dict[str, int]:
+    """从 pinned XML 解析 name -> ID，并拒绝跨 dialect 的同名异号。"""
+    identifiers: dict[str, int] = {}
+    for path in paths:
+        for message in ET.parse(path).getroot().findall("./messages/message"):
+            name = message.get("name")
+            identifier = message.get("id")
+            if not name or identifier is None:
+                continue
+            value = int(identifier)
+            previous = identifiers.get(name)
+            if previous is not None and previous != value:
+                raise GenerationError(f"message {name} has conflicting IDs")
+            identifiers[name] = value
+    return identifiers
+
+
+def validate_runtime_contract(
+    lock: dict, complete: set[str], message_ids: dict[str, int]
+) -> list[dict]:
+    """把 lock 中的消息流声明规范化为唯一、可生成的运行时描述符。
+
+    scheduler 决定谁产生周期消息，tx_stage 决定 Service 流在 metadata 前后
+    的发送阶段；无调度器的消息不得携带周期配置。这里校验的是合同闭包，
+    C++ 侧只消费生成结果，不再手写 request/interval/dispatch 清单。
+    """
+    runtime = lock.get("runtime")
+    if not isinstance(runtime, dict):
+        raise GenerationError("runtime must be an object")
+    messages = runtime.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise GenerationError("runtime.messages must be a non-empty array")
+
+    normalized: list[dict] = []
+    names: set[str] = set()
+    handlers: set[str] = set()
+    heartbeat_count = 0
+    for index, entry in enumerate(messages):
+        field = f"runtime.messages[{index}]"
+        if not isinstance(entry, dict):
+            raise GenerationError(f"{field} must be an object")
+        name = entry.get("name")
+        handler = entry.get("handler")
+        requestable = entry.get("requestable")
+        scheduler = entry.get("scheduler")
+        tx_stage = entry.get("tx_stage", "none")
+        if not isinstance(name, str) or name not in complete:
+            raise GenerationError(f"{field}.name is not in the generated dialect")
+        if name in names:
+            raise GenerationError(f"duplicate runtime message {name}")
+        if not isinstance(handler, str) or not IDENTIFIER_PATTERN.fullmatch(handler):
+            raise GenerationError(f"{field}.handler is not a C++ identifier")
+        if handler in handlers:
+            raise GenerationError(f"duplicate runtime handler {handler}")
+        if not isinstance(requestable, bool):
+            raise GenerationError(f"{field}.requestable must be boolean")
+        if scheduler not in {"none", "heartbeat", "service"}:
+            raise GenerationError(f"{field}.scheduler is invalid")
+        if tx_stage not in {"none", "pre_metadata", "post_metadata"}:
+            raise GenerationError(f"{field}.tx_stage is invalid")
+        if scheduler == "service" and tx_stage == "none":
+            raise GenerationError(f"{field}.tx_stage is required for service streams")
+        if scheduler != "service" and tx_stage != "none":
+            raise GenerationError(f"{field}.tx_stage requires the service scheduler")
+        if name not in message_ids:
+            raise GenerationError(f"unable to resolve MAVLink message ID for {name}")
+
+        default_interval = entry.get("default_interval_us", -1)
+        configurable = entry.get("interval_configurable", False)
+        if not isinstance(configurable, bool):
+            raise GenerationError(f"{field}.interval_configurable must be boolean")
+        # -1 只表示“没有周期调度”；真正的周期必须是正数且可装入 int32_t，
+        # 以便生成头与 MAV_CMD_SET_MESSAGE_INTERVAL 使用同一线协议范围。
+        if scheduler == "none":
+            if default_interval != -1 or configurable:
+                raise GenerationError(
+                    f"{field} cannot configure an interval without a scheduler"
+                )
+        else:
+            if (
+                isinstance(default_interval, bool)
+                or not isinstance(default_interval, int)
+                or default_interval <= 0
+                or default_interval > 0x7FFFFFFF
+            ):
+                raise GenerationError(f"{field}.default_interval_us is invalid")
+        if scheduler == "heartbeat":
+            heartbeat_count += 1
+            if handler != "Heartbeat" or configurable:
+                raise GenerationError(
+                    "the heartbeat scheduler requires fixed Heartbeat handler"
+                )
+
+        names.add(name)
+        handlers.add(handler)
+        normalized.append(
+            {
+                "name": name,
+                "message_id": message_ids[name],
+                "handler": handler,
+                "requestable": requestable,
+                "scheduler": scheduler,
+                "tx_stage": tx_stage,
+                "default_interval_us": default_interval,
+                "interval_configurable": configurable,
+            }
+        )
+    if heartbeat_count != 1:
+        raise GenerationError("runtime contract must contain exactly one heartbeat")
+    return normalized
+
+
+def validate_inbound_contract(
+    lock: dict, complete: set[str], message_ids: dict[str, int]
+) -> list[dict]:
+    """验证由 lock 声明的接收消息 -> 业务 handler 路由。"""
+    runtime = lock["runtime"]
+    inbound = runtime.get("inbound")
+    if not isinstance(inbound, list) or not inbound:
+        raise GenerationError("runtime.inbound must be a non-empty array")
+
+    normalized: list[dict] = []
+    names: set[str] = set()
+    for index, entry in enumerate(inbound):
+        field = f"runtime.inbound[{index}]"
+        if not isinstance(entry, dict):
+            raise GenerationError(f"{field} must be an object")
+        name = entry.get("name")
+        handler = entry.get("handler")
+        if not isinstance(name, str) or name not in complete:
+            raise GenerationError(f"{field}.name is not in the generated dialect")
+        if name in names:
+            raise GenerationError(f"duplicate inbound message {name}")
+        if not isinstance(handler, str) or not IDENTIFIER_PATTERN.fullmatch(handler):
+            raise GenerationError(f"{field}.handler is not a C++ identifier")
+        if name not in message_ids:
+            raise GenerationError(f"unable to resolve MAVLink message ID for {name}")
+        names.add(name)
+        normalized.append(
+            {"name": name, "message_id": message_ids[name], "handler": handler}
+        )
+    return normalized
+
+
+def validate_allowlist(
+    xml_dir: pathlib.Path, lock: dict
+) -> tuple[list[dict], list[dict]]:
+    """验证完整 dialect 集合、禁止消息和运行时流合同彼此闭合。"""
+    dialect = lock.get("dialect")
+    if not isinstance(dialect, dict):
+        raise GenerationError("dialect must be an object")
+    messages_from_common = required_string_set(dialect, "messages_from_common")
+    inherited_messages = required_string_set(dialect, "inherited_messages")
+    required_string_set(dialect, "enums_from_common_full")
+    required_string_set(dialect, "mav_cmd_entries")
     common_names = source_message_names(xml_dir / "common.xml")
-    missing = MESSAGES_FROM_COMMON - common_names
+    missing = messages_from_common - common_names
     if missing:
         raise GenerationError(f"messages missing from common.xml: {sorted(missing)}")
 
@@ -166,13 +299,13 @@ def validate_allowlist(xml_dir: pathlib.Path, lock: dict) -> None:
         source_message_names(xml_dir / "standard.xml")
         | source_message_names(xml_dir / "minimal.xml")
     )
-    if inherited != INHERITED_MESSAGES:
+    if inherited != inherited_messages:
         raise GenerationError(
             "pinned standard/minimal inherited message set changed: "
-            f"expected {sorted(INHERITED_MESSAGES)}, got {sorted(inherited)}"
+            f"expected {sorted(inherited_messages)}, got {sorted(inherited)}"
         )
 
-    complete = MESSAGES_FROM_COMMON | inherited
+    complete = messages_from_common | inherited
     expected_count = lock["dialect"]["message_count"]
     if len(complete) != expected_count:
         raise GenerationError(
@@ -184,10 +317,28 @@ def validate_allowlist(xml_dir: pathlib.Path, lock: dict) -> None:
         raise GenerationError(
             f"forbidden messages entered dialect: {sorted(present_forbidden)}"
         )
+    message_ids = source_message_ids(
+        (
+            xml_dir / "common.xml",
+            xml_dir / "standard.xml",
+            xml_dir / "minimal.xml",
+        )
+    )
+    return (
+        validate_runtime_contract(lock, complete, message_ids),
+        validate_inbound_contract(lock, complete, message_ids),
+    )
 
 
-def write_dialect(xml_dir: pathlib.Path, output_path: pathlib.Path) -> None:
-    messages, enums = extract(xml_dir / "common.xml")
+def write_dialect(xml_dir: pathlib.Path, output_path: pathlib.Path, lock: dict) -> None:
+    """生成仅 include standard.xml 的 dima.xml，并固定消息输出顺序与换行。"""
+    dialect = lock["dialect"]
+    messages, enums = extract(
+        xml_dir / "common.xml",
+        set(dialect["messages_from_common"]),
+        set(dialect["enums_from_common_full"]),
+        set(dialect["mav_cmd_entries"]),
+    )
     root = ET.Element("mavlink")
     ET.SubElement(root, "include").text = "standard.xml"
     ET.SubElement(root, "version").text = "0"
@@ -205,6 +356,7 @@ def write_dialect(xml_dir: pathlib.Path, output_path: pathlib.Path) -> None:
 
 
 def hash_tree(root: pathlib.Path) -> dict[str, str]:
+    """按相对路径排序记录生成树内容哈希，供 verify/缓存判断真实漂移。"""
     hashes: dict[str, str] = {}
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
         hashes[path.relative_to(root).as_posix()] = file_sha256(path)
@@ -216,7 +368,7 @@ def normalize_xml_hashes(
     dialect_path: pathlib.Path,
     xml_dir: pathlib.Path,
 ) -> None:
-    """Replace Python-version-dependent mavgen XML hashes with stable values."""
+    """用源 XML 的 SHA-256 截断值替换依赖 Python 版本的 mavgen 哈希。"""
     sources = {
         "dima": dialect_path,
         "standard": xml_dir / "standard.xml",
@@ -248,6 +400,7 @@ def normalize_xml_hashes(
 
 
 def normalize_generated_line_endings(generated: pathlib.Path) -> None:
+    """统一为 LF，避免 Windows/Unix 主机差异污染生成合同哈希。"""
     for path in (item for item in generated.rglob("*") if item.is_file()):
         content = path.read_bytes()
         normalized = content.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
@@ -255,10 +408,169 @@ def normalize_generated_line_endings(generated: pathlib.Path) -> None:
             path.write_bytes(normalized)
 
 
+def write_runtime_contract(
+    generated: pathlib.Path,
+    runtime_messages: list[dict],
+    inbound_messages: list[dict],
+) -> None:
+    """生成 C++ 编译期消息表、调度阶段和 handler 索引辅助函数。
+
+    表项完全来自已验证 lock；``service_index`` 只对 Service 周期流计数，因此
+    数组槽位与 MavlinkService 的运行时 interval 状态一一对应。
+    """
+    handlers = ",\n".join(
+        f"    {message['handler']}" for message in runtime_messages
+    )
+    scheduler_names = {
+        "none": "None",
+        "heartbeat": "Heartbeat",
+        "service": "Service",
+    }
+    tx_stage_names = {
+        "none": "None",
+        "pre_metadata": "PreMetadata",
+        "post_metadata": "PostMetadata",
+    }
+    descriptors = []
+    for message in runtime_messages:
+        descriptors.append(
+            "    {"
+            f"{message['message_id']}U, MessageHandler::{message['handler']}, "
+            f"Scheduler::{scheduler_names[message['scheduler']]}, "
+            f"TxStage::{tx_stage_names[message['tx_stage']]}, "
+            f"{message['default_interval_us']}, "
+            f"{'true' if message['requestable'] else 'false'}, "
+            f"{'true' if message['interval_configurable'] else 'false'}"
+            "}"
+        )
+    descriptor_text = ",\n".join(descriptors)
+    inbound_handlers = list(dict.fromkeys(
+        message["handler"] for message in inbound_messages
+    ))
+    inbound_handler_text = ",\n".join(
+        f"    {handler}" for handler in inbound_handlers
+    )
+    inbound_descriptor_text = ",\n".join(
+        "    {"
+        f"{message['message_id']}U, InboundHandler::{message['handler']}"
+        "}"
+        for message in inbound_messages
+    )
+    service_count = sum(
+        message["scheduler"] == "service" for message in runtime_messages
+    )
+    content = f"""// Generated by tools/mavlink/build_trimmed_dialect.py. Do not edit.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace dima::generated::mavlink_streams {{
+
+enum class MessageHandler : std::uint8_t {{
+{handlers}
+}};
+
+enum class InboundHandler : std::uint8_t {{
+{inbound_handler_text}
+}};
+
+enum class Scheduler : std::uint8_t {{
+    None,
+    Heartbeat,
+    Service,
+}};
+
+enum class TxStage : std::uint8_t {{
+    None,
+    PreMetadata,
+    PostMetadata,
+}};
+
+struct MessageContract {{
+    std::uint32_t message_id;
+    MessageHandler handler;
+    Scheduler scheduler;
+    TxStage tx_stage;
+    std::int32_t default_interval_us;
+    bool requestable;
+    bool interval_configurable;
+}};
+
+struct InboundMessageContract {{
+    std::uint32_t message_id;
+    InboundHandler handler;
+}};
+
+inline constexpr MessageContract kMessages[]{{
+{descriptor_text}
+}};
+inline constexpr std::size_t kMessageCount =
+    sizeof(kMessages) / sizeof(kMessages[0]);
+inline constexpr std::size_t kServiceStreamCount = {service_count}U;
+inline constexpr std::size_t kInvalidServiceIndex = kServiceStreamCount;
+
+inline constexpr InboundMessageContract kInboundMessages[]{{
+{inbound_descriptor_text}
+}};
+inline constexpr std::size_t kInboundMessageCount =
+    sizeof(kInboundMessages) / sizeof(kInboundMessages[0]);
+
+constexpr const MessageContract *find_message(std::uint32_t message_id) noexcept
+{{
+    for (const MessageContract &message : kMessages) {{
+        if (message.message_id == message_id) return &message;
+    }}
+    return nullptr;
+}}
+
+constexpr const MessageContract *find_handler(MessageHandler handler) noexcept
+{{
+    for (const MessageContract &message : kMessages) {{
+        if (message.handler == handler) return &message;
+    }}
+    return nullptr;
+}}
+
+constexpr const InboundMessageContract *find_inbound_message(
+    std::uint32_t message_id) noexcept
+{{
+    for (const InboundMessageContract &message : kInboundMessages) {{
+        if (message.message_id == message_id) return &message;
+    }}
+    return nullptr;
+}}
+
+constexpr std::size_t service_index(MessageHandler handler) noexcept
+{{
+    std::size_t index = 0U;
+    for (const MessageContract &message : kMessages) {{
+        if (message.scheduler == Scheduler::Service) {{
+            if (message.handler == handler) return index;
+            ++index;
+        }}
+    }}
+    return kInvalidServiceIndex;
+}}
+
+constexpr std::int32_t default_interval_us(MessageHandler handler) noexcept
+{{
+    const MessageContract *message = find_handler(handler);
+    return message != nullptr ? message->default_interval_us : -1;
+}}
+
+}} // namespace dima::generated::mavlink_streams
+"""
+    (generated / "mavlink_stream_contract.hpp").write_bytes(
+        content.encode("utf-8")
+    )
+
+
 def generate(arguments: argparse.Namespace) -> None:
+    """在隔离 work 目录完成校验、mavgen、规范化和原子发布。"""
     lock = load_lock(arguments.lock)
     validate_inputs(arguments.xml_dir, lock)
-    validate_allowlist(arguments.xml_dir, lock)
+    runtime_messages, inbound_messages = validate_allowlist(arguments.xml_dir, lock)
 
     pymavlink_root = provision_pymavlink(
         arguments.cache_root.expanduser(), arguments.lock, arguments.pymavlink_root
@@ -276,6 +588,8 @@ def generate(arguments: argparse.Namespace) -> None:
             f"loaded {pymavlink.__version__} from {imported_root}"
         )
 
+    # 所有中间产物先进入同级 work 目录；只有完整生成、规范化和 manifest
+    # 写入都成功后才替换目标树，失败不会留下“半新半旧”的头文件集合。
     output_dir = arguments.output_dir
     work_dir = output_dir.with_name(output_dir.name + ".work")
     if work_dir.exists():
@@ -287,7 +601,7 @@ def generate(arguments: argparse.Namespace) -> None:
     for filename in ("minimal.xml", "standard.xml"):
         shutil.copyfile(arguments.xml_dir / filename, definitions / filename)
     dialect_path = definitions / "dima.xml"
-    write_dialect(arguments.xml_dir, dialect_path)
+    write_dialect(arguments.xml_dir, dialect_path, lock)
 
     class Options:
         language = "C"
@@ -307,6 +621,7 @@ def generate(arguments: argparse.Namespace) -> None:
     normalize_generated_line_endings(generated)
     normalize_xml_hashes(generated, dialect_path, arguments.xml_dir)
     shutil.copyfile(dialect_path, generated / "dima.xml")
+    write_runtime_contract(generated, runtime_messages, inbound_messages)
     manifest = {
         "dialect": "dima",
         "message_count": lock["dialect"]["message_count"],
@@ -314,6 +629,8 @@ def generate(arguments: argparse.Namespace) -> None:
         "pymavlink_commit": lock["pymavlink"]["commit"],
         "pymavlink_version": lock["pymavlink"]["version"],
         "xml_sha256": lock["mavlink"]["xml_sha256"],
+        "runtime_messages": runtime_messages,
+        "runtime_inbound": inbound_messages,
         "output_sha256": hash_tree(generated),
     }
     (generated / ".generated.json").write_bytes(

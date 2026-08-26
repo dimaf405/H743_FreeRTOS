@@ -1,6 +1,12 @@
 # MCUboot image metadata. Override release values at build time, for example:
 #   make IMAGE_VERSION=1.2.3+45 KEY_FILE=/secure/path/production.pem
-IMAGE_VERSION ?= 0.1.0+0
+# IMAGE_VERSION 来自权威 firmware_identity.json；KEY_FILE 的内容身份另存 stamp，
+# 因而同一路径换钥匙也会使签名、MCUboot 与验证链失效重建。
+IMAGE_VERSION ?= $(shell $(PYTHON) $(FIRMWARE_IDENTITY_GENERATOR) \
+	--manifest $(FIRMWARE_IDENTITY_MANIFEST) --print-image-version)
+ifeq ($(strip $(IMAGE_VERSION)),)
+$(error IMAGE_VERSION could not be generated from $(FIRMWARE_IDENTITY_MANIFEST))
+endif
 DEVELOPMENT_KEY = .keys/development-ecdsa-p256.pem
 KEY_FILE ?= $(DEVELOPMENT_KEY)
 MCUBOOT_ROOT = Middlewares/Third_Party/MCUboot
@@ -18,50 +24,90 @@ KEY_ID_TOOL = tools/update_key_identity.py
 # A forced no-op recipe looks updated to `make -n` even when the real helper
 # preserves the stamp mtime.  Resolve that condition read-only while parsing
 # so the dry-run and real dependency graph agree.
+# 解析期只读 status 解决 dry-run 的“伪更新”问题：只有密钥内容身份变化才注入
+# FORCE 前置条件，计划图与真实执行图保持一致。
 KEY_IDENTITY_STATUS := $(shell $(PYTHON) "$(KEY_ID_TOOL)" \
 	--key "$(KEY_FILE)" --stamp "$(KEY_ID_STAMP)" --status)
 KEY_IDENTITY_WILL_CHANGE := $(if $(filter current,$(KEY_IDENTITY_STATUS)),0,1)
 KEY_ID_FORCE_PREREQUISITE := $(if $(filter 1,$(KEY_IDENTITY_WILL_CHANGE)),FORCE_KEY_IDENTITY_CHECK,)
+ARCHITECTURE_CACHE_TOOL = tools/architecture_cache.py
+ARCHITECTURE_VERIFY_STAMP = $(BUILD_DIR)/.architecture-verified
+# Full application/release goals keep their historical live gate.  Upload is
+# deliberately excluded when present so `make dima_rover upload` remains the
+# application-only OTA spelling; a changed architecture input still invalidates
+# the content identity and runs the complete checker before any rebuild.
+# architecture stamp 是对受控源码/manifest/生成器输入的内容寻址证明；上传可复用
+# 当前 stamp，但任一输入哈希漂移都会先完整重跑架构门禁。
+DIMA_ARCHITECTURE_FULL_GOALS := check-architecture app-check firmware verify dima_rover
+DIMA_ARCHITECTURE_FORCE_GOALS := $(if $(filter upload,$(MAKECMDGOALS)),\
+	$(filter check-architecture,$(MAKECMDGOALS)),\
+	$(filter $(DIMA_ARCHITECTURE_FULL_GOALS),$(MAKECMDGOALS)))
+DIMA_ARCHITECTURE_CACHE_GOALS := architecture-ready upload upload-ready
+# Avoid hashing the architecture surface in generated-output preparation,
+# summaries, preflight, and full goals that will force the checker anyway.
+ARCHITECTURE_IDENTITY_STATUS := $(if $(DIMA_ARCHITECTURE_FORCE_GOALS),stale,\
+	$(if $(filter $(DIMA_ARCHITECTURE_CACHE_GOALS),$(MAKECMDGOALS)),\
+		$(shell $(PYTHON) "$(ARCHITECTURE_CACHE_TOOL)" \
+			--stamp "$(ARCHITECTURE_VERIFY_STAMP)" --status),stale))
+ARCHITECTURE_IDENTITY_WILL_CHANGE := $(if \
+	$(and $(filter current,$(ARCHITECTURE_IDENTITY_STATUS)),\
+	      $(if $(DIMA_ARCHITECTURE_FORCE_GOALS),,1)),0,1)
+ARCHITECTURE_FORCE_PREREQUISITE := $(if \
+	$(filter 1,$(ARCHITECTURE_IDENTITY_WILL_CHANGE)),\
+	FORCE_ARCHITECTURE_CHECK,)
 MCUMGR ?= mcumgr
 MCUMGR_PORT ?=
 MCUMGR_BAUD ?= 921600
 MCUMGR_MTU ?= 512
 MCUMGR_MAX_WINDOW ?= 1
 UPLOAD_WAIT_SECONDS ?= 60
-UPLOAD_CONFIRM_WAIT_SECONDS ?= 8
 UPLOAD_FORCE ?= 0
-UPLOAD_VERIFY_CONFIRM ?= 1
 UPLOAD_IMAGE ?= $(SIGNED_BIN)
 UPLOAD_VERIFY_STAMP = $(BUILD_DIR)/.upload-image-verified
 UPLOAD_TOOL = tools/mcumgr_upload.py
 MCUMGR_BOOTSTRAP_TOOL = tools/bootstrap_mcumgr.py
 UPLOAD_FORCE_FLAG = $(if $(filter 1,$(UPLOAD_FORCE)),--force,)
-UPLOAD_CONFIRM_FLAG = $(if $(filter 0,$(UPLOAD_VERIFY_CONFIRM)),--skip-confirm-verification,)
 
 ifneq ($(filter-out 0 1,$(UPLOAD_FORCE)),)
 $(error UPLOAD_FORCE must be 0 or 1)
 endif
-ifneq ($(filter-out 0 1,$(UPLOAD_VERIFY_CONFIRM)),)
-$(error UPLOAD_VERIFY_CONFIRM must be 0 or 1)
-endif
-
-.PHONY: check-architecture app-check intellisense mavlink firmware mcuboot host-tools verify dima_rover \
+.PHONY: architecture-ready check-architecture app-check intellisense mavlink firmware mcuboot host-tools verify dima_rover \
 		upload-ready upload-preflight upload install-hooks \
-		__dima_clean_progress __dima_prepare_generated __dima_summary \
-		FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
+		__dima_clean_progress __dima_prepare_make_includes \
+		__dima_prepare_generated __dima_summary \
+		FORCE_ARCHITECTURE_CHECK FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
 
 # Stabilize content-addressed/generated outputs before the public wrapper takes
 # its dry-run snapshot.  A generator may run because an input timestamp changed
 # yet preserve every output timestamp when the content is unchanged; planning
 # before that decision overestimates the downstream compile/link actions.
-__dima_prepare_generated: $(SERIAL_GENERATED_OUTPUTS) \
-		$(PARAMETER_GENERATED_OUTPUTS) $(PARAMETER_METADATA_OUTPUTS) \
+# 先收敛 DroneCAN、串口、UM982、uORB、参数、Metadata 与 MAVLink 生成闭包，
+# 再截取 dry-run；生成内容未变时保留 mtime，避免虚假的全量重编译计划。
+__dima_prepare_make_includes: $(DRONECAN_GENERATED_MAKEFILE)
+	@:
+
+__dima_prepare_generated: $(DIMA_DRONECAN_GENERATED_OUTPUTS) \
+		$(SERIAL_GENERATED_OUTPUTS) \
+		$(UM982_CONTRACT_HEADER) \
+		$(MESSAGE_GENERATED_OUTPUTS) $(PARAMETER_GENERATED_OUTPUTS) \
+		$(PARAMETER_METADATA_OUTPUTS) \
 		$(MAVLINK_LIBRARY_HEADER)
 	@:
 
-check-architecture: $(ARCHITECTURE_CHECK_TOOL) parameter-metadata-verify
-	$(DIMA_PROGRESS_RUN) --label ARCH --target "$@" -- \
-		$(PYTHON) $(ARCHITECTURE_CHECK_TOOL)
+FORCE_ARCHITECTURE_CHECK:
+
+$(ARCHITECTURE_VERIFY_STAMP): $(ARCHITECTURE_FORCE_PREREQUISITE) \
+		$(ARCHITECTURE_CHECK_TOOL) $(ARCHITECTURE_CACHE_TOOL) | \
+		parameter-metadata-verify $(BUILD_DIR)
+	$(DIMA_PROGRESS_RUN) --label ARCH --target "$@" \
+		--display "check-architecture" -- \
+		$(PYTHON) $(ARCHITECTURE_CHECK_TOOL) --stamp "$@"
+
+architecture-ready: $(ARCHITECTURE_VERIFY_STAMP)
+	@:
+
+check-architecture: architecture-ready
+	@:
 
 # Install git hooks so that architecture check runs automatically on commit.
 GIT_HOOKS_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null)/.git/hooks
@@ -73,6 +119,8 @@ install-hooks:
 # Fast application-only gate for local iterations.  It deliberately excludes
 # image signing, MCUboot and Factory HEX generation; `verify` remains the full
 # incremental image gate.
+# app-check 仅证明 Application ELF；firmware/verify 才覆盖签名、MCUboot 与
+# Factory HEX。两者的证据层级不可互换。
 app-check: check-architecture $(BUILD_DIR)/$(TARGET).elf
 	$(DIMA_PROGRESS_RUN) --label ELF --target "$(BUILD_DIR)/$(TARGET).elf" -- \
 		$(PYTHON) $(APPLICATION_ELF_CHECK_TOOL) \
@@ -173,6 +221,8 @@ $(IMAGE_VERSION_STAMP): | $(BUILD_DIR)
 	@rm -f $(BUILD_DIR)/.image-version-*
 	@touch $@
 
+# -H 0x400 为 MCUboot 头，-S 0xC0000 为完整 Primary slot 上限；签名包仍从
+# slot 基址 0x08040000 写入，向量位于头后的 0x08040400。
 $(SIGNED_BIN): $(BUILD_DIR)/$(TARGET).bin $(KEY_ID_STAMP) \
                $(HOST_TOOLS_STAMP) $(IMGTOOL) \
                GNUmakefile make/project.mk make/release.mk \
@@ -185,7 +235,10 @@ $(SIGNED_BIN): $(BUILD_DIR)/$(TARGET).bin $(KEY_ID_STAMP) \
 # Routine MCUboot OTA only consumes the signed application.  Cache its two
 # direct gates so an unchanged image does not rebuild MCUboot/Factory HEX or
 # rerun the full release-layout verification on every upload.
+# 默认 OTA 只消费 signed Application；缓存的是本地 ELF 布局与签名验证结果，
+# 不是板端成功。上传工具仍必须证明 Secondary、pending TEST、reset 与应用身份。
 $(UPLOAD_VERIFY_STAMP): $(BUILD_DIR)/$(TARGET).elf $(SIGNED_BIN) \
+                        $(ARCHITECTURE_VERIFY_STAMP) \
                         $(APPLICATION_ELF_CHECK_TOOL) $(IMGTOOL) | $(BUILD_DIR)
 	$(DIMA_PROGRESS_RUN) --label ELF --target "$@" \
 		--display "$(BUILD_DIR)/$(TARGET).elf" -- \
@@ -208,6 +261,7 @@ upload-ready: $(UPLOAD_IMAGE) $(HOST_TOOLS_STAMP) $(IMGTOOL)
 		verify -k "$(KEY_FILE)" "$(UPLOAD_IMAGE)"
 endif
 
+# signed BIN 的地址域从 Primary slot 基址开始，绝不能按 0x08000000 写入。
 $(SIGNED_HEX): $(SIGNED_BIN) | $(BUILD_DIR)
 	$(CP) -I binary -O ihex --change-addresses 0x08040000 $< $@
 
@@ -237,31 +291,36 @@ verify: check-architecture firmware
 # `make dima_rover` remains the full release-image gate.  When upload is also
 # requested, the long-standing `make dima_rover upload` spelling is normalized
 # to the cached application-only OTA gate instead of rebuilding Factory HEX.
+# 单独 dima_rover 是完整发布镜像门禁；与 upload 联用时仅归一化构建范围，
+# 不放宽签名与上传协议验证。
 ifneq ($(filter upload,$(MAKECMDGOALS)),)
 dima_rover: upload-ready
 else
 dima_rover: check-architecture verify
 endif
 
-upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) $(MAVLINK_LOCK)
+upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) \
+		$(MAVLINK_LOCK) $(FIRMWARE_IDENTITY_UPLOAD_CONTRACT)
 	@env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
 		--preflight-only --mcumgr "$(MCUMGR)" \
+		--identity-contract "$(FIRMWARE_IDENTITY_UPLOAD_CONTRACT)" \
 		--tools-cache "$(HOST_TOOLS_CACHE_ROOT)" \
 		$(if $(strip $(MCUMGR_PORT)),--port "$(MCUMGR_PORT)",) \
 		--baud "$(MCUMGR_BAUD)" --mtu "$(MCUMGR_MTU)" \
 		--wait-seconds "$(UPLOAD_WAIT_SECONDS)"
 
-upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) $(MAVLINK_LOCK)
+upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) \
+		$(MAVLINK_LOCK) $(FIRMWARE_IDENTITY_UPLOAD_CONTRACT)
 	$(DIMA_PROGRESS_RUN) --label UPLOAD --target "$(UPLOAD_IMAGE)" -- \
 		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \
 		--image "$(UPLOAD_IMAGE)" --imgtool "$(IMGTOOL)" \
+		--identity-contract "$(FIRMWARE_IDENTITY_UPLOAD_CONTRACT)" \
 		--mcumgr "$(MCUMGR)" --tools-cache "$(HOST_TOOLS_CACHE_ROOT)" \
 		$(if $(strip $(MCUMGR_PORT)),--port "$(MCUMGR_PORT)",) \
 		--baud "$(MCUMGR_BAUD)" --mtu "$(MCUMGR_MTU)" \
 		--max-window "$(MCUMGR_MAX_WINDOW)" \
 		--wait-seconds "$(UPLOAD_WAIT_SECONDS)" \
-		--confirm-wait-seconds "$(UPLOAD_CONFIRM_WAIT_SECONDS)" \
-		$(UPLOAD_FORCE_FLAG) $(UPLOAD_CONFIRM_FLAG)
+		$(UPLOAD_FORCE_FLAG)
 
 __dima_summary:
 	$(PYTHON) $(BUILD_PROGRESS_TOOL) summary \

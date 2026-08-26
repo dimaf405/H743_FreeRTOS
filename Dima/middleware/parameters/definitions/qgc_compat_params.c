@@ -8,6 +8,11 @@
  * Boards/H743/serial_ports.json.
  ****************************************************************************/
 
+// 中文维护说明：本文件只描述 QGC/PX4 兼容层必须可见的固定参数，并由项目
+// 参数生成链派生 registry、Metadata 与只读策略。这里的 0 表示产品未提供对应
+// 传感器或动作能力，不能据此宣称硬件存在；下方英文 Doxygen 会进入 QGC
+// Metadata，故保持协议侧英文语义，中文说明不参与参数解析和默认值生成。
+
 /**
  * PX4-compatible airframe identity.
  *
@@ -18,6 +23,7 @@
  * @min 50000
  * @max 50000
  * @value 50000 Generic Rover Differential
+ * @qgc_required
  * @group System
  */
 PARAM_DEFINE_INT32(SYS_AUTOSTART, 50000);
@@ -48,30 +54,11 @@ PARAM_DEFINE_INT32(SYS_AUTOCONFIG, 0);
  */
 PARAM_DEFINE_INT32(MAV_SYS_ID, 1);
 
-/** Gyroscope calibration device ID; zero means unavailable/unconfigured.
- * @min 0
- * @max 0
- * @group Sensor Calibration
- */
-PARAM_DEFINE_INT32(CAL_GYRO0_ID, 0);
-
-/** Accelerometer calibration device ID; zero means unavailable/unconfigured.
- * @min 0
- * @max 0
- * @group Sensor Calibration
- */
-PARAM_DEFINE_INT32(CAL_ACC0_ID, 0);
-
-/** Magnetometer 0 calibration device ID; zero means unavailable/unconfigured.
- * @min 0
- * @max 0
- * @group Sensor Calibration
- */
-PARAM_DEFINE_INT32(CAL_MAG0_ID, 0);
-
 /** Magnetometer 1 calibration device ID; zero means unavailable/unconfigured.
  * @min 0
  * @max 0
+ * @category System
+ * @qgc_required
  * @group Sensor Calibration
  */
 PARAM_DEFINE_INT32(CAL_MAG1_ID, 0);
@@ -79,9 +66,57 @@ PARAM_DEFINE_INT32(CAL_MAG1_ID, 0);
 /** Magnetometer 2 calibration device ID; zero means unavailable/unconfigured.
  * @min 0
  * @max 0
+ * @category System
+ * @qgc_required
  * @group Sensor Calibration
  */
 PARAM_DEFINE_INT32(CAL_MAG2_ID, 0);
+
+/**
+ * Magnetometer 1 rotation; negative means an internal compass.
+ *
+ * The second magnetometer is unavailable in this product stage, so its QGC
+ * compatibility rotation remains fixed to the PX4 internal-compass value.
+ *
+ * @min -1
+ * @max -1
+ * @value -1 Internal
+ * @category System
+ * @qgc_required
+ * @group Sensor Calibration
+ */
+PARAM_DEFINE_INT32(CAL_MAG1_ROT, -1);
+
+/**
+ * Magnetometer 2 rotation; negative means an internal compass.
+ *
+ * The third magnetometer is unavailable in this product stage, so its QGC
+ * compatibility rotation remains fixed to the PX4 internal-compass value.
+ *
+ * @min -1
+ * @max -1
+ * @value -1 Internal
+ * @category System
+ * @qgc_required
+ * @group Sensor Calibration
+ */
+PARAM_DEFINE_INT32(CAL_MAG2_ROT, -1);
+
+/**
+ * Differential-pressure sensor offset.
+ *
+ * Dima Rover has no differential-pressure sensor. QGC's PX4 Sensors page
+ * still requires this Fact while loading, so expose the upstream-compatible
+ * zero value without claiming an airspeed calibration capability.
+ *
+ * @min 0.0
+ * @max 0.0
+ * @category System
+ * @qgc_required
+ * @volatile
+ * @group Sensor Calibration
+ */
+PARAM_DEFINE_FLOAT(SENS_DPRES_OFF, 0.0f);
 
 /**
  * RC-loss action.

@@ -1,3 +1,5 @@
+"""PX4 参数注释解析器的 Dima 导入版本；扩展 qgc_required 结构化标签。"""
+
 import sys
 import re
 import math
@@ -61,6 +63,7 @@ class Parameter(object):
         self.category = ""
         self.volatile = False
         self.boolean = False
+        self.qgc_required = False
 
     def GetName(self):
         return self.name
@@ -79,6 +82,9 @@ class Parameter(object):
 
     def GetBoolean(self):
         return self.boolean
+
+    def GetQgcRequired(self):
+        return self.qgc_required
 
     def SetField(self, code, value):
         """
@@ -109,6 +115,10 @@ class Parameter(object):
         Set boolean flag
         """
         self.boolean = True
+
+    def SetQgcRequired(self):
+        """标记为 QGC 设置页无条件依赖的 Fact，并透传到生成 XML。"""
+        self.qgc_required = True
 
     def SetCategory(self, category):
         """
@@ -185,7 +195,7 @@ class SourceParser(object):
     re_is_a_number = re.compile(r'^-?[0-9\.]')
     re_remove_dots = re.compile(r'\.+$')
 
-    valid_tags = set(["group", "board", "min", "max", "unit", "decimal", "increment", "reboot_required", "value", "boolean", "bit", "category", "volatile"])
+    valid_tags = set(["group", "board", "min", "max", "unit", "decimal", "increment", "reboot_required", "value", "boolean", "bit", "category", "volatile", "qgc_required"])
 
     # Order of parameter groups
     priority = {
@@ -320,6 +330,9 @@ class SourceParser(object):
                                 param.SetCategory(tags[tag])
                             elif tag == "boolean":
                                 param.SetBoolean()
+                            elif tag == "qgc_required":
+                                # 只解析权威参数定义标签，不在生成器中维护参数名列表。
+                                param.SetQgcRequired()
                             elif tag not in self.valid_tags:
                                 sys.stderr.write("Skipping invalid documentation tag: '%s'\n" % tag)
                                 return False
