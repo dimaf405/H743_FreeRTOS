@@ -1,7 +1,7 @@
 #include "ManualMode.hpp"
 
 #include "events/events.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 #include "vehicle_status.hpp"
 
 #include <cmath>
@@ -30,6 +30,8 @@ ManualMode::~ManualMode()
 
 bool ManualMode::start()
 {
+    // 三个 callback 构成模块唤醒合同；注册失败时必须按逆序撤销，避免已经停止的
+    // 对象仍被 uORB 回调调度。首次 ScheduleNow 会发布一条明确的无效请求。
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
@@ -93,6 +95,8 @@ void ManualMode::Run()
         return;
     }
 
+    // 每轮各取最新参数事件、模式和摇杆快照；参数只标记 pending，真正切换仍由
+    // fresh_disarmed_mode 门禁决定，Armed 期间保持当前曲线不变。
     parameter_update_s parameter_update{};
     if (parameter_update_subscription_.copy(&parameter_update)) {
         parameter_update_pending_ = true;
@@ -145,6 +149,7 @@ bool ManualMode::apply_parameter_snapshot() noexcept
         return false;
     }
 
+    // 四个整形参数作为一个原子候选快照读取，避免一次摇杆映射混用两代曲线参数。
     Config candidate{};
     bool loaded = false;
     {
@@ -174,6 +179,7 @@ bool ManualMode::apply_parameter_snapshot() noexcept
 bool ManualMode::apply_pending_parameters(
     std::uint64_t now_us) noexcept
 {
+    // Armed 时保持当前曲线不变；新参数等到新鲜 Disarmed mode 快照后再整体应用。
     if (!parameter_update_pending_ || !fresh_disarmed_mode(now_us)) {
         return false;
     }
@@ -197,6 +203,8 @@ bool ManualMode::fresh_disarmed_mode(std::uint64_t now_us) const noexcept
 
 bool ManualMode::manual_mode_active(std::uint64_t now_us) const noexcept
 {
+    // “Manual”不是单一枚举判断：快照必须鲜活、来源明确，并同时排除
+    // Termination/Auto/Offboard，防止模式字段与控制标志撕裂时误发请求。
     return have_control_mode_ && vehicle_control_mode_.timestamp != 0U &&
            vehicle_control_mode_.timestamp <= now_us &&
            now_us - vehicle_control_mode_.timestamp <= kControlModeTimeoutUs &&
@@ -210,6 +218,8 @@ bool ManualMode::manual_mode_active(std::uint64_t now_us) const noexcept
 
 bool ManualMode::manual_input_valid(std::uint64_t now_us) const noexcept
 {
+    // timestamp_sample <= timestamp 只证明因果顺序；原始样本最终鲜度由下游
+    // 差速控制模块的命令超时再次核对，保持双层失联保护。
     return have_manual_control_ && manual_control_.valid &&
            manual_control_.data_source == manual_control_setpoint_s::SOURCE_RC &&
            manual_control_.timestamp != 0U &&
@@ -225,12 +235,16 @@ bool ManualMode::manual_input_valid(std::uint64_t now_us) const noexcept
 bool ManualMode::publish_current_request(
     std::uint64_t now_us) noexcept
 {
+    // sequence 每次发布都递增，包括无效帧，使消费者能区分“新故障通知”和
+    // “没有新消息”；有效性只由当前参数、模式和 RC 快照共同决定。
     rover_motion_request_s request{};
     request.timestamp = now_us;
     request.timestamp_sample = manual_control_.timestamp_sample;
     request.sequence = ++sequence_;
     request.source = rover_motion_request_s::SOURCE_MANUAL;
     request.mode = rover_motion_request_s::MODE_NORMALIZED_AXES;
+    // 当前模式只提供归一化轴；未实现的速度/角速度以及无效轴均用 NaN 表示，
+    // 防止下游把伪造的 0 当成一条仍然有效的控制请求。
     request.speed_m_s = kUnavailable;
     request.yaw_rate_rad_s = kUnavailable;
 
@@ -288,12 +302,15 @@ float ManualMode::clamp(float value, float lower, float upper) noexcept
 
 float ManualMode::deadzone(float value, float width) noexcept
 {
+    // 死区外映射公式 y=(x-sign(x)*width)/(1-width)。width 被限制到 0.99，
+    // 既保持端点 ±1，也保证分母严格为正。
     const float input = clamp(value, -1.0F, 1.0F);
     const float bounded_width = clamp(width, 0.0F, 0.99F);
     if (std::fabs(input) <= bounded_width) {
         return 0.0F;
     }
     const float sign = input < 0.0F ? -1.0F : 1.0F;
+    // 死区外重新铺满 [-1, 1]：y = (input - sign(input) * width) / (1 - width)。
     return (input - sign * bounded_width) / (1.0F - bounded_width);
 }
 
@@ -303,6 +320,11 @@ float ManualMode::superexpo(float value, float expo,
     const float input = clamp(value, -1.0F, 1.0F);
     const float bounded_expo = clamp(expo, 0.0F, 1.0F);
     const float bounded_superexpo = clamp(superexpo_value, 0.0F, 0.99F);
+    // expo_value = (1-expo)*x + expo*x^3；随后用
+    // y = expo_value*(1-superexpo)/(1-|x|*superexpo) 增强端点响应。
+    // superexpo 上限小于 1，保证分母始终为正且不会产生奇点。
+    // e(x)=(1-expo)*x+expo*x^3；
+    // y=e(x)*(1-superexpo)/(1-|x|*superexpo)。superexpo<1 保证分母为正。
     const float expo_value = (1.0F - bounded_expo) * input +
                              bounded_expo * input * input * input;
     return expo_value * (1.0F - bounded_superexpo) /

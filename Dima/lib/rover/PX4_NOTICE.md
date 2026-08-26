@@ -16,5 +16,5 @@ modification, are permitted provided that the conditions of the BSD 3-Clause
 license are met. The upstream copyright notice, conditions, and disclaimer
 must be retained with redistributed source or binary documentation.
 
-No uORB, ModuleParams, PX4 events, PX4 work queue, PX4 platform HAL, or dynamic
+No uORB, Parameter Core, PX4 events, PX4 work queue, PX4 platform HAL, or dynamic
 allocation code is copied into this project-native implementation.

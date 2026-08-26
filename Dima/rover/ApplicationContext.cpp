@@ -1,8 +1,8 @@
 #include "ApplicationContext.hpp"
-#include "platform/api/Boot.hpp"
-#include "platform/api/Console.hpp"
-#include "platform/api/Memory.hpp"
-#include "platform/api/TaskRuntime.hpp"
+#include "api/Boot.hpp"
+#include "api/Console.hpp"
+#include "api/Memory.hpp"
+#include "api/TaskRuntime.hpp"
 
 #include "events/events.hpp"
 #include "logging/logging.hpp"
@@ -14,12 +14,28 @@ namespace {
 
 void *uorb_allocate(size_t size, size_t alignment) noexcept
 {
+    // uORB 元数据/队列只允许从 Startup 域分配，并拒绝超过平台 heap 对齐能力的
+    // 请求；实时运行阶段不会通过此适配器扩展消息池。
     auto *services = dima::platform::try_services();
     if (services == nullptr || alignment > services->heap.alignment()) {
         return nullptr;
     }
     return services->heap.allocate(size,
                                    dima::platform::AllocationDomain::Startup);
+}
+
+template <typename... Modules>
+bool register_all_modules(
+    dima::middleware::lifecycle::ModuleManager &manager,
+    Modules &...modules) noexcept
+{
+    // 编译期约束组合根模块数不超过固定 ModuleManager 容量；fold expression
+    // 按声明顺序注册，首个失败即停止并由调用者 reset。
+    static_assert(
+        sizeof...(Modules) <=
+            dima::middleware::lifecycle::ModuleManager::kMaxModules,
+        "Application module list exceeds ModuleManager capacity");
+    return (... && manager.register_module(modules));
 }
 
 } // namespace
@@ -38,13 +54,25 @@ ApplicationContext::ApplicationContext(
                          services.synchronization, services.critical,
                          maintenance_),
       serial_config_(services.serial_ports),
-      motor_output_(services.actuator_pwm), commander_(services.armed_flash),
-      sbus_rc_(services.sbus, serial_config_)
+      um982_gps_(services.async_serial_port, services.clock, serial_config_,
+                 services.armed_flash, maintenance_),
+      icm42688p_(services.spi, services.interrupt_sources),
+      vehicle_imu_(services.armed_flash),
+      vehicle_magnetometer_(services.armed_flash),
+      sensor_calibration_(services.armed_flash, vehicle_imu_,
+                          vehicle_magnetometer_),
+      dronecan_mag2_(services.can, services.armed_flash, maintenance_,
+                     flashfs_),
+      motor_output_(services.actuator_pwm),
+      commander_(services.armed_flash, maintenance_),
+      sbus_rc_(services.timestamped_serial_input, serial_config_)
 {
 }
 
 bool ApplicationContext::owner_call(bool bind_if_unset) noexcept
 {
+    // init 首次绑定当前任务，之后 start/service/shutdown 必须由同一 task 调用；
+    // 防止跨任务并发修改大量非原子的生命周期标志。
     const dima::platform::TaskHandle current = services_.tasks.current();
     if (!current) {
         return false;
@@ -57,21 +85,13 @@ bool ApplicationContext::owner_call(bool bind_if_unset) noexcept
 
 bool ApplicationContext::register_modules() noexcept
 {
-    if (!module_manager_.register_module(parameter_service_) ||
-        !module_manager_.register_module(log_service_) ||
-        !module_manager_.register_module(serial_config_) ||
-        !module_manager_.register_module(motor_output_) ||
-        !module_manager_.register_module(commander_) ||
-        !module_manager_.register_module(mavlink_service_) ||
-        !module_manager_.register_module(sbus_rc_) ||
-        !module_manager_.register_module(rc_update_) ||
-        !module_manager_.register_module(rc_manual_input_) ||
-        !module_manager_.register_module(manual_mode_) ||
-        !module_manager_.register_module(rover_differential_)) {
-        module_manager_.reset();
-        return false;
-    }
-    if (!module_manager_.register_module(boot_health_)) {
+    if (!register_all_modules(
+            module_manager_, parameter_service_, log_service_, serial_config_,
+            um982_gps_, icm42688p_, vehicle_imu_, vehicle_magnetometer_,
+            sensor_calibration_, dronecan_mag2_, motor_output_, commander_,
+            mavlink_service_,
+            sbus_rc_, rc_update_, rc_manual_input_, manual_mode_,
+            rover_differential_, boot_health_)) {
         module_manager_.reset();
         return false;
     }
@@ -81,6 +101,8 @@ bool ApplicationContext::register_modules() noexcept
 
 bool ApplicationContext::release_runtime_resources() noexcept
 {
+    // 资源按依赖逆序释放：模块注册表 -> 参数 -> 日志 -> uORB -> WorkQueue ->
+    // Console。某一步失败立即保留其余状态，调用者把 Runtime 锁存 Error。
     if (modules_registered_) {
         module_manager_.reset();
         modules_registered_ = false;
@@ -136,6 +158,8 @@ bool ApplicationContext::init() noexcept
         return false;
     }
 
+    // 初始化顺序是 Console -> WorkQueue -> uORB -> Logging -> Parameters ->
+    // Module registry；每一步先置 ownership 标志，失败时统一逆序回滚。
     runtime_state_ = RuntimeState::Initializing;
     dima::events::reset();
     dima::logging::reset();
@@ -148,6 +172,8 @@ bool ApplicationContext::init() noexcept
     }
     services_.diagnostics.set_stage(dima::platform::StartupStage::UsbReady);
 
+    // 参数/日志先提供基础设施；MotorOutput 必须先证明 safe-off，随后 Commander/
+    // MAVLink。任何安全关键启动失败都完整回滚。
     services_.diagnostics.set_stage(
         dima::platform::StartupStage::WorkQueueInit);
     work_queue_initialized_ = true;
@@ -264,7 +290,8 @@ bool ApplicationContext::start() noexcept
     }
     PX4_INFO("MAVLink service started");
 
-    // RC 链故障只降级手动输入，不能拖垮参数、日志和恢复服务。
+    // RC 链故障只降级手动输入，不能拖垮参数、日志和恢复服务；但输出仍由
+    // Commander/MotorOutput 的 command_valid/armed 门限保持禁止。
     services_.diagnostics.set_stage(dima::platform::StartupStage::RcStart);
     if (!start_rc_chain()) {
         PX4_ERR("RC chain unavailable; actuator output remains inhibited");
@@ -286,13 +313,146 @@ bool ApplicationContext::start() noexcept
         return false;
     }
 
+    // 传感器/GPS/校准是可降级观测能力：失败会记录但不剥夺手动 Rover 的基础
+    // 参数、恢复与控制链。静态构建通过也不代表这些设备已在板上可用。
+    icm42688p_started_ = module_manager_.start(icm42688p_);
+    if (!icm42688p_started_) {
+        PX4_ERR("ICM42688P unavailable; Manual control remains enabled");
+    }
+    vehicle_imu_started_ = module_manager_.start(vehicle_imu_);
+    if (!vehicle_imu_started_) {
+        PX4_ERR("vehicle_imu frontend unavailable; Manual control remains enabled");
+    }
+    vehicle_magnetometer_started_ =
+        module_manager_.start(vehicle_magnetometer_);
+    if (!vehicle_magnetometer_started_) {
+        PX4_ERR("vehicle_magnetometer frontend unavailable; raw magnetometer remains enabled");
+    }
+    dronecan_mag2_started_ = module_manager_.start(dronecan_mag2_);
+    if (!dronecan_mag2_started_) {
+        PX4_ERR("DroneCAN magnetometer unavailable; Manual control remains enabled");
+    }
+
+    um982_gps_started_ = module_manager_.start(um982_gps_);
+    if (!um982_gps_started_) {
+        PX4_ERR("UM982 GPS unavailable; Manual control remains enabled");
+    }
+
+    sensor_calibration_started_ =
+        module_manager_.start(sensor_calibration_);
+    if (!sensor_calibration_started_) {
+        PX4_ERR("Sensor calibration unavailable; Manual control remains enabled");
+    }
+
     runtime_state_ = RuntimeState::Running;
+    active_serial_signature_ = serial_config_.configuration_signature();
     PX4_INFO("Application Runtime running");
     return true;
 }
 
+bool ApplicationContext::apply_serial_configuration() noexcept
+{
+    // 串口映射是共享资源事务：先停 UM982 和完整 RC 链，再调用 SerialConfig
+    // 重配，之后无论配置成功与否都尝试恢复消费者，避免遗留无人拥有的 UART。
+    bool stopped = true;
+    if (um982_gps_started_) {
+        const bool result = module_manager_.stop(um982_gps_);
+        um982_gps_started_ = !result;
+        stopped = result && stopped;
+    }
+    stopped = stop_rc_chain() && stopped;
+    if (!stopped) {
+        if (!start_rc_chain()) {
+            PX4_WARN("RC chain recovery failed after serial stop failure");
+        }
+        if (!um982_gps_started_) {
+            um982_gps_started_ = module_manager_.start(um982_gps_);
+        }
+        return false;
+    }
+
+    const bool configured = serial_config_.reconfigure();
+    if (!start_rc_chain()) {
+        PX4_WARN("RC chain unavailable after serial reconfiguration");
+    }
+    um982_gps_started_ = module_manager_.start(um982_gps_);
+    if (!um982_gps_started_) {
+        PX4_WARN("UM982 unavailable after serial reconfiguration");
+    }
+    if (!configured) {
+        PX4_ERR("runtime serial reconfiguration rejected; restored active ports");
+        return false;
+    }
+    active_serial_signature_ = serial_config_.configuration_signature();
+    return active_serial_signature_ != 0U;
+}
+
+void ApplicationContext::service() noexcept
+{
+    if (!owner_call(false) || runtime_state_ != RuntimeState::Running ||
+        !serial_config_started_) {
+        return;
+    }
+    const std::uint64_t now_us = services_.clock.now_us();
+    // signature 是生成串口配置的内容签名；0/未变、已武装、退避期或已有维护
+    // 事务均不触发重配。候选还必须先通过 SerialConfig 的完整冲突校验。
+    const std::uint64_t signature = serial_config_.configuration_signature();
+    if (serial_reconfigure_phase_ == SerialReconfigurePhase::Idle) {
+        if (signature == 0U || signature == active_serial_signature_ ||
+            commander_.armed() || now_us < serial_retry_after_us_ ||
+            maintenance_.in_progress()) {
+            return;
+        }
+        if (!serial_config_.pending_configuration_valid()) {
+            serial_retry_after_us_ = now_us + 1000000ULL;
+            return;
+        }
+        serial_maintenance_ticket_ = maintenance_.request(now_us);
+        if (serial_maintenance_ticket_ == 0U) return;
+        serial_reconfigure_phase_ =
+            SerialReconfigurePhase::WaitForApproval;
+        return;
+    }
+
+    // maintenance permit 采用非阻塞轮询；Denied/应用失败均取消票据并退避 1 s。
+    if (serial_reconfigure_phase_ ==
+        SerialReconfigurePhase::WaitForApproval) {
+        const auto permit = maintenance_.permit(serial_maintenance_ticket_,
+                                                now_us);
+        if (permit == dima::middleware::maintenance::
+                          RuntimeMaintenanceCoordinator::Permit::Waiting) {
+            return;
+        }
+        if (permit == dima::middleware::maintenance::
+                          RuntimeMaintenanceCoordinator::Permit::Denied) {
+            maintenance_.cancel(serial_maintenance_ticket_);
+            serial_maintenance_ticket_ = 0U;
+            serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
+            serial_retry_after_us_ = now_us + 1000000ULL;
+            return;
+        }
+        serial_reconfigure_phase_ = SerialReconfigurePhase::Apply;
+    }
+
+    if (serial_reconfigure_phase_ == SerialReconfigurePhase::Apply) {
+        const bool progress = maintenance_.report_progress(
+            serial_maintenance_ticket_, 1U, now_us);
+        const bool applied = progress && apply_serial_configuration();
+        if (applied) {
+            maintenance_.complete(serial_maintenance_ticket_);
+        } else {
+            maintenance_.cancel(serial_maintenance_ticket_);
+            serial_retry_after_us_ = services_.clock.now_us() + 1000000ULL;
+        }
+        serial_maintenance_ticket_ = 0U;
+        serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
+    }
+}
+
 bool ApplicationContext::start_rc_chain() noexcept
 {
+    // RC 链启动依赖顺序：SBUS backend -> RCUpdate -> RcManualInput；任一后续模块
+    // 失败都逆序停止已启动前缀，不能留下无人消费或陈旧的 input_rc。
     sbus_started_ = module_manager_.start(sbus_rc_);
     if (!sbus_started_) return false;
 
@@ -343,6 +503,7 @@ bool ApplicationContext::stop_sbus() noexcept
 
 bool ApplicationContext::start_control_chain() noexcept
 {
+    // 控制链先把 RC setpoint 变成 rover request，再由差速混控生成 actuator_motors。
     manual_mode_started_ = module_manager_.start(manual_mode_);
     if (!manual_mode_started_) {
         return false;
@@ -375,6 +536,8 @@ bool ApplicationContext::stop_control_chain() noexcept
 
 bool ApplicationContext::stop_motor_output() noexcept
 {
+    // MotorOutput 停止成功还必须同时满足模块 Stopped 与六路 GPIO safe-off 证明；
+    // 仅 WorkQueue 停止不足以宣称执行器安全。
     if (!motor_output_started_) {
         return true;
     }
@@ -388,9 +551,44 @@ bool ApplicationContext::stop_motor_output() noexcept
 
 bool ApplicationContext::stop_started_modules() noexcept
 {
-    // 停止顺序与启动顺序相反：
-    // Parameter → Log → MotorOutput → Commander → MAVLink → RC → Control → BootHealth
+    // 停止按消费者到生产者、执行器到基础设施逆序推进；每个 started 标志只在
+    // stop 确认成功后清除，因此部分失败可准确保留未释放所有权。
     bool stopped = true;
+    if (serial_maintenance_ticket_ != 0U) {
+        maintenance_.cancel(serial_maintenance_ticket_);
+        serial_maintenance_ticket_ = 0U;
+        serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
+    }
+    if (sensor_calibration_started_) {
+        const bool result = module_manager_.stop(sensor_calibration_);
+        sensor_calibration_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (um982_gps_started_) {
+        const bool result = module_manager_.stop(um982_gps_);
+        um982_gps_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (dronecan_mag2_started_) {
+        const bool result = module_manager_.stop(dronecan_mag2_);
+        dronecan_mag2_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (vehicle_magnetometer_started_) {
+        const bool result = module_manager_.stop(vehicle_magnetometer_);
+        vehicle_magnetometer_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (vehicle_imu_started_) {
+        const bool result = module_manager_.stop(vehicle_imu_);
+        vehicle_imu_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (icm42688p_started_) {
+        const bool result = module_manager_.stop(icm42688p_);
+        icm42688p_started_ = !result;
+        stopped = result && stopped;
+    }
     if (boot_started_) {
         const bool result = module_manager_.stop(boot_health_);
         boot_started_ = !result;
@@ -465,6 +663,8 @@ bool ApplicationContext::watchdog_feed_allowed(
      * both timers and restored all six GPIOs low. Keep IWDG alive in this
      * intentional safe-idle state so a same-power Runtime restart remains
      * possible. Error and partial lifecycle states deliberately stop feeding. */
+    // Running 需要新健康代数；完整 Stopped 已证明 PWM 定时器关闭且六路 GPIO 拉低，
+    // 可继续喂狗支持同电源重启。Error/中间态故意不喂，交给 IWDG 恢复。
     return runtime_state_ == RuntimeState::Stopped;
 }
 
@@ -475,6 +675,7 @@ void ApplicationContext::watchdog_feed_completed() noexcept
 
 ApplicationContext &application_context() noexcept
 {
+    // 函数局部静态是全应用唯一实例；构造依赖已安装的 platform Services。
     static ApplicationContext instance{dima::platform::services()};
     return instance;
 }

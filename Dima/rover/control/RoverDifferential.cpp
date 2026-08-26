@@ -1,7 +1,7 @@
 #include "RoverDifferential.hpp"
 
 #include "events/events.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 
 #include <cmath>
 #include <limits>
@@ -13,6 +13,7 @@ constexpr std::uint32_t kEventParameterInvalid = 0x52444601U;
 constexpr std::uint32_t kEventPublishFailure = 0x52444602U;
 constexpr std::uint32_t kEventScheduleFailure = 0x52444603U;
 constexpr std::uint32_t kEventClockRegression = 0x52444604U;
+// 仅 actuator_motors.control[0..1] 是可逆左右电机；其余通道必须保持 NaN 不可用语义。
 constexpr std::uint16_t kReversibleMotorMask = 0x0003U;
 constexpr float kUnavailable = std::numeric_limits<float>::quiet_NaN();
 
@@ -31,6 +32,8 @@ RoverDifferential::~RoverDifferential()
 
 bool RoverDifferential::start()
 {
+    // 启动必须先建立 work-item 执行权，再绑定并验证整组参数；首次对外发布 NaN
+    // 无效帧，确保下游在收到第一条有效运动请求前不会沿用旧电机命令。
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
@@ -83,6 +86,8 @@ void RoverDifferential::Run()
         parameter_update_pending_ = true;
     }
 
+    // motion_request 是有界队列；单轮最多排空队列深度并只保留最新请求，既避免
+    // 旧操纵量累积执行，也保证本 work item 不会因异常积压而无界占用 CPU。
     rover_motion_request_s request{};
     for (std::uint8_t count = 0U;
          count < kMotionRequestQueueDepth &&
@@ -96,6 +101,8 @@ void RoverDifferential::Run()
     refresh_safety_snapshot(now);
     (void)apply_pending_parameters(now);
 
+    // 斜率限制、换向延时和解锁渐入均依赖真实运行间隔；时钟回退时 dt 无定义，
+    // 因而必须清空控制器并 fail-closed，不能退回名义周期继续输出。
     if (last_run_time_us_ != 0U && now < last_run_time_us_) {
         drive_.reset();
         (void)publish_invalid(now, motion_request_.timestamp_sample);
@@ -154,6 +161,9 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
         return false;
     }
 
+    // 原子读取完整候选快照，只有全量校验和控制器配置均成功后才替换生效参数。
+    // 原子读取整组候选快照；只有全部读取、交叉约束和控制器配置均成功，才一次
+    // 性替换当前有效参数，避免一次 PARAM_SET 让控制器看到跨代混合配置。
     ParameterSnapshot candidate{};
     std::int32_t reverse_steering = 0;
     bool loaded = false;
@@ -211,6 +221,7 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
 bool RoverDifferential::apply_pending_parameters(
     std::uint64_t now_us) noexcept
 {
+    // 运行期参数只允许在 Commander 发布的新鲜 Disarmed 一致快照下整体切换。
     if (!parameter_update_pending_ || !fresh_disarmed_snapshot(now_us)) {
         return false;
     }
@@ -227,6 +238,8 @@ bool RoverDifferential::apply_pending_parameters(
 void RoverDifferential::refresh_safety_snapshot(
     std::uint64_t now_us) noexcept
 {
+    // 任一 Topic 先观察到否定安全状态就立即锁存抑制；只有三项 Topic 以同一时间戳
+    // 完整收敛后，才用这一批 Commander 安全快照重新计算是否允许驱动。
     if (actuator_armed_subscription_.update()) {
         observed_actuator_armed_ = actuator_armed_subscription_.get();
         if (safety_negative(observed_actuator_armed_)) {
@@ -292,6 +305,8 @@ bool RoverDifferential::fresh_disarmed_snapshot(
 bool RoverDifferential::safety_permits_output(
     std::uint64_t now_us) const noexcept
 {
+    // 任一新 Topic 出现负向安全证据就立即锁止；恢复则必须等待三份同拍、鲜活且
+    // 字段互相一致的 Manual+Armed 快照，不能靠较旧的正向快照抵消新故障。
     if (safety_inhibit_observed_ || !active_snapshot_fresh(now_us)) {
         return false;
     }
@@ -334,6 +349,11 @@ bool RoverDifferential::request_valid(std::uint64_t now_us) const noexcept
         return false;
     }
 
+    // timestamp 约束处理链路新鲜度，timestamp_sample 约束原始 RC 样本新鲜度；
+    // 两者都在超时内才能避免“刚转发的旧摇杆样本”被误当作新命令。
+    // timeout_us = command_timeout_s * 1e6。timestamp 约束模块链路鲜度，
+    // timestamp_sample 约束原始 RC 样本鲜度；两者都在窗口内才能避免刚转发的
+    // 旧摇杆样本重新激活电机命令。
     const std::uint64_t timeout_us = static_cast<std::uint64_t>(
         parameters_.command_timeout_s * 1000000.0F);
     return timeout_us > 0U &&
@@ -344,6 +364,8 @@ bool RoverDifferential::request_valid(std::uint64_t now_us) const noexcept
 bool RoverDifferential::publish_output(std::uint64_t now_us,
                                        float dt_s) noexcept
 {
+    // 参数、安全或输入任一合同失败都重置 slew/reversal/ramp 内部状态并发布
+    // 全 NaN；不能仅把输出夹到零，否则下游会把零当作仍然有效的控制命令。
     if (!parameters_valid_ || !safety_permits_output(now_us) ||
         !request_valid(now_us)) {
         drive_.reset();
@@ -362,6 +384,7 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
     motors.timestamp = now_us;
     motors.timestamp_sample = motion_request_.timestamp_sample;
     motors.reversible_flags = kReversibleMotorMask;
+    // 未实现的电机槽用 NaN 明确表示不可用，不能填 0 伪装成有效零油门命令。
     for (float &control : motors.control) {
         control = kUnavailable;
     }
@@ -421,6 +444,8 @@ bool RoverDifferential::normalized(float value) noexcept
 bool RoverDifferential::valid_parameter_snapshot(
     const ParameterSnapshot &snapshot) noexcept
 {
+    // 此处复核参数元数据之外的运行时合同：timeout 单位 s，slew 单位 1/s，
+    // reversal_delay/arm_ramp 单位 s，并保证 throttle_min <= throttle_max。
     const dima::lib::rover::DifferentialDriveConfig &drive = snapshot.drive;
     return finite(snapshot.command_timeout_s) &&
            snapshot.command_timeout_s >= 0.02F &&
