@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared paths, patterns, and helpers for Dima architecture checks."""
+"""Dima 架构门禁共享的路径、分层规则、源码扫描与 Make 解析辅助函数。"""
 
 from __future__ import annotations
 
@@ -19,31 +19,44 @@ C_COMMENT_RE = re.compile(
 PROTECTED_ROOTS = (
     "Dima/application",
     "Dima/rover",
+    "Dima/drivers",
     "Dima/modules",
     "Dima/middleware",
     "Dima/messages",
     "Dima/lib",
     "Dima/adapters",
     "Dima/platform/api",
+    "Dima/platform/common",
 )
 FREERTOS_ROOT = "Dima/platform/freertos"
 STM32_ROOT = "Dima/platform/stm32h7"
 COMMON_INCLUDE_ROOTS = (
-    "Dima",
     "Dima/application",
     "Dima/rover",
+    "Dima/drivers/gps",
+    "Dima/drivers/imu",
+    "Dima/drivers/magnetometer",
+    "Dima/drivers/rc",
     "Dima/modules",
+    "Dima/modules/sensors",
     "Dima/middleware",
+    "Dima/middleware/parameters",
     "Dima/messages",
     "Dima/lib",
+    "Dima/lib/protocols",
+    "Dima/lib/sensors",
     "Dima/adapters",
+    "Dima/platform",
+    "Dima/platform/stm32h7",
 )
 LAYER_ROOTS = (
     ("platform/freertos", ROOT / "Dima/platform/freertos"),
     ("platform/stm32h7", ROOT / "Dima/platform/stm32h7"),
+    ("platform/common", ROOT / "Dima/platform/common"),
     ("platform/api", ROOT / "Dima/platform/api"),
     ("application", ROOT / "Dima/application"),
     ("rover", ROOT / "Dima/rover"),
+    ("drivers", ROOT / "Dima/drivers"),
     ("modules", ROOT / "Dima/modules"),
     ("middleware", ROOT / "Dima/middleware"),
     ("messages", ROOT / "Dima/messages"),
@@ -53,21 +66,26 @@ LAYER_ROOTS = (
 ALLOWED_LAYER_DEPENDENCIES = {
     "platform/freertos": {"platform/freertos", "platform/api"},
     "platform/stm32h7": {"platform/stm32h7", "platform/api"},
+    "platform/common": {"platform/common", "platform/api"},
     "platform/api": {"platform/api"},
     "lib": {"lib", "platform/api"},
     "middleware": {"middleware", "lib", "platform/api"},
     "messages": {"messages", "middleware", "lib", "platform/api"},
     "modules": {
-        "modules", "messages", "middleware", "lib", "platform/api",
+        "modules", "messages", "middleware", "lib", "adapters",
+        "platform/api",
+    },
+    "drivers": {
+        "drivers", "messages", "middleware", "lib", "platform/api",
     },
     "adapters": {"adapters", "platform/api"},
     "rover": {
-        "rover", "modules", "messages", "middleware", "lib", "adapters",
-        "platform/api",
+        "rover", "drivers", "modules", "messages", "middleware", "lib",
+        "adapters", "platform/api",
     },
     "application": {
-        "application", "rover", "modules", "messages", "middleware", "lib",
-        "adapters", "platform/api",
+        "application", "rover", "drivers", "modules", "messages",
+        "middleware", "lib", "adapters", "platform/api",
     },
 }
 
@@ -101,6 +119,7 @@ NONZERO_PWM_PULSE_RE = re.compile(
 )
 
 BOARD_HEADERS = {
+    "board_bus_resources.h",
     "board_init.h",
     "boot_diagnostics.h",
     "boot_diagnostics_store.h",
@@ -146,7 +165,7 @@ class Violation:
 
 
 def strip_c_comments(text: str) -> str:
-    """Remove C/C++ comments while preserving strings and line numbers."""
+    """删除 C/C++ 注释，但保留字符串内容和换行数，保证违规行号仍可追溯。"""
     def replace(match: re.Match[str]) -> str:
         if match.group(1) is not None:
             return match.group(1)
@@ -156,7 +175,7 @@ def strip_c_comments(text: str) -> str:
 
 
 def strip_cpp_structure(text: str) -> list[str]:
-    """Strip comments and literals while retaining one output line per line."""
+    """删除注释与字面量，并保持输入输出逐行对应，供结构正则避免误匹配文本。"""
     literal_re = re.compile(
         r'"(?:\\.|[^"\\\r\n])*"|\'(?:\\.|[^\'\\\r\n])*\''
     )
@@ -175,6 +194,7 @@ def strip_cpp_structure(text: str) -> list[str]:
 
 @functools.lru_cache(maxsize=None)
 def source_files_under(relative: str) -> tuple[pathlib.Path, ...]:
+    """缓存一个产品目录下的第一方 C/C++ 文件集合，排除原样 vendored 代码。"""
     base = ROOT / relative
     if not base.exists():
         return ()
@@ -222,6 +242,7 @@ def fatfs_include(include: str) -> bool:
 
 
 def low_level_include(include: str) -> bool:
+    """按头文件身份识别 RTOS/HAL/板级依赖，不依赖调用方写出的具体相对路径。"""
     lowered = include.lower()
     basename = pathlib.PurePosixPath(lowered).name
     return (
@@ -230,7 +251,7 @@ def low_level_include(include: str) -> bool:
         or "cmsis" in lowered
         or "stm32" in lowered
         or lowered.startswith(("core/", "boards/", "usb_device/",
-                               "drivers/", "middlewares/"))
+                               "middlewares/"))
         or lowered.startswith(("platform/freertos/",
                                "platform/stm32h7/"))
         or fatfs_include(include)
@@ -285,33 +306,9 @@ def resolve_common_include(source: pathlib.Path,
             return candidate.resolve()
     return None
 
-def variable_blocks(lines: list[str],
-                    name: str) -> list[list[tuple[int, str]]]:
-    start_re = re.compile(
-        rf"^\s*{re.escape(name)}\s*(?::|\+|\?)?="
-    )
-    blocks: list[list[tuple[int, str]]] = []
-    for index, line in enumerate(lines):
-        if not start_re.match(line):
-            continue
-        block = [(index + 1, line)]
-        while block[-1][1].rstrip().endswith("\\"):
-            next_index = index + len(block)
-            if next_index >= len(lines):
-                break
-            block.append((next_index + 1, lines[next_index]))
-        blocks.append(block)
-    return blocks
-
-
-def variable_block(lines: list[str], name: str) -> list[tuple[int, str]]:
-    blocks = variable_blocks(lines, name)
-    return blocks[0] if blocks else []
-
-
 def effective_variable_blocks(
         lines: list[str], name: str) -> list[list[tuple[int, str]]]:
-    """Apply Make's replace/append/conditional assignment order for a variable."""
+    """按 Make 的覆盖、追加和条件赋值顺序计算变量的有效定义块。"""
     start_re = re.compile(
         rf"^\s*(?:(?:override|export|private)\s+)*"
         rf"{re.escape(name)}\s*(?P<operator>:=|\+=|\?=|=)"
@@ -350,7 +347,7 @@ MAKE_VARIABLE_REFERENCE_RE = re.compile(
 
 def transitive_variable_block(lines: list[str],
                               name: str) -> list[tuple[int, str]]:
-    """Return one Make variable and all directly referenced variable blocks."""
+    """递归展开 Make 变量引用，返回源码清单真正可达的定义块并阻止重复遍历。"""
     output: list[tuple[int, str]] = []
     visited: set[str] = set()
 
@@ -374,23 +371,69 @@ def line_for(text: str, needle: str) -> int:
     return 1 if offset < 0 else text.count("\n", 0, offset) + 1
 
 
+@functools.lru_cache(maxsize=None)
+def repository_files_named(filename: str) -> tuple[pathlib.Path, ...]:
+    """按文件身份搜索源码树；目录位置不属于内容合同。"""
+    matches: list[pathlib.Path] = []
+    skipped_roots = {".git", ".keys", ".vscode", "build"}
+    for child in ROOT.iterdir():
+        if child.name in skipped_roots or child.name.startswith("build-"):
+            continue
+        if child.is_file():
+            if child.name == filename:
+                matches.append(child)
+            continue
+        if child.is_dir():
+            matches.extend(path for path in child.rglob(filename) if path.is_file())
+    return tuple(sorted(set(matches)))
+
+
+def resolve_architecture_source(
+        requested: pathlib.Path,
+        identity_literals: Iterable[str] = (),
+) -> pathlib.Path | None:
+    """优先使用当前路径；移动后按唯一文件名和内容身份重新定位。"""
+    if requested.is_file():
+        return requested
+    candidates = repository_files_named(requested.name)
+    literals = tuple(identity_literals)
+    if literals:
+        matching: list[pathlib.Path] = []
+        for candidate in candidates:
+            try:
+                text = candidate.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            if all(literal in text for literal in literals):
+                matching.append(candidate)
+        if len(matching) == 1:
+            return matching[0]
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def require_literals(path: pathlib.Path,
                      requirements: Iterable[tuple[str, str, str]],
                      violations: list[Violation]) -> None:
-    if not path.is_file():
+    """按唯一文件名和内容身份定位 owner，再核对合同字面量而不锁死原目录位置。"""
+    required = tuple(requirements)
+    resolved = resolve_architecture_source(
+        path, (literal for literal, _rule, _message in required)
+    )
+    if resolved is None:
         violations.append(Violation(
-            path, 1, "R040", "required architecture source is missing",
+            path, 1, "R040",
+            "required architecture source identity is missing or ambiguous",
         ))
         return
-    text = path.read_text(encoding="utf-8")
-    for literal, rule, message in requirements:
+    text = resolved.read_text(encoding="utf-8")
+    for literal, rule, message in required:
         if literal not in text:
-            violations.append(Violation(path, 1, rule, message))
+            violations.append(Violation(resolved, 1, rule, message))
 
 
 def owner_texts(
         paths: Iterable[pathlib.Path]) -> tuple[tuple[pathlib.Path, str], ...]:
-    """Read the existing files from one explicit logical-owner set."""
+    """读取显式 owner 白名单中当前存在的文件；白名单本身仍是安全边界。"""
     return tuple(
         (path, path.read_text(encoding="utf-8"))
         for path in paths
@@ -401,7 +444,7 @@ def owner_texts(
 def find_literal_owner(
         paths: Iterable[pathlib.Path],
         literal: str) -> tuple[pathlib.Path, str] | None:
-    """Return the first explicit owner containing a literal contract."""
+    """在 owner 白名单内寻找合同字面量，不允许白名单外文件取得该能力。"""
     for path, text in owner_texts(paths):
         if literal in text:
             return path, text
@@ -412,7 +455,7 @@ def require_literals_in_owners(
         paths: tuple[pathlib.Path, ...],
         requirements: Iterable[tuple[str, str, str]],
         violations: list[Violation]) -> None:
-    """Require each literal in at least one file of a logical-owner set."""
+    """要求每项合同至少由一个白名单 owner 实现，允许同一职责在白名单内拆文件。"""
     existing = owner_texts(paths)
     if not existing:
         require_literals(paths[0], requirements, violations)
@@ -430,7 +473,7 @@ def require_make_source_paths(
         path: pathlib.Path,
         requirements: Iterable[tuple[str, str, str]],
         violations: list[Violation]) -> None:
-    """Require sources to be transitively reachable from PROJECT_*_SOURCES."""
+    """要求源码从 PROJECT_C/CXX_SOURCES 的传递变量闭包可达，不能只散落在文件中。"""
     if not path.is_file():
         require_literals(path, requirements, violations)
         return

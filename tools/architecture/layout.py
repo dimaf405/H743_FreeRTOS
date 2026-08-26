@@ -1,9 +1,9 @@
-"""Repository layout, Rover root, debug, and message contract checks."""
+"""仓库布局、唯一 Rover 组合根、调试出口与消息 schema/生成物边界门禁。"""
 
 from __future__ import annotations
 
+import json
 import pathlib
-import re
 
 from architecture.common import (
     ROOT,
@@ -16,9 +16,10 @@ from architecture.common import (
     MAKE_CONTRACT_PATHS,
     owner_texts,
 )
-
+from architecture.build_closure import BuildClosureError, load_build_closure
 
 def scan_rover_root_contract(violations: list[Violation]) -> None:
+    """要求产品实现位于唯一 Dima/rover 根，并拒绝已废弃或语义歧义的旧路径。"""
     rover_root = ROOT / "Dima/rover"
     legacy_root = ROOT / "Dima/modules/rover"
     if not rover_root.is_dir():
@@ -129,48 +130,18 @@ def scan_rover_root_contract(violations: list[Violation]) -> None:
 
 
 def scan_repository_layout(violations: list[Violation]) -> None:
-    expected_ioc = ROOT / "H743_FreeRTOS.ioc"
-    ioc_files = list(ROOT.glob("*.ioc"))
-    skipped_roots = {
-        ".git", ".keys", ".vscode", "Drivers", "Middlewares", "build",
-    }
-    for child in ROOT.iterdir():
-        if (not child.is_dir() or child.name in skipped_roots or
-                child.name.startswith("build-")):
-            continue
-        ioc_files.extend(child.rglob("*.ioc"))
-    for path in sorted(ioc_files):
-        if path != expected_ioc:
-            violations.append(Violation(
-                path, 1, "R220",
-                "secondary CubeMX project makes the authoritative .ioc "
-                "ambiguous",
-            ))
-
-    retired_files = (
-        ROOT / "newlib_lock_glue.c",
-        ROOT / "stm32_lock.h",
-        ROOT / "Dima/platform/stm32h7/Backend.hpp",
-        ROOT / "Dima/modules/boot_health/boot_health.cpp",
-        ROOT / "Dima/modules/boot_health/boot_health.hpp",
-        ROOT / "Dima/modules/parameters/SerialMigrationSchema.hpp",
-        ROOT / "Dima/modules/parameters/SerialParameterMigration.cpp",
-        ROOT / "Middlewares/Third_Party/FatFs/src/diskio.c",
-        ROOT / "Middlewares/Third_Party/FatFs/src/syscall.c",
-    )
-    for path in retired_files:
-        if path.exists():
-            violations.append(Violation(
-                path, 1, "R221",
-                "retired or misleading source path has returned",
-            ))
+    """核对有效 owner、非空目录和 Make 源码闭包，不固定文档或工程文件位置。"""
 
     required_storage_paths = (
         "Boards/H743/Src/fatfs_diskio.c",
         "Dima/middleware/maintenance/RuntimeMaintenanceCoordinator.cpp",
         "Dima/middleware/parameters/FileStorage.cpp",
         "Dima/middleware/parameters/flashfs.cpp",
+        "Dima/modules/parameters/ParameterSnapshotCodec.cpp",
+        "Dima/modules/parameters/ParameterSnapshotCodec.hpp",
         "Dima/modules/parameters/ParameterService.cpp",
+        "Dima/modules/parameters/ParameterServicePersistence.cpp",
+        "Dima/modules/parameters/ParameterServiceSdMirror.cpp",
         "Dima/platform/api/ParameterFileStore.hpp",
         "Dima/platform/freertos/storage/FatFsParameterFileStore.cpp",
     )
@@ -232,22 +203,34 @@ def scan_repository_layout(violations: list[Violation]) -> None:
         violations,
     )
     require_literals(
-        ROOT / "Dima/modules/parameters/ParameterService.cpp",
+        ROOT / "Dima/modules/parameters/ParameterSnapshotCodec.cpp",
         (
             ("kSnapshotMagic", "R230",
              "parameter mirror snapshot identity is missing"),
-            ("storage_generation_", "R230",
-             "Flash/SD snapshot ordering is missing"),
             ("payload_crc", "R230",
              "equal-generation split-brain detection is missing"),
+        ),
+        violations,
+    )
+    require_literals(
+        ROOT / "Dima/modules/parameters/ParameterServicePersistence.cpp",
+        (
+            ("storage_generation_", "R230",
+             "Flash/SD snapshot ordering is missing"),
+            ("begin_persistence(", "R230",
+             "runtime persistence is not maintenance-gated"),
+        ),
+        violations,
+    )
+    require_literals(
+        ROOT / "Dima/modules/parameters/ParameterServiceSdMirror.cpp",
+        (
             ("file_storage_poll(available)", "R230",
              "periodic software SD probing is missing"),
             ("resume_after_storage_available()", "R230",
              "SD reinsertion cannot resume ENOSPC autosave"),
             ("sd_mirror_required_", "R230",
              "independent SD mirror retry is missing"),
-            ("begin_persistence(", "R230",
-             "runtime persistence is not maintenance-gated"),
         ),
         violations,
     )
@@ -297,34 +280,62 @@ def scan_repository_layout(violations: list[Violation]) -> None:
                 "ambiguous",
             ))
 
-    make_owners = owner_texts(MAKE_CONTRACT_PATHS)
-    if make_owners:
-        dima_sources = sorted(
-            path for path in dima_root.rglob("*")
-            if path.is_file() and path.suffix.lower() in {".c", ".cpp"}
-        )
-        for path in dima_sources:
-            relative = path.relative_to(ROOT).as_posix()
-            if not any(relative in text for _owner, text in make_owners):
-                violations.append(Violation(
-                    path, 1, "R225",
-                    "Dima translation unit is absent from make/project.mk",
-                ))
-        for owner_path, text in make_owners:
-            listed = set(re.findall(
-                r"Dima/[A-Za-z0-9_./-]+\.(?:cpp|c)\b", text,
+    project_make = ROOT / "make/project.mk"
+    if project_make.is_file():
+        make_text = project_make.read_text(encoding="utf-8")
+        try:
+            closure = load_build_closure(ROOT)
+        except BuildClosureError as error:
+            violations.append(Violation(
+                project_make, 1, "R225",
+                f"cannot evaluate the real Make build closure: {error}",
             ))
-            for relative in sorted(listed):
-                path = ROOT / relative
-                if not path.is_file():
+        else:
+            compiled_sources = closure.sources
+            parameter_sources = closure.parameter_generator_inputs
+            first_party_sources = sorted(
+                path
+                for source_root in (dima_root, ROOT / "Boards/H743")
+                for path in source_root.rglob("*")
+                if path.is_file()
+                and path.suffix.lower() in {".c", ".cpp"}
+            )
+            for path in first_party_sources:
+                relative = path.relative_to(ROOT).as_posix()
+                is_parameter_input = path.is_relative_to(
+                    ROOT / "Dima/middleware/parameters/definitions"
+                )
+                expected_sources = (
+                    parameter_sources if is_parameter_input
+                    else compiled_sources
+                )
+                if relative not in expected_sources:
                     violations.append(Violation(
-                        owner_path, line_for(text, relative), "R226",
-                        f"build manifest references missing source {relative}",
+                        path, 1, "R225",
+                        "first-party source is outside its compiled or "
+                        "generator input closure",
                     ))
+
+            for relative in sorted(compiled_sources | parameter_sources):
+                if not relative.startswith(("Dima/", "Boards/H743/")):
+                    continue
+                source_path = ROOT / relative
+                if source_path.is_file():
+                    continue
+                boot_make = ROOT / "Bootloader/Makefile"
+                owner = project_make
+                owner_text = make_text
+                if relative not in owner_text and boot_make.is_file():
+                    owner = boot_make
+                    owner_text = boot_make.read_text(encoding="utf-8")
+                violations.append(Violation(
+                    owner, line_for(owner_text, relative), "R226",
+                    f"evaluated build closure references missing {relative}",
+                ))
 
     require_literals(
         ROOT / "Core/Inc/FreeRTOSConfig.h",
-        (("#include \"../../Dima/platform/freertos/FreeRTOSConfig.h\"",
+        (("#include \"freertos/FreeRTOSConfig.h\"",
           "R227", "CubeMX FreeRTOSConfig shim no longer forwards to the "
           "single Dima configuration"),),
         violations,
@@ -338,6 +349,7 @@ def scan_repository_layout(violations: list[Violation]) -> None:
 
 
 def scan_debug_console_contract(violations: list[Violation]) -> None:
+    """核对调试示例已退出生产闭包，并保证结构化日志与 SBUS 输出仍有唯一出口。"""
     legacy_paths = (
         ROOT / "Dima/modules/hello_world",
         ROOT / "Dima/messages/app_heartbeat.cpp",
@@ -416,37 +428,42 @@ def scan_debug_console_contract(violations: list[Violation]) -> None:
 
 
 def scan_phase5_message_contracts(violations: list[Violation]) -> None:
+    """验证 uORB schema 是唯一权威输入，派生头/源及 ABI lock 只能由生成器产生。"""
     requirements = {
-        ROOT / "Dima/messages/actuator_motors.hpp": (
-            ("MESSAGE_VERSION = 0U", "R140",
+        ROOT / "Dima/messages/schemas/actuator_motors.msg": (
+            ("uint32 MESSAGE_VERSION = 0", "R140",
              "actuator_motors version contract changed"),
-            ("NUM_CONTROLS = 12U", "R141",
+            ("uint8 NUM_CONTROLS = 12", "R141",
              "actuator_motors must retain 12 public controls"),
-            ("std::uint16_t reversible_flags", "R142",
+            ("uint16 reversible_flags", "R142",
              "actuator_motors reversible flags are missing"),
-            ("float control[NUM_CONTROLS]", "R143",
+            ("float32[NUM_CONTROLS] control", "R143",
              "actuator_motors control array is missing"),
+            ("@queue 1", "R154",
+             "actuator_motors must remain a latest-value Topic"),
         ),
-        ROOT / "Dima/messages/rover_motion_request.hpp": (
-            ("SOURCE_MANUAL = 0U", "R144",
+        ROOT / "Dima/messages/schemas/rover_motion_request.msg": (
+            ("uint8 SOURCE_MANUAL = 0", "R144",
              "Manual motion source contract changed"),
-            ("SOURCE_NAVIGATION = 1U", "R145",
+            ("uint8 SOURCE_NAVIGATION = 1", "R145",
              "Navigation motion source reservation changed"),
-            ("MODE_NORMALIZED_AXES = 0U", "R146",
+            ("uint8 MODE_NORMALIZED_AXES = 0", "R146",
              "normalized two-axis mode contract changed"),
-            ("MODE_SPEED_YAW_RATE = 1U", "R147",
+            ("uint8 MODE_SPEED_YAW_RATE = 1", "R147",
              "navigation speed/yaw-rate mode reservation changed"),
-            ("float normalized_longitudinal", "R148",
+            ("float32 normalized_longitudinal", "R148",
              "longitudinal motion axis is missing"),
-            ("float normalized_steering", "R149",
+            ("float32 normalized_steering", "R149",
              "steering motion axis is missing"),
+            ("@queue 8", "R155",
+             "motion request queue depth must remain eight"),
         ),
-        ROOT / "Dima/messages/actuator_output_status.hpp": (
-            ("NUM_OUTPUTS = 6U", "R150",
+        ROOT / "Dima/messages/schemas/actuator_output_status.msg": (
+            ("uint8 NUM_OUTPUTS = 6", "R150",
              "actuator output status must remain six-channel"),
-            ("STATE_HARD_SAFE_OFF = 1U", "R151",
+            ("uint8 STATE_HARD_SAFE_OFF = 1", "R151",
              "hard-safe-off output state is missing"),
-            ("STATE_DISARMED_NEUTRAL = 5U", "R151",
+            ("uint8 STATE_DISARMED_NEUTRAL = 5", "R151",
              "disarmed-neutral output state is missing"),
             ("configured_output_mask", "R151",
              "configured output mask is missing"),
@@ -454,23 +471,77 @@ def scan_phase5_message_contracts(violations: list[Violation]) -> None:
              "right motor output mask is missing"),
             ("left_output_mask", "R151",
              "left motor output mask is missing"),
-            ("STATE_FAULT = 4U", "R152",
+            ("uint8 STATE_FAULT = 4", "R152",
              "fault output state is missing"),
-            ("std::uint16_t pwm_us[NUM_OUTPUTS]", "R153",
+            ("uint16[NUM_OUTPUTS] pwm_us", "R153",
              "per-channel applied PWM status is missing"),
+            ("@queue 8", "R156",
+             "output status queue depth must remain eight"),
         ),
-        ROOT / "Dima/messages/actuator_motors.cpp": (
-            ("ORB_DEFINE(actuator_motors, actuator_motors_s, 1U)", "R154",
-             "actuator_motors must remain a latest-value Topic"),
+        ROOT / "Dima/messages/schemas/estimator_gps_status.msg": (
+            ("bool checks_passed", "R343",
+             "PX4 GPS eligibility result is missing"),
+            ("bool check_fail_spoofed_gps", "R343",
+             "PX4 GPS spoofing failure bit is missing"),
+            ("bool check_fail_max_horz_drift", "R343",
+             "unsupported PX4 GPS drift bit must remain explicit"),
+            ("@queue 1", "R343",
+             "estimator_gps_status must remain latest-value"),
         ),
-        ROOT / "Dima/messages/rover_motion_request.cpp": (
-            ("ORB_DEFINE(rover_motion_request, rover_motion_request_s, 8U)",
-             "R155", "motion request queue depth must remain eight"),
-        ),
-        ROOT / "Dima/messages/actuator_output_status.cpp": (
-            ("ORB_DEFINE(actuator_output_status, actuator_output_status_s, 8U)",
-             "R156", "output status queue depth must remain eight"),
+        ROOT / "Dima/messages/schemas/vehicle_imu_status.msg": (
+            ("uint32[3] accel_clipping", "R344",
+             "PX4 cumulative accelerometer clipping is missing"),
+            ("float32 delta_angle_coning_metric", "R344",
+             "PX4 coning diagnostic is missing"),
+            ("float32[3] var_gyro", "R344",
+             "PX4 gyroscope variance is missing"),
+            ("@queue 1", "R344",
+             "vehicle_imu_status must remain latest-value"),
         ),
     }
     for path, required in requirements.items():
         require_literals(path, required, violations)
+
+    schema_dir = ROOT / "Dima/messages/schemas"
+    schema_names = sorted(path.stem for path in schema_dir.glob("*.msg"))
+
+    lock_path = ROOT / "Dima/messages/uorb_abi.lock.json"
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        locked_topics = lock["topics"]
+        locked_names = sorted(topic["name"] for topic in locked_topics)
+        # schema 目录是 Topic 集合的权威来源；ABI lock 只锁定这个派生集合及
+        # 实例上限，新增 schema 时不再同步维护第二份固定数量常量。
+        if (lock.get("format_version") != 1 or
+                lock.get("maximum_instances") != 4 or
+                lock.get("topic_count") != len(locked_topics) or
+                len(locked_topics) != len(schema_names) or
+                locked_names != schema_names):
+            violations.append(Violation(
+                lock_path, 1, "R339",
+                "uORB ABI lock does not match the schema-derived "
+                "four-instance topic set",
+            ))
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        violations.append(Violation(
+            lock_path, 1, "R339", "uORB ABI lock is missing or invalid",
+        ))
+
+    for legacy in sorted((ROOT / "Dima/messages").glob("*.[ch]pp")):
+        violations.append(Violation(
+            legacy, 1, "R340",
+            "hand-written uORB Topic contract bypasses schema generation",
+        ))
+
+    require_literals(
+        ROOT / "make/project.mk",
+        (
+            ("MESSAGE_GENERATOR := tools/uorb/generate_messages.py", "R341",
+             "uORB schema generator is not part of the build contract"),
+            ("MESSAGE_ABI_LOCK := Dima/messages/uorb_abi.lock.json", "R341",
+             "uORB ABI lock is not part of the build contract"),
+            ("$(MESSAGE_GENERATED_SOURCE)", "R341",
+             "generated uORB metadata source is not built"),
+        ),
+        violations,
+    )

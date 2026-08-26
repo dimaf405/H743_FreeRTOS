@@ -1,10 +1,12 @@
-"""Parameter catalogue and QGC policy checks."""
+"""生成参数目录、传感器 consumer 闭包与 QGC 可见性/写入策略门禁。"""
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 
+from architecture.build_closure import BuildClosureError, load_build_closure
 from architecture.common import (
     ROOT,
     Violation,
@@ -17,8 +19,69 @@ from architecture.common import (
 from architecture.mavlink_protocol import scan_mavlink_protocol_contract
 
 
+def _generated_serial_parameter_schema(
+        violations: list[Violation]) -> tuple[tuple[str, str, str], ...]:
+    """直接从板级 serial manifest 推导参数名和默认值，禁止在门禁中复制第二份清单。"""
+    path = ROOT / "Boards/H743/serial_ports.json"
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        violations.append(Violation(
+            path, 1, "R331",
+            f"cannot derive generated serial parameter schema: {error}",
+        ))
+        return ()
+
+    schema: list[tuple[str, str, str]] = []
+    valid = True
+    ports = manifest.get("ports")
+    if not isinstance(ports, list):
+        ports = []
+        valid = False
+    for port in ports:
+        if not isinstance(port, dict):
+            valid = False
+            continue
+        serial = port.get("serial")
+        if serial == 0:
+            continue
+        baud_name = port.get("parameter")
+        function_name = port.get("function_parameter")
+        default_baud = port.get("default_baud")
+        default_function = port.get("default_function")
+        if (not isinstance(serial, int) or
+                not isinstance(baud_name, str) or
+                not isinstance(function_name, str) or
+                type(default_baud) is not int or
+                type(default_function) is not int):
+            valid = False
+            continue
+        schema.extend((
+            (baud_name, "INT32", str(default_baud)),
+            (function_name, "INT32", str(default_function)),
+        ))
+
+    gps_parameter = manifest.get("gps_port_parameter")
+    if (not isinstance(gps_parameter, dict) or
+            not isinstance(gps_parameter.get("name"), str) or
+            type(gps_parameter.get("default")) is not int):
+        valid = False
+    else:
+        schema.append((
+            gps_parameter["name"], "INT32", str(gps_parameter["default"]),
+        ))
+
+    if not valid or len(schema) != 17:
+        violations.append(Violation(
+            path, 1, "R331",
+            "serial manifest must generate 16 SERIALx parameters and one "
+            "primary GPS port parameter",
+        ))
+    return tuple(schema)
+
+
 def scan_mavlink_contract(violations: list[Violation]) -> None:
-    """R330-R336: enforce the shipped, deliberately trimmed MAVLink surface."""
+    """R330-R336：验证实际交付的裁剪 MAVLink/参数表面及其生成闭包。"""
     forbidden_paths = (
         ROOT / "Dima/lib/mavlink/c_library_v2",
         ROOT / "tools/generate_actuators_metadata.py",
@@ -40,6 +103,7 @@ def scan_mavlink_contract(violations: list[Violation]) -> None:
 
 def _scan_parameter_catalog_contract(
         violations: list[Violation]) -> tuple[pathlib.Path, str]:
+    """核对参数定义输入、生成 public/QGC/fixed 集合和运行期消费者完全同源。"""
     forbidden_parameters = {
         "COM_DL_LOSS_T", "COM_ARM_SWISBTN", "COM_RC_ARM_HYST",
         "MAN_ARM_GESTURE", "RTL_RETURN_ALT", "RTL_DESCEND_ALT",
@@ -47,39 +111,7 @@ def _scan_parameter_catalog_contract(
         "COM_FLTMODE3", "COM_FLTMODE4", "COM_FLTMODE5",
         "COM_FLTMODE6", "DIMA_SER_VER", "RC_PORT_CONFIG",
     }
-    qgc_fixed_schema = (
-        ("SYS_AUTOSTART", "INT32", "50000"),
-        ("SYS_AUTOCONFIG", "INT32", "0"),
-        ("MAV_SYS_ID", "INT32", "1"),
-        ("CAL_GYRO0_ID", "INT32", "0"),
-        ("CAL_ACC0_ID", "INT32", "0"),
-        ("CAL_MAG0_ID", "INT32", "0"),
-        ("CAL_MAG1_ID", "INT32", "0"),
-        ("CAL_MAG2_ID", "INT32", "0"),
-        ("NAV_RCL_ACT", "INT32", "6"),
-        ("NAV_DLL_ACT", "INT32", "0"),
-        ("COM_LOW_BAT_ACT", "INT32", "0"),
-    )
-    serial_parameter_schema = (
-        ("SERIAL1_BAUD", "INT32", "921600"),
-        ("SERIAL1_FUNCTION", "INT32", "0"),
-        ("SERIAL2_BAUD", "INT32", "0"),
-        ("SERIAL2_FUNCTION", "INT32", "0"),
-        ("SERIAL3_BAUD", "INT32", "0"),
-        ("SERIAL3_FUNCTION", "INT32", "0"),
-        ("SERIAL4_BAUD", "INT32", "115200"),
-        ("SERIAL4_FUNCTION", "INT32", "0"),
-        ("SERIAL5_BAUD", "INT32", "115200"),
-        ("SERIAL5_FUNCTION", "INT32", "0"),
-        ("SERIAL6_BAUD", "INT32", "0"),
-        ("SERIAL6_FUNCTION", "INT32", "1"),
-        ("SERIAL7_BAUD", "INT32", "57600"),
-        ("SERIAL7_FUNCTION", "INT32", "0"),
-        ("SERIAL8_BAUD", "INT32", "115200"),
-        ("SERIAL8_FUNCTION", "INT32", "0"),
-    )
-    expected_qgc_schema = set(qgc_fixed_schema)
-    qgc_parameter_names = tuple(entry[0] for entry in qgc_fixed_schema)
+    _generated_serial_parameter_schema(violations)
     parameter_definition_re = re.compile(
         r"\bPARAM_DEFINE_(INT32|FLOAT)\s*\(\s*"
         r"([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([^\s,)]+)\s*\)\s*;"
@@ -87,22 +119,30 @@ def _scan_parameter_catalog_contract(
     raw_parameter_definition_re = re.compile(
         r"\b(?:PX4_)?PARAM_DEFINE_[A-Z_][A-Z0-9_]*\s*\("
     )
-    project_mk_path = ROOT / "make/project.mk"
-    project_mk_text = project_mk_path.read_text(encoding="utf-8")
-    definition_block = re.search(
-        r"^PARAMETER_DEFINITIONS\s*:=\s*\\\s*\n"
-        r"(?P<body>(?:^[^\n]*\\\s*\n)*^[^\n]*)",
-        project_mk_text,
-        re.MULTILINE,
+    documented_parameter_re = re.compile(
+        r"/\*\*(?P<documentation>.*?)\*/\s*"
+        r"PARAM_DEFINE_(?:INT32|FLOAT)\s*\(\s*"
+        r"(?P<name>[A-Z][A-Z0-9_]*)\s*,",
+        re.DOTALL,
     )
-    definition_inputs = [] if definition_block is None else re.findall(
-        r"Dima/middleware/parameters/definitions/[^\\\s]+\.[ch]",
-        definition_block.group("body"),
+    qgc_required_tag_re = re.compile(
+        r"^\s*\*\s*@qgc_required\s*$", re.MULTILINE
     )
+    try:
+        definition_inputs = sorted(
+            load_build_closure(ROOT).parameter_generator_inputs
+        )
+    except BuildClosureError as error:
+        violations.append(Violation(
+            ROOT / "make/project.mk", 1, "R331",
+            f"cannot evaluate generated parameter input closure: {error}",
+        ))
+        definition_inputs = []
     parameter_paths = [ROOT / relative for relative in definition_inputs]
     parameter_definition_count = 0
     raw_parameter_definition_count = 0
     parameter_name_locations: dict[str, list[tuple[pathlib.Path, int]]] = {}
+    qgc_required_locations: dict[str, list[tuple[pathlib.Path, int]]] = {}
     for path in parameter_paths:
         if not path.is_file():
             violations.append(Violation(
@@ -111,6 +151,11 @@ def _scan_parameter_catalog_contract(
             ))
             continue
         text = path.read_text(encoding="utf-8")
+        for documented in documented_parameter_re.finditer(text):
+            if qgc_required_tag_re.search(documented.group("documentation")):
+                qgc_required_locations.setdefault(
+                    documented.group("name"), []
+                ).append((path, line_for(text, documented.group(0))))
         code = strip_c_comments(text)
         raw_parameter_definition_count += len(
             raw_parameter_definition_re.findall(code)
@@ -127,13 +172,6 @@ def _scan_parameter_catalog_contract(
                     path, line_for(text, definition.group(0)), "R331",
                     f"unimplemented parameter '{parameter}' entered the build",
                 ))
-    serial_manifest_path = ROOT / "Boards/H743/serial_ports.json"
-    for name, parameter_type, value in serial_parameter_schema:
-        parameter_definition_count += 1
-        raw_parameter_definition_count += 1
-        parameter_name_locations.setdefault(name, []).append(
-            (serial_manifest_path, 1)
-        )
     listed_parameter_paths = set(parameter_paths)
     for path in sources_under(("Dima/middleware/parameters/definitions",)):
         if path in listed_parameter_paths:
@@ -145,10 +183,10 @@ def _scan_parameter_catalog_contract(
                 path, 1, "R331",
                 "parameter definition exists outside PARAMETER_DEFINITIONS",
             ))
-    if raw_parameter_definition_count != 203:
+    if raw_parameter_definition_count != 233:
         violations.append(Violation(
             ROOT / "Dima/middleware/parameters/definitions", 1, "R331",
-            "generated parameter source contract must contain exactly 203 "
+            "generated parameter source contract must contain exactly 233 "
             f"definitions (found {raw_parameter_definition_count})",
         ))
     if parameter_definition_count != raw_parameter_definition_count:
@@ -167,6 +205,26 @@ def _scan_parameter_catalog_contract(
                 f"parameter '{name}' has duplicate source definitions",
             ))
 
+    duplicate_qgc_required = sorted(
+        name for name, locations in qgc_required_locations.items()
+        if len(locations) != 1
+    )
+    if not qgc_required_locations or duplicate_qgc_required:
+        violations.append(Violation(
+            ROOT / "Dima/middleware/parameters/definitions", 1, "R331",
+            "QGC setup Facts must be tagged in their authoritative parameter "
+            "definitions and generated as one contract "
+            f"(count={len(qgc_required_locations)}, "
+            f"duplicates={duplicate_qgc_required})",
+        ))
+    for name, locations in qgc_required_locations.items():
+        if name not in parameter_name_locations:
+            path, line = locations[0]
+            violations.append(Violation(
+                path, line, "R331",
+                f"QGC-required parameter '{name}' has no catalogue entry",
+            ))
+
     qgc_compat_path = (
         ROOT / "Dima/middleware/parameters/definitions/qgc_compat_params.c"
     )
@@ -182,38 +240,35 @@ def _scan_parameter_catalog_contract(
             (match.group(2), match.group(1), match.group(3))
             for match in parameter_definition_re.finditer(qgc_compat_code)
         ]
-    if (qgc_compat_raw_definition_count != 11 or
-            len(qgc_compat_definitions) != 11):
+    if (qgc_compat_raw_definition_count == 0 or
+            len(qgc_compat_definitions) != qgc_compat_raw_definition_count):
         violations.append(Violation(
             qgc_compat_path, 1, "R331",
-            "qgc_compat_params.c must contain exactly 11 fixed parameter "
-            "definitions with parseable literal values "
+            "qgc_compat_params.c must contain only parseable literal "
+            "parameter definitions; fixedness is generated from min/max "
             f"(raw={qgc_compat_raw_definition_count}, "
             f"parsed={len(qgc_compat_definitions)})",
         ))
-    actual_qgc_definitions = qgc_compat_definitions
-    actual_qgc_schema = set(actual_qgc_definitions)
-    if actual_qgc_schema != expected_qgc_schema:
-        missing = sorted(expected_qgc_schema - actual_qgc_schema)
-        extra = sorted(actual_qgc_schema - expected_qgc_schema)
-        violations.append(Violation(
-            qgc_compat_path, 1, "R331",
-            "QGC compatibility schema differs from the exact fixed contract "
-            f"(missing={missing}, extra={extra})",
-        ))
+    qgc_parameter_names = tuple(
+        definition[0] for definition in qgc_compat_definitions
+    )
     require_literals(
         ROOT / "tools/parameters/generate_parameters.py",
         (
-            ("generated_json_names = json_names(json_path, xml_names)",
+            ("catalog = ordered_json_parameters(json_path, xml_names)",
              "R331", "JSON catalogue must use the generated handle order"),
             ("xml_names != generated_json_names", "R331",
              "JSON and firmware parameter orders must remain identical"),
             ('"--src-file"', "R331",
              "parameter parser must receive the explicit source file set"),
-            ("EXPECTED_PARAMETER_COUNT = 203", "R331",
-              "generator must fail closed on a parameter count change"),
             ("parameters = generate(xml_path, args.output)", "R331",
              "parameter generator must use the current catalogue order"),
+            ("write_parameter_contract(contract_path", "R331",
+             "MAVLink/QGC parameter contracts must be generated"),
+            ("if not qgc_required:", "R331",
+             "QGC-required Fact annotations must not generate an empty set"),
+            ("compatibility_names.issubset(fixed_names)", "R331",
+             "fixed QGC compatibility values must come from generated metadata"),
         ),
         violations,
     )
@@ -237,92 +292,44 @@ def _scan_parameter_catalog_contract(
     qgc_registry_path = (
         ROOT / "Dima/middleware/parameters/QgcCompatibility.hpp"
     )
-    qgc_registry_text = qgc_registry_path.read_text(encoding="utf-8")
-    registry_entry_re = re.compile(
-        r'\{\s*"([A-Z][A-Z0-9_]*)"\s*,\s*'
-        r'([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[fF])?)\s*\}'
-    )
-
-    def registry_entries(
-            array_name: str,
-            parameter_type: str) -> list[tuple[str, str, str]]:
-        array = re.search(
-            rf"{re.escape(array_name)}\[\]\s*\{{(?P<body>.*?)\}};",
-            qgc_registry_text,
-            re.DOTALL,
-        )
-        if array is None:
-            violations.append(Violation(
-                qgc_registry_path, 1, "R331",
-                f"QGC fixed-value registry '{array_name}' is missing",
-            ))
-            return []
-        body = array.group("body")
-        residue = registry_entry_re.sub("", body)
-        if re.sub(r"[\s,]", "", residue):
-            violations.append(Violation(
-                qgc_registry_path,
-                line_for(qgc_registry_text, array.group(0)),
-                "R331",
-                f"QGC fixed-value registry '{array_name}' contains an "
-                "unparseable or non-literal entry",
-            ))
-        return [
-            (match.group(1), parameter_type, match.group(2))
-            for match in registry_entry_re.finditer(body)
-        ]
-
-    actual_qgc_registry = registry_entries(
-        "kQgcFixedInt32Parameters", "INT32"
-    )
-    expected_qgc_registry = {
-        (name, parameter_type,
-         value.upper() if parameter_type == "FLOAT" else value)
-        for name, parameter_type, value in qgc_fixed_schema
-    }
-    registry_names = [entry[0] for entry in actual_qgc_registry]
-    duplicate_registry_names = sorted({
-        name for name in registry_names if registry_names.count(name) > 1
-    })
-    if (len(actual_qgc_registry) != 11 or duplicate_registry_names or
-            set(actual_qgc_registry) != expected_qgc_registry):
-        missing = sorted(expected_qgc_registry - set(actual_qgc_registry))
-        extra = sorted(set(actual_qgc_registry) - expected_qgc_registry)
+    if qgc_registry_path.exists():
         violations.append(Violation(
             qgc_registry_path, 1, "R331",
-            "QGC fixed-value registry differs from the exact schema "
-            f"(duplicates={duplicate_registry_names}, missing={missing}, "
-            f"extra={extra})",
+            "hand-maintained QGC parameter registries are forbidden; use the "
+            "generated parameter_contract.hpp",
         ))
     require_literals(
         mavlink_parameters_path,
-        (("dima::parameters::qgc_fixed_int32_parameter(name)", "R331",
-          "MAVLink fixed values bypass the shared QGC registry"),),
+        (
+            ("prepare_parameter_catalogue()", "R331",
+             "MAVLink must activate the generated public catalogue"),
+            ("contract::kMavlinkPublicParameters", "R331",
+             "MAVLink public parameters must come from generated handles"),
+            ("contract::kQgcRequiredParameters", "R331",
+             "QGC setup Facts must be verified from generated handles"),
+            ("contract::kFixedParameterConstraints", "R331",
+             "fixed parameter writes must use generated constraints"),
+        ),
         violations,
     )
 
-    parameter_service_path = (
-        ROOT / "Dima/modules/parameters/ParameterService.cpp"
+    snapshot_codec_path = (
+        ROOT / "Dima/modules/parameters/ParameterSnapshotCodec.cpp"
     )
     require_literals(
-        parameter_service_path,
+        snapshot_codec_path,
         (
-            ("is_qgc_compatibility_parameter(name)", "R331",
-             "snapshot load must identify fixed QGC compatibility values"),
-            ("qgc_fixed_int32_parameter(name)", "R331",
-             "Journal filter must use the shared QGC registry"),
-            ("is_disabled_mode_compatibility_parameter(name)", "R336",
-             "disabled RC mode mapping must ignore legacy stored values"),
+            ("is_fixed_parameter(name)", "R331",
+             "snapshot load must identify generated fixed parameters"),
+            ("kFixedParameterConstraints", "R331",
+             "snapshot filter must use generated fixed constraints"),
             ("load_mutable_parameter, &filtered", "R331",
               "snapshot decode must filter fixed values before the param layer"),
         ),
         violations,
     )
 
-    common_qgc_owners = {
-        qgc_compat_path,
-        qgc_registry_path,
-    }
+    common_qgc_owners = {qgc_compat_path}
     expected_qgc_consumers = {
         name: set() for name in qgc_parameter_names
     }

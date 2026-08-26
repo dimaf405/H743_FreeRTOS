@@ -1,4 +1,4 @@
-"""Dependency, include, namespace, and hardware ownership checks."""
+"""依赖方向、include、时钟、命名空间与硬件能力唯一所有权门禁。"""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ import re
 
 from architecture.common import (
     ROOT,
-    SOURCE_SUFFIXES,
     PROTECTED_ROOTS,
     FREERTOS_ROOT,
     STM32_ROOT,
-    COMMON_INCLUDE_ROOTS,
     ALLOWED_LAYER_DEPENDENCIES,
     INCLUDE_RE,
     PROTECTED_API_RE,
@@ -28,16 +26,16 @@ from architecture.common import (
     freertos_include,
     protected_layer,
     resolve_common_include,
-    transitive_variable_block,
-    variable_block,
     require_literals,
     strip_cpp_structure,
     MAKE_CONTRACT_PATHS,
     owner_texts,
 )
+from architecture.build_closure import BuildClosureError, load_build_closure
 
 
 def scan_include_directions(violations: list[Violation]) -> None:
+    """解析第一方 include 目标并按 ALLOWED_LAYER_DEPENDENCIES 拒绝反向依赖。"""
     roots = PROTECTED_ROOTS + (FREERTOS_ROOT, STM32_ROOT)
     for path in sources_under(roots):
         source_layer = protected_layer(path)
@@ -62,6 +60,7 @@ def scan_include_directions(violations: list[Violation]) -> None:
 
 
 def scan_layer_dependencies(violations: list[Violation]) -> None:
+    """拒绝受保护层直接包含或调用 FreeRTOS、CMSIS、HAL、CubeMX 等底层接口。"""
     for path in sources_under(PROTECTED_ROOTS):
         is_api = path.is_relative_to(ROOT / "Dima/platform/api")
         for line_number, line in enumerate(
@@ -90,8 +89,7 @@ def scan_layer_dependencies(violations: list[Violation]) -> None:
                     "Serial.hpp", "Services.hpp", "Synchronization.hpp",
                     "TaskRuntime.hpp", "Time.hpp", "platform_config.h",
                 }
-                if include not in allowed and not include.startswith(
-                        "platform/api/"):
+                if include not in allowed:
                     violations.append(Violation(
                         path, line_number, "R003",
                         f"platform/api includes non-contract header '{include}'",
@@ -128,12 +126,15 @@ def scan_layer_dependencies(violations: list[Violation]) -> None:
 
 
 def scan_hardware_ownership(violations: list[Violation]) -> None:
+    """核对 Flash、DMA、cache、USB 等硬件 API 只存在于指定平台后端。"""
     cache_owners = {
         "Dima/platform/stm32h7/memory/cache.c",
         "Dima/platform/stm32h7/memory/early_memory.c",
     }
     dma_owners = {
-        "Dima/platform/stm32h7/serial/SbusUart.cpp",
+        "Dima/platform/stm32h7/serial/UartTimestampedRxEndpoint.cpp",
+        "Dima/platform/stm32h7/serial/UartDuplexDmaEndpoint.cpp",
+        "Dima/platform/stm32h7/spi/Spi4.cpp",
     }
     flash_owners = {
         "Dima/platform/stm32h7/flash/FlashDevice.cpp",
@@ -162,60 +163,284 @@ def scan_hardware_ownership(violations: list[Violation]) -> None:
                     "raw HAL Flash operation is outside a Flash driver",
                 ))
 
+    spi4_path = ROOT / "Dima/platform/stm32h7/spi/Spi4.cpp"
+    spi4_text = spi4_path.read_text(encoding="utf-8")
+    unsupported_spi4_clock_query = re.compile(
+        r"HAL_RCCEx_GetPeriphCLKFreq\s*\(\s*RCC_PERIPHCLK_SPI4\s*\)"
+    )
+    match = unsupported_spi4_clock_query.search(spi4_text)
+    if match is not None:
+        violations.append(Violation(
+            spi4_path, spi4_text[:match.start()].count("\n") + 1, "R023",
+            "STM32H7 HAL does not implement the SPI45 clock query through "
+            "HAL_RCCEx_GetPeriphCLKFreq",
+        ))
+    require_literals(
+        spi4_path,
+        (
+            ("__HAL_RCC_GET_SPI45_SOURCE()", "R023",
+             "SPI4 must verify its SPI45 kernel clock source"),
+            ("HAL_RCC_GetPCLK1Freq()", "R023",
+             "SPI4 D2PCLK1 source must use the PCLK1 frequency API"),
+            ("spi_clock::select", "R023",
+             "SPI4 must select a non-overclocking hardware divider"),
+        ),
+        violations,
+    )
+
+
+def scan_device_policy_boundaries(violations: list[Violation]) -> None:
+    """隔离设备/协议策略、具体驱动和供应商 ABI；R024 有意连注释 token 一并扫描。"""
+    device_policy_re = re.compile(
+        r"\b(?:sbus|gps|um982|icm42688p?|dronecan|rm3100|mavlink)\b",
+        re.IGNORECASE,
+    )
+    for path in sources_under((STM32_ROOT,)):
+        for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1):
+            if device_policy_re.search(line):
+                violations.append(Violation(
+                    path, line_number, "R024",
+                    "STM32H7 backend contains a device/protocol policy token",
+                ))
+
+    for path in sources_under(("Dima/modules/sensors",)):
+        for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), 1):
+            match = INCLUDE_RE.match(line)
+            if match is None:
+                continue
+            target = resolve_common_include(path, match.group(1))
+            if (target is not None and
+                    target.is_relative_to(ROOT / "Dima/drivers")):
+                violations.append(Violation(
+                    path, line_number, "R025",
+                    "sensor frontend includes a concrete device driver",
+                ))
+
+    vendor_include_re = re.compile(
+        r"(?:^|/)(?:canard\.h|uavcan[._/][^/]*\.h)$", re.IGNORECASE,
+    )
+    vendor_abi_re = re.compile(
+        r"\b(?:Canard(?:Instance|RxTransfer|TransferType)|"
+        r"uavcan_[A-Za-z0-9_]+)\b"
+    )
+    for path in sources_under(PROTECTED_ROOTS):
+        if path.suffix.lower() not in {".h", ".hpp"}:
+            continue
+        if (path.is_relative_to(ROOT / FREERTOS_ROOT) or
+                path.is_relative_to(ROOT / STM32_ROOT)):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(text.splitlines(), 1):
+            match = INCLUDE_RE.match(line)
+            include = match.group(1) if match is not None else ""
+            if vendor_include_re.search(include) or vendor_abi_re.search(line):
+                violations.append(Violation(
+                    path, line_number, "R026",
+                    "public first-party header leaks a DroneCAN vendor ABI",
+                ))
+
 def scan_build_isolation(violations: list[Violation]) -> None:
+    """从真实 Make 闭包验证目标私有 include 上下文，防止供应商头泄漏到应用层。"""
     path = MAKE_CONTRACT_PATHS[0]
     make_owners = owner_texts(MAKE_CONTRACT_PATHS)
-    checks = {
-        "DIMA_COMMON_INCLUDES": (
-            "R030",
-            re.compile(r"(?:^|\s)-I\.(?:\s|\\|$)|Core/|Boards/|USB_DEVICE/|"
-                       r"Drivers/|Middlewares/|FatFs|FreeRTOS|CMSIS|STM32"),
-            "common include set exposes a low-level search path",
-        ),
-        "DIMA_FREERTOS_INCLUDES": (
-            "R031",
-            re.compile(r"Core/|Boards/|USB_DEVICE/|Drivers/|CMSIS|STM32|"
-                       r"platform/stm32h7"),
-            "FreeRTOS include set exposes an MCU search path",
-        ),
-        "DIMA_STM32_INCLUDES": (
-            "R032",
-            re.compile(r"FreeRTOS|platform/freertos"),
-            "STM32 include set exposes an RTOS search path",
-        ),
-    }
-    for name, (rule, pattern, message) in checks.items():
-        owner_blocks = [
-            (
-                owner,
-                transitive_variable_block(text.splitlines(), name)
-                if name == "DIMA_COMMON_INCLUDES"
-                else variable_block(text.splitlines(), name),
+    for forbidden_name in ("DIMA_COMMON_INCLUDES",
+                           "DIMA_GENERATED_INCLUDES"):
+        for owner, text in make_owners:
+            if forbidden_name in text:
+                violations.append(Violation(
+                    owner, 1, "R030",
+                    f"build restores forbidden include union "
+                    f"{forbidden_name}",
+                ))
+
+    try:
+        closure = load_build_closure(ROOT)
+    except BuildClosureError as error:
+        violations.append(Violation(
+            path, 1, "R033",
+            f"cannot evaluate isolated object contexts: {error}",
+        ))
+    else:
+        for unit in closure.units:
+            source_path = ROOT / unit.source
+            owner_path = (
+                source_path if source_path.is_file()
+                else path if unit.owner == "application"
+                else ROOT / "Bootloader/Makefile"
             )
-            for owner, text in make_owners
-        ]
-        owner_blocks = [
-            (owner, block) for owner, block in owner_blocks if block
-        ]
-        if not owner_blocks:
-            violations.append(Violation(
-                path, 1, rule, f"missing build include set {name}",
-            ))
-            continue
-        for owner, block in owner_blocks:
-            for line_number, line in block:
-                if pattern.search(line):
+            broad = sorted({
+                include for include in unit.includes
+                if include in {".", "Dima"}
+            })
+            if broad:
+                violations.append(Violation(
+                    owner_path, 1, "R030",
+                    f"effective compile context exposes broad include roots "
+                    f"{broad}",
+                ))
+            duplicates = sorted({
+                include for include in unit.includes
+                if unit.includes.count(include) > 1
+            })
+            if duplicates:
+                violations.append(Violation(
+                    owner_path, 1, "R030",
+                    f"effective compile context repeats include roots "
+                    f"{duplicates}",
+                ))
+
+            if unit.source.startswith("Dima/platform/freertos/"):
+                forbidden = sorted({
+                    include for include in unit.includes
+                    if include.startswith((
+                        "Core/", "Boards/", "USB_DEVICE/", "Drivers/",
+                        "Dima/platform/stm32h7",
+                    ))
+                    or "cmsis" in include.lower()
+                    or "stm32" in include.lower()
+                })
+                if forbidden:
                     violations.append(Violation(
-                        owner, line_number, rule, message,
+                        owner_path, 1, "R031",
+                        f"FreeRTOS object exposes MCU include roots {forbidden}",
                     ))
 
+            if unit.source.startswith("Dima/platform/stm32h7/"):
+                forbidden = sorted({
+                    include for include in unit.includes
+                    if "freertos" in include.lower()
+                    or include.startswith("Dima/platform/freertos")
+                })
+                if forbidden:
+                    violations.append(Violation(
+                        owner_path, 1, "R032",
+                        f"STM32 object exposes RTOS include roots {forbidden}",
+                    ))
+
+        project_units = closure.project_units
+        if not project_units:
+            violations.append(Violation(
+                path, 1, "R033", "Application project object group is empty",
+            ))
+        for unit in project_units:
+            if unit.target_private_includes and unit.includes:
+                continue
+            source_path = ROOT / unit.source
+            violations.append(Violation(
+                source_path if source_path.is_file() else path,
+                1,
+                "R033",
+                "project object lacks an effective target-private include "
+                "context",
+            ))
+
+        required_groups = {
+            "DIMA_PLATFORM_COMMON_OBJECTS": "Dima/platform/common/",
+            "DIMA_MODULE_OBJECTS": "Dima/modules/",
+            "DIMA_PARAMETER_MODULE_OBJECTS": "Dima/modules/parameters/",
+            "DIMA_MIDDLEWARE_OBJECTS": "Dima/middleware/",
+        }
+        for name, prefix in required_groups.items():
+            if not any(unit.source.startswith(prefix) for unit in project_units):
+                violations.append(Violation(
+                    path, 1, "R033",
+                    f"effective object group {name} is empty",
+                ))
+
+        bridge_contexts = {
+            "Core/Src/main.c": "Dima/application",
+            "USB_DEVICE/App/usbd_cdc_if.c": "Dima/adapters",
+        }
+        application_by_source = {
+            unit.source: unit for unit in closure.application_units
+        }
+        for source, required_include in bridge_contexts.items():
+            unit = application_by_source.get(source)
+            if unit is None or required_include not in unit.includes:
+                violations.append(Violation(
+                    path, 1, "R033",
+                    f"{source} lacks private bridge include "
+                    f"{required_include}",
+                ))
+
+        boot_families = (
+            (
+                "Drivers/STM32H7xx_HAL_Driver/",
+                ("Core/", "Drivers/STM32H7xx_HAL_Driver/", "Drivers/CMSIS/"),
+            ),
+            (
+                "Middlewares/ST/STM32_USB_Device_Library/",
+                ("Core/", "Drivers/", "USB_DEVICE/", "Middlewares/ST/"),
+            ),
+            (
+                "Middlewares/Third_Party/MCUboot/boot/bootutil/",
+                (
+                    "Bootloader/Inc",
+                    "Middlewares/Third_Party/MCUboot/boot/bootutil/",
+                    "Middlewares/Third_Party/MCUboot/ext/tinycrypt/",
+                    "Middlewares/Third_Party/MCUboot/ext/mbedtls-asn1/",
+                ),
+            ),
+            (
+                "Middlewares/Third_Party/MCUboot/boot/boot_serial/",
+                (
+                    "Bootloader/Inc",
+                    "Middlewares/Third_Party/MCUboot/boot/bootutil/",
+                    "Middlewares/Third_Party/MCUboot/boot/boot_serial/",
+                    "Middlewares/Third_Party/MCUboot/boot/zcbor/",
+                ),
+            ),
+            (
+                "Middlewares/Third_Party/MCUboot/boot/zcbor/",
+                ("Middlewares/Third_Party/MCUboot/boot/zcbor/",),
+            ),
+            (
+                "Middlewares/Third_Party/MCUboot/ext/tinycrypt/",
+                ("Middlewares/Third_Party/MCUboot/ext/tinycrypt/",),
+            ),
+            (
+                "Middlewares/Third_Party/MCUboot/ext/mbedtls-asn1/",
+                ("Middlewares/Third_Party/MCUboot/ext/mbedtls-asn1/",),
+            ),
+        )
+        for unit in closure.units:
+            if unit.owner != "bootloader":
+                continue
+            for source_prefix, allowed_includes in boot_families:
+                if not unit.source.startswith(source_prefix):
+                    continue
+                if not unit.includes:
+                    violations.append(Violation(
+                        ROOT / "Bootloader/Makefile",
+                        1,
+                        "R039",
+                        f"{source_prefix} object group has no private include "
+                        "context",
+                    ))
+                unexpected = sorted({
+                    include for include in unit.includes
+                    if not include.startswith(allowed_includes)
+                })
+                if unexpected:
+                    violations.append(Violation(
+                        ROOT / "Bootloader/Makefile",
+                        1,
+                        "R039",
+                        f"{source_prefix} object exposes unrelated include "
+                        f"roots {unexpected}",
+                    ))
+                break
+
     required = {
-        "$(DIMA_COMMON_OBJECTS): DIMA_PRIVATE_INCLUDES := "
-        "$(DIMA_COMMON_INCLUDES)": "R033",
         "$(DIMA_FREERTOS_OBJECTS): DIMA_PRIVATE_INCLUDES := "
         "$(DIMA_FREERTOS_INCLUDES)": "R034",
+        "$(DIMA_BOARD_BOOT_DIAGNOSTICS_OBJECT): DIMA_PRIVATE_INCLUDES +=": "R034",
         "$(DIMA_STM32_OBJECTS): DIMA_PRIVATE_INCLUDES := "
         "$(DIMA_STM32_INCLUDES)": "R035",
+        "$(DIMA_STM32_USB_TRANSPORT_OBJECT): DIMA_PRIVATE_INCLUDES +=": "R035",
+        "$(DIMA_BOARD_COMPOSITION_OBJECT): DIMA_PRIVATE_INCLUDES +=": "R035",
         "$(CC) -c $(DIMA_PROJECT_CFLAGS)": "R036",
         "$(CXX) -c $(DIMA_PROJECT_CXXFLAGS)": "R037",
         "override CFLAGS += -Werror": "R038",
@@ -236,54 +461,8 @@ def scan_build_isolation(violations: list[Violation]) -> None:
     )
 
 
-def scan_include_style(violations: list[Violation]) -> None:
-    """Require first-party includes to use a registered, non-parent path."""
-    dima_full_path_re = re.compile(r'^\s*#\s*include\s*[<"]Dima/')
-    for path in sources_under(("Dima",)):
-        if is_vendored(path):
-            continue
-        if path.suffix.lower() not in SOURCE_SUFFIXES:
-            continue
-        for line_number, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), 1):
-            match = INCLUDE_RE.match(line)
-            if not match:
-                continue
-            if dima_full_path_re.match(line):
-                violations.append(Violation(
-                    path, line_number, "R300",
-                    f"include uses full 'Dima/' path '{match.group(1)}'; "
-                    f"use layer-root-relative form instead",
-                ))
-                continue
-            include = match.group(1)
-            if include.startswith("./") or ".." in include.split("/"):
-                violations.append(Violation(
-                    path, line_number, "R301",
-                    f"include uses a relative hierarchy '{include}'; "
-                    "use a registered include-root spelling instead",
-                ))
-                continue
-            target = resolve_common_include(path, include)
-            if target is None or not target.is_relative_to(ROOT / "Dima"):
-                continue
-            spellings: set[str] = set()
-            for root in COMMON_INCLUDE_ROOTS:
-                include_root = ROOT / root
-                if target.is_relative_to(include_root):
-                    spellings.add(target.relative_to(include_root).as_posix())
-            if target.is_relative_to(path.parent):
-                spellings.add(target.relative_to(path.parent).as_posix())
-            if include not in spellings:
-                violations.append(Violation(
-                    path, line_number, "R301",
-                    f"include spelling '{include}' is not canonical; expected "
-                    f"one of {sorted(spellings)}",
-                ))
-
-
 def scan_namespace_convention(violations: list[Violation]) -> None:
-    """R310: declarations must be enclosed by an allowed outer namespace."""
+    """R310：除显式 C ABI/转发白名单外，声明必须位于允许的最外层命名空间。"""
     known_ns_re = re.compile(
         r"^\s*namespace\s+(?:dima(?:\b|::)|px4\b|uORB\b).*\{"
     )
@@ -305,7 +484,7 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
         "Dima/application/app_bootstrap.cpp",
         "Dima/application/app_main.cpp",
         "Dima/lib/tinybson/tinybson.cpp",
-        "Dima/modules/mavlink/MavlinkChannelState.cpp",
+        "Dima/adapters/mavlink/MavlinkChannelState.cpp",
         "Dima/middleware/logging/logging.cpp",
         "Dima/middleware/logging/logging.hpp",
         "Dima/middleware/parameters/autosave.cpp",
@@ -320,8 +499,10 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
         "Dima/platform/stm32h7/system/Clock.cpp",
         "Dima/platform/stm32h7/memory/DmaMemory.cpp",
         "Dima/platform/stm32h7/flash/FlashDevice.cpp",
-        "Dima/platform/stm32h7/serial/SbusUart.cpp",
-        "Dima/platform/stm32h7/io/SensorInterrupts.cpp",
+        "Dima/platform/stm32h7/serial/UartTimestampedRxEndpoint.cpp",
+        "Dima/platform/stm32h7/serial/UartDuplexDmaEndpoint.cpp",
+        "Dima/platform/stm32h7/serial/UartIrqRouter.cpp",
+        "Dima/platform/stm32h7/interrupts/SensorInterrupts.cpp",
     }
     for path in sources_under(("Dima",)):
         if is_vendored(path):
@@ -378,7 +559,7 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
 
 
 def scan_usb_console_owner(violations: list[Violation]) -> None:
-    """R320: MavlinkService is the only Application Console data-plane owner."""
+    """R320/R321：MavlinkService 是应用层 Console 数据面和能力引用的唯一 owner。"""
     owners = {
         "Dima/modules/mavlink/MavlinkService.cpp",
         "Dima/modules/mavlink/MavlinkService.hpp",

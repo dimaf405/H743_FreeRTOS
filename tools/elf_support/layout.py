@@ -1,4 +1,4 @@
-"""H743 section layout, interrupt, and initialization-array contracts."""
+"""H743 ELF 段地址/容量、中断强弱符号、初始化数组与 uORB metadata 合同。"""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from .reader import (
 from .symbols import symbol_section, unique_fragment_symbol
 
 APP_VECTOR = 0x08040400
+APP_FLASH_SIZE = 0x000BF000
 DTCM_BASE = 0x20000000
 DTCM_SIZE = 128 * 1024
 RAM_D1_BASE = 0x24000000
@@ -37,28 +38,12 @@ ZERO_INITIALIZED_STATE_SIZES = {
     "g_file_store_state": 1128,
 }
 
-# MAVLink module added 4 entries: orb_mavlink_log, orb_vehicle_command,
-# orb_vehicle_command_ack, and LogService::mavlink_log_publication_.
+# uORB 描述符由链接器遍历 .dima_orb_meta，禁止引入静态构造；LogService 的独立静态
+# publication 是显式允许项，其他 init/fini 入口必须逐个审查。
 INIT_ARRAY_ALLOWLIST = {
     "register_fini",
     "frame_dummy",
     "_GLOBAL__sub_I__ZN4dima10parameters8internal18g_runtime_defaultsE",
-    "_GLOBAL__sub_I___orb_action_request",
-    "_GLOBAL__sub_I___orb_actuator_armed",
-    "_GLOBAL__sub_I___orb_actuator_motors",
-    "_GLOBAL__sub_I___orb_actuator_output_status",
-    "_GLOBAL__sub_I___orb_input_rc",
-    "_GLOBAL__sub_I___orb_manual_control_setpoint",
-    "_GLOBAL__sub_I___orb_manual_control_switches",
-    "_GLOBAL__sub_I___orb_parameter_update",
-    "_GLOBAL__sub_I___orb_rc_channels",
-    "_GLOBAL__sub_I___orb_rover_motion_request",
-    "_GLOBAL__sub_I___orb_vehicle_control_mode",
-    "_GLOBAL__sub_I___orb_vehicle_status",
-    # --- MAVLink module (uORB topics + LogService static) ---
-    "_GLOBAL__sub_I___orb_mavlink_log",
-    "_GLOBAL__sub_I___orb_vehicle_command",
-    "_GLOBAL__sub_I___orb_vehicle_command_ack",
     "_GLOBAL__sub_I__ZN4dima7modules7logging10LogService24mavlink_log_publication_E",
 }
 FINI_ARRAY_ALLOWLIST = {
@@ -68,6 +53,7 @@ FINI_ARRAY_ALLOWLIST = {
 }
 
 def range_contains(base: int, size: int, address: int, length: int) -> bool:
+    """要求非空区间 ``[address,address+length)`` 完整落在目标内存区间。"""
     return length > 0 and base <= address and address + length <= base + size
 
 
@@ -130,6 +116,7 @@ def verify_handler_symbols(elf: Elf32) -> None:
 def array_entry_names(
         elf: Elf32, section_name: str,
         allowlist: set[str], required: bool = True) -> list[str]:
+    """按小端 32 位指针解析 init/fini 数组，并要求每项唯一解析到 allowlist。"""
     section = elf.section(section_name, required=required)
     if section is None:
         return []
@@ -184,9 +171,52 @@ def verify_initialization_arrays(elf: Elf32) -> None:
         raise ElfVerificationError(".preinit_array must remain empty")
     array_entry_names(elf, ".init_array", INIT_ARRAY_ALLOWLIST)
     array_entry_names(elf, ".fini_array", FINI_ARRAY_ALLOWLIST)
+    verify_orb_metadata_section(elf)
+
+
+def verify_orb_metadata_section(elf: Elf32) -> None:
+    """验证 metadata 段只含等长 __orb_ 描述符且没有对应静态构造器。"""
+    section = elf.section(".dima_orb_meta")
+    assert section is not None
+    if not range_contains(APP_VECTOR, APP_FLASH_SIZE,
+                          section.address, section.size):
+        raise ElfVerificationError(
+            ".dima_orb_meta must be a non-empty Flash section"
+        )
+
+    start = elf.symbol("__dima_orb_meta_start__")
+    end = elf.symbol("__dima_orb_meta_end__")
+    if start.value != section.address or end.value != section.address + section.size:
+        raise ElfVerificationError(
+            "uORB metadata linker boundaries do not match .dima_orb_meta"
+        )
+
+    descriptors = elf.symbols_matching(
+        lambda symbol: symbol.section_index == section.index and
+        symbol.symbol_type == STT_OBJECT and
+        symbol.name.startswith("__orb_")
+    )
+    if not descriptors:
+        raise ElfVerificationError(".dima_orb_meta has no topic descriptors")
+    descriptor_size = descriptors[0].size
+    if descriptor_size == 0 or any(
+            descriptor.size != descriptor_size for descriptor in descriptors):
+        raise ElfVerificationError("uORB descriptors have inconsistent sizes")
+    if section.size != len(descriptors) * descriptor_size:
+        raise ElfVerificationError(
+            ".dima_orb_meta contains padding or non-descriptor data"
+        )
+    constructors = elf.symbols_matching(
+        lambda symbol: symbol.name.startswith("_GLOBAL__sub_I___orb_")
+    )
+    if constructors:
+        raise ElfVerificationError(
+            "uORB descriptors must not create static constructors"
+        )
 
 
 def verify_memory_layout(elf: Elf32) -> None:
+    """核对应用向量、DTCM/D1/D2/D3、DMA 与零初始化大对象的物理归属。"""
     vector = elf.section(".isr_vector")
     assert vector is not None
     if vector.address != APP_VECTOR or vector.size == 0:
