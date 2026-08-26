@@ -1,6 +1,6 @@
 # RC 输入模块
 
-- **职责：** `SbusRc` 接收原始帧，`RCUpdate` 完成校准和通道映射，`RcManualInput` 再把规范化通道及开关边沿发布为 `manual_control_setpoint` 与 `action_request`。
+- **职责：** `drivers/rc/sbus/SbusRc` 接收原始帧；本目录的 `RCUpdate` 完成校准和通道映射，`RcManualInput` 再把规范化通道及开关边沿发布为 `manual_control_setpoint` 与 `action_request`。
 - **禁止事项：** 不从协议解析器直接驱动 PWM，不绕过 Arming、Failsafe 和控制模块链。
 - **命名边界：** `RcManualInput` 是 RC 来源转换器，不是 Rover Manual 模式，也不拥有未来 MAVLink 输入；Rover 模式入口明确位于 `Dima/rover/modes/ManualMode.*`。
 - **上游 API 保留：** 保留上游 SBUS、RCUpdate、ManualControl 的 Topic、参数名和公开状态语义，仅对本地类名和 UART/DMA 平台外壳做适配。
@@ -21,11 +21,11 @@
 | SERIAL7 | UART7 | PE8 / PE7 | 串口 7 | `SERIAL7_BAUD=57600`、Function Disabled |
 | SERIAL8 | UART8 | PE1 / PE0 | 串口 8 | `SERIAL8_BAUD=115200`、Function Disabled |
 
-UART5 同时引到独立串口 5 插座和串口 5/I2C2 复合插座，两处共享同一个 PB13/PB12 外设，不能由两个设备同时驱动 RX。各路普通 baud 是当前板级清单的产品默认值；这些默认值不代表尚未实现的 GPS、串口 MAVLink 或 RS485 服务。
+UART5 同时引到独立串口 5 插座和串口 5/I2C2 复合插座，两处共享同一个 PB13/PB12 外设，不能由两个设备同时驱动 RX。各路普通 baud 是当前板级清单的产品默认值；GPS 已由 UM982 driver 使用，串口 MAVLink 和 RS485 数据服务仍未实现。
 
-每个外部端口固定生成 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前只有 `0=Disabled`、`1=RC Input` 两个具有生产数据路径的 Function。通过 QGC 把目标端口设为 RC Input 时，固件会在同一参数事务中把旧 RC owner 设为 Disabled；如果存储数据本身异常地包含多个 RC owner，启动仍会 fail-closed。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
+每个外部端口固定生成 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前 Function 为 `0=Disabled`、`1=RC Input`、`2=GPS`。RC 和 GPS 各自只能有一个 owner，同一个 UART 也不能同时被二者占用；异常存储或冲突写入必须 fail-closed。通过 QGC 把目标端口设为 RC Input 时，固件会在同一参数事务中把旧 RC owner 设为 Disabled。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
 
-SerialConfig 在 RC driver 前应用普通 8N1 波特率。被唯一 `SERIALx_FUNCTION=RC Input` 选中的端口随后由 SBUS 临时接管为 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`，释放时恢复普通 UART、FIFO 和 GPIO。Auto/0 只表示最终波特率交给对应 Function driver；当前未实现的 GPS、串口 MAVLink、RS485 数据服务不会因连接器名称而被虚构。
+SerialConfig 先应用普通 8N1 配置。被唯一 `SERIALx_FUNCTION=RC Input` 选中的端口随后由 SBUS driver 临时接管为 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`，释放时恢复普通 UART、FIFO 和 GPIO。GPS owner 由 UM982 driver 保持 8N1，按所选 `SERIALx_BAUD` 确定目标 baud，并在需要时异步扫描接收机当前 baud。Auto/0 只表示最终 baud 交给对应 Function driver；串口 MAVLink 和 RS485 数据服务不会因连接器名称而被虚构。
 
 当前板级固件不定义 `RC_PORT_CONFIG`、迁移版本参数或旧串口键，也不扫描、补全或迁移旧存储目录。持久化快照中出现未知键或类型不符时整份拒绝，重新按当前 `SERIAL1..8` 直接编号配置。
 

@@ -4,7 +4,7 @@
 #include "RcManualInput.hpp"
 
 #include "logging/logging.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 
 #include <cmath>
 #include <limits>
@@ -128,6 +128,7 @@ bool RcManualInput::mapped_channel(const rc_channels_s &channels,
                                    std::uint8_t function,
                                    float &value) noexcept
 {
+    // 功能未映射、索引越界或通道为非有限值时统一返回 NaN，不制造可用的零输入。
     const std::int8_t channel = channels.function[function];
 
     if (channel < 0 ||
@@ -221,6 +222,8 @@ void RcManualInput::process_switches(
         return;
     }
 
+    // 去抖同时要求状态一致、样本数足够且基于原始 sample_time 的持续时间足够；
+    // 调度器重复处理同一 Topic 不会被累计成多个稳定样本。
     const bool candidate_matches = candidate_sample_count_ != 0U &&
         switches.arm_switch == candidate_switches_.arm_switch &&
         switches.kill_switch == candidate_switches_.kill_switch;
@@ -257,8 +260,7 @@ void RcManualInput::process_switches(
         candidate_switches_.kill_switch ==
             manual_control_switches_s::SWITCH_POS_ON;
 
-    /* A newly engaged Kill must be queued before a simultaneous Arm edge so
-     * no intermediate ARMED snapshot can escape to MotorOutput. */
+    // Kill 与 Arm 同帧变化时必须先发布 Kill，防止中间态 ARMED 快照逃逸到 MotorOutput。
     if (kill_engaged) {
         publish_action(action_request_s::ACTION_KILL);
     }
@@ -273,8 +275,8 @@ void RcManualInput::process_switches(
         }
     }
 
-    /* Unkill remains last. A simultaneous Arm edge is therefore evaluated
-     * while Kill is still latched and cannot re-arm without a later edge. */
+    // Unkill 始终最后发布：同帧 Arm 边沿仍在 Kill 锁存期间求值，只有后续新的
+    // Arm 边沿才可能重新解锁，避免一个复合开关动作直接恢复动力。
     if (kill_changed && !kill_engaged &&
         candidate_switches_.kill_switch ==
             manual_control_switches_s::SWITCH_POS_OFF) {
@@ -319,10 +321,11 @@ void RcManualInput::reset_switch_parameter_state() noexcept
 
 bool RcManualInput::initialize_switch_parameter_handles() noexcept
 {
-    arm_mapping_handle_ = param_find("RC_MAP_ARM_SW");
-    kill_mapping_handle_ = param_find("RC_MAP_KILL_SW");
-    arm_threshold_handle_ = param_find("RC_ARMSWITCH_TH");
-    kill_threshold_handle_ = param_find("RC_KILLSWITCH_TH");
+    // 直接消费生成参数枚举；开关业务只声明所需角色，不复制字符串名称表。
+    arm_mapping_handle_ = param_handle(px4::params::RC_MAP_ARM_SW);
+    kill_mapping_handle_ = param_handle(px4::params::RC_MAP_KILL_SW);
+    arm_threshold_handle_ = param_handle(px4::params::RC_ARMSWITCH_TH);
+    kill_threshold_handle_ = param_handle(px4::params::RC_KILLSWITCH_TH);
     return arm_mapping_handle_ != PARAM_INVALID &&
            kill_mapping_handle_ != PARAM_INVALID &&
            arm_threshold_handle_ != PARAM_INVALID &&
@@ -351,6 +354,7 @@ bool RcManualInput::refresh_switch_configuration() noexcept
     kill_threshold_ = kill_threshold;
     switch_configuration_initialized_ = true;
     if (changed) {
+        // 映射或阈值变化会改变边沿含义，必须丢弃旧基线，避免参数更新本身触发动作。
         reset_switch_baseline();
     }
     return true;

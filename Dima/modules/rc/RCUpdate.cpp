@@ -5,7 +5,9 @@
 
 #include "events/events.hpp"
 #include "logging/logging.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
+
+#include <parameters/parameter_contract.hpp>
 
 #include <cmath>
 #include <limits>
@@ -13,26 +15,9 @@
 namespace dima::modules::rc {
 namespace {
 
-constexpr const char *kCalibrationNames[18][5] = {
-#define RC_CAL_NAMES(n) {"RC" #n "_MIN", "RC" #n "_TRIM", "RC" #n "_MAX", "RC" #n "_REV", "RC" #n "_DZ"}
-    RC_CAL_NAMES(1), RC_CAL_NAMES(2), RC_CAL_NAMES(3), RC_CAL_NAMES(4),
-    RC_CAL_NAMES(5), RC_CAL_NAMES(6), RC_CAL_NAMES(7), RC_CAL_NAMES(8),
-    RC_CAL_NAMES(9), RC_CAL_NAMES(10), RC_CAL_NAMES(11), RC_CAL_NAMES(12),
-    RC_CAL_NAMES(13), RC_CAL_NAMES(14), RC_CAL_NAMES(15), RC_CAL_NAMES(16),
-    RC_CAL_NAMES(17), RC_CAL_NAMES(18),
-#undef RC_CAL_NAMES
-};
-
 constexpr std::uint32_t kEventInvalidCalibration = 0x52435501U;
 constexpr std::uint32_t kEventInvalidMapping = 0x52435502U;
 constexpr std::uint32_t kEventSignalState = 0x52435503U;
-
-constexpr const char *kMappingNames[13] = {
-    "RC_MAP_ROLL", "RC_MAP_PITCH", "RC_MAP_THROTTLE", "RC_MAP_YAW",
-    "RC_MAP_ARM_SW", "RC_MAP_KILL_SW", "RC_MAP_FLAPS",
-    "RC_MAP_AUX1", "RC_MAP_AUX2", "RC_MAP_AUX3", "RC_MAP_AUX4",
-    "RC_MAP_AUX5", "RC_MAP_AUX6",
-};
 
 float constrain(float value, float minimum, float maximum) noexcept
 {
@@ -142,6 +127,8 @@ void RCUpdate::Run()
     }
 
     const std::uint64_t now_us = hrt_absolute_time();
+    // COM_RC_LOSS_T 的计时起点是最后一帧真实信号时间，不是本次转发/调度时间；
+    // 未来时间戳、零时间戳以及无输入都按失联处理，避免时钟异常放宽安全门限。
     const std::uint64_t timeout_us = static_cast<std::uint64_t>(loss_timeout_s_ * 1000000.0F);
     const bool timed_out = !have_input_ || timeout_us == 0U ||
                            last_input_time_us_ == 0U ||
@@ -166,6 +153,7 @@ void RCUpdate::Run()
     }
 
     if (signal_lost_) {
+        // 失联恢复需要连续的新帧覆盖稳定窗口；单个偶发好帧不会立即解除 signal_lost。
         if (recovery_start_time_us_ == 0U ||
             last_input_time_us_ < recovery_start_time_us_) {
             recovery_start_time_us_ = last_input_time_us_;
@@ -234,25 +222,40 @@ void RCUpdate::reset_runtime_state() noexcept
 
 bool RCUpdate::initialize_parameter_handles() noexcept
 {
+    namespace contract = dima::generated::parameters;
+    static_assert(contract::kRcCalibrationChannelCount == kChannelCount);
+    static_assert(contract::kRcCalibrationFieldCount ==
+                  kCalibrationFieldCount);
+    static_assert(contract::kRcMappingParameterCount == kMappingCount);
+
     bool valid = true;
 
+    // 校准矩阵与映射顺序由权威 PARAM_DEFINE 源生成；这里仅把生成枚举转换为
+    // 运行时 handle，避免参数改名/增删后仍命中一份陈旧字符串清单。
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
-        for (std::size_t field = 0U; field < kCalibrationFieldCount; ++field) {
-            calibration_handles_[channel][field] = param_find(kCalibrationNames[channel][field]);
-            valid = valid && calibration_handles_[channel][field] != PARAM_INVALID;
+        const contract::RcCalibrationParameters &parameters =
+            contract::kRcCalibrationParameters[channel];
+        calibration_handles_[channel][0] = param_handle(parameters.min);
+        calibration_handles_[channel][1] = param_handle(parameters.trim);
+        calibration_handles_[channel][2] = param_handle(parameters.max);
+        calibration_handles_[channel][3] = param_handle(parameters.rev);
+        calibration_handles_[channel][4] = param_handle(parameters.dz);
+        for (const param_t handle : calibration_handles_[channel]) {
+            valid = valid && handle != PARAM_INVALID;
         }
     }
 
     for (std::size_t mapping = 0U; mapping < kMappingCount; ++mapping) {
-        mapping_handles_[mapping] = param_find(kMappingNames[mapping]);
+        mapping_handles_[mapping] =
+            param_handle(contract::kRcMappingParameters[mapping]);
         valid = valid && mapping_handles_[mapping] != PARAM_INVALID;
     }
 
-    channel_count_handle_ = param_find("RC_CHAN_CNT");
-    arm_threshold_handle_ = param_find("RC_ARMSWITCH_TH");
-    kill_threshold_handle_ = param_find("RC_KILLSWITCH_TH");
-    loss_timeout_handle_ = param_find("COM_RC_LOSS_T");
-    rc_input_mode_handle_ = param_find("COM_RC_IN_MODE");
+    channel_count_handle_ = param_handle(px4::params::RC_CHAN_CNT);
+    arm_threshold_handle_ = param_handle(px4::params::RC_ARMSWITCH_TH);
+    kill_threshold_handle_ = param_handle(px4::params::RC_KILLSWITCH_TH);
+    loss_timeout_handle_ = param_handle(px4::params::COM_RC_LOSS_T);
+    rc_input_mode_handle_ = param_handle(px4::params::COM_RC_IN_MODE);
     return valid && channel_count_handle_ != PARAM_INVALID &&
            arm_threshold_handle_ != PARAM_INVALID && kill_threshold_handle_ != PARAM_INVALID &&
            loss_timeout_handle_ != PARAM_INVALID &&
@@ -261,6 +264,8 @@ bool RCUpdate::initialize_parameter_handles() noexcept
 
 bool RCUpdate::load_parameters() noexcept
 {
+    // 校准、映射、阈值和超时共同构成一代 RC 配置；任一读取或范围校验失败，
+    // 整体参数状态即为无效，不能只使用其中“看起来正常”的通道。
     bool valid = true;
     valid = valid && param_get(channel_count_handle_, &configured_channel_count_) == 0;
     valid = valid && param_get(arm_threshold_handle_, &arm_threshold_) == 0;
@@ -329,7 +334,9 @@ float RCUpdate::normalize(std::size_t channel, std::uint16_t raw) const noexcept
     const float value = static_cast<float>(raw);
     float normalized = 0.0F;
 
-    // 死区两侧分别线性映射，所有轴（含油门）保持中心双向语义。
+    // 死区两侧分别线性映射，所有轴（含油门）保持中心双向语义：
+    // 高侧 y=(raw-trim-dz)/(max-trim-dz)，低侧 y=(raw-trim+dz)/(trim-dz-min)，
+    // 最后乘 REV 并夹紧到 [-1,1]。
     if (value > cal.trim + cal.deadzone) {
         normalized = (value - cal.trim - cal.deadzone) /
                      (cal.maximum - cal.trim - cal.deadzone);
@@ -358,6 +365,7 @@ void RCUpdate::rebuild_functions(std::uint8_t channel_count) noexcept
         const std::int32_t value = mappings_[mapping_index];
         if (value <= 0) return;
 
+        // 参数映射使用 1..18，uORB 数组使用 0..17；0 明确表示该功能未映射。
         const std::size_t channel = static_cast<std::size_t>(value - 1);
         if (value <= channel_count && calibration_valid_[channel]) {
             rc_.function[function] = static_cast<std::int8_t>(channel);
@@ -425,6 +433,7 @@ void RCUpdate::publish_lost(std::uint64_t now_us) noexcept
     rc_.rssi = 0U;
     rc_.signal_lost = true;
     rc_.frame_drop_count = have_input_ ? latest_input_.rc_lost_frame_count : 0U;
+    // 失联时所有轴发布 NaN，而不是有效的零值；下游可据此 fail-closed。
     for (float &channel : rc_.channels) channel = std::numeric_limits<float>::quiet_NaN();
     (void)rc_channels_pub_.publish(rc_);
     perf_count(publish_interval_);
@@ -465,6 +474,7 @@ std::uint8_t RCUpdate::switch_position(std::uint8_t function, float threshold) c
     const std::int8_t channel = rc_.function[function];
     if (channel < 0) return manual_control_switches_s::SWITCH_POS_NONE;
 
+    // 将归一化轴 [-1,1] 线性换算为开关判定域 [0,1]：value = 0.5*x + 0.5。
     float value = 0.5F * rc_.channels[static_cast<std::size_t>(channel)] + 0.5F;
     if (threshold < 0.0F) value = -value;
     const bool active = threshold == 1.0F ? value >= threshold
