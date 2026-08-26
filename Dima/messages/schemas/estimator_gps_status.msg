@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# PX4 v1.17.0 EstimatorGpsStatus compatibility contract.
+@queue 1
+
+uint64 timestamp
+uint64 timestamp_sample
+bool checks_passed
+bool check_fail_gps_fix
+bool check_fail_min_sat_count
+bool check_fail_max_pdop
+bool check_fail_max_horz_err
+bool check_fail_max_vert_err
+bool check_fail_max_spd_err
+bool check_fail_max_horz_drift
+bool check_fail_max_vert_drift
+bool check_fail_max_horz_spd_err
+bool check_fail_max_vert_spd_err
+bool check_fail_spoofed_gps
+float32 position_drift_rate_horizontal_m_s
+float32 position_drift_rate_vertical_m_s
+float32 filtered_horizontal_speed_m_s
