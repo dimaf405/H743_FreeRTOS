@@ -1,7 +1,7 @@
 #include "flash_bank1.h"
 
 #include "boot_layout.h"
-#include "platform/stm32h7/memory/cache.h"
+#include "memory/cache.h"
 #include "stm32h7xx_hal.h"
 
 #define DIMA_FLASH_BUSY_MASK \
@@ -16,6 +16,8 @@ __attribute__((noinline, section(".dima_ramfunc")))
 static int program_from_dtcm(uint32_t address, const uint32_t *source,
                              size_t flash_word_count)
 {
+    /* 执行代码位于 DTCM，避免 Bank1 编程期间从同一 Bank 取指。每个 32-byte
+     * flashword 必须连续写入 8 个 word，再轮询 QW/BSY/WBNE 直到硬件完成。 */
     if ((FLASH->SR1 & DIMA_FLASH_BUSY_MASK) != 0U) {
         return 0;
     }
@@ -84,6 +86,8 @@ bool dima_stm32_flash_bank1_program(uint32_t address, const void *source,
         return false;
     }
 
+    /* Bank1 写期间关闭中断，防止 ISR 从正在编程的 Bank1 取指；恢复时保留调用前
+     * PRIMASK，不能无条件开中断。写后失效 D-cache 并逐字节校验。 */
     const uint32_t saved_primask = __get_PRIMASK();
     __disable_irq();
     const int programmed = program_from_dtcm(

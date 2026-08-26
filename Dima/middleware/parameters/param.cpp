@@ -8,7 +8,7 @@
 
 #include "ConstLayer.h"
 #include "param_internal.hpp"
-#include "platform/api/Execution.hpp"
+#include "api/Execution.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -44,6 +44,10 @@ static void *g_lock_context{};
 const param_storage_backend_s *g_storage{};
 void *g_storage_context{};
 
+/* 参数值分层：ConstLayer 固件默认值；runtime_defaults 保存运行期自定义默认；
+ * user_config 保存用户覆盖。g_unsaved 与 user_config 分离：值可等于默认而仍需
+ * 记录一次 reset 的持久化意图，直到成功保存后由存储层清理。 */
+
 bool valid(param_t param) noexcept
 {
     return static_cast<size_t>(param) < kCount;
@@ -56,6 +60,7 @@ bool task_read_allowed() noexcept
 
 bool service_write_allowed() noexcept
 {
+    /* 写参数可能增长稀疏层并触发通知，ISR 与 realtime 任务一律禁止。 */
     return !dima::platform::in_realtime_context();
 }
 
@@ -116,6 +121,8 @@ static int set_internal(param_t param, const void *value, bool notify,
         return 0;
     }
 
+    /* 新值等于当前 runtime default 时删除 user override，否则存入稀疏层；这使
+     * param_value_is_default 可由“是否 contains”精确判断，而非重复保存默认值。 */
     const param_value_u current_default = g_runtime_defaults->get(param);
     const bool stored = equal_value(param, next, current_default)
                             ? (g_user_config->reset(param), true)
@@ -163,6 +170,8 @@ void transaction_end() noexcept
         return;
     }
 
+    /* 嵌套事务只在最外层退出时合并发布一次 parameter_update；snapshot 记录操作
+     * 计数与 active/changed/default 数量，避免逐参数通知风暴。 */
     const bool emit = (--g_transaction_depth == 0U) && g_notification_pending;
     if (emit) {
         g_notification_pending = false;
@@ -190,6 +199,8 @@ void param_init(void)
         return;
     }
     // ready 与对象构造状态分离，保证部分分配失败后的重试不会覆盖并泄漏旧对象。
+    /* placement-new 使用静态 storage，重新初始化前先按构造标记逆序析构旧层；
+     * 任一层分配失败时 ready=false，但不会覆盖或泄漏上代对象。 */
     if (g_user_constructed) {
         g_user_config->~DynamicSparseLayer();
         g_user_constructed = false;
@@ -302,6 +313,8 @@ param_t param_find_no_notification(const char *name)
 
 param_t param_find(const char *name)
 {
+    /* find 会把参数标记为 used，供 MAVLink used-index/元数据裁剪；
+     * find_no_notification 只查句柄，不改变 active 集合。 */
     const param_t param = param_find_no_notification(name);
     if (valid(param)) {
         param_set_used(param);
@@ -422,6 +435,8 @@ int param_set_default_value(param_t param, const void *value)
     const param_value_u previous = g_runtime_defaults->get(param);
     if (equal_value(param, previous, next)) { return 0; }
 
+    /* 自定义默认等于固件默认时删除 runtime override，否则存入 runtime 稀疏层；
+     * 仅当该参数已 active 时请求通知，未使用参数不制造无意义更新。 */
     const param_value_u firmware = g_firmware_defaults.get(param);
     const bool stored = equal_value(param, firmware, next)
                             ? (g_runtime_defaults->reset(param), true)

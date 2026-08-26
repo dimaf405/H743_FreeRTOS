@@ -2,8 +2,8 @@
 #include "FileStorage.hpp"
 
 #include "logging/logging.hpp"
-#include "platform/api/ParameterFileStore.hpp"
-#include "platform/api/Synchronization.hpp"
+#include "api/ParameterFileStore.hpp"
+#include "api/Synchronization.hpp"
 
 #include <cerrno>
 
@@ -23,6 +23,10 @@ enum class SavePhase : std::uint8_t {
     CleanupTemporary,
 };
 
+/* 保存状态机：tmp 分块写入 -> sync/close -> 逐字节回读验证 -> 删除旧 backup ->
+ * primary 改名为 backup -> tmp 改名为 primary。只有新文件已验证后才移动现役
+ * primary；最后一步失败且 primary 已移动时回滚 backup，保证至少保留一代。 */
+
 struct FileStorageContext {
     platform::ParameterFileStore *store{nullptr};
     platform::Synchronization *synchronization{nullptr};
@@ -41,6 +45,8 @@ class FileStorageGuard final {
 public:
     explicit FileStorageGuard(FileStorageContext &context) noexcept
         : context_(context),
+          /* 文件状态机及 FATFS 后端为单事务资源，使用普通 mutex 串行化 poll、
+           * save 与 load；RAII 覆盖全部 errno 返回路径。 */
           locked_(context.synchronization != nullptr && context.mutex &&
                   context.synchronization->lock(
                       context.mutex, platform::Timeout::forever()))
@@ -180,6 +186,8 @@ int file_storage_begin_save(const std::uint8_t *data,
         return ready;
     }
 
+    /* 这里只借用序列化缓冲；直到 continue_save 返回最终 0/错误或 cancel 前，
+     * 调用方必须保持 data 内容和生命周期稳定。 */
     ctx.save_data = data;
     ctx.save_size = size;
     ctx.save_error = 0;
@@ -198,6 +206,8 @@ int file_storage_continue_save() noexcept
         return -EINVAL;
     }
 
+    /* 每次调用只推进一个可阻塞边界并以 -EAGAIN 请求再次调度，避免一次 Run 内
+     * 完成整文件 I/O 而饿死看门狗、MAVLink 和控制服务。 */
     int result = 0;
     switch (ctx.save_phase) {
     case SavePhase::BeginTemporaryWrite:
@@ -266,6 +276,8 @@ int file_storage_continue_save() noexcept
             reset_save(ctx);
             return 0;
         }
+        /* 只有确实把 primary 移到 backup 后才执行回滚；首次保存没有 primary 时
+         * 不可把不存在的 backup 当成可恢复来源。 */
         if (ctx.primary_moved) {
             ctx.save_error = result;
             ctx.save_phase = SavePhase::RollbackPrimary;
@@ -322,6 +334,8 @@ int file_storage_load(std::uint8_t *destination, std::size_t capacity,
         return ready;
     }
 
+    /* 恢复优先级固定为 primary -> backup -> tmp；每个候选都必须同时通过文件读取
+     * 和上层快照 validator，存在但 CRC/格式错误的 primary 不阻断后备恢复。 */
     const int primary_result = read_and_validate(
         ctx, platform::ParameterFile::Primary, destination, capacity,
         output_size, validator, validator_context);

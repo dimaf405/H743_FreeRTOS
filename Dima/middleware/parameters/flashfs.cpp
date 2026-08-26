@@ -43,7 +43,7 @@
 
 #include "flashfs.h"
 #include "Crc32.hpp"
-#include "platform/api/Execution.hpp"
+#include "api/Execution.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -387,7 +387,53 @@ int FlashFS::begin_write_entry(flash_file_token_t token,
     return 0;
 }
 
-int FlashFS::begin_erase_all() noexcept
+int FlashFS::validate_exclusive_erase_locked(
+    flash_file_token_t exclusive_token) noexcept
+{
+    std::size_t offset = 0U;
+    while (offset + kFlashWordBytes <= partition_size_) {
+        HeaderFields header{};
+        if (!partition_.read(offset, &header, sizeof(header))) {
+            return -EIO;
+        }
+        if (header.magic == kMagicBlank) {
+            offset += kFlashWordBytes;
+            continue;
+        }
+        if (offset + kHeaderFlashBytes > partition_size_ ||
+            header.magic != kMagicValid || !header_crc_valid(header)) {
+            offset += kFlashWordBytes;
+            continue;
+        }
+
+        std::uint32_t commit_marker = 0U;
+        if (!partition_.read(offset + kFlashWordBytes, &commit_marker,
+                             sizeof(commit_marker))) {
+            return -EIO;
+        }
+        const bool size_valid =
+            header.size > 0U &&
+            header.size <= partition_size_ - offset - kHeaderFlashBytes;
+        if (!size_valid) {
+            offset += kFlashWordBytes;
+            continue;
+        }
+        const std::size_t total = compute_total_size(header.size);
+        if (total > partition_size_ - offset) {
+            offset += kFlashWordBytes;
+            continue;
+        }
+        if (header.flag == kFlagValid && commit_marker == kFlagValid &&
+            verify_crc(header, offset) &&
+            !(header.token == exclusive_token)) {
+            return -ENOTEMPTY;
+        }
+        offset += total;
+    }
+    return 0;
+}
+
+int FlashFS::begin_erase_all(flash_file_token_t exclusive_token) noexcept
 {
     if (platform::in_interrupt_context()) {
         return -EPERM;
@@ -398,6 +444,11 @@ int FlashFS::begin_erase_all() noexcept
     if (!lock) { return -EDEADLK; }
     if (operation_ != Operation::Idle) {
         return -EBUSY;
+    }
+    const int scope_result =
+        validate_exclusive_erase_locked(exclusive_token);
+    if (scope_result != 0) {
+        return scope_result;
     }
     operation_ = Operation::Erase;
     return 0;

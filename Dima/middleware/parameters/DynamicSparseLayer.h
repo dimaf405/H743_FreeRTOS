@@ -35,13 +35,16 @@
 
 #include "ParamLayer.h"
 #include "containers/atomic.h"
-#include "platform/api/Execution.hpp"
-#include "platform/api/Memory.hpp"
+#include "api/Execution.hpp"
+#include "api/Memory.hpp"
 
 #include <cstring>
 #include <utility>
 
 // Upstream path: src/lib/parameters/DynamicSparseLayer.h @ d6f12ad1
+/* 稀疏层只保存“与 parent 不同”的参数，槽按 param_t 升序排列。当前层未命中时
+ * get 递归读取 parent，形成 firmware defaults -> runtime defaults -> user config
+ * 三层覆盖；容量增长只允许在非实时任务中发生。 */
 class DynamicSparseLayer : public ParamLayer
 {
 public:
@@ -63,6 +66,8 @@ public:
 
     bool store(param_t param, param_value_u value) override
     {
+        /* lowerBound 定位替换/插入点；新键通过 memmove 保持有序。先 grow 成功再
+         * 移动，分配失败时原数组和逻辑内容完全不变。 */
         px4::AtomicTransaction transaction;
         const int index = lowerBound(param);
         Slot *slots = _slots.load();
@@ -91,6 +96,7 @@ public:
     }
     void reset(param_t param) override
     {
+        /* 删除 override 后元素左移，末槽恢复 UINT16_MAX 哨兵；读取会自然回退 parent。 */
         px4::AtomicTransaction transaction; const int index = lowerBound(param); Slot *slots = _slots.load();
         if (index < _next_slot && slots[index].param == param) {
             if (index + 1 < _next_slot) {
@@ -106,6 +112,8 @@ public:
 
     void swapContents(DynamicSparseLayer &other) noexcept
     {
+        /* 仅交换已完整构建层的缓冲和容量，不分配也不逐项复制，用于解码完成后的
+         * 原子式代际提交；两层必须具有相同 parent 语义。 */
         Slot *mine = _slots.load();
         Slot *theirs = other._slots.load();
         _slots.store(theirs);
@@ -120,6 +128,7 @@ private:
     static void initialize(Slot *slots, int begin, int end) { for (int i = begin; i < end; ++i) { slots[i] = {UINT16_MAX, {}}; } }
     int lowerBound(param_t param) const
     {
+        /* 标准半开区间 [left,right) 二分，返回首个 slot.param >= param 的位置。 */
         int left = 0, right = _next_slot; Slot *slots = _slots.load();
         while (left < right) {
             const int mid = left + (right - left) / 2;
@@ -130,6 +139,8 @@ private:
     }
     bool grow()
     {
+        /* 新容量 = old + n_grow；先复制/初始化新块并发布指针，再释放旧块。
+         * AtomicTransaction 负责阻止并发读者观察交换窗口。 */
         if (!allocation_allowed()) { return false; }
         const int next_capacity = _n_slots > 0 ? _n_slots + _n_grow : _n_grow;
         auto *next = static_cast<Slot *>(dima::platform::allocate(sizeof(Slot) * next_capacity,

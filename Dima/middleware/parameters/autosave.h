@@ -34,8 +34,8 @@
 #pragma once
 
 #include "containers/atomic.h"
-#include "platform/api/Flash.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Flash.hpp"
+#include "api/Time.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include <cstdint>
@@ -43,6 +43,8 @@
 class ParamAutosave : public px4::ScheduledWorkItem
 {
 public:
+    /* request 只合并待保存标记，由 lp_default WorkQueue 执行实际持久化。armed 时
+     * writeAllowed=false，不能以参数保存阻塞控制链或触发 Flash 访问。 */
     using CancelSaveFn = void (*)(void *context) noexcept;
 
     explicit ParamAutosave(
@@ -58,6 +60,8 @@ public:
 
 private:
     enum class DisableReason : std::uint8_t {
+        /* Manual 需显式 enable；StorageFull 只有介质恢复路径才可 resume，避免
+         * ENOSPC 状态下无界高频重试磨损介质并刷日志。 */
         None,
         Manual,
         StorageFull,

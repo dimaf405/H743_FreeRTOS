@@ -49,6 +49,8 @@ typedef struct param_info_s {
 } param_info_s;
 
 typedef struct parameter_update_s {
+    /* timestamp 由通知适配层填写；instance 每次合并通知递增，get/set/find/export
+     * 是诊断累计计数，active/changed/custom_default 是通知时刻的数量快照。 */
     uint64_t timestamp;
     uint32_t instance;
     uint32_t get_count;
@@ -80,6 +82,8 @@ typedef struct param_storage_status_s {
 } param_storage_status_s;
 
 typedef struct param_storage_backend_s {
+    /* 存储后端通过 visitor/enumerator 解耦值目录；参数 ID/类型仍来自生成的
+     * param_info 权威表，后端不得维护第二份手写列表。 */
     int (*load)(param_storage_visitor_t visitor, void *visitor_context,
                 void *backend_context);
     int (*save)(param_storage_enumerator_t enumerate, void *enumerate_context,
@@ -134,7 +138,6 @@ int param_storage_get_status(param_storage_status_s *status) PARAM_NOEXCEPT;
 #ifdef __cplusplus
 }
 
-#include "param_macros.h"
 #include <parameters/px4_parameters.hpp>
 
 inline param_t param_handle(px4::params parameter) noexcept
@@ -167,6 +170,8 @@ template<typename T, px4::params p>
 class Param
 {
 public:
+    /* 模板参数 p 来自生成枚举，构造期静态核对 C++ 类型。bind 建立本地缓存并
+     * 标记 used；set 只改缓存，commit 才写全局参数层。 */
     constexpr Param() noexcept
     {
         static_assert(px4::parameters_type[static_cast<unsigned>(p)] == ParamTraits<T, p>::type,
@@ -226,10 +231,4 @@ template<params p> using ParamInt = do_not_explicitly_use_this_namespace::ParamI
 template<params p> using ParamBool = do_not_explicitly_use_this_namespace::ParamBool<p>;
 }
 
-#define _DEFINE_SINGLE_PARAMETER(x) do_not_explicitly_use_this_namespace::PAIR(x);
-#define _CALL_UPDATE(x) STRIP(x).update();
-#define _DEFINE_PARAMETER_UPDATE_METHOD(...) protected: void updateParamsImpl() final { APPLY_ALL(_CALL_UPDATE, __VA_ARGS__) } private:
-#define DEFINE_PARAMETERS(...) APPLY_ALL(_DEFINE_SINGLE_PARAMETER, __VA_ARGS__) _DEFINE_PARAMETER_UPDATE_METHOD(__VA_ARGS__)
-#define _DEFINE_PARAMETER_UPDATE_METHOD_CUSTOM_PARENT(parent_class, ...) protected: void updateParamsImpl() override { parent_class::updateParamsImpl(); APPLY_ALL(_CALL_UPDATE, __VA_ARGS__) } private:
-#define DEFINE_PARAMETERS_CUSTOM_PARENT(parent_class, ...) APPLY_ALL(_DEFINE_SINGLE_PARAMETER, __VA_ARGS__) _DEFINE_PARAMETER_UPDATE_METHOD_CUSTOM_PARENT(parent_class, __VA_ARGS__)
 #endif

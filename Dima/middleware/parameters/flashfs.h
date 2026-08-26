@@ -10,8 +10,8 @@
  * 适配：dima 平台 FlashPartition 抽象，32 字节编程对齐。
  */
 
-#include "platform/api/Flash.hpp"
-#include "platform/api/Synchronization.hpp"
+#include "api/Flash.hpp"
+#include "api/Synchronization.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -52,7 +52,8 @@ public:
     /* 运行期写入是分步事务；每次 continue 最多编程或回读一个 Flash 字。 */
     int begin_write_entry(flash_file_token_t token,
                           const void *data, std::size_t size) noexcept;
-    int begin_erase_all() noexcept;
+    /* Refuse to erase if any valid record belongs to another token. */
+    int begin_erase_all(flash_file_token_t exclusive_token) noexcept;
     int continue_operation() noexcept;
     void cancel_operation() noexcept;
 
@@ -105,8 +106,10 @@ private:
     /* 内部方法 */
     int  scan() noexcept;
     int  find_entry_locked(flash_file_token_t token,
-                            std::size_t &offset,
-                            HeaderFields &header) noexcept;
+                           std::size_t &offset,
+                           HeaderFields &header) noexcept;
+    int validate_exclusive_erase_locked(
+        flash_file_token_t exclusive_token) noexcept;
     std::size_t compute_total_size(std::size_t data_size) const noexcept;
     static std::uint32_t payload_crc_seed(
         const HeaderFields &header) noexcept;

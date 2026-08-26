@@ -6,10 +6,10 @@
 #include "parameters/flashfs.h"
 #include "parameters/autosave.h"
 #include "parameters/param.h"
-#include "platform/api/Execution.hpp"
-#include "platform/api/Flash.hpp"
-#include "platform/api/ParameterFileStore.hpp"
-#include "platform/api/Synchronization.hpp"
+#include "api/Execution.hpp"
+#include "api/Flash.hpp"
+#include "api/ParameterFileStore.hpp"
+#include "api/Synchronization.hpp"
 #include "uorb/Publication.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
@@ -18,6 +18,8 @@
 
 namespace dima::modules::parameters {
 
+// 参数服务桥接生成参数表、运行时分层、FlashFS 主副本、FatFs SD 镜像与 autosave。
+// 所有持久化采用固定缓冲和非阻塞状态机；参数定义/列表仍只由权威源生成。
 class ParameterService final : public dima::middleware::lifecycle::ModuleBase,
                                public px4::ScheduledWorkItem {
 public:
@@ -37,6 +39,8 @@ public:
     dima::middleware::lifecycle::ModuleState state() const noexcept override;
 
 private:
+    // 10 ms 服务 autosave/通知，3 s 探测 SD；快照为 20 B header + 生成参数层
+    // 允许的最大 payload，两份 32-byte 对齐缓冲用于已提交/当前比较。
     static constexpr std::uint32_t kPollUs = 10000U;
     static constexpr std::uint64_t kSdPollIntervalUs = 3000000ULL;
     static constexpr std::size_t kSnapshotHeaderBytes = 20U;
@@ -50,6 +54,8 @@ private:
     };
 
     enum class PersistencePhase : std::uint8_t {
+        // Wait approval -> Flash write -> SD write；Flash 满/损坏且 SD 已有同代副本
+        // 时才允许 erase+rewrite Flash。每个 Continue 阶段均可跨多次 Run。
         Idle,
         WaitForApproval,
         BeginFlashWrite,
@@ -105,11 +111,15 @@ private:
     dima::platform::CriticalSection &critical_;
     dima::middleware::maintenance::RuntimeMaintenanceCoordinator
         &maintenance_;
+    // param_mutex 保护参数核心的可重入调用；storage_mutex 独立串行化保存/加载/
+    // SD 镜像，避免长介质事务阻塞普通 param_get。
     dima::platform::RecursiveMutex param_mutex_{};
     dima::platform::RecursiveMutex storage_mutex_{};
     ParamAutosave autosave_;
     uORB::Publication<parameter_update_s> parameter_update_pub_{
         ORB_ID(parameter_update)};
+    // payload_ 在异步 Flash/SD 完成前保持所有权；comparison_payload_ 用于启动时
+    // 比较双介质和保存后检测参数是否在事务期间再次变化。
     alignas(32) std::uint8_t payload_[kPayloadCapacity]{};
     alignas(32) std::uint8_t comparison_payload_[kPayloadCapacity]{};
     parameter_update_s pending_update_{};

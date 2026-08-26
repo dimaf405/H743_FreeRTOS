@@ -1,4 +1,4 @@
-#include "platform/freertos/Backend.hpp"
+#include "freertos/Backend.hpp"
 
 #include "diskio.h"
 #include "ff.h"
@@ -16,6 +16,8 @@ constexpr const char *kPrimaryPath = "0:/dima/params.bin";
 constexpr const char *kBackupPath = "0:/dima/params.bak";
 constexpr const char *kTemporaryPath = "0:/dima/params.tmp";
 
+/* 三文件事务角色：tmp 接收新快照，校验后由上层轮换 primary/backup；本后端只
+ * 提供单步文件原语，不擅自决定代际提交策略。 */
 const char *file_path(ParameterFile file) noexcept
 {
     switch (file) {
@@ -96,6 +98,8 @@ public:
 
     int initialize() noexcept override
     {
+        /* 已挂载且块设备仍 ready 时保持幂等；介质变化先彻底卸载旧 FATFS 对象，
+         * 再同步挂载并确保 /dima 目录存在。 */
         if (state_.mounted && disk_status(0) == 0U) {
             return 0;
         }
@@ -136,6 +140,8 @@ public:
             return -EBUSY;
         }
 
+        /* begin 只取得文件并保存调用方缓冲区引用；缓冲区所有权持续到
+         * continue_write 返回 0/错误或 cancel，调用方期间不得修改或释放。 */
         const FRESULT result =
             f_open(&state_.file, path, FA_WRITE | FA_CREATE_ALWAYS);
         if (result != FR_OK) {
@@ -151,6 +157,8 @@ public:
 
     int continue_write() noexcept override
     {
+        /* 协作式状态机每次最多推进一个 512 B 数据块或一个 sync/close 阶段。
+         * -EAGAIN 表示“仍在正常进行”，让维护任务在块间喂狗和服务通信。 */
         if (state_.operation != Operation::WriteData &&
             state_.operation != Operation::SyncWrite &&
             state_.operation != Operation::CloseWrite) {
@@ -179,6 +187,7 @@ public:
         }
 
         if (state_.operation == Operation::SyncWrite) {
+            /* 必须先 f_sync 再 f_close；close 成功但介质缓存未同步不能算持久提交。 */
             const FRESULT result = f_sync(&state_.file);
             if (result != FR_OK) {
                 (void)f_close(&state_.file);
@@ -219,6 +228,7 @@ public:
             return handle(result);
         }
 
+        /* 参数快照必须完整装入调用方容量，空文件视作不存在，超长文件拒绝截断。 */
         const FSIZE_t file_size = f_size(&state_.file);
         if (file_size == 0U || file_size > capacity) {
             (void)f_close(&state_.file);
@@ -258,6 +268,7 @@ public:
         if (result != FR_OK) {
             return handle(result);
         }
+        /* 先锁定精确长度，再分块逐字节比对；仅 CRC 相同不足以代替落盘回读。 */
         if (f_size(&state_.file) != static_cast<FSIZE_t>(size)) {
             (void)f_close(&state_.file);
             return -EIO;
@@ -272,6 +283,7 @@ public:
 
     int continue_verify() noexcept override
     {
+        /* 与写入相同，每次只读 512 B；任何短读或内容差异都关闭文件并复位状态。 */
         if (state_.operation != Operation::VerifyData &&
             state_.operation != Operation::CloseVerify) {
             return -EINVAL;
@@ -352,6 +364,8 @@ private:
 
     void invalidate_mount() noexcept
     {
+        /* 媒体级错误会取消在途操作并卸载卷，后续调用必须重新 initialize；
+         * 普通 ENOENT/EEXIST 不应误触发整卷失效。 */
         if (state_.operation != Operation::Idle) {
             (void)f_close(&state_.file);
             reset_operation();
