@@ -1,26 +1,14 @@
-#include "platform/stm32h7/HardwareServices.hpp"
-#include "SbusUartPrivate.hpp"
+#include "UartTimestampedRxEndpoint.hpp"
 
-#include "board_serial_config.hpp"
+#include "UartResources.hpp"
+#include "stm32h7/HardwareServices.hpp"
+
 #include "usart.h"
 
 #include <algorithm>
 
 namespace dima::platform::stm32h7 {
 namespace {
-
-constexpr std::uint64_t kSbusByteTimeUs = 120U;
-
-UART_HandleTypeDef *uart_for(std::int32_t port) noexcept
-{
-    switch (port) {
-#define DIMA_UART_CASE(id, handle, request, irq, gpio, pin, af, index) \
-    case id: return &handle;
-    DIMA_STM32_SERIAL_PORT_LIST(DIMA_UART_CASE)
-#undef DIMA_UART_CASE
-    default: return nullptr;
-    }
-}
 
 constexpr std::size_t kDmaBufferSize = 64U;
 constexpr std::size_t kReceiveRingCapacity = 256U;
@@ -36,72 +24,24 @@ struct ReceivedByte {
 };
 
 static_assert((kReceiveRingCapacity & (kReceiveRingCapacity - 1U)) == 0U,
-              "SBUS receive ring capacity must be a power of two");
+              "timestamped RX ring capacity must be a power of two");
 
 alignas(32) std::uint8_t g_dma_buffer[kDmaBufferSize]
     __attribute__((section(".dima_dma")));
-// CPU Ring 只负责 ISR 到任务的交接，DMA 不得直接持有或写入。
 alignas(8) ReceivedByte g_receive_ring[kReceiveRingCapacity]{};
-DMA_HandleTypeDef g_sbus_dma{};
+/* 上述 CPU ring 只保存 ISR 从 DMA 快照出的字节与估算到达时间；DMA 不直接写
+ * 该环，因此消费者在 write_sequence 发布后读取到的槽保持稳定。 */
+DMA_HandleTypeDef g_timestamped_rx_dma{};
 
-std::uint32_t translate_uart_error(std::uint32_t error) noexcept
-{
-    std::uint32_t translated = SbusInputErrorNone;
-    if ((error & HAL_UART_ERROR_PE) != 0U) translated |= SbusInputErrorParity;
-    if ((error & HAL_UART_ERROR_NE) != 0U) translated |= SbusInputErrorNoise;
-    if ((error & HAL_UART_ERROR_FE) != 0U) translated |= SbusInputErrorFraming;
-    if ((error & HAL_UART_ERROR_ORE) != 0U) translated |= SbusInputErrorOverrun;
-    if ((error & HAL_UART_ERROR_DMA) != 0U) translated |= SbusInputErrorDma;
-    if ((error & HAL_UART_ERROR_RTO) != 0U) translated |= SbusInputErrorTimeout;
-    constexpr std::uint32_t known = HAL_UART_ERROR_PE | HAL_UART_ERROR_NE |
-                                    HAL_UART_ERROR_FE | HAL_UART_ERROR_ORE |
-                                    HAL_UART_ERROR_DMA | HAL_UART_ERROR_RTO;
-    if ((error & ~known) != 0U) translated |= SbusInputErrorUnknown;
-    return translated;
-}
-
-class Stm32SbusInput final : public SerialPorts, public SbusInput {
+class UartTimestampedRxEndpoint final : public TimestampedSerialInput {
 public:
-    bool configure_normal_baud(std::int32_t port,
-                               std::uint32_t baudrate) noexcept override
+    bool allows_line_configuration() const noexcept
     {
-        if (running() || uart_ != nullptr || dma_initialized_ ||
-            normal_configuration_valid_ ||
-            !dima::board::serial_baud_supported(baudrate)) {
-            return false;
-        }
-        UART_HandleTypeDef *const uart = uart_for(port);
-        if (uart == nullptr) {
-            return false;
-        }
-        if (baudrate == 0U) {
-            return true;
-        }
-        if (HAL_UART_DeInit(uart) != HAL_OK) {
-            return false;
-        }
-        uart->Init.BaudRate = baudrate;
-        uart->Init.WordLength = UART_WORDLENGTH_8B;
-        uart->Init.StopBits = UART_STOPBITS_1;
-        uart->Init.Parity = UART_PARITY_NONE;
-        uart->Init.Mode = UART_MODE_TX_RX;
-        uart->Init.HwFlowCtl = UART_HWCONTROL_NONE;
-        uart->Init.OverSampling = UART_OVERSAMPLING_16;
-        uart->Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-        uart->Init.ClockPrescaler = UART_PRESCALER_DIV1;
-        uart->AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-        if (HAL_UART_Init(uart) != HAL_OK ||
-            HAL_UARTEx_SetTxFifoThreshold(
-                uart, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK ||
-            HAL_UARTEx_SetRxFifoThreshold(
-                uart, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK ||
-            HAL_UARTEx_DisableFifoMode(uart) != HAL_OK) {
-            return false;
-        }
-        return true;
+        return !running() && uart_ == nullptr && !dma_initialized_ &&
+               !normal_configuration_valid_;
     }
 
-    bool reset_normal_configuration() noexcept override
+    bool reset_configuration() noexcept
     {
         if (running() || uart_ != nullptr || dma_initialized_ ||
             takeover_active_) {
@@ -112,6 +52,8 @@ public:
         normal_init_ = {};
         normal_advanced_init_ = {};
         normal_rx_pin_ = {};
+        line_configuration_ = {};
+        byte_time_us_ = 0U;
         normal_fifo_mode_ = UART_FIFOMODE_DISABLE;
         normal_tx_fifo_threshold_ = UART_TXFIFO_THRESHOLD_1_8;
         normal_rx_fifo_threshold_ = UART_RXFIFO_THRESHOLD_1_8;
@@ -119,18 +61,26 @@ public:
         return true;
     }
 
-    bool configure(std::int32_t port) noexcept override
+    bool configure(
+        std::int32_t port,
+        const SerialLineConfiguration &configuration) noexcept override
     {
-        if (running() || uart_ != nullptr || dma_initialized_) {
+        const std::uint64_t byte_time_us =
+            serial_byte_time_us(configuration);
+        if (running() || uart_ != nullptr || dma_initialized_ ||
+            !configuration.rx_enabled || configuration.tx_enabled ||
+            byte_time_us == 0U) {
             return false;
         }
+        /* configure 建立一代新统计基线，并保存正常 UART/FIFO/GPIO 快照；这里只
+         * 记录接管合同，实际 HAL 重配到 start 才发生。 */
         reset_statistics();
         const std::int32_t selected = port;
         auto *const uart = uart_for(selected);
         if (uart == nullptr || request_for(selected) == 0U) {
             return false;
         }
-        RxPinSnapshot rx_pin{};
+        UartRxPinSnapshot rx_pin{};
         if (!capture_rx_pin(selected, rx_pin)) {
             return false;
         }
@@ -142,6 +92,8 @@ public:
         normal_tx_fifo_threshold_ = uart->Instance->CR3 & USART_CR3_TXFTCFG;
         normal_rx_fifo_threshold_ = uart->Instance->CR3 & USART_CR3_RXFTCFG;
         normal_rx_pin_ = rx_pin;
+        line_configuration_ = configuration;
+        byte_time_us_ = byte_time_us;
         normal_configuration_valid_ = true;
         return true;
     }
@@ -162,33 +114,13 @@ public:
             return false;
         }
 
+        /* start 先调用 stop 清理上代残留，再验证生成的 DMA request 与 DMA 区；
+         * takeover_active 一旦置位，所有失败路径都必须经 stop 尝试恢复正常 UART。 */
         uart_ = uart;
         takeover_active_ = true;
-        if (HAL_UART_DeInit(uart) != HAL_OK) {
-            increment_recovery_failure();
-            (void)stop();
-            return false;
-        }
-        uart->Init.BaudRate = 100000U;
-        uart->Init.WordLength = UART_WORDLENGTH_9B;
-        uart->Init.StopBits = UART_STOPBITS_2;
-        uart->Init.Parity = UART_PARITY_EVEN;
-        uart->Init.Mode = UART_MODE_RX;
-        uart->Init.HwFlowCtl = UART_HWCONTROL_NONE;
-        uart->Init.OverSampling = UART_OVERSAMPLING_16;
-        uart->Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-        uart->Init.ClockPrescaler = UART_PRESCALER_DIV1;
-        uart->AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_RXINVERT_INIT;
-        uart->AdvancedInit.RxPinLevelInvert = UART_ADVFEATURE_RXINV_ENABLE;
-        if (HAL_UART_Init(uart) != HAL_OK) {
-            increment_recovery_failure();
-            (void)stop();
-            return false;
-        }
-
-        configure_sbus_rx_pin(configured_port_);
-
-        if (HAL_UARTEx_DisableFifoMode(uart) != HAL_OK) {
+        if (!reinitialize_uart(uart, line_configuration_) ||
+            !configure_uart_rx_pull(configured_port_,
+                                    line_configuration_.rx_pull)) {
             increment_recovery_failure();
             (void)stop();
             return false;
@@ -198,29 +130,29 @@ public:
                                        UART_CLEAR_IDLEF);
         __HAL_UART_SEND_REQ(uart, UART_RXDATA_FLUSH_REQUEST);
 
-        g_sbus_dma = DMA_HandleTypeDef{};
-        g_sbus_dma.Instance = DMA1_Stream2;
-        g_sbus_dma.Init.Request = request;
-        g_sbus_dma.Init.Direction = DMA_PERIPH_TO_MEMORY;
-        g_sbus_dma.Init.PeriphInc = DMA_PINC_DISABLE;
-        g_sbus_dma.Init.MemInc = DMA_MINC_ENABLE;
-        g_sbus_dma.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
-        g_sbus_dma.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-        g_sbus_dma.Init.Mode = DMA_CIRCULAR;
-        g_sbus_dma.Init.Priority = DMA_PRIORITY_HIGH;
-        g_sbus_dma.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
-        if (HAL_DMA_Init(&g_sbus_dma) != HAL_OK) {
+        g_timestamped_rx_dma = DMA_HandleTypeDef{};
+        g_timestamped_rx_dma.Instance = DMA1_Stream2;
+        g_timestamped_rx_dma.Init.Request = request;
+        g_timestamped_rx_dma.Init.Direction = DMA_PERIPH_TO_MEMORY;
+        g_timestamped_rx_dma.Init.PeriphInc = DMA_PINC_DISABLE;
+        g_timestamped_rx_dma.Init.MemInc = DMA_MINC_ENABLE;
+        g_timestamped_rx_dma.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+        g_timestamped_rx_dma.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+        g_timestamped_rx_dma.Init.Mode = DMA_CIRCULAR;
+        g_timestamped_rx_dma.Init.Priority = DMA_PRIORITY_HIGH;
+        g_timestamped_rx_dma.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+        if (HAL_DMA_Init(&g_timestamped_rx_dma) != HAL_OK) {
             increment_recovery_failure();
             (void)stop();
             return false;
         }
         dma_initialized_ = true;
-        __HAL_LINKDMA(uart, hdmarx, g_sbus_dma);
+        __HAL_LINKDMA(uart, hdmarx, g_timestamped_rx_dma);
 
         notification_ = notification;
 
-        /* DMA half/full callbacks must precede a simultaneous UART IDLE event
-         * so callback positions remain ordered across a circular wrap. */
+        /* DMA half/full 回调必须先于同拍 UART IDLE 回调，圆形缓冲跨界时 position
+         * 才保持有序；因此 DMA IRQ 数值优先级高于 UART IRQ。 */
         HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, kDmaIrqPriority, 0U);
         HAL_NVIC_ClearPendingIRQ(DMA1_Stream2_IRQn);
         HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
@@ -241,6 +173,8 @@ public:
 
     bool stop() noexcept override
     {
+        /* 先撤销 running 阻止新回调写 ring，再停两级 IRQ/DMA，最后恢复接管前的
+         * UART 和 RX pin；恢复失败时保留 ownership 以阻止其他模块抢用未知状态。 */
         __atomic_store_n(&running_, false, __ATOMIC_RELEASE);
         auto *const uart = static_cast<UART_HandleTypeDef *>(uart_);
         if (uart != nullptr) {
@@ -255,7 +189,7 @@ public:
             (void)HAL_UART_AbortReceive(uart);
         }
         if (dma_initialized_) {
-            (void)HAL_DMA_DeInit(&g_sbus_dma);
+            (void)HAL_DMA_DeInit(&g_timestamped_rx_dma);
             dma_initialized_ = false;
         }
         if (uart != nullptr) {
@@ -290,6 +224,8 @@ public:
             __atomic_load_n(&ring_read_sequence_, __ATOMIC_RELAXED);
         const std::uint32_t produced =
             __atomic_load_n(&ring_write_sequence_, __ATOMIC_ACQUIRE);
+        /* SPSC ring 由 ISR 单写、任务单读；acquire write_sequence 后槽内容完整。
+         * 差值超过固定容量表示内部溢出，故返回 0 并由 pending_fault 报失效。 */
         const std::uint32_t available = produced - consumed;
         if (available > kReceiveRingCapacity) {
             return 0U;
@@ -311,6 +247,8 @@ public:
 
     bool service() noexcept override
     {
+        /* timestamped 端点对溢出/UART/DMA 位置错误采用 fail-closed，不在 service
+         * 自动重启；上层必须 stop/start，避免时间连续性被悄悄拼接。 */
         return __atomic_load_n(&pending_fault_, __ATOMIC_ACQUIRE) == 0U &&
                running();
     }
@@ -320,11 +258,13 @@ public:
         return __atomic_load_n(&running_, __ATOMIC_ACQUIRE);
     }
 
-    SbusInputStats stats() const noexcept override
+    std::uint64_t byte_time_us() const noexcept { return byte_time_us_; }
+
+    TimestampedSerialInputStats stats() const noexcept override
     {
         return {
             __atomic_load_n(&received_bytes_, __ATOMIC_ACQUIRE),
-            __atomic_load_n(&overwritten_bytes_, __ATOMIC_ACQUIRE),
+            __atomic_load_n(&dropped_bytes_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&receive_errors_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&recovery_failures_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&receive_error_flags_, __ATOMIC_ACQUIRE),
@@ -361,8 +301,11 @@ public:
             return;
         }
 
+        /* 已知本批最后字节时间，按固定线路字节周期反推：
+         * first = last - (delta-1)*byte_time；每字节 arrival=first+i*byte_time。
+         * 下溢饱和到 0，并用 previous_arrival 单调钳位抵抗取整误差。 */
         const std::uint64_t span_us =
-            static_cast<std::uint64_t>(delta - 1U) * kSbusByteTimeUs;
+            static_cast<std::uint64_t>(delta - 1U) * byte_time_us_;
         const std::uint64_t first_arrival =
             last_byte_arrival_us >= span_us
                 ? last_byte_arrival_us - span_us
@@ -376,13 +319,15 @@ public:
         for (std::uint16_t offset = 0U; offset < delta; ++offset) {
             std::uint64_t arrival =
                 first_arrival + static_cast<std::uint64_t>(offset) *
-                                    kSbusByteTimeUs;
+                                    byte_time_us_;
             if (arrival < previous_arrival) {
                 arrival = previous_arrival;
             }
             const std::size_t index =
                 (static_cast<std::size_t>(previous) + offset) %
                 kDmaBufferSize;
+            /* ring 满时丢弃最新字节并锁定故障/停止端点，不能覆盖仍待解析的数据
+             * 后继续声称时间序列完整。 */
             if (write_sequence - read_sequence < kReceiveRingCapacity) {
                 ReceivedByte &received = g_receive_ring[
                     write_sequence & (kReceiveRingCapacity - 1U)];
@@ -400,7 +345,7 @@ public:
         last_dma_position_ = normalized;
         last_byte_arrival_us_ = previous_arrival;
         if (dropped != 0U) {
-            (void)__atomic_add_fetch(&overwritten_bytes_, dropped,
+            (void)__atomic_add_fetch(&dropped_bytes_, dropped,
                                      __ATOMIC_RELAXED);
             (void)__atomic_fetch_or(&pending_fault_, kReceiveFaultOverflow,
                                     __ATOMIC_RELEASE);
@@ -449,6 +394,7 @@ private:
             (void)__atomic_add_fetch(&receive_errors_, 1U,
                                      __ATOMIC_RELAXED);
         }
+        /* ISR 仅合并原因、撤销 running 并通知；HAL 资源清理由任务调用 stop 完成。 */
         (void)__atomic_fetch_or(&pending_fault_, fault, __ATOMIC_RELEASE);
         __atomic_store_n(&running_, false, __ATOMIC_RELEASE);
         notification_.invoke();
@@ -475,7 +421,7 @@ private:
     void reset_statistics() noexcept
     {
         __atomic_store_n(&received_bytes_, 0U, __ATOMIC_RELAXED);
-        __atomic_store_n(&overwritten_bytes_, 0U, __ATOMIC_RELAXED);
+        __atomic_store_n(&dropped_bytes_, 0U, __ATOMIC_RELAXED);
         __atomic_store_n(&receive_errors_, 0U, __ATOMIC_RELAXED);
         __atomic_store_n(&recovery_failures_, 0U, __ATOMIC_RELAXED);
         __atomic_store_n(&receive_error_flags_, 0U, __ATOMIC_RELAXED);
@@ -497,7 +443,8 @@ private:
     UART_HandleTypeDef *normal_uart_{nullptr};
     UART_InitTypeDef normal_init_{};
     UART_AdvFeatureInitTypeDef normal_advanced_init_{};
-    RxPinSnapshot normal_rx_pin_{};
+    UartRxPinSnapshot normal_rx_pin_{};
+    SerialLineConfiguration line_configuration_{};
     IsrCallback notification_{};
     std::uint32_t ring_write_sequence_{0U};
     std::uint32_t ring_read_sequence_{0U};
@@ -505,70 +452,79 @@ private:
     std::uint64_t last_byte_arrival_us_{0U};
     std::uint32_t pending_fault_{0U};
     std::uint32_t received_bytes_{0U};
-    std::uint32_t overwritten_bytes_{0U};
+    std::uint32_t dropped_bytes_{0U};
     std::uint32_t receive_errors_{0U};
     std::uint32_t recovery_failures_{0U};
     std::uint32_t receive_error_flags_{0U};
     std::uint32_t normal_fifo_mode_{UART_FIFOMODE_DISABLE};
     std::uint32_t normal_tx_fifo_threshold_{UART_TXFIFO_THRESHOLD_1_8};
     std::uint32_t normal_rx_fifo_threshold_{UART_RXFIFO_THRESHOLD_1_8};
+    std::uint64_t byte_time_us_{0U};
     bool normal_configuration_valid_{false};
     bool takeover_active_{false};
     bool dma_initialized_{false};
     bool running_{false};
 };
 
-Stm32SbusInput &instance() noexcept
+UartTimestampedRxEndpoint &instance() noexcept
 {
-    static Stm32SbusInput value;
+    static UartTimestampedRxEndpoint value;
     return value;
 }
 
 } // namespace
 
-SerialPorts &serial_ports() noexcept { return instance(); }
-SbusInput &sbus_input() noexcept { return instance(); }
+TimestampedSerialInput &timestamped_serial_input() noexcept
+{
+    return instance();
+}
+
+bool uart_timestamped_rx_endpoint_allows_line_configuration() noexcept
+{
+    return instance().allows_line_configuration();
+}
+
+bool uart_timestamped_rx_endpoint_reset_configuration() noexcept
+{
+    return instance().reset_configuration();
+}
+
+bool uart_timestamped_rx_endpoint_on_rx_event(
+    UART_HandleTypeDef *uart, std::uint16_t position) noexcept
+{
+    auto &backend = instance();
+    if (!backend.running() || !backend.handles_uart(uart)) {
+        return false;
+    }
+
+    std::uint64_t arrival = clock().now_us();
+    const std::uint32_t active_exception = __get_IPSR();
+    const std::uint32_t uart_exception =
+        static_cast<std::uint32_t>(irq_for(uart)) + 16U;
+    const std::uint64_t byte_time_us = backend.byte_time_us();
+    if (active_exception == uart_exception && arrival >= byte_time_us) {
+        /* UART IDLE 中断通常在最后一个字节后的一个帧时间到达，减去 byte_time
+         * 近似最后字节结束时刻；DMA half/full 回调不做该补偿。 */
+        arrival -= byte_time_us;
+    }
+    backend.on_rx_position_from_isr(position, arrival);
+    return true;
+}
+
+bool uart_timestamped_rx_endpoint_on_error(
+    UART_HandleTypeDef *uart, std::uint32_t error) noexcept
+{
+    auto &backend = instance();
+    if (!backend.running() || !backend.handles_uart(uart)) {
+        return false;
+    }
+    backend.on_error_from_isr(error);
+    return true;
+}
 
 } // namespace dima::platform::stm32h7
 
-extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *uart,
-                                             std::uint16_t position)
-{
-    auto &backend = dima::platform::stm32h7::instance();
-    if (backend.running() && backend.handles_uart(uart)) {
-        std::uint64_t arrival =
-            dima::platform::stm32h7::clock().now_us();
-        const std::uint32_t active_exception = __get_IPSR();
-        const std::uint32_t uart_exception =
-            static_cast<std::uint32_t>(
-                dima::platform::stm32h7::irq_for(uart)) +
-            16U;
-        if (active_exception == uart_exception &&
-            arrival >= dima::platform::stm32h7::kSbusByteTimeUs) {
-            arrival -= dima::platform::stm32h7::kSbusByteTimeUs;
-        }
-        backend.on_rx_position_from_isr(position, arrival);
-    }
-}
-
-extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
-{
-    auto &backend = dima::platform::stm32h7::instance();
-    if (backend.running() && backend.handles_uart(uart)) {
-        backend.on_error_from_isr(uart->ErrorCode);
-    }
-}
-
 extern "C" void DMA1_Stream2_IRQHandler(void)
 {
-    HAL_DMA_IRQHandler(&dima::platform::stm32h7::g_sbus_dma);
+    HAL_DMA_IRQHandler(&dima::platform::stm32h7::g_timestamped_rx_dma);
 }
-
-extern "C" void UART4_IRQHandler(void) { HAL_UART_IRQHandler(&huart4); }
-extern "C" void UART5_IRQHandler(void) { HAL_UART_IRQHandler(&huart5); }
-extern "C" void UART7_IRQHandler(void) { HAL_UART_IRQHandler(&huart7); }
-extern "C" void UART8_IRQHandler(void) { HAL_UART_IRQHandler(&huart8); }
-extern "C" void USART1_IRQHandler(void) { HAL_UART_IRQHandler(&huart1); }
-extern "C" void USART2_IRQHandler(void) { HAL_UART_IRQHandler(&huart2); }
-extern "C" void USART3_IRQHandler(void) { HAL_UART_IRQHandler(&huart3); }
-extern "C" void USART6_IRQHandler(void) { HAL_UART_IRQHandler(&huart6); }
