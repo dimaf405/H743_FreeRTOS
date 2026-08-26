@@ -1,7 +1,7 @@
 #include "MotorOutput.hpp"
 
 #include "events/events.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 
 namespace dima::modules::motor {
 namespace {
@@ -39,6 +39,8 @@ bool MotorOutput::start()
         return false;
     }
 
+    // 启动调度器和读取参数以前先让后端进入物理 Safe Off；若无法确认停波，
+    // 模块不得以 Running 状态对外提供任何输出能力。
     const dima::platform::ActuatorPwmResult stopped = pwm_->stop();
     if (stopped != dima::platform::ActuatorPwmResult::Applied) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -106,6 +108,7 @@ dima::middleware::lifecycle::ModuleState MotorOutput::state() const
 
 bool MotorOutput::safe_off_confirmed() const noexcept
 {
+    // BootHealth 使用这条独立证据判断电机链是否真正停波，不能只依赖本模块状态枚举。
     return backend_ready_ && safe_off_ &&
            (pwm_ == nullptr || !pwm_->started());
 }
@@ -148,6 +151,9 @@ void MotorOutput::Run()
         command_valid;
     const bool disarmed_neutral = !active_output &&
         safety_permits_disarmed_neutral(now);
+
+    // 四态输出策略：Active 写入受控波形；Disarmed Neutral 保持可配置的中位；
+    // 其余场景执行 Hard Safe Off。后端暂不可用时只允许进入 Retry，绝不沿用旧帧。
     if (!active_output && !disarmed_neutral) {
         const dima::platform::ActuatorPwmResult result = force_safe_off();
         if (result == dima::platform::ActuatorPwmResult::Fault) {
@@ -181,6 +187,7 @@ void MotorOutput::Run()
         return;
     }
     if (write_result == dima::platform::ActuatorPwmResult::Retry) {
+        // 写波形未成功时立即尝试停波；只有后端明确返回 Applied 才能重新确认 Safe Off。
         const dima::platform::ActuatorPwmResult stopped = force_safe_off();
         if (stopped == dima::platform::ActuatorPwmResult::Fault) {
             enter_error(kEventBackendFault);
@@ -240,6 +247,7 @@ bool MotorOutput::enter_parameter_safe_off() noexcept
 
 void MotorOutput::enter_error(std::uint32_t event_id) noexcept
 {
+    // 故障路径先取消后续调度，再强制停波并发布 FAULT，避免错误状态仍残留最后一帧 PWM。
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     ScheduleCancelAndDrain();
     const dima::platform::ActuatorPwmResult stopped = force_safe_off();

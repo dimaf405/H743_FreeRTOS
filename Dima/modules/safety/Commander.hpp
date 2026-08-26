@@ -38,13 +38,16 @@
 #include "actuator_output_status.hpp"
 #include "manual_control_setpoint.hpp"
 #include "parameter_update.hpp"
+#include "sensor_calibration_request.hpp"
+#include "sensor_calibration_status.hpp"
 #include "vehicle_command.hpp"
 #include "vehicle_command_ack.hpp"
 #include "vehicle_control_mode.hpp"
 #include "vehicle_status.hpp"
 #include "lifecycle/module_base.hpp"
+#include "maintenance/RuntimeMaintenanceCoordinator.hpp"
 #include "parameters/param.h"
-#include "platform/api/Flash.hpp"
+#include "api/Flash.hpp"
 #include "uorb/Publication.hpp"
 #include "uorb/SubscriptionData.hpp"
 #include "work_queue/WorkQueue.hpp"
@@ -56,13 +59,18 @@ namespace dima::modules::safety {
 /**
  * PX4 Commander 的 Dima Rover 安全子集。
  *
- * 只维护安全状态并发布 uORB Topic，不拥有任何执行器或 HAL 输出。
+ * 只维护安全状态并发布 uORB Topic，不拥有任何执行器或 HAL 输出。电机后端状态、
+ * RC 新鲜度、参数完整性和维护/Flash 互斥都在这里汇合为唯一 Arm/Disarm 判定。
+ * actuator_armed、vehicle_control_mode、vehicle_status 必须使用同一时间戳发布，
+ * 供下游组成不可拆分的 Commander 安全快照。
  */
 class Commander final : public dima::middleware::lifecycle::ModuleBase,
                         public px4::ScheduledWorkItem {
 public:
     explicit Commander(
-        dima::platform::ArmedFlashCoordinator &armed_flash) noexcept;
+        dima::platform::ArmedFlashCoordinator &armed_flash,
+        dima::middleware::maintenance::RuntimeMaintenanceCoordinator
+            &maintenance) noexcept;
     ~Commander() override;
 
     bool start() override;
@@ -77,10 +85,13 @@ private:
     static constexpr std::uint64_t kPublishIntervalUs = 500000ULL;
     static constexpr std::uint64_t kActuatorStatusTimeoutUs = 250000ULL;
     static constexpr std::uint64_t kActuatorArmTransitionUs = 250000ULL;
+    static constexpr std::uint64_t kSensorCalibrationStatusTimeoutUs =
+        1500000ULL;
     // 安全正向动作不得在队列中滞留超过一个公开状态心跳周期。
     static constexpr std::uint64_t kActionRequestMaxAgeUs = kPublishIntervalUs;
 
     enum FailsafeCause : std::uint8_t {
+        // 可恢复原因按位累计；Termination 另有跨 Runtime 的不可恢复锁存。
         FailsafeNone = 0U,
         FailsafeRcLoss = 1U << 0,
         FailsafeParameters = 1U << 1,
@@ -98,6 +109,7 @@ private:
     bool refresh_parameters() noexcept;
     bool refresh_manual_control() noexcept;
     bool refresh_actuator_output_status() noexcept;
+    bool refresh_sensor_calibration_status() noexcept;
     bool evaluate_safety(std::uint64_t now) noexcept;
     bool update_public_projection(std::uint64_t now) noexcept;
     bool execute_action(const action_request_s &request,
@@ -128,6 +140,8 @@ private:
     static std::uint8_t reason_from_source(std::uint8_t source) noexcept;
 
     dima::platform::ArmedFlashCoordinator &armed_flash_;
+    dima::middleware::maintenance::RuntimeMaintenanceCoordinator
+        &maintenance_;
     uORB::SubscriptionCallbackWorkItem action_request_subscription_{
         ORB_ID(action_request), *this};
     uORB::SubscriptionCallbackWorkItem manual_control_subscription_{
@@ -136,6 +150,8 @@ private:
         ORB_ID(parameter_update), *this};
     uORB::SubscriptionCallbackWorkItem vehicle_command_subscription_{
         ORB_ID(vehicle_command), *this};
+    uORB::SubscriptionCallbackWorkItem sensor_calibration_subscription_{
+        ORB_ID(sensor_calibration_status), *this};
     uORB::SubscriptionData<actuator_output_status_s>
         actuator_output_status_subscription_{ORB_ID(actuator_output_status)};
     uORB::Publication<actuator_armed_s> actuator_armed_publication_{
@@ -146,12 +162,16 @@ private:
         ORB_ID(vehicle_status)};
     uORB::Publication<vehicle_command_ack_s> vehicle_command_ack_publication_{
         ORB_ID(vehicle_command_ack)};
+    uORB::Publication<sensor_calibration_request_s>
+        sensor_calibration_request_publication_{
+            ORB_ID(sensor_calibration_request)};
 
     actuator_armed_s actuator_armed_{};
     vehicle_control_mode_s vehicle_control_mode_{};
     vehicle_status_s vehicle_status_{};
     manual_control_setpoint_s manual_control_setpoint_{};
     actuator_output_status_s actuator_output_status_{};
+    sensor_calibration_status_s sensor_calibration_status_{};
     param_t rc_loss_timeout_handle_{PARAM_INVALID};
     param_t arm_stick_deadzone_handle_{PARAM_INVALID};
     param_t rc_loss_action_handle_{PARAM_INVALID};
@@ -161,6 +181,7 @@ private:
     std::int32_t rc_loss_action_{6};
     std::int32_t data_link_loss_action_{0};
     std::uint64_t last_publish_time_{0U};
+    std::uint64_t sensor_calibration_dispatch_time_{0U};
     std::uint32_t last_actuator_output_sequence_{0U};
     std::uint8_t recoverable_failsafe_causes_{FailsafeNone};
     dima::middleware::lifecycle::ModuleState state_{

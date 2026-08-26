@@ -1,4 +1,4 @@
-#include "platform/stm32h7/HardwareServices.hpp"
+#include "stm32h7/HardwareServices.hpp"
 
 #include "motor_pwm.h"
 
@@ -7,6 +7,8 @@ namespace {
 
 ActuatorPwmResult translate(board_motor_pwm_result_t result) noexcept
 {
+    /* 保持板级三态语义：Retry 是可恢复资源/启动失败，Fault 是合同或硬件配置错误，
+     * 上层安全状态机据此决定重试还是锁定输出，不能合并成 bool。 */
     switch (result) {
     case BOARD_MOTOR_PWM_APPLIED:
         return ActuatorPwmResult::Applied;
@@ -32,6 +34,7 @@ public:
 
     ActuatorPwmResult write(const ActuatorPwmFrame &frame) noexcept override
     {
+        /* 编译期锁定平台 API 与板级六通道布局；脉宽单位保持 us，不做隐式缩放。 */
         static_assert(kActuatorPwmChannelCount == BOARD_MOTOR_PWM_COUNT);
         return translate(board_motor_pwm_write(frame.pulse_us,
                                                frame.enabled_mask));

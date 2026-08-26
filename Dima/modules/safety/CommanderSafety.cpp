@@ -4,7 +4,7 @@
 #define MODULE_NAME "commander"
 #include "Commander.hpp"
 
-#include "platform/api/ActuatorPwm.hpp"
+#include "api/ActuatorPwm.hpp"
 
 #include "logging/logging.hpp"
 
@@ -32,10 +32,11 @@ bool normalized_axis(float value) noexcept
 
 bool Commander::initialize_parameter_handles() noexcept
 {
-    rc_loss_timeout_handle_ = param_find("COM_RC_LOSS_T");
-    arm_stick_deadzone_handle_ = param_find("COM_ARM_STICK_DZ");
-    rc_loss_action_handle_ = param_find("NAV_RCL_ACT");
-    data_link_loss_action_handle_ = param_find("NAV_DLL_ACT");
+    // 安全策略句柄来自生成枚举；参数定义、索引与名称只由权威定义源生成。
+    rc_loss_timeout_handle_ = param_handle(px4::params::COM_RC_LOSS_T);
+    arm_stick_deadzone_handle_ = param_handle(px4::params::COM_ARM_STICK_DZ);
+    rc_loss_action_handle_ = param_handle(px4::params::NAV_RCL_ACT);
+    data_link_loss_action_handle_ = param_handle(px4::params::NAV_DLL_ACT);
     return rc_loss_timeout_handle_ != PARAM_INVALID &&
            arm_stick_deadzone_handle_ != PARAM_INVALID &&
            rc_loss_action_handle_ != PARAM_INVALID &&
@@ -44,6 +45,8 @@ bool Commander::initialize_parameter_handles() noexcept
 
 bool Commander::refresh_parameters() noexcept
 {
+    // 先读取候选值并整体校验；任何参数缺失或策略值超出本 Rover 子集时，
+    // 保留最后一代数值但把 parameters_valid_ 置假，由安全评估强制解除 Armed。
     float loss_timeout = rc_loss_timeout_s_;
     float stick_deadzone = arm_stick_deadzone_;
     std::int32_t rc_loss_action = rc_loss_action_;
@@ -97,6 +100,8 @@ bool Commander::refresh_actuator_output_status() noexcept
     }
     const actuator_output_status_s &candidate =
         actuator_output_status_subscription_.get();
+    // 无符号差值按模 2^32 判断前进：0 < delta < 2^31 接受，既允许自然回绕，
+    // 又拒绝重复序号和明显倒退的旧状态。
     const std::uint32_t sequence_delta =
         candidate.sequence - last_actuator_output_sequence_;
     const bool sequence_valid = candidate.sequence != 0U &&
@@ -114,6 +119,8 @@ bool Commander::refresh_actuator_output_status() noexcept
 
 bool Commander::evaluate_safety(std::uint64_t now) noexcept
 {
+    // 三类可恢复原因独立按位维护；Disarmed 且重新观察到完整健康证据后才清除，
+    // 防止某一来源恢复时误把其他仍存在的故障一并抹掉。
     const bool rc_valid = rc_input_valid(now);
     std::uint8_t causes = recoverable_failsafe_causes_;
 
@@ -160,6 +167,8 @@ bool Commander::evaluate_safety(std::uint64_t now) noexcept
 bool Commander::update_public_projection(std::uint64_t now) noexcept
 {
     const bool checks_pass = preflight_checks_pass(now);
+    // 已 Armed 时保持 ready_to_arm，避免健康状态瞬变让投影自相矛盾；真实故障仍由
+    // evaluate_safety 先执行强制 Disarm，再在下一投影中反映为不可解锁。
     const bool ready_to_arm = checks_pass || actuator_armed_.armed;
     const bool failsafe = termination_latched_ ||
                           recoverable_failsafe_causes_ != FailsafeNone;
@@ -203,6 +212,11 @@ Commander::TransitionResult Commander::arm(
     }
     if (!preflight_checks_pass(now)) {
         PX4_WARN("Arming denied: safety checks failed");
+        return TransitionResult::Denied;
+    }
+    // 维护事务和 Flash 擦写都与 Armed 互斥；try_arm() 是最终原子门，防止检查后竞态。
+    if (maintenance_.in_progress()) {
+        PX4_WARN("Arming denied: runtime maintenance in progress");
         return TransitionResult::Denied;
     }
     if (!armed_flash_.try_arm()) {
@@ -250,6 +264,7 @@ bool Commander::rc_input_valid(std::uint64_t now) const noexcept
         return false;
     }
 
+    // 超时基于原始 RC 样本 timestamp_sample，而不是较新的 uORB 转发时间。
     const std::uint64_t timeout_us = static_cast<std::uint64_t>(
         rc_loss_timeout_s_ * 1000000.0F);
     return timeout_us > 0U &&
@@ -283,6 +298,7 @@ bool Commander::actuator_output_mapping_valid() const noexcept
     const std::uint8_t supported =
         static_cast<std::uint8_t>((1U << actuator_output_status_s::NUM_OUTPUTS) -
                                   1U);
+    // 左右集合都必须非空、互斥，且并集精确等于已配置集合；多余位或遗漏位均拒绝。
     return configured != 0U && right != 0U && left != 0U &&
            (configured & static_cast<std::uint8_t>(~supported)) == 0U &&
            (right & left) == 0U &&
@@ -292,6 +308,8 @@ bool Commander::actuator_output_mapping_valid() const noexcept
 bool Commander::actuator_output_ready_for_arming(
     std::uint64_t now) const noexcept
 {
+    // Arm 前要求后端正在输出完整 Disarmed Neutral 帧；Hard Safe Off 虽然安全，
+    // 但不能证明映射和定时器已具备接管动力的能力。
     if (!actuator_output_status_fresh(now) ||
         !actuator_output_mapping_valid() ||
         actuator_output_status_.state !=
@@ -323,6 +341,8 @@ bool Commander::actuator_output_ready_for_arming(
 bool Commander::actuator_output_recovered_disarmed(
     std::uint64_t now) const noexcept
 {
+    // 故障恢复可由零活动掩码、全零脉宽的 Hard Safe Off 证明，用于清除历史 failsafe；
+    // 它仍不满足下一次 Arm 的 Neutral 波形前置条件。
     if (!actuator_output_status_fresh(now) ||
         !actuator_output_mapping_valid() ||
         actuator_output_status_.state !=
@@ -364,8 +384,8 @@ bool Commander::actuator_output_fault_while_armed(
     }
     if (in_transition &&
         actuator_output_status_.state != actuator_output_status_s::STATE_ACTIVE) {
-        /* A healthy neutral/hard-off frame is expected while the three Arm
-         * topics converge. Backend retry or a broken mapping is not. */
+        // 三项 Arm Topic 收敛期间允许暂时看到上一帧健康 Neutral/Hard-Off；
+        // 后端 Retry、映射破损或不可驱动仍立即视为故障，不能被过渡宽限掩盖。
         return actuator_output_status_.state ==
                    actuator_output_status_s::STATE_RETRY ||
                !actuator_output_mapping_valid() ||
@@ -385,13 +405,16 @@ bool Commander::actuator_output_fault_while_armed(
 
 bool Commander::preflight_checks_pass(std::uint64_t now) const noexcept
 {
+    // 这是唯一正向 Arm 合同：参数、人工模式、新鲜且居中的 RC、可接管的 Neutral
+    // 输出、Kill/Termination 以及两类校准状态必须同时满足。
     return parameters_valid_ &&
            vehicle_status_.nav_state ==
                vehicle_status_s::NAVIGATION_STATE_MANUAL &&
            rc_input_valid(now) && sticks_centered() &&
            actuator_output_ready_for_arming(now) &&
            !actuator_armed_.kill && !termination_latched_ &&
-           !vehicle_status_.rc_calibration_in_progress;
+           !vehicle_status_.rc_calibration_in_progress &&
+           !vehicle_status_.calibration_enabled;
 }
 
 bool Commander::action_request_fresh(const action_request_s &request,
@@ -403,6 +426,7 @@ bool Commander::action_request_fresh(const action_request_s &request,
 
 bool Commander::publish_state(std::uint64_t now) noexcept
 {
+    // 三项 Topic 共用同一 now；下游只接受时间戳完全相同的一组，避免半套安全状态。
     actuator_armed_.timestamp = now;
     const bool armed_published = actuator_armed_publication_.publish(
         actuator_armed_);
@@ -429,6 +453,8 @@ void Commander::reset_runtime_state() noexcept
     vehicle_status_ = vehicle_status_s{};
     manual_control_setpoint_ = manual_control_setpoint_s{};
     actuator_output_status_ = actuator_output_status_s{};
+    sensor_calibration_status_ = sensor_calibration_status_s{};
+    sensor_calibration_dispatch_time_ = 0U;
     rc_loss_timeout_handle_ = PARAM_INVALID;
     arm_stick_deadzone_handle_ = PARAM_INVALID;
     rc_loss_action_handle_ = PARAM_INVALID;
@@ -483,6 +509,8 @@ void Commander::initialize_public_state(std::uint64_t now) noexcept
 
 void Commander::initialize_disarmed_snapshot(std::uint64_t now) noexcept
 {
+    // 发布/调度失败的保底快照保留 Kill 锁存，但清除 Armed 和 ready_to_arm；
+    // 这样恢复通信不会隐式解除操作员已经触发的紧急停机。
     const bool kill_latched = actuator_armed_.kill;
     armed_flash_.disarm();
 

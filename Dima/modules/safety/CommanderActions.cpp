@@ -23,7 +23,10 @@ bool Commander::execute_action(const action_request_s &request,
 {
     const std::uint8_t reason = reason_from_source(request.source);
 
-    if (vehicle_status_.rc_calibration_in_progress &&
+    // 校准期间禁止来自 RC 的正向状态动作，但 Disarm/Kill/Termination 等负向安全动作
+    // 永远保留，避免校准会话反而阻断紧急停机。
+    if ((vehicle_status_.rc_calibration_in_progress ||
+         vehicle_status_.calibration_enabled) &&
         rc_action_source(request.source) &&
         request.action != action_request_s::ACTION_DISARM &&
         request.action != action_request_s::ACTION_KILL &&
@@ -36,6 +39,7 @@ bool Commander::execute_action(const action_request_s &request,
         return disarm(reason) == TransitionResult::Changed;
 
     case action_request_s::ACTION_ARM:
+        // 正向动作必须满足队列新鲜度；安全负向动作即使延迟也仍允许执行。
         if (!action_request_fresh(request, now)) {
             PX4_WARN("Commander rejected stale Arm request");
             return false;
@@ -66,6 +70,7 @@ bool Commander::execute_action(const action_request_s &request,
 
     case action_request_s::ACTION_KILL:
     {
+        // Kill 同时锁存 kill 位并解除 Armed；解除 Kill 不会自动重新 Arm。
         bool changed = false;
         if (!actuator_armed_.kill) {
             actuator_armed_.kill = true;
@@ -81,6 +86,8 @@ bool Commander::execute_action(const action_request_s &request,
     }
 
     case action_request_s::ACTION_TERMINATION:
+        // Termination 只允许从 false 锁存到 true，Runtime stop/start 不会清除，
+        // 必须通过 MCU 复位才能恢复。
         if (!termination_latched_) {
             termination_latched_ = true;
             vehicle_status_.nav_state =

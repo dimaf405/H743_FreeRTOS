@@ -8,7 +8,7 @@
 #include "vehicle_status.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
-#include "platform/api/ActuatorPwm.hpp"
+#include "api/ActuatorPwm.hpp"
 #include "uorb/Publication.hpp"
 #include "uorb/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
@@ -18,7 +18,13 @@
 
 namespace dima::modules::motor {
 
-/** Safety-gated mapping from two reversible motors to six ordinary PWM pins. */
+/**
+ * 将两路可逆电机指令映射到六路普通 PWM 引脚，并在模块边界执行安全门控。
+ *
+ * 该模块不会把“收到电机指令”等同于“允许输出”：只有参数快照有效、三项安全
+ * Topic 属于同一时间戳且仍然新鲜、车辆已进入人工 Armed 状态时才可输出有效波形。
+ * 任一前提失效都会退回 Disarmed Neutral 或硬件 Safe Off。
+ */
 class MotorOutput final
     : public dima::middleware::lifecycle::ModuleBase,
       public px4::ScheduledWorkItem {
@@ -53,6 +59,7 @@ private:
         bool reversed;
     };
 
+    // 一次原子读取形成完整映射；禁止逐通道更新导致新旧参数混用。
     struct ParameterSnapshot {
         float command_timeout_s;
         ChannelConfig channels[kChannelCount];
@@ -62,6 +69,7 @@ private:
         bool drive_available;
     };
 
+    // Commander 同一发布周期的三项安全 Topic 必须按时间戳组成一致快照。
     struct SafetySnapshot {
         actuator_armed_s actuator_armed;
         vehicle_control_mode_s control_mode;

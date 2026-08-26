@@ -1,7 +1,7 @@
 #include "motor_pwm.h"
 
 #include "main.h"
-#include "platform/api/ActuatorPwmLimits.h"
+#include "api/ActuatorPwmLimits.h"
 #include "tim.h"
 
 #define MOTOR_PWM_TIMER_CLOCK_HZ 240000000U
@@ -9,6 +9,8 @@
 #define MOTOR_PWM_PRESCALER (MOTOR_PWM_TIMER_CLOCK_HZ / MOTOR_PWM_COUNTER_HZ - 1U)
 #define MOTOR_PWM_PERIOD_TICKS 19999U
 
+/* 定时器计数频率 = 240 MHz / (PSC + 1) = 1 MHz，因此 1 tick = 1 us；
+ * 周期 = (ARR + 1) tick = 20 ms，即 50 Hz。CCR 可直接使用 pulse_us。 */
 _Static_assert(DIMA_ACTUATOR_PWM_MAX_PULSE_US <= MOTOR_PWM_PERIOD_TICKS,
                "actuator PWM envelope exceeds timer period");
 
@@ -16,11 +18,14 @@ static bool motor_pwm_started;
 
 static uint32_t timer_input_clock_hz(uint32_t pclk, bool divided)
 {
+    /* STM32H7 的 APB 预分频不为 1 时，定时器内核时钟为对应 PCLK 的 2 倍。 */
     return divided ? pclk * 2U : pclk;
 }
 
 static bool timer_configuration_valid(void)
 {
+    /* TIM8 以更新事件输出 TRGO，TIM5 以 ITR3 的 reset 模式跟随，保证两组输出
+     * 共用 20 ms 帧边界；S1/S2 使用互补通道，故同时核对其反相极性位。 */
     RCC_ClkInitTypeDef clocks = {0};
     uint32_t flash_latency = 0U;
     HAL_RCC_GetClockConfig(&clocks, &flash_latency);
@@ -59,6 +64,7 @@ static bool timer_configuration_valid(void)
 
 static void configure_pins_low(void)
 {
+    /* 先写低电平再切 GPIO 输出模式，避免复用切换窗口产生意外脉冲。 */
     GPIO_InitTypeDef gpio = {0};
 
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -119,6 +125,7 @@ static void stop_outputs(void)
 
 static void prepare_zero_frame(void)
 {
+    /* 清空 CCR 和计数器后强制更新，使预装载寄存器中的零值在开放引脚前生效。 */
     clear_compare_registers();
     __HAL_TIM_SET_COUNTER(&htim5, 0U);
     __HAL_TIM_SET_COUNTER(&htim8, 0U);
@@ -143,6 +150,8 @@ board_motor_pwm_result_t board_motor_pwm_start(void)
         return BOARD_MOTOR_PWM_FAULT;
     }
 
+    /* 启动顺序保持失效安全：GPIO 拉低 -> 停止通道 -> 零帧 -> 切复用 -> 启动。
+     * 任一 HAL 启动失败都回退到 GPIO 低电平，并返回 RETRY 供上层决定重试。 */
     configure_pins_low();
     stop_outputs();
     prepare_zero_frame();
@@ -203,6 +212,8 @@ board_motor_pwm_result_t board_motor_pwm_write(
         return BOARD_MOTOR_PWM_FAULT;
     }
 
+    /* 在触碰任何 CCR 前完成整帧校验：mask 外位、无效通道非零值、脉宽包络
+     * 或超过 ARR 均整帧拒绝，避免六路输出出现部分更新。 */
     for (uint8_t index = 0U; index < BOARD_MOTOR_PWM_COUNT; ++index) {
         if ((valid_mask & (uint8_t)(1U << index)) == 0U) {
             if (pulse_us[index] != 0U) {
@@ -218,6 +229,8 @@ board_motor_pwm_result_t board_motor_pwm_write(
         }
     }
 
+    /* 临时禁止 update 事件，连续写完 TIM8/TIM5 的六个比较值后再恢复；这依赖
+     * 通道预装载与同步帧边界，防止软件更新事件在半帧写入期间锁存新值。 */
     htim8.Instance->CR1 |= TIM_CR1_UDIS;
     htim5.Instance->CR1 |= TIM_CR1_UDIS;
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2,
