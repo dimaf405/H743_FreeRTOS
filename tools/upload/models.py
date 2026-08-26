@@ -1,20 +1,24 @@
-"""Shared upload constants, data models, and output helpers."""
+"""上传流程共享的串口合同、不可变数据模型、阶段计时和输出解码。"""
 
 from __future__ import annotations
 
 import dataclasses
 import enum
 import locale
+import time
+from typing import TextIO
 
 DEFAULT_USB_CDC_BAUD = 921600
 DEFAULT_SERIAL_MTU = 512
 DEFAULT_MAX_WINDOW = 1
-DEFAULT_CONFIRM_WAIT_SECONDS = 8
+
+_STAGE_STARTED = time.monotonic()
+_STAGE_PREVIOUS = _STAGE_STARTED
 
 
 
 class UploadError(RuntimeError):
-    """An actionable one-command upload failure."""
+    """可直接据错误文本处理的一条命令上传失败。"""
 
 
 class HostPlatform(enum.Enum):
@@ -74,11 +78,30 @@ class ApplicationIdentity:
             f"board={self.board_version} uid=0x{self.uid:016x}"
         )
 
-def stage(name: str, message: str) -> None:
-    print(f"[{name}] {message}", flush=True)
+def reset_stage_timing() -> None:
+    global _STAGE_STARTED, _STAGE_PREVIOUS
+    now = time.monotonic()
+    _STAGE_STARTED = now
+    _STAGE_PREVIOUS = now
+
+
+def stage(
+        name: str, message: str, *, stream: TextIO | None = None) -> None:
+    """用单调时钟同时报告总耗时和相邻阶段耗时，便于定位枚举/传输卡点。"""
+    global _STAGE_PREVIOUS
+    now = time.monotonic()
+    elapsed = now - _STAGE_STARTED
+    delta = now - _STAGE_PREVIOUS
+    _STAGE_PREVIOUS = now
+    print(
+        f"[{name}] t={elapsed:.2f}s delta={delta:.2f}s {message}",
+        file=stream,
+        flush=True,
+    )
 
 
 def decode_output(output: bytes) -> str:
+    """先按 UTF-8 解码工具输出，失败时使用主机编码并替换坏字节，永不隐藏原错误。"""
     output = output.replace(b"\x00", b"")
     try:
         return output.decode("utf-8").strip()

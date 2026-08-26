@@ -1,5 +1,5 @@
 #include "UsbConsole.hpp"
-#include "platform/api/Services.hpp"
+#include "api/Services.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -9,9 +9,9 @@ namespace dima::adapters {
 namespace {
 
 constexpr std::size_t kRxCapacity = 1024U;
-/* MAVLink 2 FILE_TRANSFER_PROTOCOL is 266 bytes unsigned; retain the full
- * generated MAVLINK_MAX_PACKET_LEN envelope without coupling this adapter to
- * protocol headers. */
+/* RX 是 ISR 单生产者/任务单消费者的 2^n 环形缓冲；幂次容量允许用 mask 取模。
+ * TX staging 覆盖未签名 MAVLink2 FILE_TRANSFER_PROTOCOL 的 266 B 最大帧并留余量，
+ * 同时避免 Console 适配器反向依赖协议头。 */
 constexpr std::size_t kTxCapacity = 280U;
 static_assert((kRxCapacity & (kRxCapacity - 1U)) == 0U);
 
@@ -29,6 +29,8 @@ public:
 
     bool initialize() noexcept override
     {
+        // 同步原语和 USB transport 按顺序建立；任一步失败都逆序回滚，不能留下
+        // “initialized=true 但 completion/mutex 不可用”的半初始化状态。
         if (!initialized()) {
             reset_runtime_buffers();
             if (!tx_mutex_.initialize(synchronization_)) {
@@ -57,11 +59,13 @@ public:
 
     bool shutdown() noexcept override
     {
+        // shutdown 会等待/持有任务态 TX mutex，ISR 中调用将造成不可界定阻塞。
         if (execution_.in_interrupt()) {
             return false;
         }
 
         set_initialized(false);
+        // 先推进 epoch 并唤醒等待者，使旧 USB 会话上的在途写以 EPIPE 收敛。
         advance_epoch();
         if (completion_.valid()) {
             completion_.notify();
@@ -124,6 +128,8 @@ public:
             return fail(EAGAIN);
         }
 
+        // started 定义整次 write 的唯一截止时间；抢 mutex、吸收上一笔完成、
+        // Busy 重试和等待本次完成都消费同一预算，任何阶段都不能重置 timeout。
         const std::uint32_t started = now_ms();
         platform::MutexGuard guard{
             tx_mutex_, platform::Timeout::from_ms(
@@ -144,6 +150,8 @@ public:
         }
 
         drain_completion();
+        // transport/DMA 可能在 transmit 返回后继续读取，故先复制到对象期 staging，
+        // 禁止把调用方短生命周期缓冲直接交给异步 USB 后端。
         std::memcpy(tx_staging_, data, length);
         for (;;) {
             if (!ready()) {
@@ -157,6 +165,8 @@ public:
 
             in_flight_ = true;
             in_flight_epoch_ = submit_epoch;
+            // epoch 把完成信号绑定到一次物理 USB 连接；断开/重连后的迟到 IRQ
+            // 不能被误认作当前传输完成。
             const platform::ConsoleTransmitResult result =
                 transport_.transmit(tx_staging_, length);
             if (result == platform::ConsoleTransmitResult::Accepted) {
@@ -215,6 +225,8 @@ public:
         if (!initialized()) {
             return false;
         }
+        // ISR 先写数据再 release 发布 head；任务 acquire 读取 head 后才访问槽位。
+        // tail 只由任务推进，因而可用 relaxed 读取并在消费后 release 发布。
         std::uint32_t tail =
             __atomic_load_n(&rx_tail_, __ATOMIC_RELAXED);
         const std::uint32_t head =
@@ -255,6 +267,8 @@ public:
         if (!initialized() || data == nullptr || length == 0U) {
             return;
         }
+        // 满环时保留已经排队的较早字节，丢弃本批尾部并精确累计丢弃数；MAVLink
+        // parser 随后会靠帧校验重新同步，ISR 不做协议解析或阻塞等待空间。
         std::uint32_t head =
             __atomic_load_n(&rx_head_, __ATOMIC_RELAXED);
         const std::uint32_t tail =
@@ -280,12 +294,14 @@ public:
 
     void transport_connected_from_isr() noexcept override
     {
+        // 每次连接都是新会话；先推进 epoch，再以 release 发布 online。
         advance_epoch();
         __atomic_store_n(&transport_online_, true, __ATOMIC_RELEASE);
     }
 
     void transport_disconnected_from_isr() noexcept override
     {
+        // 先撤销 online，再推进 epoch 并唤醒 TX waiter，确保任务看到断链而非成功。
         __atomic_store_n(&transport_online_, false, __ATOMIC_RELEASE);
         advance_epoch();
         signal_completion();
@@ -306,6 +322,8 @@ private:
     std::uint32_t remaining_ms(std::uint32_t start,
                                std::uint32_t timeout) const noexcept
     {
+        // unsigned 差值在 32-bit 毫秒计数回绕时仍保持模运算语义；只要单次 timeout
+        // 小于半个计数周期，elapsed 比较即无歧义。
         const std::uint32_t elapsed = now_ms() - start;
         return elapsed >= timeout ? 0U : timeout - elapsed;
     }
@@ -338,6 +356,8 @@ private:
     int complete_previous_transfer(std::uint32_t start,
                                    std::uint32_t timeout) noexcept
     {
+        // 前一笔超时后保留 in_flight，下一次 write 必须先吸收其迟到 completion；
+        // 若会话 epoch 已变化则旧完成无效，清空信号后以断链语义结束。
         if (!in_flight_) {
             return 0;
         }
@@ -390,6 +410,8 @@ private:
 
     void reset_runtime_buffers() noexcept
     {
+        // 仅在 initialize/shutdown 的排他阶段清空；运行中不得重置单调 head/tail，
+        // 否则 ISR 与任务可能把跨代槽位误判为可用数据。
         __atomic_store_n(&rx_head_, 0U, __ATOMIC_RELEASE);
         __atomic_store_n(&rx_tail_, 0U, __ATOMIC_RELEASE);
         __atomic_store_n(&rx_overflows_, 0U, __ATOMIC_RELEASE);
@@ -426,6 +448,7 @@ platform::Console &usb_console(
     platform::MonotonicClock &clock,
     platform::ConsoleTransport &transport) noexcept
 {
+    // C++11 静态初始化保证单例只构造一次；板级组合根保证传入依赖同寿命。
     static UsbConsole instance{synchronization, tasks, execution, clock,
                                transport};
     return instance;
@@ -436,6 +459,7 @@ platform::Console &usb_console(
 extern "C" void usb_console_receive_from_isr(const std::uint8_t *data,
                                                 std::size_t length)
 {
+    // C/HAL 回调只做空安全转发；Services 尚未安装时静默丢弃启动期 IRQ。
     if (auto *services = dima::platform::try_services()) {
         services->console.receive_from_isr(data, length);
     }
@@ -464,6 +488,7 @@ extern "C" void usb_console_transport_disconnected(void)
 
 extern "C" int _write(int file, char *data, int length)
 {
+    // newlib stdout/stderr 共用 Console 的串行 TX 合同；其他 fd 不伪装成可写设备。
     if (file != 1 && file != 2) {
         errno = EBADF;
         return -1;

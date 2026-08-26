@@ -1,42 +1,41 @@
-"""Command-line workflow for upload, swap, confirmation, and restart."""
+"""签名镜像上传、测试态切换与应用重启流程。"""
 
 from __future__ import annotations
 
 import argparse
 import pathlib
-import time
 
-from .recovery_request import request_application_recovery
 from .mavlink import resolve_mavlink_codec
 from .mcumgr import (
     has_active_confirmed_image,
     has_pending_secondary_image,
     has_secondary_image,
-    has_unconfirmed_active_image,
     image_hash,
     mcumgr_image_path,
     run_mcumgr,
 )
 from .models import (
-    DEFAULT_CONFIRM_WAIT_SECONDS,
     DEFAULT_MAX_WINDOW,
     DEFAULT_SERIAL_MTU,
     DEFAULT_USB_CDC_BAUD,
     UploadError,
+    reset_stage_timing,
     stage,
 )
 from .endpoint_preflight import endpoint_preflight
 from .endpoint_wait import (
     wait_for_application,
     wait_for_recovery,
-    wait_for_recovery_endpoint,
 )
 from .runtime import resolve_mcumgr
 
 def main() -> int:
+    """执行工具解析、端点绑定、Secondary 上传、TEST pending、复位与应用身份闭环。"""
+    reset_stage_timing()
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=pathlib.Path)
     parser.add_argument("--imgtool", type=pathlib.Path)
+    parser.add_argument("--identity-contract", type=pathlib.Path, required=True)
     parser.add_argument("--mcumgr", default="mcumgr")
     parser.add_argument(
         "--tools-cache",
@@ -48,14 +47,8 @@ def main() -> int:
     parser.add_argument("--baud", type=int, default=DEFAULT_USB_CDC_BAUD)
     parser.add_argument("--mtu", type=int, default=DEFAULT_SERIAL_MTU)
     parser.add_argument("--max-window", type=int, default=DEFAULT_MAX_WINDOW)
-    parser.add_argument(
-        "--confirm-wait-seconds",
-        type=int,
-        default=DEFAULT_CONFIRM_WAIT_SECONDS,
-    )
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--skip-confirm-verification", action="store_true")
     arguments = parser.parse_args()
 
     if arguments.wait_seconds <= 0:
@@ -66,12 +59,17 @@ def main() -> int:
         parser.error("--mtu must be between 128 and 512 for this MCUboot build")
     if arguments.max_window < 1 or arguments.max_window > 3:
         parser.error("--max-window must be between 1 and 3 for the 2048-byte RX ring")
-    if arguments.confirm_wait_seconds <= 0:
-        parser.error("--confirm-wait-seconds must be positive")
-
     tools_cache = arguments.tools_cache.expanduser()
+    stage("HOST", "resolving pinned upload tools and MAVLink codec")
     runtime = resolve_mcumgr(arguments.mcumgr, arguments.port, tools_cache)
-    codec = resolve_mavlink_codec(tools_cache)
+    codec = resolve_mavlink_codec(
+        tools_cache, arguments.identity_contract.resolve()
+    )
+    stage(
+        "HOST_READY",
+        f"mcumgr={pathlib.Path(runtime.executable).name} "
+        f"transport={runtime.serial_backend.value}",
+    )
     if arguments.preflight_only:
         endpoint_preflight(
             runtime,
@@ -98,11 +96,6 @@ def main() -> int:
         arguments.mtu,
     )
     already_active_confirmed = has_active_confirmed_image(initial_list, digest)
-    if has_unconfirmed_active_image(initial_list):
-        raise UploadError(
-            "ACTIVE_IMAGE_UNCONFIRMED: refusing to overwrite Secondary while "
-            "the current test image still depends on it for rollback"
-        )
     if already_active_confirmed and not arguments.force:
         stage(
             "ALREADY_INSTALLED",
@@ -129,9 +122,7 @@ def main() -> int:
 
     upload_image = mcumgr_image_path(runtime, image)
 
-    # The bootloader receives serial frames in a 2048-byte ring. Stop-and-wait
-    # remains the production default until a larger window passes sustained
-    # real-board acceptance.
+    # Bootloader 用 2048 字节环接收串口帧；更大窗口完成持续板测前，生产默认保持停等窗口 1。
     stage(
         "UPLOAD_SECONDARY",
         f"uploading {image.stat().st_size} bytes with mtu={arguments.mtu} "
@@ -152,9 +143,8 @@ def main() -> int:
         mtu=arguments.mtu,
         measure_bytes=image.stat().st_size,
     )
-    # An explicitly forced rewrite of the active hash is ambiguous to MCUboot's
-    # hash lookup because Primary matches first.  Only that uncommon case needs
-    # a separate Secondary proof before setting pending.
+    # 强制重写当前 active hash 时，MCUboot 按 hash 查找会先匹配 Primary；仅该歧义场景
+    # 需要在 TEST 前额外用 slot 1 证明 Secondary 确已写入。
     if already_active_confirmed:
         stage("VERIFY_SECONDARY", "verifying the forced Secondary rewrite")
         secondary_list = run_mcumgr(
@@ -194,7 +184,7 @@ def main() -> int:
         baud=arguments.baud,
         mtu=arguments.mtu,
     )
-    application_port, application_identity, application_binding = wait_for_application(
+    wait_for_application(
         runtime,
         codec,
         port,
@@ -202,58 +192,5 @@ def main() -> int:
         initial_identity,
         initial_binding,
     )
-    if arguments.skip_confirm_verification:
-        stage(
-            "COMPLETE",
-            "upload and swap completed; application confirmation was not probed",
-        )
-        return 0
-
-    stage(
-        "HEALTH_CONFIRM",
-        f"waiting {arguments.confirm_wait_seconds}s for application health confirmation",
-    )
-    time.sleep(arguments.confirm_wait_seconds)
-    reboot_acknowledged, reboot_output = request_application_recovery(
-        codec,
-        runtime.serial_backend,
-        application_port,
-    )
-    if reboot_output:
-        print(reboot_output)
-    if not reboot_acknowledged:
-        stage(
-            "REBOOT_REQUEST",
-            "automatic reboot sequence sent; ACK was not required; waiting "
-            "for MCUboot on the same physical USB device",
-        )
-    confirm_port, confirm_list = wait_for_recovery_endpoint(
-        runtime,
-        application_binding,
-        arguments.wait_seconds,
-        arguments.baud,
-        arguments.mtu,
-    )
-    confirmed = has_active_confirmed_image(confirm_list, digest)
-    stage("RESET", "returning from confirmation probe to the application")
-    run_mcumgr(
-        runtime.executable,
-        confirm_port,
-        "reset",
-        baud=arguments.baud,
-        mtu=arguments.mtu,
-    )
-    wait_for_application(
-        runtime,
-        codec,
-        confirm_port,
-        arguments.wait_seconds,
-        application_identity,
-        application_binding,
-    )
-    if not confirmed:
-        raise UploadError(
-            "IMAGE_NOT_CONFIRMED: the uploaded image did not become active and confirmed"
-        )
-    stage("COMPLETE", "upload, swap, health confirmation, and application restart passed")
+    stage("COMPLETE", "upload, swap, and application restart passed")
     return 0

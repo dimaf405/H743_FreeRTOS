@@ -1,4 +1,4 @@
-"""Wait for MCUboot Recovery and application USB re-enumeration."""
+"""等待 MCUboot Recovery 与 Application USB 重枚举，并保持物理设备身份连续。"""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ def wait_for_recovery(
     baud: int,
     mtu: int,
 ) -> tuple[str, str, ApplicationIdentity | None, str]:
+    """识别应用、请求 Recovery，并仅在同一物理 USB binding 上接受 MCUboot。"""
     stage(
         "PORT_OPEN",
         "scanning for a Dima Rover application or MCUboot Recovery "
@@ -45,9 +46,8 @@ def wait_for_recovery(
     application_binding: str | None = None
     probe_after: dict[str, float] = {}
     while time.monotonic() < deadline:
-        # Once an application is selected, only ports bound to the same physical
-        # USB identity may become Recovery. Falling back to every serial port
-        # could flash another board that enumerated during this reboot window.
+        # 选中应用后只扫描同一物理 USB binding；若退回所有串口，重启窗口中新插入的
+        # 另一块板可能被误烧录。
         if reboot_requested:
             ports = (
                 ports_matching_binding(runtime, application_binding)
@@ -209,6 +209,7 @@ def wait_for_application(
     expected_identity: ApplicationIdentity | None = None,
     expected_binding: str | None = None,
 ) -> tuple[str, ApplicationIdentity, str]:
+    """复位后要求应用重新出现，并核对 UID 与原物理 binding，防止错认另一块板。"""
     stage(
         "APPLICATION_REENUM",
         f"waiting up to {wait_seconds}s for the application",
@@ -267,54 +268,5 @@ def wait_for_application(
         time.sleep(0.25)
     raise UploadError(
         f"APPLICATION_REENUM: application was not reached within "
-        f"{wait_seconds}s ({last_error})"
-    )
-
-
-def wait_for_recovery_endpoint(
-    runtime: McumgrRuntime,
-    binding: str,
-    wait_seconds: int,
-    baud: int,
-    mtu: int,
-) -> tuple[str, str]:
-    stage(
-        "RECOVERY_REENUM",
-        f"waiting up to {wait_seconds}s for MCUboot Recovery",
-    )
-    deadline = time.monotonic() + wait_seconds
-    last_error = "no serial ports detected"
-    probe_after: dict[str, float] = {}
-    while time.monotonic() < deadline:
-        ports = ports_matching_binding(runtime, binding)
-        matches: list[tuple[str, str]] = []
-        now = time.monotonic()
-        for port in ports:
-            if time.monotonic() >= deadline:
-                break
-            if now < probe_after.get(port, 0.0):
-                continue
-            probe_after[port] = now + 1.0
-            success, output = try_image_list(
-                runtime.executable, port, baud, mtu
-            )
-            if success:
-                matches.append((port, output))
-            elif output:
-                last_error = f"{port}: {output}"
-        if len(matches) > 1:
-            raise UploadError(
-                "RECOVERY_REENUM: multiple MCUboot endpoints were identified: "
-                + ", ".join(port for port, _ in matches)
-            )
-        if matches:
-            port, output = matches[0]
-            stage("SMP_LIST", f"connected to MCUboot Recovery on {port}")
-            if output:
-                print(output)
-            return port, output
-        time.sleep(0.25)
-    raise UploadError(
-        f"RECOVERY_REENUM: MCUboot Recovery was not reached within "
         f"{wait_seconds}s ({last_error})"
     )

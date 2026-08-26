@@ -1,8 +1,13 @@
-"""Pinned MAVLink codec and application identity verification."""
+"""固定版本的 MAVLink codec 与上传后 Application 身份验证。
+
+本模块不推测固件版本；期望值只读取构建生成的 firmware identity 合同，并把
+板端 HEARTBEAT/AUTOPILOT_VERSION 作为 reset 后确已进入目标应用的证据。
+"""
 
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 import sys
 
@@ -13,8 +18,6 @@ MAVLINK_GCS_COMPONENT_ID = 190
 MAVLINK_PX4_UPLOADER_COMPONENT_ID = 0
 MAVLINK_APP_SYSTEM_ID = 1
 MAVLINK_APP_COMPONENT_ID = 1
-DIMA_FLIGHT_SW_VERSION = 0x00010000
-DIMA_BOARD_VERSION = 1
 # Runtime-file digests from the size/SHA-256-pinned pymavlink 2.4.47 archive.
 PINNED_PYMAVLINK_RUNTIME_SHA256 = {
     "__init__.py": "d902c5d877504a9098956ddf5c4a6321ba8e432815a78b279af4d8b79c939a5f",
@@ -23,11 +26,59 @@ PINNED_PYMAVLINK_RUNTIME_SHA256 = {
     "dialects/v20/common.py": "11761aba1f8eafcaceaebf02bb81a5836c823d83da28bcb405fc30ade11b02d7",
 }
 
-class MavlinkCodec:
-    """Pinned pymavlink codec without mavutil or a pyserial dependency."""
+def load_expected_identity(path: pathlib.Path) -> tuple[int, int, tuple[int, ...]]:
+    """读取并严格验证生成合同中的 wire-version、板版本和 8 字节 Git 身份。"""
+    try:
+        contract = json.loads(path.read_text(encoding="utf-8"))
+        if contract.get("schema_version") != 1:
+            raise ValueError("schema_version must be 1")
+        flight_version = contract["mavlink"]["flight_version"]
+        encoded = flight_version["encoded"]
+        board_version = contract["board_version"]
+        custom_version = tuple(contract["mavlink"]["flight_custom_version"])
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise UploadError(
+            f"unable to load generated firmware identity contract {path}: {error}"
+        ) from error
+    if (
+        isinstance(encoded, bool)
+        or not isinstance(encoded, int)
+        or encoded < 0
+        or encoded > 0xFFFFFFFF
+        or isinstance(board_version, bool)
+        or not isinstance(board_version, int)
+        or board_version < 0
+        or board_version > 0xFFFFFFFF
+        or len(custom_version) != 8
+        or any(
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > 0xFF
+            for value in custom_version
+        )
+    ):
+        raise UploadError("generated firmware identity contract has invalid values")
+    return encoded, board_version, custom_version
 
-    def __init__(self, dialect: object) -> None:
+
+class MavlinkCodec:
+    """不依赖 mavutil/pyserial 的 pinned pymavlink codec。
+
+    串口所有权由上传状态机管理；这里仅负责编解码以及来源/身份/能力位核对。
+    """
+
+    def __init__(
+        self,
+        dialect: object,
+        expected_flight_sw_version: int,
+        expected_board_version: int,
+        expected_custom_version: tuple[int, ...],
+    ) -> None:
         self._dialect = dialect
+        self._expected_flight_sw_version = expected_flight_sw_version
+        self._expected_board_version = expected_board_version
+        self._expected_custom_version = expected_custom_version
         self._encoder = dialect.MAVLink(  # type: ignore[attr-defined]
             None,
             srcSystem=MAVLINK_GCS_SYSTEM_ID,
@@ -46,8 +97,11 @@ class MavlinkCodec:
             | parameter_bytewise_capability
             | dialect.MAV_PROTOCOL_CAPABILITY_MAVLINK2  # type: ignore[attr-defined]
         )
+        # 必须同时声明 float 参数、COMMAND_INT、bytewise/union 参数和 MAVLink2；
+        # 少任一位都说明运行的不是本次构建所约定的应用能力集合。
 
     def command_long(self, command: int, param1: float) -> bytes:
+        """打包定向 1/1 的 MAVLink2 COMMAND_LONG，并按 uint8_t 回绕序号。"""
         message = self._encoder.command_long_encode(
             MAVLINK_APP_SYSTEM_ID,
             MAVLINK_APP_COMPONENT_ID,
@@ -66,12 +120,14 @@ class MavlinkCodec:
         return frame
 
     def identify_request(self) -> bytes:
+        """同时请求 HEARTBEAT(消息 0) 与 AUTOPILOT_VERSION，形成身份组合证据。"""
         request_message = self._dialect.MAV_CMD_REQUEST_MESSAGE
         return self.command_long(request_message, 0.0) + self.command_long(
             request_message, float(self._dialect.MAVLINK_MSG_ID_AUTOPILOT_VERSION)
         )
 
     def parse(self, payload: bytes) -> list[object]:
+        """健壮解析一个接收批次；坏帧可跳过，但不会放宽后续字段校验。"""
         parser = self._dialect.MAVLink(None)
         parser.robust_parsing = True
         return list(parser.parse_buffer(payload) or [])
@@ -84,6 +140,7 @@ class MavlinkCodec:
         )
 
     def application_identity(self, payload: bytes) -> ApplicationIdentity | None:
+        """仅接受来源 1/1 且 rover/PX4、版本、能力、UID 全部匹配的应用。"""
         heartbeat = None
         version = None
         for message in self.parse(payload):
@@ -98,8 +155,10 @@ class MavlinkCodec:
         if (
             heartbeat.type != self._dialect.MAV_TYPE_GROUND_ROVER
             or heartbeat.autopilot != self._dialect.MAV_AUTOPILOT_PX4
-            or int(version.flight_sw_version) != DIMA_FLIGHT_SW_VERSION
-            or int(version.board_version) != DIMA_BOARD_VERSION
+            or int(version.flight_sw_version) != self._expected_flight_sw_version
+            or int(version.board_version) != self._expected_board_version
+            or tuple(int(value) for value in version.flight_custom_version)
+            != self._expected_custom_version
             or (
                 int(version.capabilities) & self._expected_capabilities
             ) != self._expected_capabilities
@@ -113,6 +172,7 @@ class MavlinkCodec:
         )
 
     def reboot_ack(self, payload: bytes) -> tuple[bool | None, str]:
+        """解析发往固定 uploader 255/0 的 Recovery mode=3 重启 ACK。"""
         command = self._dialect.MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN
         for message in self.parse(payload):
             if (
@@ -134,7 +194,11 @@ class MavlinkCodec:
             return False, f"MAVLink reboot was rejected (result={result}, mode={mode})"
         return None, "no matching MAVLink reboot ACK was received"
 
-def resolve_mavlink_codec(tools_cache: pathlib.Path) -> MavlinkCodec:
+def resolve_mavlink_codec(
+    tools_cache: pathlib.Path, identity_contract: pathlib.Path
+) -> MavlinkCodec:
+    """校验缓存运行时逐文件哈希后，从该唯一目录导入 pymavlink。"""
+    expected_identity = load_expected_identity(identity_contract)
     tools_directory = pathlib.Path(__file__).resolve().parents[1] / "mavlink"
     bootstrap_directory = str(tools_directory)
     if bootstrap_directory not in sys.path:
@@ -155,6 +219,8 @@ def resolve_mavlink_codec(tools_cache: pathlib.Path) -> MavlinkCodec:
     except MavlinkBootstrapError as error:
         raise UploadError(str(error)) from error
 
+    # archive 级哈希之外再次固定实际会 import 的最小运行时闭包，防止缓存目录
+    # 被局部替换后仍借包版本号通过检查。
     for relative, expected_digest in PINNED_PYMAVLINK_RUNTIME_SHA256.items():
         runtime_file = package_root / relative
         try:
@@ -182,4 +248,4 @@ def resolve_mavlink_codec(tools_cache: pathlib.Path) -> MavlinkCodec:
         raise UploadError(
             "the imported pymavlink package did not come from the pinned tools cache"
         )
-    return MavlinkCodec(common)
+    return MavlinkCodec(common, *expected_identity)

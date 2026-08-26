@@ -1,4 +1,4 @@
-"""Signed-image inspection and Apache mcumgr command client."""
+"""签名镜像 TLV 检查、MCUboot image 状态解析与 Apache mcumgr 有界命令客户端。"""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ MCUMGR_ERROR_RE = re.compile(
 MCUMGR_IMAGES_RE = re.compile(r"^Images:[ \t]*\r?$", re.MULTILINE)
 
 def image_hash(imgtool: pathlib.Path, image: pathlib.Path) -> str:
+    """从 imgtool 解析唯一 32 字节 SHA-256 TLV；不是对整个 signed BIN 再求文件散列。"""
     if not image.is_file():
         raise UploadError(f"signed upload image does not exist: {image}")
     if not imgtool.is_file():
@@ -154,6 +155,7 @@ def try_image_list(
     return success, output
 
 def parse_image_states(output: str) -> list[ImageState]:
+    """把 mcumgr 文本解析为 image/slot/version/flags/hash 结构，未知行不影响已知字段。"""
     states: list[ImageState] = []
     current: ImageState | None = None
     for raw_line in output.splitlines():
@@ -189,15 +191,6 @@ def has_active_confirmed_image(output: str, digest: str) -> bool:
     )
 
 
-def has_unconfirmed_active_image(output: str) -> bool:
-    return any(
-        state.slot == 0
-        and "active" in state.flags
-        and "confirmed" not in state.flags
-        for state in parse_image_states(output)
-    )
-
-
 def has_secondary_image(output: str, digest: str) -> bool:
     return any(
         state.slot == 1 and state.digest == digest
@@ -206,6 +199,7 @@ def has_secondary_image(output: str, digest: str) -> bool:
 
 
 def has_pending_secondary_image(output: str, digest: str) -> bool:
+    """上传成功合同：同一 digest 位于 slot 1 且带 pending；不要求 image_ok/confirmed。"""
     return any(
         state.slot == 1
         and state.digest == digest
@@ -224,6 +218,7 @@ def run_mcumgr(
     mtu: int = DEFAULT_SERIAL_MTU,
     measure_bytes: int | None = None,
 ) -> str:
+    """实时转发 stdout，以独立 reader 避免管道阻塞，并在单调期限后终止子进程。"""
     command = mcumgr_command(executable, port, *arguments, baud=baud, mtu=mtu)
     print("+ " + shlex.join(command), flush=True)
     started = time.monotonic()
@@ -310,6 +305,7 @@ def run_mcumgr(
         raise UploadError("mcumgr response returned no Images section")
     if measure_bytes is not None:
         elapsed = time.monotonic() - started
+        # 速率 = 镜像字节数 / 实际墙钟秒 / 1024，仅作传输诊断，不作为成功条件。
         rate = measure_bytes / max(elapsed, 0.001) / 1024.0
         print(
             f"Transferred {measure_bytes} bytes in {elapsed:.2f}s "
@@ -317,4 +313,3 @@ def run_mcumgr(
             flush=True,
         )
     return output
-

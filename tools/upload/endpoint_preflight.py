@@ -1,4 +1,4 @@
-"""Preflight discovery for Dima application and MCUboot endpoints."""
+"""只读发现 Dima Application/MCUboot endpoint 的上传前置检查。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from .models import (
     McumgrRuntime,
     SerialBackend,
     UploadError,
+    stage,
 )
 from .recovery_request import try_application_identify
 from .serial_discovery import serial_ports
@@ -26,6 +27,7 @@ def endpoint_preflight(
     baud: int,
     mtu: int,
 ) -> tuple[str, str]:
+    """在期限内分别用 SMP image list 和 MAVLink 身份探测，且只接受唯一匹配设备。"""
     host_label = {
         HostPlatform.WINDOWS_NATIVE: "Windows native",
         HostPlatform.WSL: "WSL",
@@ -35,7 +37,8 @@ def endpoint_preflight(
         SerialBackend.WINDOWS_COM: "Windows COM",
         SerialBackend.POSIX_TTY: "POSIX tty",
     }[runtime.serial_backend]
-    print("[PREFLIGHT] USB upload", flush=True)
+    stage("PREFLIGHT", "probing USB application and MCUboot endpoints")
+    print("USB upload", flush=True)
     print(f"  Host       : {host_label}", flush=True)
     print(f"  Transport  : {transport_label}", flush=True)
     print(
@@ -45,6 +48,7 @@ def endpoint_preflight(
     print(f"  Scan limit : {wait_seconds}s", flush=True)
     deadline = time.monotonic() + wait_seconds
     last_error = "no serial ports detected"
+    # 每个端口最多 1 Hz 探测，避免反复打开同一 COM 干扰 USB 重枚举或其他工具。
     probe_after: dict[str, float] = {}
     while time.monotonic() < deadline:
         ports = [explicit_port] if explicit_port else serial_ports(runtime)
@@ -93,6 +97,7 @@ def endpoint_preflight(
             port, endpoint = matches[0]
             print(f"  Device     : {port} ({endpoint})", flush=True)
             print("  Status     : ready\n", flush=True)
+            stage("PREFLIGHT_READY", f"{port} identified as {endpoint}")
             return port, endpoint
         time.sleep(0.25)
 
