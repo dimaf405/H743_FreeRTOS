@@ -9,6 +9,10 @@
 **                The first 1 KiB of the primary slot is the MCUboot header;
 **                the end of the slot is reserved for TLVs and swap trailer.
 **
+**                Primary slot 基址为 0x08040000：0x400 字节 MCUboot header
+**                之后才是向量表；尾部 0xC00 为 TLV/swap trailer 预留，
+**                因而应用 FLASH 可用长度固定为 0xBF000。
+**
 **                Set heap size, stack size and stack location according
 **                to application requirements.
 **
@@ -53,12 +57,14 @@
 ENTRY(Reset_Handler)
 
 /* Highest address of the user mode stack */
+/* 启动栈位于 DTCM 顶端；newlib/CubeMX heap 禁用，通用平台堆另放 RAM_D1。 */
 _estack = ORIGIN(DTCMRAM) + LENGTH(DTCMRAM);    /* end of RAM */
 /* Generate a link error if heap and stack don't fit into RAM */
 _Min_Heap_Size = 0x0;        /* CubeMX/newlib heap disabled; platform heap is in RAM_D1 */
 _Min_Stack_Size = 0x400; /* required amount of stack */
 
 /* Specify the memory areas */
+/* RAM_DMA 单独占 D2 SRAM3，避免 D-cache 一致性风险；RAM_D3 保存复位后诊断。 */
 MEMORY
 {
 DTCMRAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 128K
@@ -107,6 +113,17 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
+  /* Immutable uORB topic descriptors are enumerated directly from Flash. */
+  /* 链接区间 [start,end) 是运行时唯一 topic catalog，不维护手写消费者列表。 */
+  .dima_orb_meta :
+  {
+    . = ALIGN(4);
+    __dima_orb_meta_start__ = .;
+    KEEP(*(.dima_orb_meta))
+    __dima_orb_meta_end__ = .;
+    . = ALIGN(4);
+  } >FLASH
+
   .ARM.extab   : { *(.ARM.extab* .gnu.linkonce.armextab.*) } >FLASH
   .ARM : {
     __exidx_start = .;
@@ -137,6 +154,8 @@ SECTIONS
 
   /* Flash programming code runs from DTCM. It is copied together with .data
      by the existing startup loop, but retains executable-only permissions. */
+  /* 擦写 Bank1 时 Flash 不可取指，因此 ramfunc 与 .data 共用连续 LMA/VMA 差值
+     由启动代码一次搬运；末尾 32 字节对齐同时满足 cache line。 */
   .dima_ramfunc :
   {
     . = ALIGN(4);
@@ -155,11 +174,6 @@ SECTIONS
     . = ALIGN(4);
     *(.data)           /* .data sections */
     *(.data*)          /* .data* sections */
-
-    . = ALIGN(4);
-    __dima_orb_meta_start__ = .;
-    KEEP(*(.dima_orb_meta))
-    __dima_orb_meta_end__ = .;
 
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */
@@ -193,6 +207,7 @@ SECTIONS
   } >DTCMRAM
 
   /* DMA buffers are isolated in D2 SRAM and aligned to cache lines. */
+  /* NOLOAD 避免镜像携带无意义初值；起止均按 32 字节 cache line 对齐。 */
   .dima_dma ORIGIN(RAM_DMA) (NOLOAD) :
   {
     . = ALIGN(32);
@@ -206,6 +221,7 @@ SECTIONS
   __dima_dma_region_end__ = ORIGIN(RAM_DMA) + LENGTH(RAM_DMA);
 
   /* Dima general heap lives in D1 AXI SRAM; DTCM and DMA-oriented D2 stay isolated. */
+  /* 固定 256 KiB 平台堆与随后 task pool 分区，链接 ASSERT 防止二者重叠。 */
   .dima_heap (NOLOAD) :
   {
     . = ALIGN(32);
@@ -255,6 +271,7 @@ SECTIONS
   ASSERT((ADDR(.data) - ADDR(.dima_ramfunc)) ==
          (LOADADDR(.data) - LOADADDR(.dima_ramfunc)),
          "Startup DTCM copy span must have identical load and run gaps")
+  /* 上式保证 run_gap == load_gap，启动代码才能从 _sidata 连续复制 ramfunc+.data。 */
   ASSERT(ADDR(.dima_dma) == 0x30040000,
          "DMA region must start at D2 SRAM3 base")
   ASSERT((ADDR(.dima_dma) & 31) == 0,

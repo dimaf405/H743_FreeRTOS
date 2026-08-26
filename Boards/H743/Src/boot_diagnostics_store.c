@@ -5,9 +5,12 @@
 
 #include "boot_diagnostics.h"
 #include "boot_layout.h"
-#include "platform/stm32h7/flash/flash_bank1.h"
+#include "flash/flash_bank1.h"
 #include "stm32h7xx_hal.h"
 
+/* 启动诊断区是跨复位持久化 ABI：NOLOAD 捕获区保存“本次故障”，Bank1 末端
+ * 以固定槽位追加历史记录。该模块只追加、不就地覆盖，写满后返回 FULL，避免
+ * 在故障处理路径中擦除整扇区而放大掉电风险。 */
 #define RECORD_COUNT \
     (H743_BOOT_DIAGNOSTICS_SIZE / DIMA_BOOT_FLASH_RECORD_SIZE)
 #define STORE_STATE_ENABLED UINT32_C(0x53544F52)
@@ -26,6 +29,8 @@ static dima_boot_flash_record_any_t staging_record
     __attribute__((aligned(H743_FLASH_WRITE_SIZE)));
 static volatile uint32_t store_state;
 
+/* v1/v2 记录必须同时可读，因此尺寸、CRC 位置和末字 commit 标记均是存储 ABI，
+ * 不能随普通结构体重构而漂移。静态断言把布局错误提前到编译期。 */
 _Static_assert(sizeof(dima_boot_diagnostics_v1_t) == 192U,
                "Boot diagnostics v1 layout is a persistent ABI");
 _Static_assert(sizeof(dima_boot_diagnostics_t) == 208U,
@@ -63,6 +68,8 @@ static const volatile void *capture_record(void)
 
 static uint32_t crc32_bytes(const void *data, size_t length)
 {
+    /* 反射形式 CRC-32：初值/终值均异或 0xffffffff，多项式为
+     * 0xedb88320。mask=0-(crc&1) 将条件异或写成无分支位运算。 */
     const uint8_t *bytes = (const uint8_t *)data;
     uint32_t crc = UINT32_C(0xFFFFFFFF);
     for (size_t index = 0U; index < length; ++index) {
@@ -99,6 +106,8 @@ static uint32_t record_crc_offset(uint32_t version)
 
 static int capture_is_valid(const volatile void *capture)
 {
+    /* 捕获区可能由异常上下文写入，按持久 ABI 的 word 索引校验 magic、版本、
+     * 长度、有效标记和 failure_kind，未完整发布的半成品绝不能落盘。 */
     const volatile uint32_t *words =
         (const volatile uint32_t *)capture;
     const uint32_t expected_size = diagnostics_size_for_version(words[1]);
@@ -134,6 +143,8 @@ static const volatile void *record_diagnostics(
 
 static int record_is_valid(const dima_boot_flash_record_any_t *record)
 {
+    /* commit 位于最后一个 Flash word；只有头、诊断负载、CRC 与 commit 全部匹配
+     * 才承认记录有效。这样掉电导致的前缀写入不会被下一次启动误判为历史记录。 */
     const uint32_t version = record->words[1];
     const uint32_t crc_offset = record_crc_offset(version);
     if (record->words[0] != DIMA_BOOT_FLASH_RECORD_MAGIC ||
@@ -225,6 +236,8 @@ static void clear_capture_if_requested(volatile void *capture,
 static dima_boot_diagnostics_store_result_t finish_store(
     dima_boot_diagnostics_store_result_t result)
 {
+    /* DMB 保证记录写入及校验的内存访问先于状态回到 ENABLED；调用方随后看到
+     * 可重入状态时，不会观察到尚未完成的 staging 操作。 */
     __DMB();
     store_state = STORE_STATE_ENABLED;
     __DMB();
@@ -253,10 +266,9 @@ static void seed_application_bridge_record(
         words[index] = 0U;
     }
 
-    /* MCUboot runs before the Application has initialized the NOLOAD D3
-     * record after a cold boot or ROM-DFU recovery. Seed the persistent ABI
-     * here so the reset-only handoff cannot depend on code that has not been
-     * allowed to start yet. */
+    /* 冷启动或 ROM-DFU 恢复后，MCUboot 早于应用初始化 D3 NOLOAD 捕获区。
+     * 因此由引导程序先播种最小合法 ABI，reset-only 交接不能依赖尚未获准运行的
+     * 应用代码。magic 最后发布，配合 DMB/DSB/ISB 防止读者看到半初始化记录。 */
     record->version = DIMA_BOOT_DIAGNOSTICS_VERSION;
     record->size = sizeof(*record);
     record->reset_flags = reset_flags;
@@ -314,6 +326,8 @@ dima_boot_diagnostics_store_pending(int clear_capture)
     store_state = STORE_STATE_BUSY;
     __DMB();
 
+    /* 先复制到对齐 staging，再校验副本；扫描期间原 NOLOAD 捕获区即使被其他
+     * 启动阶段更新，也不会改变本次准备写入的内容。 */
     fill_erased(&staging_record, sizeof(staging_record));
     copy_capture(&staging_record, capture);
     if (!capture_is_valid(record_diagnostics(&staging_record))) {
@@ -322,6 +336,8 @@ dima_boot_diagnostics_store_pending(int clear_capture)
 
     uint32_t next_sequence = 1U;
     uint32_t free_index = RECORD_COUNT;
+    /* 单次线性扫描同时完成去重、最大序号推进和首个擦除槽定位。序号回绕时跳过
+     * 0，保留 0 作为“未分配”语义；相同诊断不重复消耗 Flash 寿命。 */
     for (uint32_t index = 0U; index < RECORD_COUNT; ++index) {
         const dima_boot_flash_record_any_t *record = flash_record(index);
         if (record_is_valid(record)) {
@@ -356,6 +372,8 @@ dima_boot_diagnostics_store_pending(int clear_capture)
     staging_record.words[1] = record_version;
     staging_record.words[2] = sizeof(staging_record);
     staging_record.words[3] = next_sequence;
+    /* CRC 只覆盖其字段之前的稳定前缀；commit 在 CRC 之后且最后写入对应槽尾，
+     * 共同形成掉电可判定的追加记录。 */
     staging_record.words[crc_offset / sizeof(uint32_t)] =
         crc32_bytes(&staging_record, crc_offset);
     staging_record.words[

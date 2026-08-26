@@ -1,6 +1,6 @@
-#include "platform/stm32h7/HardwareServices.hpp"
+#include "stm32h7/HardwareServices.hpp"
 
-#include "platform/api/platform_config.h"
+#include "api/platform_config.h"
 
 #include "stm32h7xx_hal.h"
 
@@ -10,6 +10,8 @@ namespace {
 constexpr std::uint32_t kTimerFrequencyHz = 1000000U;
 constexpr std::uint32_t kExpectedTimerInputClockHz = 240000000U;
 
+/* TIM2 以 1 MHz 自由运行：PSC = 240 MHz / 1 MHz - 1 = 239，单 tick 为 1 us。
+ * 32-bit CNT 每约 4294.967296 s 回绕，overflow_high 将其扩展为 64-bit 单调时间。 */
 class Stm32Clock final : public MonotonicClock {
 public:
     bool initialize() noexcept
@@ -62,6 +64,8 @@ public:
         std::uint32_t high;
         std::uint32_t low;
         std::uint32_t status;
+        /* sequence 是轻量 seqlock：ISR 更新前后各递增一次，读者只接受相同偶数
+         * 序号。若 UIF 已置位但 ISR 尚未执行，读者本地补偿 high，覆盖回绕窗口。 */
         do {
             sequence_before = sequence_;
             __DMB();
@@ -85,6 +89,7 @@ public:
         if ((TIM2->SR & TIM_SR_UIF) == 0U) {
             return;
         }
+        /* 奇数表示写入中，偶数表示稳定；DMB 固定 high 与序号的可见顺序。 */
         ++sequence_;
         __DMB();
         TIM2->SR = ~TIM_SR_UIF;

@@ -26,7 +26,7 @@
 #include "board_init.h"
 #include "boot_diagnostics.h"
 #include "platform_composition.h"
-#include "platform/stm32h7/memory/early_memory.h"
+#include "memory/early_memory.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,6 +69,8 @@ void PeriphCommonClock_Config(void);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
+  /* 在 HAL 重置外设和启用缓存前验证链接脚本给出的内存合同；失败详情写入
+   * 启动诊断后立即停机，避免错误的 DMA/NOLOAD 区域继续运行。 */
   dima_boot_stage_set(DIMA_BOOT_STAGE_MAIN_ENTER);
   dima_boot_stage_set(DIMA_BOOT_STAGE_MEMORY_CONTRACT);
   uint32_t memory_contract_failures = 0U;
@@ -100,6 +102,8 @@ int main(void)
   PeriphCommonClock_Config();
 
   /* USER CODE BEGIN SysInit */
+  /* board_init 完成 CubeMX 外设实例初始化；平台组合根随后发布带静态生命周期的
+   * 服务，但尚不启动业务模块，业务任务统一在调度器启动后进入。 */
   board_init();
   dima_boot_stage_set(DIMA_BOOT_STAGE_PLATFORM_EARLY);
   if (!dima_platform_early_init())
@@ -149,6 +153,7 @@ int main(void)
   dima_boot_stage_set(DIMA_BOOT_STAGE_SCHEDULER_START);
   osKernelStart();
 
+  /* 正常情况下 osKernelStart 永不返回；返回本身即为启动故障。 */
   dima_boot_diagnostics_panic(
       DIMA_BOOT_FAILURE_ERROR_HANDLER,
       (uint32_t)(uintptr_t)__builtin_return_address(0), 0U);

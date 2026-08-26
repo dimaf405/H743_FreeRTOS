@@ -1,4 +1,4 @@
-#include "platform/stm32h7/HardwareServices.hpp"
+#include "stm32h7/HardwareServices.hpp"
 
 #include "stm32h7xx.h"
 
@@ -17,6 +17,8 @@ class Stm32IndependentWatchdog final : public IndependentWatchdog {
 public:
     bool start(std::uint32_t timeout_ms) noexcept override
     {
+        /* LSI 约 32 kHz，/32 后约 1 kHz，故 RLR=timeout_ms-1；LSI 有器差，毫秒值
+         * 是安全窗口配置而非高精度计时。重复 start 只接受完全相同的超时合同。 */
         if (timeout_ms < kMinimumTimeoutMs || timeout_ms > kMaximumTimeoutMs) {
             return false;
         }
@@ -24,11 +26,8 @@ public:
             return timeout_ms == timeout_ms_;
         }
 
-        /* Start the counter before requesting register updates. On a cold
-         * boot the LSI kernel clock is still stopped, so PR/RLR/WINR update
-         * flags cannot clear until the start key enables it. Repeating the
-         * start key is harmless when MCUboot carried an active IWDG across a
-         * reset. This is also the ordering used by the STM32 HAL. */
+        /* 冷启动时 LSI 内核时钟可能尚未运行，必须先写 start key，再开放并更新
+         * PR/RLR/WINR；若 MCUboot 已跨复位启动 IWDG，重复 start key 仍是幂等的。 */
         IWDG1->KR = kStartKey;
         IWDG1->KR = kWriteAccessKey;
         IWDG1->PR = kPrescalerDiv32;
@@ -42,8 +41,7 @@ public:
             return false;
         }
 
-        /* A halted debugger must not turn an intentional inspection into a
-         * watchdog reset. This freeze bit has no effect during normal run. */
+        /* 调试器 halt 时冻结 IWDG，避免有意断点被误判为运行故障；正常运行不受影响。 */
         DBGMCU->APB4FZ1 |= DBGMCU_APB4FZ1_DBG_IWDG1;
         IWDG1->KR = kReloadKey;
         timeout_ms_ = timeout_ms;

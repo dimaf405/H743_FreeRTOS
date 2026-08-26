@@ -1,8 +1,8 @@
-#include "platform/stm32h7/HardwareServices.hpp"
+#include "stm32h7/HardwareServices.hpp"
 
 #include "boot_layout.h"
 #include "dima_boot_request.h"
-#include "platform/stm32h7/flash/flash_bank1.h"
+#include "flash/flash_bank1.h"
 
 #include <cstring>
 
@@ -31,6 +31,9 @@ public:
 
     BootConfirmResult confirm_running_image() noexcept override
     {
+        /* 仅应用侧确认当前 Primary 中已带 MCUboot TEST magic 的镜像。先用 no-wait
+         * 取得全局 Flash 事务与未 armed 写租约；资源忙时返回 Deferred，不阻塞
+         * 控制链。非测试镜像不写 image_ok，已确认镜像保持幂等。 */
         FlashTransaction transaction{transactions_, Timeout::no_wait()};
         if (!transaction) {
             return BootConfirmResult::Deferred;
@@ -54,6 +57,8 @@ public:
         if (!write) {
             return BootConfirmResult::Deferred;
         }
+        /* image_ok 位于 trailer 所属 flashword 首字节。Flash 只能把 1 写成 0，
+         * 因此要求原值为 0xff，写入 0x01 后立即回读；其余字节保持 0xff。 */
         alignas(H743_FLASH_WRITE_SIZE)
             std::uint8_t flashword[H743_FLASH_WRITE_SIZE];
         std::memset(flashword, UINT8_MAX, sizeof(flashword));
@@ -77,6 +82,8 @@ public:
 
     [[noreturn]] void reboot_to_recovery() noexcept override
     {
+        /* 先写跨复位 recovery request，再触发系统复位；若请求写入失败仍复位，
+         * MCUboot 将按现有 trailer/镜像状态选择启动路径。 */
         (void)dima_boot_request_set_recovery();
         NVIC_SystemReset();
         for (;;) {

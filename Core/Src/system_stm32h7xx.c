@@ -49,7 +49,7 @@
 
 #if defined(H743_APPLICATION_IMAGE)
 #include "boot_diagnostics.h"
-#include "platform/stm32h7/memory/early_memory.h"
+#include "memory/early_memory.h"
 #endif
 
 #if !defined  (HSE_VALUE)
@@ -379,9 +379,8 @@ void SystemCoreClockUpdate (void)
 
   case RCC_CFGR_SWS_PLL1:  /* PLL1 used as system clock  source */
 
-    /* PLL_VCO = (HSE_VALUE or HSI_VALUE or CSI_VALUE/ PLLM) * PLLN
-    SYSCLK = PLL_VCO / PLLR
-    */
+    /* PLL 频率公式：VCO = 输入时钟 / PLLM * (PLLN + FRACN/8192)，
+     * SYSCLK = VCO / PLLP。这里只根据寄存器计算软件视图，不是板上实测频率。 */
     pllsource = (RCC->PLLCKSELR & RCC_PLLCKSELR_PLLSRC);
     pllm = ((RCC->PLLCKSELR & RCC_PLLCKSELR_DIVM1)>> 4)  ;
     pllfracen = ((RCC->PLLCFGR & RCC_PLLCFGR_PLL1FRACEN)>>RCC_PLLCFGR_PLL1FRACEN_Pos);

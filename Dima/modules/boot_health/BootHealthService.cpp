@@ -1,6 +1,6 @@
 #include "BootHealthService.hpp"
 
-#include "platform/api/ActuatorPwm.hpp"
+#include "api/ActuatorPwm.hpp"
 
 #include "parameters/param.h"
 
@@ -26,6 +26,7 @@ bool BootHealthService::start()
         return false;
     }
 
+    // 每次启动都丢弃上一次 Runtime 的确认窗口、序号和活性证据。
     stable_window_start_ms_ = clock_.now_ms();
     safety_snapshot_observed_ = false;
     output_snapshot_observed_ = false;
@@ -80,6 +81,8 @@ void BootHealthService::Run()
     const std::uint64_t now_us = clock_.now_us();
     const std::uint64_t now_ms = clock_.now_ms();
 
+    // watchdog 健康与 MCUboot 确认分层：前者允许 Armed/Active，只要输出与
+    // 安全状态一致；后者必须 Disarmed 且输出处于确认安全态。
     const bool safety_healthy = update_safety_health(now_us);
     const bool output_healthy = update_output_health(now_us);
     const bool runtime_healthy =
@@ -87,12 +90,16 @@ void BootHealthService::Run()
     const bool maintenance_safe =
         runtime_healthy && confirmation_state_safe() &&
         output_status_confirmation_safe();
+    // 维护协调器在此统一仲裁 Flash/参数/驱动重配置；返回 false 时本轮既不推进
+    // generation，也不累计镜像确认窗口。
     if (!maintenance_.boot_health_update(
             now_us, runtime_healthy, maintenance_safe)) {
         reset_stable_window(now_ms);
         return;
     }
 
+    // 每次完整 Runtime 健康检查只发行一代票据。uint32 回绕到 0 时再前进一步，
+    // 因为 0 保留为“尚无健康证明”，appMain 不会把它当作新代。
     std::uint32_t generation = __atomic_add_fetch(
         &health_generation_, 1U, __ATOMIC_RELEASE);
     if (generation == 0U) {
@@ -110,6 +117,8 @@ void BootHealthService::Run()
         return;
     }
 
+    // 确认窗口从第一次满足“运行健康 + Disarmed + 输出安全”开始，任一轮不满足
+    // 都在上方 reset；累计满 5 s 后才写 MCUboot image_ok。
     if (!stable_window_active_) {
         stable_window_active_ = true;
         stable_window_start_ms_ = now_ms;
@@ -144,6 +153,8 @@ bool BootHealthService::update_safety_health(std::uint64_t now_us) noexcept
     const bool armed_updated = actuator_armed_subscription_.update();
     const bool control_updated = vehicle_control_mode_subscription_.update();
     const bool status_updated = vehicle_status_subscription_.update();
+    // Commander 用同一 timestamp 连续发布三 Topic。只更新其中一项表示读到了
+    // 撕裂批次，不能把新旧状态拼成一份安全证明。
     const bool any_updated = armed_updated || control_updated || status_updated;
     const bool all_updated = armed_updated && control_updated && status_updated;
 
@@ -178,6 +189,8 @@ bool BootHealthService::safety_topics_consistent(
         vehicle_control_mode_subscription_.get();
     const vehicle_status_s &status = vehicle_status_subscription_.get();
 
+    // timestamp 相等先证明同批；随后逐字段交叉验证 armed/control/status 是
+    // 同一状态机投影，而不是三个各自“看起来合理”的快照。
     if (armed.timestamp == 0U || armed.timestamp != control.timestamp ||
         armed.timestamp != status.timestamp || armed.timestamp > now_us ||
         now_us - armed.timestamp > kSafetyTopicTimeoutUs) {
@@ -192,6 +205,8 @@ bool BootHealthService::safety_topics_consistent(
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL;
     const bool termination =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+    // 本 Rover 运行时只承认 Manual 与 Termination；can_set 只允许主动进入 Manual，
+    // Termination 必须由安全故障路径触发。
     const std::uint32_t manual_mask =
         1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
     const std::uint32_t termination_mask =
@@ -230,6 +245,8 @@ bool BootHealthService::update_output_health(std::uint64_t now_us) noexcept
     if (actuator_output_status_subscription_.update()) {
         const actuator_output_status_s &status =
             actuator_output_status_subscription_.get();
+        // sequence 按 uint32 模空间前进：delta==0 是重复，delta>=2^31 视为倒退；
+        // 正常从 UINT32_MAX 回绕到 1 仍得到小正 delta，0 永远保留为无效。
         const std::uint32_t sequence_delta =
             status.sequence - last_output_sequence_;
         if (status.sequence == 0U ||
@@ -247,6 +264,8 @@ bool BootHealthService::update_output_health(std::uint64_t now_us) noexcept
 bool BootHealthService::output_mapping_consistent(
     const actuator_output_status_s &output) const noexcept
 {
+    // supported=(1<<NUM_OUTPUTS)-1；所有 mapping 位必须落在物理输出范围内，
+    // 左右集合互斥且并集恰好等于 configured mask。
     const std::uint8_t supported = static_cast<std::uint8_t>(
         (1U << actuator_output_status_s::NUM_OUTPUTS) - 1U);
     const bool complete_drive_mapping =
@@ -271,6 +290,8 @@ bool BootHealthService::output_mapping_valid(
 bool BootHealthService::output_frame_valid(
     const actuator_output_status_s &output) const noexcept
 {
+    // 非 Hard-Safe 帧要求每个 configured 输出都有合法 PWM，未激活槽必须严格为 0；
+    // 这样 Topic 不能掩盖“mask 未置位但数组残留脉宽”的后台错误。
     if (output.active_output_mask != output.configured_output_mask) {
         return false;
     }
@@ -302,6 +323,8 @@ bool BootHealthService::output_status_runtime_healthy(
 
     const actuator_armed_s &armed = actuator_armed_subscription_.get();
     const vehicle_status_s &status = vehicle_status_subscription_.get();
+    // Hard-Safe 必须同时满足状态、safe_off、空 active mask 和全零脉宽，
+    // 不能只相信一个布尔位。
     const bool hard_safe =
         output.state == actuator_output_status_s::STATE_HARD_SAFE_OFF &&
         output.safe_off && output.active_output_mask == 0U;
@@ -320,6 +343,8 @@ bool BootHealthService::output_status_runtime_healthy(
     }
 
     if (armed.armed) {
+        // 解锁沿后的短窗口允许 PWM 尚处 Hard-Safe；窗口结束后必须进入 Active，
+        // 且命令、左右映射和整帧范围全部有效。
         const bool in_transition = status.armed_time != 0U &&
             status.armed_time <= now_us &&
             now_us - status.armed_time <= kActuatorArmTransitionUs;
@@ -333,6 +358,8 @@ bool BootHealthService::output_status_runtime_healthy(
     }
 
     if (output.drive_available) {
+        // Disarmed 且具备完整左右驱动时应持续输出 Neutral；映射不完整的降级态
+        // 可保持一致的 Neutral 或退回物理 Hard-Safe，但绝不允许 Active。
         return output.state ==
                    actuator_output_status_s::STATE_DISARMED_NEUTRAL &&
                !output.safe_off && !output.parameter_update_pending &&
@@ -350,6 +377,7 @@ bool BootHealthService::output_status_confirmation_safe() const noexcept
 {
     const actuator_output_status_s &output =
         actuator_output_status_subscription_.get();
+    // image_ok 写 Flash 前不能存在尚未应用的 PWM 参数；只接受不产生动力的两态。
     return !output.parameter_update_pending &&
            (output.state == actuator_output_status_s::STATE_HARD_SAFE_OFF ||
             output.state ==
@@ -360,6 +388,8 @@ bool BootHealthService::confirmation_state_safe() const noexcept
 {
     const actuator_armed_s &armed = actuator_armed_subscription_.get();
     const vehicle_status_s &status = vehicle_status_subscription_.get();
+    // MCUboot 确认比 watchdog 运行健康更严格：必须人工安全态、无故障/失控，
+    // 避免在 Armed 或 failsafe 期间把可能回滚的 test image 永久确认。
     return !armed.armed && !armed.kill && !armed.termination &&
            !armed.lockdown &&
            status.arming_state == vehicle_status_s::ARMING_STATE_DISARMED &&
@@ -370,6 +400,7 @@ bool BootHealthService::confirmation_state_safe() const noexcept
 
 void BootHealthService::reset_stable_window(std::uint64_t now_ms) noexcept
 {
+    // 记录 now 只便于下一次激活重新起算；active=false 保证中断窗口不可续接。
     stable_window_active_ = false;
     stable_window_start_ms_ = now_ms;
 }

@@ -4,8 +4,8 @@
 #include "actuator_output_status.hpp"
 #include "lifecycle/module_base.hpp"
 #include "maintenance/RuntimeMaintenanceCoordinator.hpp"
-#include "platform/api/Boot.hpp"
-#include "platform/api/Execution.hpp"
+#include "api/Boot.hpp"
+#include "api/Execution.hpp"
 #include "vehicle_control_mode.hpp"
 #include "vehicle_status.hpp"
 
@@ -16,6 +16,9 @@
 
 namespace dima::modules::boot_health {
 
+// BootHealth 独立核对参数核心、Commander 同拍安全快照、MotorOutput 物理输出快照
+// 与维护互斥状态。它只发布“本轮可喂狗”的 generation，并在连续安全窗口后
+// 确认 MCUboot test image；真正的 IWDG feed owner 仍是 appMain。
 class BootHealthService final : public dima::middleware::lifecycle::ModuleBase,
                                 public px4::ScheduledWorkItem {
 public:
@@ -28,6 +31,7 @@ public:
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
+    // 单调非零的一次性健康票据；读取方必须证明比上一代更新后才可喂狗。
     std::uint32_t health_generation() const noexcept;
 
 protected:
@@ -35,9 +39,11 @@ protected:
 
 private:
     static constexpr std::uint32_t kCheckIntervalMs = 100U;
+    // 镜像确认要求 5 s 连续健康；Topic 鲜度门限均短于应用 IWDG 期限。
     static constexpr std::uint64_t kStableWindowMs = 5000ULL;
     static constexpr std::uint64_t kSafetyTopicTimeoutUs = 750000ULL;
     static constexpr std::uint64_t kOutputStatusTimeoutUs = 250000ULL;
+    // Armed 发布到 PWM 激活之间允许一个 250 ms 的明确过渡窗口。
     static constexpr std::uint64_t kActuatorArmTransitionUs = 250000ULL;
 
     dima::platform::BootControl &boot_control_;
@@ -58,6 +64,7 @@ private:
     std::uint32_t health_generation_{0U};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
+    // observed 位禁止把启动前缓存的静态 Topic 当作本次 Runtime 活性证明。
     bool safety_snapshot_observed_{false};
     bool output_snapshot_observed_{false};
     bool stable_window_active_{false};

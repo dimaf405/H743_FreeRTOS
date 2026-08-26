@@ -1,11 +1,13 @@
 #include "boot_platform.h"
 
 #include "boot_layout.h"
-#include "platform/stm32h7/memory/cache.h"
+#include "memory/cache.h"
 #include "stm32h7xx_hal.h"
 
 static int stack_pointer_is_valid(uint32_t stack_pointer)
 {
+    /* 初始 MSP 可落在 H743 的 DTCM、AXI SRAM、D2 SRAM 或 D3 SRAM；拒绝所有
+     * 外设/Flash 地址，避免对损坏向量执行不可恢复跳转。 */
     return (stack_pointer >= 0x20000000UL && stack_pointer <= 0x20020000UL) ||
            (stack_pointer >= 0x24000000UL && stack_pointer <= 0x24080000UL) ||
            (stack_pointer >= 0x30000000UL && stack_pointer <= 0x30048000UL) ||
@@ -14,6 +16,8 @@ static int stack_pointer_is_valid(uint32_t stack_pointer)
 
 int boot_vector_is_valid(uint32_t vector_address)
 {
+    /* VTOR 地址必须位于 Primary slot 且按 0x400 对齐；复位入口最低位必须为 1
+     *（Thumb 状态），清除该位后的真实入口也必须仍位于同一镜像槽。 */
     if (vector_address < H743_PRIMARY_SLOT_BASE ||
         vector_address >= H743_PRIMARY_SLOT_BASE + H743_PRIMARY_SLOT_SIZE ||
         (vector_address & 0x3FFU) != 0U) {
@@ -34,6 +38,9 @@ void boot_jump_to_application(uint32_t vector_address)
     const uint32_t stack_pointer = *(const uint32_t *)(uintptr_t)vector_address;
     const uint32_t reset_handler = *(const uint32_t *)(uintptr_t)(vector_address + 4U);
 
+    /* 交接顺序：屏蔽中断 -> 停 SysTick -> 清 NVIC enable/pending -> 关闭并清理
+     * cache -> 切 VTOR/MSP -> 清 PSP/屏蔽寄存器 -> 以 Thumb 入口跳转。应用不会
+     * 继承 MCUboot 的挂起中断、栈或缓存可见性状态。 */
     __disable_irq();
     SysTick->CTRL = 0U;
     SysTick->LOAD = 0U;
