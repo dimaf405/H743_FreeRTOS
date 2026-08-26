@@ -1,23 +1,21 @@
 #pragma once
 /*
- * MAVLink command reception — ported from PX4-Autopilot v1.17.0
+ * MAVLink 命令接收，移植自 PX4-Autopilot v1.17.0
  * src/modules/mavlink/mavlink_receiver.cpp (commit d6f12ad):
  * evaluate_target_ok / acknowledge / handle_message_command_long /
  * handle_message_command_int / handle_message_command_both /
  * handle_request_message_command.
  *
- * Architecture is unchanged from PX4: the receiver does framing-level
- * target filtering and protocol translation, publishes vehicle_command
- * for Commander arbitration, and publishes vehicle_command_ack for
- * locally served requests. MavlinkService turns the acks back into
- * MAVLink COMMAND_ACK frames.
+ * 架构保持 PX4 的所有权边界：接收器只做目标过滤和协议转换；需要安全裁决的命令发布
+ * vehicle_command 交给 Commander，链路本地即可完成的请求发布 vehicle_command_ack；
+ * MavlinkService 最终把 ACK Topic 编码成 COMMAND_ACK 帧。
  *
  * Dima adaptations:
  *   - COMMAND_INT is accepted: handle_message_command_int is ported
  *     1:1 from upstream and shares handle_message_command_both with
  *     the COMMAND_LONG path (Phase-6 dialect extension).
- *   - Stream-interval commands are answered Unsupported until the
- *     periodic stream set gains interval control.
+ *   - Stream-interval commands use caller callbacks backed by the fixed,
+ *     allocation-free Dima stream table.
  *   - Autotune / failure injection / logging commands are omitted.
  *   - handle_request_message_command resolves via a caller callback
  *     instead of the PX4 stream list.
@@ -32,7 +30,7 @@
 
 #include "vehicle_command.hpp"
 #include "vehicle_command_ack.hpp"
-#include "lib/mavlink/mavlink_bridge.h"
+#include "mavlink/MavlinkBridge.h"
 #include "uorb/Publication.hpp"
 
 #include <cstdint>
@@ -42,14 +40,20 @@ namespace dima::modules::mavlink {
 class MavlinkCommands {
 public:
     /**
-     * Resolve MAV_CMD_REQUEST_MESSAGE: send the requested message once.
-     * Returns the MAV_RESULT used for the ack.
+     * 解析 MAV_CMD_REQUEST_MESSAGE：按需发送一次目标消息并返回 ACK 使用的 MAV_RESULT。
      */
     using RequestMessageFn = std::uint8_t (*)(void *ctx,
-                                              std::uint16_t message_id);
+                                               std::uint16_t message_id);
+    using SetMessageIntervalFn = std::uint8_t (*)(
+        void *ctx, std::uint16_t message_id, float interval_us,
+        float param3, float param4, float param7);
+    using GetMessageIntervalFn = std::uint8_t (*)(
+        void *ctx, std::uint16_t message_id);
 
     MavlinkCommands(RequestMessageFn request_message,
-                    void *request_ctx) noexcept;
+                    SetMessageIntervalFn set_message_interval,
+                    GetMessageIntervalFn get_message_interval,
+                    void *callback_ctx) noexcept;
 
     void handle_message(const mavlink_message_t *msg) noexcept;
 
@@ -59,7 +63,7 @@ private:
 
     void acknowledge(std::uint8_t sysid, std::uint8_t compid,
                      std::uint16_t command, std::uint8_t result,
-                     std::uint8_t progress = 0) noexcept;
+                     std::uint8_t result_param2 = 0) noexcept;
 
     std::uint8_t handle_request_message_command(
         std::uint16_t message_id) noexcept;
@@ -82,7 +86,9 @@ private:
         noexcept;
 
     RequestMessageFn request_message_{nullptr};
-    void *request_ctx_{nullptr};
+    SetMessageIntervalFn set_message_interval_{nullptr};
+    GetMessageIntervalFn get_message_interval_{nullptr};
+    void *callback_ctx_{nullptr};
     uORB::Publication<vehicle_command_s> _cmd_pub{ORB_ID(vehicle_command)};
     uORB::Publication<vehicle_command_ack_s> _cmd_ack_pub{
         ORB_ID(vehicle_command_ack)};

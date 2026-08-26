@@ -1,15 +1,20 @@
 #define MODULE_NAME "mavlink"
 #include "MavlinkService.hpp"
-#include "platform/api/BoardIdentity.hpp"
+#include "FirmwareIdentityContract.hpp"
+#include "api/BoardIdentity.hpp"
 
 #include "logging/logging.hpp"
 #include "parameter_metadata_files.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 
+#include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace dima::modules::mavlink {
+namespace stream_contract = dima::generated::mavlink_streams;
 namespace {
 
 namespace metadata = dima::generated::parameter_metadata;
@@ -17,6 +22,11 @@ namespace metadata = dima::generated::parameter_metadata;
 static_assert(metadata::kGeneralFileSize <= UINT32_MAX);
 static_assert(metadata::kParameterFileSize <= UINT32_MAX);
 static_assert(metadata::kActuatorFileSize <= UINT32_MAX);
+static_assert(
+    HeartbeatPacer::kIntervalUs == static_cast<std::uint64_t>(
+        stream_contract::default_interval_us(
+            stream_contract::MessageHandler::Heartbeat)),
+    "Heartbeat pacer must match the generated MAVLink stream contract");
 
 constexpr MavlinkMetadataFtp::VirtualFile kMetadataFiles[]{
     {metadata::kGeneralPath, metadata::kGeneralFile,
@@ -52,17 +62,20 @@ bool MavlinkService::start() noexcept
         return false;
     }
 
-    /* Firmware version 0.1.0; UID and board version from platform API. */
+    // PX4/QGC compatibility identity is generated independently of MCUboot's
+    // product image version; board version and UID remain hardware identity.
     identity_.configure(
-        MavlinkIdentity::encode_version(0, 1, 0, 0),
+        dima::generated::firmware_identity::kFlightSoftwareVersion,
         dima::platform::board_version(),
         dima::platform::board_hardware_uid());
     identity_.set_state(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, MAV_STATE_BOOT);
-    rc_loss_timeout_handle_ = param_find("COM_RC_LOSS_T");
-    mav_system_id_handle_ = param_find("MAV_SYS_ID");
+    // 协议参数使用生成枚举句柄；MAVLink 层不维护参数名或目录副本。
+    rc_loss_timeout_handle_ = param_handle(px4::params::COM_RC_LOSS_T);
+    mav_system_id_handle_ = param_handle(px4::params::MAV_SYS_ID);
     if (rc_loss_timeout_handle_ == PARAM_INVALID ||
         mav_system_id_handle_ == PARAM_INVALID ||
-        !refresh_protocol_parameters()) {
+        !refresh_protocol_parameters() ||
+        !parameters_.prepare_parameter_catalogue()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
         reset_runtime_state();
@@ -111,10 +124,10 @@ void MavlinkService::reset_runtime_state() noexcept
     reboot_mode_pending_ = 0;
     reboot_deadline_us_ = 0U;
     latest_input_rc_ = input_rc_s{};
+    reset_sensor_streams();
     rc_loss_timeout_handle_ = PARAM_INVALID;
     mav_system_id_handle_ = PARAM_INVALID;
     rc_loss_timeout_s_ = 0.0F;
-    last_rc_channels_tx_us_ = 0U;
     have_input_rc_ = false;
     rc_stream_active_ = false;
     rc_loss_timeout_valid_ = false;
@@ -123,6 +136,7 @@ void MavlinkService::reset_runtime_state() noexcept
 
 void MavlinkService::reset_parser_state() noexcept
 {
+    // 官方 MAVLink C 库还维护 channel 全局状态；本地解析器和 channel 状态必须一起清零。
     *mavlink_get_channel_status(MAVLINK_COMM_0) = mavlink_status_t{};
     *mavlink_get_channel_buffer(MAVLINK_COMM_0) = mavlink_message_t{};
     parse_message_ = mavlink_message_t{};
@@ -149,19 +163,20 @@ void MavlinkService::Run()
     console_.service();
     const bool transport_ready = console_.ready();
     if (!transport_ready && transport_was_ready_) {
-        /* Track the physical USB edge independently from first-frame TX.
-         * Metadata requests can arrive while HEARTBEAT/AUTOPILOT_VERSION are
-         * still retrying, so was_link_ready_ is not a sufficient session
-         * lifetime boundary. */
+        // USB 物理断开边沿独立于“首帧发送成功”：握手重试期间也可能已收到 FTP 请求，
+        // 因此断开时必须同时清解析器、参数快照、FTP 会话和各流节拍。
         discard_rx();
         reset_parser_state();
+        parameters_.reset();
         metadata_ftp_.reset();
+        reset_sensor_link_state();
     }
     transport_was_ready_ = transport_ready;
     if (!transport_ready) {
         was_link_ready_ = false;
     }
     update_rc_input();
+    update_sensor_topics();
     if (parameter_update_subscription_.update() &&
         !refresh_protocol_parameters()) {
         PX4_ERR("MAVLink protocol parameters invalid");
@@ -173,17 +188,17 @@ void MavlinkService::Run()
         return;
     }
 
-    /* RX handlers only freeze protocol replies; the fixed-priority TX path
-     * below owns their transmission. Never consume stale USB bytes while the
-     * physical link is down. */
+    // RX 处理器只冻结回复状态，真实写出仍由固定优先级 TX 路径统一拥有；物理链路
+    // 未就绪时不消费残留字节，避免上一 USB 会话的数据进入新会话。
     if (transport_ready) {
         drain_rx();
     }
 
-    /* TX priority: ACK -> Heartbeat -> RC -> Metadata FTP -> Params -> Log. */
+    /* TX priority: ACK -> Heartbeat -> RC -> Metadata FTP -> Sensors -> Params -> Log. */
     process_command_acks();
     now = hrt_absolute_time();
     maybe_perform_reboot(now);
+    // ACK 重试和批准重启拥有最高优先级；存在时本轮不发送低优先级数据。
     if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
         return;
     }
@@ -199,9 +214,13 @@ void MavlinkService::Run()
         const bool version_sent = send_autopilot_version();
         if (heartbeat_sent && version_sent) {
             was_link_ready_ = true;
-            last_rc_channels_tx_us_ = 0U;
+            last_highres_imu_timestamp_us_ = 0U;
+            last_highres_mag_timestamp_us_ = 0U;
+            last_scaled_imu_timestamp_us_ = 0U;
+            last_scaled_mag_timestamp_us_ = 0U;
             rc_stream_active_ = false;
             PX4_INFO("MAVLink USB link ready");
+            report_sensor_link_summary();
         }
     }
 
@@ -215,15 +234,18 @@ void MavlinkService::Run()
             heartbeat_pacer_.reset();
         }
     }
-    stream_rc_channels(now);
+    stream_configured_messages(
+        now, dima::generated::mavlink_streams::TxStage::PreMetadata);
     if (!metadata_ftp_.service(now)) {
         return;
     }
+    stream_configured_messages(
+        now, dima::generated::mavlink_streams::TxStage::PostMetadata);
     parameters_.send();
     stream_statustext();
 }
 
-/* ── RX path ─────────────────────────────────────────────────────── */
+    // 接收路径：官方解析器完成帧校验后，才按生成方言允许的消息分派。
 
 void MavlinkService::drain_rx() noexcept
 {
@@ -238,42 +260,41 @@ void MavlinkService::drain_rx() noexcept
 
 void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
 {
-    switch (msg.msgid) {
+    // 接收路由由 mavlink.lock.json 生成；源码只实现 handler 行为，不维护
+    // msgid/consumer 的第二份 switch 清单。
+    const stream_contract::InboundMessageContract *inbound =
+        stream_contract::find_inbound_message(msg.msgid);
+    if (inbound == nullptr) {
+        // GCS HEARTBEAT 及当前消费集合之外的消息静默忽略。
+        return;
+    }
 
-    case MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
+    switch (inbound->handler) {
+    case stream_contract::InboundHandler::ParameterList:
         PX4_INFO("PARAM_REQUEST_LIST from sys=%u comp=%u", msg.sysid, msg.compid);
-        parameters_.handle_message(&msg);
-        break;
-    case MAVLINK_MSG_ID_PARAM_REQUEST_READ:
-    case MAVLINK_MSG_ID_PARAM_SET:
-    case MAVLINK_MSG_ID_PARAM_EXT_REQUEST_READ:
+        [[fallthrough]];
+    case stream_contract::InboundHandler::Parameters:
         parameters_.handle_message(&msg);
         break;
 
-    case MAVLINK_MSG_ID_COMMAND_LONG:
-    case MAVLINK_MSG_ID_COMMAND_INT:
+    case stream_contract::InboundHandler::Commands:
         commands_.handle_message(&msg);
         break;
 
-    case MAVLINK_MSG_ID_MISSION_REQUEST_LIST:
-    case MAVLINK_MSG_ID_MISSION_CLEAR_ALL:
+    case stream_contract::InboundHandler::Mission:
         mission_.handle_message(&msg);
         break;
 
-    case MAVLINK_MSG_ID_FILE_TRANSFER_PROTOCOL:
+    case stream_contract::InboundHandler::MetadataFtp:
         metadata_ftp_.handle_message(&msg, hrt_absolute_time());
         break;
 
-    case MAVLINK_MSG_ID_TIMESYNC:
+    case stream_contract::InboundHandler::Timesync:
         timesync_.handle_message(&msg);
         break;
 
-    case MAVLINK_MSG_ID_PING:
+    case stream_contract::InboundHandler::Ping:
         handle_ping(msg);
-        break;
-
-    default:
-        /* GCS heartbeat and everything outside the allowlist: ignore. */
         break;
     }
 }
@@ -283,7 +304,7 @@ void MavlinkService::handle_ping(const mavlink_message_t &msg) noexcept
     mavlink_ping_t ping;
     mavlink_msg_ping_decode(&msg, &ping);
 
-    /* Respond to pings addressed to us or broadcast. */
+    // 只回应本系统或广播 PING，并把 target 定向回原发送者。
     if (ping.target_system != 0 &&
         ping.target_system != MAVLINK_SYSTEM_ID) {
         return;
@@ -306,6 +327,7 @@ void MavlinkService::handle_ping(const mavlink_message_t &msg) noexcept
 bool MavlinkService::send_message(mavlink_message_t &msg,
                                   std::uint32_t timeout_ms) noexcept
 {
+    // 只有整帧字节全部写入才算成功；短写保留给上层按各自策略重试。
     const std::uint16_t length =
         mavlink_msg_to_send_buffer(tx_buffer_, &msg);
     const int written = console_.write(tx_buffer_, length, timeout_ms);
@@ -328,6 +350,91 @@ void MavlinkService::send_frame_void(void *ctx,
     }
 }
 
+void MavlinkService::reset_configured_streams() noexcept
+{
+    std::size_t index = 0U;
+    for (const stream_contract::MessageContract &contract :
+         stream_contract::kMessages) {
+        if (contract.scheduler != stream_contract::Scheduler::Service) {
+            continue;
+        }
+        if (index < configured_streams_.size()) {
+            configured_streams_[index].interval_us =
+                contract.default_interval_us;
+            configured_streams_[index].last_tx_us = 0U;
+        }
+        ++index;
+    }
+    rc_stream_active_ = false;
+}
+
+bool MavlinkService::send_contract_message(
+    stream_contract::MessageHandler handler, std::uint64_t now,
+    bool refresh_topics) noexcept
+{
+    switch (handler) {
+    case stream_contract::MessageHandler::Heartbeat: {
+        mavlink_message_t heartbeat{};
+        heartbeat_pacer_.pack_now(now, heartbeat);
+        if (send_message(heartbeat)) return true;
+        heartbeat_pacer_.reset();
+        return false;
+    }
+    case stream_contract::MessageHandler::AutopilotVersion:
+        return send_autopilot_version();
+    case stream_contract::MessageHandler::ProtocolVersion:
+        return send_protocol_version();
+    case stream_contract::MessageHandler::ComponentMetadata:
+        return send_component_metadata();
+    case stream_contract::MessageHandler::ComponentInformation:
+        return send_component_information();
+    case stream_contract::MessageHandler::RcChannels:
+        update_rc_input();
+        rc_stream_active_ = rc_sample_streamable(now) &&
+                            send_rc_channels(now);
+        return rc_stream_active_;
+    case stream_contract::MessageHandler::HighresImu:
+        if (refresh_topics) update_sensor_topics();
+        return send_highres_imu(now);
+    case stream_contract::MessageHandler::ScaledImu:
+        if (refresh_topics) update_sensor_topics();
+        return send_scaled_imu(now);
+    case stream_contract::MessageHandler::GpsRawInt:
+        if (refresh_topics) update_sensor_topics();
+        return send_gps_raw_int(now);
+    case stream_contract::MessageHandler::SystemStatus:
+        if (refresh_topics) update_sensor_topics();
+        return send_system_status(now);
+    }
+    return false;
+}
+
+void MavlinkService::stream_configured_messages(
+    std::uint64_t now, stream_contract::TxStage stage) noexcept
+{
+    std::size_t index = 0U;
+    for (const stream_contract::MessageContract &contract :
+         stream_contract::kMessages) {
+        if (contract.scheduler != stream_contract::Scheduler::Service) {
+            continue;
+        }
+        if (index >= configured_streams_.size()) return;
+        ConfiguredStreamState &state = configured_streams_[index++];
+        if (contract.tx_stage != stage) continue;
+        if (state.interval_us < 0) {
+            if (contract.handler ==
+                stream_contract::MessageHandler::RcChannels) {
+                rc_stream_active_ = false;
+            }
+            continue;
+        }
+        if (stream_due(now, state.last_tx_us, state.interval_us) &&
+            send_contract_message(contract.handler, now, false)) {
+            state.last_tx_us = now;
+        }
+    }
+}
+
 std::uint8_t MavlinkService::request_message(void *ctx,
                                              std::uint16_t message_id) noexcept
 {
@@ -335,45 +442,102 @@ std::uint8_t MavlinkService::request_message(void *ctx,
         return vehicle_command_ack_s::RESULT_UNSUPPORTED;
     }
     auto &self = *static_cast<MavlinkService *>(ctx);
-
-    switch (message_id) {
-    case MAVLINK_MSG_ID_AUTOPILOT_VERSION:
-        return self.send_autopilot_version()
-            ? vehicle_command_ack_s::RESULT_ACCEPTED
-            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
-
-    case MAVLINK_MSG_ID_PROTOCOL_VERSION:
-        return self.send_protocol_version()
-            ? vehicle_command_ack_s::RESULT_ACCEPTED
-            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
-
-    case MAVLINK_MSG_ID_HEARTBEAT: {
-        mavlink_message_t heartbeat{};
-        self.heartbeat_pacer_.pack_now(hrt_absolute_time(), heartbeat);
-        if (self.send_message(heartbeat)) {
-            return vehicle_command_ack_s::RESULT_ACCEPTED;
-        }
-        self.heartbeat_pacer_.reset();
-        return vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
-    }
-
-    case MAVLINK_MSG_ID_COMPONENT_METADATA:
-        return self.send_component_metadata()
-            ? vehicle_command_ack_s::RESULT_ACCEPTED
-            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
-
-    case MAVLINK_MSG_ID_COMPONENT_INFORMATION:
-        return self.send_component_information()
-            ? vehicle_command_ack_s::RESULT_ACCEPTED
-            : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
-
-    default:
+    const stream_contract::MessageContract *contract =
+        stream_contract::find_message(message_id);
+    if (contract == nullptr || !contract->requestable) {
         return vehicle_command_ack_s::RESULT_UNSUPPORTED;
     }
+    return self.send_contract_message(
+               contract->handler, hrt_absolute_time(), true)
+        ? vehicle_command_ack_s::RESULT_ACCEPTED
+        : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
+}
+
+std::uint8_t MavlinkService::set_message_interval(
+    void *ctx, std::uint16_t message_id, float interval_us,
+    float param3, float param4, float param7) noexcept
+{
+    if (ctx == nullptr || !std::isfinite(interval_us)) {
+        return vehicle_command_ack_s::RESULT_FAILED;
+    }
+    const auto unsupported_nonzero = [](float value) {
+        return !std::isfinite(value) || std::lround(value) != 0L;
+    };
+    if (unsupported_nonzero(param3) || unsupported_nonzero(param4) ||
+        unsupported_nonzero(param7)) {
+        return vehicle_command_ack_s::RESULT_FAILED;
+    }
+
+    auto &self = *static_cast<MavlinkService *>(ctx);
+    const stream_contract::MessageContract *contract =
+        stream_contract::find_message(message_id);
+    if (contract == nullptr || !contract->interval_configurable ||
+        contract->scheduler != stream_contract::Scheduler::Service) {
+        return vehicle_command_ack_s::RESULT_FAILED;
+    }
+    const std::size_t index = stream_contract::service_index(contract->handler);
+    if (index >= self.configured_streams_.size()) {
+        return vehicle_command_ack_s::RESULT_FAILED;
+    }
+
+    // MAV_CMD_SET_MESSAGE_INTERVAL：负值禁用，0 恢复产品默认值，正值按微秒四舍五入，
+    // HEARTBEAT 不允许关闭；param3/4/7 当前未实现，非零时明确拒绝。
+    std::int32_t selected_interval = contract->default_interval_us;
+    if (interval_us < -0.00001F) {
+        selected_interval = -1;
+    } else if (interval_us > 0.00001F) {
+        const double rounded_interval = std::round(
+            static_cast<double>(interval_us));
+        if (rounded_interval > static_cast<double>(
+                std::numeric_limits<std::int32_t>::max())) {
+            return vehicle_command_ack_s::RESULT_FAILED;
+        }
+        selected_interval = static_cast<std::int32_t>(
+            std::max(1.0, rounded_interval));
+    }
+
+    self.configured_streams_[index].interval_us = selected_interval;
+    if (contract->handler == stream_contract::MessageHandler::RcChannels &&
+        selected_interval < 0) {
+        self.rc_stream_active_ = false;
+    }
+    return vehicle_command_ack_s::RESULT_ACCEPTED;
+}
+
+std::uint8_t MavlinkService::get_message_interval(
+    void *ctx, std::uint16_t message_id) noexcept
+{
+    if (ctx == nullptr) return vehicle_command_ack_s::RESULT_FAILED;
+    auto &self = *static_cast<MavlinkService *>(ctx);
+    std::int32_t interval_us = -1;
+    const stream_contract::MessageContract *contract =
+        stream_contract::find_message(message_id);
+    if (contract != nullptr) {
+        interval_us = contract->default_interval_us;
+        if (contract->scheduler == stream_contract::Scheduler::Service) {
+            const std::size_t index =
+                stream_contract::service_index(contract->handler);
+            if (index < self.configured_streams_.size()) {
+                interval_us = self.configured_streams_[index].interval_us;
+            }
+        }
+    }
+
+    mavlink_message_interval_t report{};
+    report.message_id = message_id;
+    report.interval_us = interval_us;
+    mavlink_message_t message{};
+    mavlink_msg_message_interval_encode(MAVLINK_SYSTEM_ID,
+                                        MAVLINK_COMPONENT_ID,
+                                        &message, &report);
+    return self.send_message(message)
+        ? vehicle_command_ack_s::RESULT_ACCEPTED
+        : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
 }
 
 void MavlinkService::process_command_acks() noexcept
 {
+    // pending 单槽未清空时不继续消费深度 4 的 uORB FIFO，保持 Commander ACK 顺序。
     if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
         return;
     }
@@ -398,6 +562,7 @@ void MavlinkService::process_command_acks() noexcept
             ack.result == vehicle_command_ack_s::RESULT_ACCEPTED &&
             (ack.result_param2 == 1U || ack.result_param2 == 3U);
         if (is_reboot) {
+            // 重启 mode 只接受 Commander 在 ACK.result_param2 中批准的 1/3。
             reboot_mode_pending_ = static_cast<int>(ack.result_param2);
             reboot_deadline_us_ = hrt_absolute_time() + kRebootDeadlineUs;
         }
@@ -414,6 +579,7 @@ void MavlinkService::send_command_ack(
                                    &message, &ack);
 
     if (send_message(message)) {
+        // 重启 ACK 整帧写入成功后立即复位；无需再等待低优先级流。
         if (reboot_ack) {
             perform_reboot();
         }
@@ -422,6 +588,7 @@ void MavlinkService::send_command_ack(
 
     const int error = errno;
     if (error == EAGAIN || error == ETIMEDOUT) {
+        // 仅暂态拥塞/超时进入有界重试槽，其他错误直接丢弃并记录。
         pending_ack_ = ack;
         pending_ack_valid_ = true;
         pending_ack_is_reboot_ = reboot_ack;
@@ -471,6 +638,7 @@ void MavlinkService::flush_pending_ack() noexcept
 
 void MavlinkService::maybe_perform_reboot(std::uint64_t now) noexcept
 {
+    // ACK 无法在 400 ms 内送达时仍执行已批准重启，避免链路拥塞永久卡住 Recovery。
     if (reboot_mode_pending_ != 0 && reboot_deadline_us_ != 0U &&
         now >= reboot_deadline_us_) {
         pending_ack_valid_ = false;
@@ -485,7 +653,7 @@ void MavlinkService::maybe_perform_reboot(std::uint64_t now) noexcept
 
 void MavlinkService::stream_statustext() noexcept
 {
-    /* Keep records queued while USB is disconnected. */
+    // USB 断开时不消费日志 Topic，尽量保留记录给下一次连接。
     if (!console_.ready()) {
         return;
     }
@@ -496,7 +664,7 @@ void MavlinkService::stream_statustext() noexcept
            mavlink_log_subscription_.update()) {
         const mavlink_log_s &mavlink_log = mavlink_log_subscription_.get();
 
-        /* don't send stale messages */
+        // 超过 5 s 的文本已失去操作时效，丢弃而不占用当前 USB 带宽。
         if (hrt_elapsed_time(&mavlink_log.timestamp) >= 5000000ULL) {
             continue;
         }
@@ -516,7 +684,7 @@ void MavlinkService::stream_statustext() noexcept
 
             if (chunk_size < max_chunk_size) {
                 std::memcpy(&msg.text[0], &text[0], chunk_size);
-                /* pad with zeros */
+                // 最后一片不足 50 字节时补零，满足 MAVLink 定长文本字段语义。
                 std::memset(&msg.text[0] + chunk_size, 0,
                             max_chunk_size - chunk_size);
 
@@ -554,6 +722,7 @@ void MavlinkService::stream_statustext() noexcept
 
 void MavlinkService::perform_reboot() noexcept
 {
+    // mode=3 进入 MCUboot Recovery，其余已批准 mode 走普通平台复位。
     PX4_INFO("Executing deferred reboot (mode %d)", reboot_mode_pending_);
     if (reboot_mode_pending_ == 3) {
         boot_control_.reboot_to_recovery();

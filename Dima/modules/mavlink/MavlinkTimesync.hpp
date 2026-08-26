@@ -1,21 +1,14 @@
 #pragma once
 /*
- * MAVLink TIMESYNC handler — ported from PX4-Autopilot v1.17.0
- * (src/modules/mavlink/mavlink_timesync.cpp, commit d6f12ad).
+ * MAVLink TIMESYNC 处理器，语义来自 PX4-Autopilot v1.17.0。
  *
- * Semantics (unchanged from upstream):
- *   - tc1 == 0: message originates from the remote system — timestamp
- *     it (tc1 = local hrt time in NANOSECONDS) and return it.
- *   - tc1 > 0 : message originates from this system — feed the
- *     round-trip into the Timesync convergence filter.
- *
- * Dima adaptations: the SYSTEM_TIME clock-set leg is omitted (this
- * platform has no realtime clock), and the Mavlink& reference is
- * replaced by a caller-supplied transmit callback.
+ * tc1==0 表示远端发起：用本机 HRT 纳秒时间回填 tc1 并原样回显 ts1；tc1>0 表示
+ * 本机发起请求的返回包：把往返样本交给 Timesync 滤波器。本平台没有 RTC，因此不处理
+ * SYSTEM_TIME 校时；发送也通过回调交还给 MavlinkService，避免第二个链路所有者。
  */
 
-#include "lib/mavlink/mavlink_bridge.h"
-#include "lib/timesync/Timesync.hpp"
+#include "mavlink/MavlinkBridge.h"
+#include "timesync/Timesync.hpp"
 
 #include <cstdint>
 
@@ -23,7 +16,7 @@ namespace dima::modules::mavlink {
 
 class MavlinkTimesync {
 public:
-    /** Transmit callback: finalise + send the prepared mavlink_message_t. */
+    /** 发送回调：由链路所有者完成帧封装与写出。 */
     using SendFn = void (*)(void *ctx, mavlink_message_t &msg);
 
     MavlinkTimesync(SendFn send, void *send_ctx) noexcept;
@@ -34,8 +27,7 @@ public:
     void handle_message(const mavlink_message_t *msg) noexcept;
 
     /**
-     * Convert remote timestamp to local hrt time (usec).
-     * Uses synchronised time if available, monotonic boot time otherwise.
+     * 将远端微秒时间换算到本机 HRT；滤波未收敛时退回单调启动时间语义。
      */
     std::uint64_t sync_stamp(std::uint64_t usec) noexcept;
 

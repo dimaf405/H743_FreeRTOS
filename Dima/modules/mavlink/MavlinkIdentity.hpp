@@ -7,6 +7,9 @@
  * version, capabilities bitmap, and hardware UID.
  *
  * This is a pure data provider — no thread, no work queue.
+ *
+ * 该对象只保存线协议身份与 HEARTBEAT 状态，不拥有线程、队列或硬件；所有
+ * 运行时值均由 ApplicationContext/HeartbeatPacer 在明确时点写入。
  */
 
 #include <cstdint>
@@ -16,13 +19,14 @@ namespace dima::modules::mavlink {
 /**
  * PX4 Rover identity constants and runtime state.
  *
- * The firmware version is encoded as a 32-bit value where each byte
- * represents (major)(minor)(patch)(FIRMWARE_VERSION_TYPE):
- *   type 0 = release, type 64 ('@') = alpha
+     * The generated firmware version follows MAVLink's 0xAABBCCTT layout, where
+     * TT is FIRMWARE_VERSION_TYPE (0=development, 255=official release).
+     * 其中 AA/BB/CC 分别是主/次/补丁版本，TT 是固件类型；编码值来自生成的
+     * firmware identity 合同，不能在 MAVLink 模块内另建版本清单。
  */
 class MavlinkIdentity {
 public:
-    /* ── Fixed PX4 Rover identity ─────────────────────────────────── */
+    /* 固定的 PX4 Rover 线协议身份；与 QGC 的 autopilot/vehicle 选择契约一致。 */
 
     static constexpr uint8_t  SYSTEM_ID   = 1;     /* PX4 autopilot default */
     static constexpr uint8_t  COMPONENT_ID = 1;    /* MAV_COMP_ID_AUTOPILOT1 */
@@ -30,29 +34,16 @@ public:
     static constexpr uint8_t  MAV_TYPE_VALUE     = 10;   /* MAV_TYPE_GROUND_ROVER */
     static constexpr uint8_t  MAV_AUTOPILOT_VALUE = 12;  /* MAV_AUTOPILOT_PX4 */
 
-    /* ── Firmware version ─────────────────────────────────────────── */
-
-    /**
-     * Encode semantic version into the PX4 flight_sw_version format.
-     * Byte 3 (MSB) = major, byte 2 = minor, byte 1 = patch, byte 0 = type.
-     */
-    static constexpr uint32_t encode_version(uint8_t major, uint8_t minor,
-                                              uint8_t patch, uint8_t type = 0)
-    {
-        return (static_cast<uint32_t>(major) << 24)
-             | (static_cast<uint32_t>(minor) << 16)
-             | (static_cast<uint32_t>(patch) << 8)
-             |  static_cast<uint32_t>(type);
-    }
-
-    /* ── Constructor ──────────────────────────────────────────────── */
+    /* 构造后先保持零值，待板级 UID 和生成版本合同一起配置。 */
 
     MavlinkIdentity() = default;
 
     /**
      * Configure the identity with runtime values.
+     * 同一次 configure 原子地形成 AUTOPILOT_VERSION 所需快照；调用方不得把
+     * 未验证的上传包版本或主机推测值写入这里。
      *
-     * @param version   Encoded firmware version (use encode_version()).
+     * @param version   Generated PX4/MAVLink encoded firmware version.
      * @param board_ver Board version from hardware.
      * @param uid       64-bit hardware UID (0 if unavailable).
      * @param vendor_id Board vendor ID (0 = unknown).
@@ -64,10 +55,11 @@ public:
 
     /**
      * Set the current system state for HEARTBEAT.
+     * base_mode/system_status 是当前安全与控制状态的投影，不是独立状态机。
      */
     void set_state(uint8_t base_mode, uint8_t system_status);
 
-    /* ── Accessors ────────────────────────────────────────────────── */
+    /* 只读访问器供打包路径使用，避免发送线程重新推导身份或状态。 */
 
     uint8_t  base_mode()      const noexcept { return base_mode_; }
     uint8_t  system_status()  const noexcept { return system_status_; }
@@ -80,8 +72,9 @@ public:
     uint64_t capabilities() const noexcept;
 
     /**
-     * Get the git hash bytes (first 8 bytes) for custom version fields.
-     * Currently returns zeros (no git hash embedded in this build).
+     * Get the PX4 wire-order bytes for the first 16 Git hash characters.
+     * 输入为生成合同中的 16 个十六进制字符，输出为 8 个真实字节；这是
+     * MAVLink/PX4 wire order，不是把 ASCII 字符原样拷入消息。
      */
     void get_flight_custom_version(uint8_t out[8]) const noexcept;
     void get_middleware_custom_version(uint8_t out[8]) const noexcept;

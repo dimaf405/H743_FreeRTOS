@@ -1,6 +1,6 @@
 #include "MavlinkTimesync.hpp"
 
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 
 namespace dima::modules::mavlink {
 
@@ -17,7 +17,7 @@ void MavlinkTimesync::handle_message(const mavlink_message_t *msg) noexcept
     const std::uint64_t now = hrt_absolute_time();
 
     if (tsync.tc1 == 0) {
-        /* Message originating from remote system, timestamp and return it */
+        // 远端发起：MAVLink TIMESYNC 字段单位为纳秒，本机 HRT 为微秒，故乘 1000。
         mavlink_timesync_t rsync{};
         rsync.tc1 = static_cast<std::int64_t>(now * 1000ULL);
         rsync.ts1 = tsync.ts1;
@@ -29,7 +29,7 @@ void MavlinkTimesync::handle_message(const mavlink_message_t *msg) noexcept
         }
 
     } else if (tsync.tc1 > 0) {
-        /* Message originating from this system, compute time offset */
+        // 本机发起的返回包：利用发送时间、远端接收时间和当前接收时间估计偏移及 RTT。
         timesync_.update(now, tsync.tc1, tsync.ts1);
     }
 }

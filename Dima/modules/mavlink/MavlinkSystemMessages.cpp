@@ -2,7 +2,7 @@
 #include "MavlinkService.hpp"
 
 #include "parameter_metadata_files.hpp"
-#include "platform/api/Time.hpp"
+#include "api/Time.hpp"
 
 #include <cstring>
 
@@ -22,6 +22,8 @@ bool MavlinkService::send_autopilot_version() noexcept
 
 bool MavlinkService::send_protocol_version() noexcept
 {
+    // version 字段单位为 100：100=MAVLink1，200=MAVLink2。当前未生成规范库与
+    // MAVLink C 库各自的 8-byte hash，因此两个 hash 数组必须明确置零。
     mavlink_protocol_version_t version{};
     version.version = 200;
     version.min_version = 100;
@@ -39,6 +41,7 @@ bool MavlinkService::send_protocol_version() noexcept
 
 bool MavlinkService::send_component_metadata() noexcept
 {
+    // URI 与 CRC 来自参数 metadata 生成物；二者必须同代，QGC 才能安全复用缓存。
     mavlink_component_metadata_t metadata_message{};
     metadata_message.time_boot_ms = static_cast<std::uint32_t>(
         hrt_absolute_time() / 1000ULL);
@@ -55,6 +58,7 @@ bool MavlinkService::send_component_metadata() noexcept
 
 bool MavlinkService::send_component_information() noexcept
 {
+    // COMPONENT_INFORMATION 提供兼容旧 QGC 的同一 general metadata 入口。
     mavlink_component_information_t information{};
     information.time_boot_ms = static_cast<std::uint32_t>(
         hrt_absolute_time() / 1000ULL);

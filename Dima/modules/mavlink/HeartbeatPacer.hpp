@@ -8,11 +8,15 @@
  *
  * This is a pure message-filling helper — the owning MavlinkService
  * decides when to call tick() and how to transmit the resulting frames.
+ *
+ * 1 Hz 仅是链路存活节拍，不代表传感器或控制循环频率。base_mode、
+ * custom_mode 与 system_status 必须来自 Commander 发布状态，不能自行推测。
  */
 
 #include "vehicle_control_mode.hpp"
 #include "vehicle_status.hpp"
-#include "lib/mavlink/mavlink_bridge.h"
+#include "mavlink/MavlinkBridge.h"
+#include "mavlink_stream_contract.hpp"
 #include "uorb/SubscriptionData.hpp"
 
 #include "MavlinkIdentity.hpp"
@@ -23,7 +27,14 @@ namespace dima::modules::mavlink {
 
 class HeartbeatPacer {
 public:
-    static constexpr std::uint64_t kIntervalUs = 1000000ULL;  /* 1 Hz */
+    static constexpr std::uint64_t kIntervalUs =
+        static_cast<std::uint64_t>(
+            dima::generated::mavlink_streams::default_interval_us(
+                dima::generated::mavlink_streams::
+                    MessageHandler::Heartbeat));
+    static_assert(kIntervalUs > 0U,
+                  "generated HEARTBEAT interval must be enabled");
+    // PX4 custom_mode 的 main_mode 位于高 16 bit：Manual=1，Termination=10。
     static constexpr std::uint32_t kPx4CustomModeManual = 1UL << 16;
     static constexpr std::uint32_t kPx4CustomModeTermination = 10UL << 16;
 
@@ -31,6 +42,7 @@ public:
 
     /**
      * Periodic tick: packs a HEARTBEAT message if the interval elapsed.
+     * 只有真正打包成功才推进 last_send_us_；发送失败由 owner reset 后重试。
      *
      * @param now_us    Current monotonic time in microseconds.
      * @param[out] msg  Filled HEARTBEAT message when true is returned.
@@ -42,6 +54,7 @@ public:
 
     /**
      * Pack an AUTOPILOT_VERSION message (on request or at connect).
+     * 版本、能力和 UID 均来自 MavlinkIdentity 的已配置快照。
      */
     void pack_autopilot_version(mavlink_message_t &msg) const noexcept;
 
@@ -51,6 +64,7 @@ private:
     /**
      * Project vehicle_status_s into HEARTBEAT base_mode/system_status
      * via MavlinkIdentity.
+     * 仅投影现有 Topic，不反向改变 Commander 状态。
      */
     void refresh_state_from_orb() noexcept;
 
