@@ -1,0 +1,46 @@
+{
+  "format_version": 1,
+  "contract": "px4_um982_nmea_10hz",
+  "upstream": {
+    "repository": "PX4/PX4-GPSDrivers",
+    "commit": "0b9695881bd1e8f830ab4538ab3acc0050019eba",
+    "source": "src/nmea.cpp",
+    "lines": "1053-1091"
+  },
+  "rate_policy": {
+    "message_rate_hz": 10,
+    "target_baudrate": 460800
+  },
+  "messages": [
+    {
+      "log_name": "GPGGA",
+      "command_name": "GPGGA",
+      "period_s": "0.1"
+    },
+    {
+      "log_name": "AGRICA",
+      "command_name": "UNIAGRICA",
+      "period_s": "0.1"
+    },
+    {
+      "log_name": "UNIHEADINGA",
+      "command_name": "UNIHEADINGA",
+      "period_s": "0.1"
+    },
+    {
+      "log_name": "GPGST",
+      "command_name": "GPGST",
+      "period_s": "0.1"
+    },
+    {
+      "log_name": "GPGSA",
+      "command_name": "GPGSA",
+      "period_s": "0.1"
+    },
+    {
+      "log_name": "GPRMC",
+      "command_name": "GPRMC",
+      "period_s": "0.1"
+    }
+  ]
+}
