@@ -1,4 +1,4 @@
-#include "Synchronization.hpp"
+#include "api/Synchronization.hpp"
 
 namespace dima::platform {
 
@@ -7,6 +7,7 @@ Mutex::~Mutex() { reset(); }
 bool Mutex::initialize(Synchronization &synchronization,
                        MutexKind kind) noexcept
 {
+    /* 已初始化对象只接受同一后端的幂等调用；不在运行中迁移原生句柄。 */
     if (handle_) {
         return synchronization_ == &synchronization;
     }
@@ -21,6 +22,7 @@ bool Mutex::initialize(Synchronization &synchronization,
 
 void Mutex::reset() noexcept
 {
+    /* 先销毁后端对象，再清能力句柄和后端指针，析构路径可安全重复执行。 */
     if (synchronization_ != nullptr && handle_) {
         synchronization_->destroy_mutex(handle_);
     }
@@ -69,6 +71,7 @@ MutexGuard::MutexGuard(RecursiveMutex &mutex, Timeout timeout) noexcept
 
 MutexGuard::~MutexGuard()
 {
+    /* 仅当构造期确实获得锁时释放，超时 guard 不会误解锁其他所有者。 */
     if (!locked_) {
         return;
     }
@@ -119,6 +122,7 @@ void Signal::notify() noexcept
 
 void Signal::notify_from_isr() noexcept
 {
+    /* 显式走 ISR 原语，是否触发高优先级任务切换由具体后端决定。 */
     if (synchronization_ != nullptr && handle_) {
         synchronization_->notify_from_isr(handle_);
     }

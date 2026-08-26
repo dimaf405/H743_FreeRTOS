@@ -1,7 +1,7 @@
 #include "Backend.hpp"
 #include "BackendTimeout.hpp"
 
-#include "platform/api/platform_config.h"
+#include "api/platform_config.h"
 
 #include <atomic>
 #include <cstring>
@@ -26,6 +26,8 @@ constexpr std::size_t kTaskStackBlocks =
     kTaskStackPoolBytes / kTaskStackBlockBytes;
 constexpr std::size_t kTaskBitmapWords = (kTaskStackBlocks + 31U) / 32U;
 
+/* 资源均来自固定容量池：互斥量/信号/任务槽不走 heap，任务栈按 256 字节块从
+ * 专用链接段分配。bitmap 字数使用 ceil(blocks/32)，末字未用位永不被扫描。 */
 extern "C" std::uint8_t __dima_heap_start__;
 extern "C" std::uint8_t __dima_heap_end__;
 
@@ -35,6 +37,8 @@ alignas(32) std::uint8_t g_task_stack_pool[kTaskStackPoolBytes]
 bool pointer_in_range(std::uintptr_t pointer, std::uintptr_t begin,
                       std::uintptr_t end, std::size_t stride) noexcept
 {
+    /* 对外句柄实际是池内槽地址；范围与 stride 同时校验可拒绝伪造的中间地址，
+     * 但它是进程内能力校验，不是安全加密 token。 */
     return pointer >= begin && pointer < end &&
            ((pointer - begin) % stride) == 0U;
 }
@@ -91,6 +95,8 @@ public:
         if (!initialize()) {
             return false;
         }
+        /* Flash 上层调用会嵌套事务，因此使用递归 mutex；创建失败则整个后端
+         * 保持未初始化，不能只发布部分 RTOS 服务。 */
         state_.flash_mutex = create_mutex(MutexKind::Recursive);
         state_.initialized = static_cast<bool>(state_.flash_mutex);
         return state_.initialized;
@@ -108,6 +114,8 @@ public:
 
     bool in_realtime_task() const noexcept override
     {
+        /* ISR 一律视为实时上下文；任务实时属性来自受临界区保护的静态槽，
+         * 作为动态分配禁用条件，而不是由任务优先级临时推断。 */
         if (in_interrupt()) {
             return true;
         }
@@ -318,6 +326,8 @@ public:
             return {};
         }
 
+        /* 栈容量向上取整到 256 字节块：ceil(stack_bytes / block_bytes)。返回的
+         * 实际栈可能略大于请求值，但绝不小于请求值。 */
         const std::size_t requested_blocks =
             (config.stack_bytes + kTaskStackBlockBytes - 1U) /
             kTaskStackBlockBytes;
@@ -350,10 +360,9 @@ public:
         const std::size_t stack_bytes = requested_blocks * kTaskStackBlockBytes;
         std::memset(stack, 0, stack_bytes);
 
-        /* Keep the scheduler excluded until the native handle is published.
-         * xTaskCreateStatic() may make a higher-priority task ready immediately;
-         * the outer critical section defers that context switch until the slot
-         * is complete. */
+        /* xTaskCreateStatic 可能立即使更高优先级任务 ready；外层临界区延迟切换，
+         * 直到 native handle 和槽元数据完整发布，避免新任务反查 current 时看到
+         * 半初始化槽。 */
         token = enter();
         slot->native = xTaskCreateStatic(
             entry, config.name,
@@ -381,6 +390,8 @@ public:
             return false;
         }
         const TaskHandle_t native = slot->native;
+        /* 禁止任务经此接口删除自身：自身栈仍承载当前调用链，必须由明确的退出
+         * 生命周期处理，不能先回收 bitmap 再继续执行。 */
         if (native == xTaskGetCurrentTaskHandle()) {
             leave(token);
             return false;
@@ -434,6 +445,8 @@ public:
         }
         auto *const begin = &__dima_heap_start__;
         auto *const end = &__dima_heap_end__;
+        /* 链接脚本必须提供精确 256 KiB、32 字节对齐区域；不满足时拒绝调用
+         * heap_5，防止把相邻 NOLOAD/DMA 段误纳入动态内存。 */
         if ((reinterpret_cast<std::uintptr_t>(begin) & 31U) != 0U ||
             static_cast<std::size_t>(end - begin) != kHeapBytes) {
             return false;
@@ -450,6 +463,8 @@ public:
     void *allocate(std::size_t size,
                    AllocationDomain domain) noexcept override
     {
+        /* RealtimeForbidden 是调用点显式禁配；即便 domain 允许，ISR 或 realtime
+         * 任务也统一拒绝，并把拒绝与耗尽都计入 allocation_failures。 */
         if (!state_.heap_initialized || size == 0U ||
             domain == AllocationDomain::RealtimeForbidden ||
             in_realtime_task()) {
@@ -551,6 +566,8 @@ private:
 
     std::size_t find_free_blocks(std::size_t count) const noexcept
     {
+        /* 首次适配连续区间；run 遇已用位归零，命中 count 时反推区间首块。固定池
+         * 不做搬迁，碎片只会导致“总空闲足够但无连续区间”的可见失败。 */
         std::size_t run = 0U;
         for (std::size_t block = 0U; block < kTaskStackBlocks; ++block) {
             run = block_used(block) ? 0U : run + 1U;

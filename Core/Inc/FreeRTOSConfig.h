@@ -2,4 +2,5 @@
 #define CMSIS_device_header "stm32h7xx.h"
 #endif
 
-#include "../../Dima/platform/freertos/FreeRTOSConfig.h"
+/* CubeMX/CMSIS 入口统一转发到 Dima 的唯一 FreeRTOS 配置，避免两份宏值漂移。 */
+#include "freertos/FreeRTOSConfig.h"

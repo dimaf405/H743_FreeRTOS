@@ -1,7 +1,7 @@
 #pragma once
 
-#include "platform/api/PlatformTypes.hpp"
-#include "platform/api/platform_config.h"
+#include "api/PlatformTypes.hpp"
+#include "api/platform_config.h"
 
 extern "C" {
 #include "FreeRTOS.h"
@@ -32,6 +32,8 @@ TickType_t timeout_to_ticks(Timeout timeout) noexcept
         return kMaximumFiniteTicks;
     }
 
+    /* 向上取整：ticks = ceil(us * tick_hz / 1e6)，确保非零有限超时不会被截断成
+     * 立即返回；超过可表达范围时饱和到 portMAX_DELAY-1，保留 forever 哨兵。 */
     std::uint64_t ticks =
         (timeout.microseconds * DIMA_KERNEL_TICK_HZ +
          kMicrosecondsPerSecond - 1U) /

@@ -1,14 +1,16 @@
 #pragma once
 
-#include "platform/api/Execution.hpp"
-#include "platform/api/Flash.hpp"
-#include "platform/api/Memory.hpp"
-#include "platform/api/ParameterFileStore.hpp"
-#include "platform/api/Synchronization.hpp"
-#include "platform/api/TaskRuntime.hpp"
+#include "api/Execution.hpp"
+#include "api/Flash.hpp"
+#include "api/Memory.hpp"
+#include "api/ParameterFileStore.hpp"
+#include "api/Synchronization.hpp"
+#include "api/TaskRuntime.hpp"
 
 namespace dima::platform::freertos {
 
+/* 单一 Backend 同时实现执行上下文、同步、任务、heap 和 Flash 事务接口；
+ * initialize 必须在 Services 发布前完成，后续访问器只返回该静态实例的不同视图。 */
 bool initialize() noexcept;
 ExecutionContext &execution_context() noexcept;
 CriticalSection &critical_section() noexcept;

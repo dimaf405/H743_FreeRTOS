@@ -1,7 +1,7 @@
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
 
-#include "platform/api/platform_config.h"
+#include "api/platform_config.h"
 
 #include <stdint.h>
 
@@ -30,6 +30,8 @@ __attribute__((noreturn)) void dima_freertos_assert_failed(
 #define configTICK_RATE_HZ                       ((TickType_t)DIMA_KERNEL_TICK_HZ)
 #define configMAX_PRIORITIES                     56
 #define configMINIMAL_STACK_SIZE                 ((uint16_t)128)
+/* 平台 Backend 使用 heap_5 在链接脚本的 256 KiB 区域上定义 heap；该宏仍供
+ * FreeRTOS/CMSIS 编译期接口兼容，不是产品实际可分配总量。 */
 #define configTOTAL_HEAP_SIZE                    ((size_t)15360)
 #define configMAX_TASK_NAME_LEN                  DIMA_TASK_NAME_CAPACITY
 #define configUSE_TRACE_FACILITY                 1
@@ -73,6 +75,8 @@ __attribute__((noreturn)) void dima_freertos_assert_failed(
 #define configPRIO_BITS 4
 #endif
 
+/* 数值越小中断优先级越高；仅逻辑优先级不高于 MAX_SYSCALL 边界的 ISR 才能
+ * 调用 FreeRTOS FromISR API。 */
 #define configLIBRARY_LOWEST_INTERRUPT_PRIORITY \
     DIMA_LOWEST_INTERRUPT_PRIORITY
 #define configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY \
