@@ -1,7 +1,7 @@
 #define MODULE_NAME "mavlink"
 #include "MavlinkParameters.hpp"
 
-#include "board_serial_config.hpp"
+#include "SerialContract.hpp"
 #include "logging/logging.hpp"
 
 #include <cmath>
@@ -19,12 +19,51 @@ void MavlinkParameters::reset() noexcept
     clear_parameter_snapshot();
     _param_update_time = 0U;
     _param_update_index = 0;
-    _qgc_setup_parameters_marked = false;
+    _last_read_failure_index = -1;
+    _catalogue_reported = false;
 }
 
-unsigned MavlinkParameters::get_size() const noexcept
+bool MavlinkParameters::prepare_parameter_catalogue() noexcept
 {
-    return MAVLINK_MSG_ID_PARAM_VALUE_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES;
+    namespace contract = dima::generated::parameters;
+    // 公开参数集合由生成合同唯一给出；编译期数量和运行期 core/used 数量必须同时一致。
+    static_assert(contract::kMavlinkPublicParameterCount ==
+                      px4::param_info_count,
+                  "generated MAVLink catalogue must cover every parameter");
+
+    if (!param_is_ready() || param_count() !=
+            contract::kMavlinkPublicParameterCount) {
+        PX4_ERR("parameter catalogue unavailable: core=%u generated=%u",
+                param_count(),
+                static_cast<unsigned>(contract::kMavlinkPublicParameterCount));
+        return false;
+    }
+
+    for (const px4::params parameter : contract::kMavlinkPublicParameters) {
+        param_set_used(param_handle(parameter));
+    }
+    for (const px4::params parameter : contract::kMavlinkPublicParameters) {
+        const param_t handle = param_handle(parameter);
+        if (!param_used(handle)) {
+            PX4_ERR("parameter catalogue activation failed: %s",
+                    param_name(handle));
+            return false;
+        }
+    }
+    if (param_count_used() != contract::kMavlinkPublicParameterCount) {
+        PX4_ERR("parameter catalogue count mismatch: active=%u generated=%u",
+                param_count_used(),
+                static_cast<unsigned>(contract::kMavlinkPublicParameterCount));
+        return false;
+    }
+
+    if (!_catalogue_reported) {
+        PX4_INFO("MAVLink parameter catalogue ready: %u params, %u QGC facts",
+                 static_cast<unsigned>(contract::kMavlinkPublicParameterCount),
+                 static_cast<unsigned>(contract::kQgcRequiredParameterCount));
+        _catalogue_reported = true;
+    }
+    return true;
 }
 
 void MavlinkParameters::handle_message(
@@ -32,25 +71,25 @@ void MavlinkParameters::handle_message(
 {
     switch (msg->msgid) {
     case MAVLINK_MSG_ID_PARAM_REQUEST_LIST: {
-        /* request all parameters */
+        // 每次 LIST 都重新冻结目录；重复请求按 PX4 语义从索引 0 重新开始。
         mavlink_param_request_list_t req_list;
         mavlink_msg_param_request_list_decode(msg, &req_list);
 
         if (req_list.target_system == MAVLINK_SYSTEM_ID &&
             (req_list.target_component == MAVLINK_COMPONENT_ID ||
              req_list.target_component == MAV_COMP_ID_ALL)) {
-            mark_qgc_setup_parameters_used();
-            /* No hash check on this platform: stream from index 0.
-             * A restart skips straight to the list (PX4 semantics
-             * for repeated requests). */
-            snapshot_parameter_stream();
-            PX4_INFO("Starting param stream: %u params", _send_all_count);
+            // 本平台不宣称 PARAM_HASH，不能用 _HASH_CHECK 提前结束；直接从索引 0 发送。
+            if (snapshot_parameter_stream()) {
+                PX4_INFO("Starting param stream: %u params", _send_all_count);
+            } else {
+                PX4_ERR("PARAM_REQUEST_LIST rejected: catalogue incomplete");
+            }
         }
         break;
     }
 
     case MAVLINK_MSG_ID_PARAM_SET: {
-        /* set parameter */
+        // 参数写入先做目标、类型和产品约束校验；成功后必须回显实际生效值作为 ACK。
         mavlink_param_set_t set;
         mavlink_msg_param_set_decode(msg, &set);
 
@@ -58,17 +97,16 @@ void MavlinkParameters::handle_message(
             (set.target_component == MAVLINK_COMPONENT_ID ||
              set.target_component == MAV_COMP_ID_ALL)) {
 
-            /* local name buffer to enforce null-terminated string */
+            // MAVLink 的 16 字节 param_id 可无 NUL，复制到本地后显式补终止符。
             char name[MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN + 1];
             std::strncpy(name, set.param_id,
                          MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN);
             /* enforce null termination */
             name[MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN] = '\0';
 
-            /* Whatever the value is, we're being told to stop sending */
+            // 未发布匹配散列就不能接受 QGC/PX4 的缓存确认，否则会把普通参数列表错误截断。
             if (std::strncmp(name, "_HASH_CHECK", sizeof(name)) == 0) {
-                clear_parameter_snapshot();
-                /* No other action taken, return */
+                PX4_WARN("Ignoring unadvertised PARAM_HASH acknowledgement");
                 return;
             }
             /* attempt to find parameter, set and send it */
@@ -97,7 +135,7 @@ void MavlinkParameters::handle_message(
     }
 
     case MAVLINK_MSG_ID_PARAM_REQUEST_READ: {
-        /* request one parameter */
+        // 单参数既支持按名称，也支持按本次冻结目录的索引重传。
         mavlink_param_request_read_t req_read;
         mavlink_msg_param_request_read_decode(msg, &req_read);
 
@@ -158,19 +196,21 @@ void MavlinkParameters::send() noexcept
     int max_num_to_send = 20;
     int i = 0;
 
-    /* Send while burst is not exceeded and still something to send */
+    // 单轮最多 20 帧，给 Commander、传感器和 ACK 留出同一 USB WorkQueue 带宽。
     while ((i++ < max_num_to_send) && send_params()) {}
 }
 
-const MavlinkParameters::FixedInt32Parameter *
-MavlinkParameters::fixed_int32_parameter(const char *name) noexcept
+const MavlinkParameters::FixedParameterConstraint *
+MavlinkParameters::fixed_parameter_constraint(param_t param) noexcept
 {
-    return dima::parameters::qgc_fixed_int32_parameter(name);
-}
-
-bool MavlinkParameters::is_qgc_fixed_parameter(const char *name) noexcept
-{
-    return fixed_int32_parameter(name) != nullptr;
+    namespace contract = dima::generated::parameters;
+    for (const FixedParameterConstraint &constraint :
+         contract::kFixedParameterConstraints) {
+        if (param_handle(constraint.parameter) == param) {
+            return &constraint;
+        }
+    }
+    return nullptr;
 }
 
 bool MavlinkParameters::is_serial_baud_parameter(
@@ -214,7 +254,7 @@ bool MavlinkParameters::write_and_acknowledge_parameter(
         return false;
     }
 
-    /* The MAVLink parameter protocol requires an acknowledgement. */
+    // Classic 参数协议以回显 PARAM_VALUE 作为写入 ACK，且应回显存储层实际值。
     (void)send_param(param);
     return true;
 }
@@ -226,8 +266,8 @@ bool MavlinkParameters::set_serial_function(
                    sizeof(dima::board::kSerialPorts[0])]{};
     unsigned owner_count = 0U;
     {
-        /* QGC can enable the new RC port before disabling the old one. Keep the
-         * handoff invisible to readers and publish only the completed state. */
+        // QGC 常先在新端口启用独占功能，再关闭旧端口。整个交接放进参数原子事务：
+        // 读者只能看到旧状态或完成后的新状态，不能看到两个 RC/GPS owner。
         px4::AtomicTransaction transaction;
         if (!serial_function_write_allowed(name, value)) {
             return false;
@@ -256,7 +296,8 @@ bool MavlinkParameters::set_serial_function(
                     !dima::board::serial_function_supported(other_value)) {
                     return false;
                 }
-                if (other_value == dima::board::kSerialFunctionRcInput) {
+                if (value != dima::board::kSerialFunctionDisabled &&
+                    other_value == value) {
                     owners[owner_count++] = other;
                 }
             }
@@ -286,6 +327,7 @@ bool MavlinkParameters::set_serial_function(
                         }
                     }
                     if (!rollback_ok) {
+                        // 即使回滚不完整也必须通知消费者重新校验，禁止继续使用陈旧缓存。
                         param_notify_changes();
                         PX4_ERR("serial RC owner rollback failed");
                     }
@@ -304,27 +346,6 @@ bool MavlinkParameters::set_serial_function(
         (void)send_param(owners[index]);
     }
     return true;
-}
-
-void MavlinkParameters::mark_qgc_setup_parameters_used() noexcept
-{
-    if (_qgc_setup_parameters_marked) {
-        return;
-    }
-
-    for (unsigned index = 0U; index < param_count(); ++index) {
-        const param_t param = param_for_index(index);
-        const char *const name = param_name(param);
-        if (name != nullptr &&
-            (std::strncmp(name, "RC", 2U) == 0 ||
-             dima::board::serial_baud_parameter(name) ||
-             dima::board::serial_function_parameter(name) ||
-             std::strcmp(name, "COM_RC_IN_MODE") == 0 ||
-             is_qgc_fixed_parameter(name))) {
-            param_set_used(param);
-        }
-    }
-    _qgc_setup_parameters_marked = true;
 }
 
 void MavlinkParameters::append_used_parameter(
@@ -350,16 +371,46 @@ void MavlinkParameters::clear_parameter_snapshot() noexcept
     _send_all_count = 0U;
 }
 
-void MavlinkParameters::snapshot_parameter_stream() noexcept
+bool MavlinkParameters::snapshot_parameter_stream() noexcept
 {
+    namespace contract = dima::generated::parameters;
     static_assert(px4::param_info_count <= 0xFFFFU,
                   "MAVLink parameter count exceeds uint16_t");
-    /* 一轮 LIST 必须冻结 used handle、count 和 index；中途新激活的参数只能
-     * 进入下一轮，否则 QGC 的缺包补读会落到不同参数。 */
+    if (!prepare_parameter_catalogue()) {
+        clear_parameter_snapshot();
+        return false;
+    }
+    // 每次 LIST 冻结 handle/count/index；之后才激活的参数必须等下一次 LIST，
+    // 保证 QGC 的缺失索引重试不会解析到另一个 handle。
     _send_all_count = 0U;
     param_foreach(&MavlinkParameters::append_used_parameter, this,
                   false, true);
+    if (_send_all_count != contract::kMavlinkPublicParameterCount ||
+        !snapshot_contains_qgc_required_parameters()) {
+        PX4_ERR("parameter snapshot incomplete: snapshot=%u generated=%u",
+                _send_all_count,
+                static_cast<unsigned>(contract::kMavlinkPublicParameterCount));
+        clear_parameter_snapshot();
+        return false;
+    }
     _send_all_index = _send_all_count == 0U ? -1 : 0;
+    _last_read_failure_index = -1;
+    return _send_all_index >= 0;
+}
+
+bool MavlinkParameters::snapshot_contains_qgc_required_parameters()
+    const noexcept
+{
+    namespace contract = dima::generated::parameters;
+    for (const px4::params parameter : contract::kQgcRequiredParameters) {
+        const param_t handle = param_handle(parameter);
+        if (parameter_snapshot_index(handle) < 0) {
+            PX4_ERR("QGC setup parameter missing from snapshot: %s",
+                    param_name(handle));
+            return false;
+        }
+    }
+    return true;
 }
 
 int MavlinkParameters::parameter_snapshot_index(param_t param) const noexcept
@@ -376,23 +427,11 @@ bool MavlinkParameters::write_value_allowed(param_t param,
                                             float wire_value) noexcept
 {
     const char *const name = param_name(param);
-    /* PX4 v1.17.0 (d6f12ad1) and ArduPilot Rover 4.7.0 treat
-     * min/max/enum metadata as GCS guidance rather than a generic write gate.
-     * Keep finite-value rejection at the protocol boundary; output-specific
-     * validation and arming inhibition belong to MotorOutput and Commander. */
+    // PX4/APM 把 min/max/enum metadata 作为 GCS 指引，不作为通用协议写门；这里拒绝
+    // 非有限 float、生成合同的固定值及串口结构约束，输出专属校验与禁武装仍归消费者。
     if (param_type(param) == PARAM_TYPE_FLOAT &&
         !std::isfinite(wire_value)) {
         return false;
-    }
-    if (name != nullptr && std::strcmp(name, "COM_RC_IN_MODE") == 0) {
-        std::int32_t mode = 0;
-        std::memcpy(&mode, &wire_value, sizeof(mode));
-        return mode == 0;
-    }
-    if (name != nullptr && std::strcmp(name, "RC_MAP_FLTMODE") == 0) {
-        std::int32_t mapping = 0;
-        std::memcpy(&mapping, &wire_value, sizeof(mapping));
-        return mapping == 0;
     }
     if (name != nullptr && std::strcmp(name, "RC_INPUT_PROTO") == 0) {
         std::int32_t protocol = 0;
@@ -409,11 +448,15 @@ bool MavlinkParameters::write_value_allowed(param_t param,
         std::memcpy(&function, &wire_value, sizeof(function));
         return serial_function_write_allowed(name, function);
     }
-    if (const FixedInt32Parameter *const fixed =
-            fixed_int32_parameter(name)) {
-        std::int32_t value = 0;
-        std::memcpy(&value, &wire_value, sizeof(value));
-        return value == fixed->value;
+    if (const FixedParameterConstraint *const fixed =
+            fixed_parameter_constraint(param)) {
+        if (fixed->type == dima::generated::parameters::
+                FixedParameterType::Int32) {
+            std::int32_t value = 0;
+            std::memcpy(&value, &wire_value, sizeof(value));
+            return value == fixed->int32_value;
+        }
+        return wire_value == fixed->float_value;
     }
     return true;
 }
@@ -437,7 +480,7 @@ bool MavlinkParameters::send_untransmitted() noexcept
     if (_parameter_update_sub.update()) {
         const parameter_update_s &pupdate = _parameter_update_sub.get();
 
-        /* Schedule an update if not already the case */
+        // 首次更新后延迟 5 ms 合并同一参数事务产生的多个通知，避免重复回显半套状态。
         if (_param_update_time == 0) {
             _param_update_time = pupdate.timestamp;
             _param_update_index = 0;
@@ -449,7 +492,7 @@ bool MavlinkParameters::send_untransmitted() noexcept
 
         param_t param = 0;
 
-        /* send out all changed values */
+        // 只回显 used 且尚未持久化的参数；完整扫描结束后才清除本轮更新时间。
         do {
             /* skip over all parameters which are not invalid and not used */
             do {
@@ -493,16 +536,24 @@ bool MavlinkParameters::send_one() noexcept
             static_cast<std::uint16_t>(snapshot_index));
 
         if (ret == 1) {
-            /* 传输失败：保留快照 index，下一轮 Run() 重发。 */
+            // 传输暂不可用：保留索引，下一次 Run 重试同一 PARAM_VALUE。
             return false;
         }
 
-        ++_send_all_index;
         if (ret == 2) {
-            /* 读取失败（非传输失败）：快照 index 已推进，直接
-             * 跳过该参数继续后续发送。 */
-            PX4_ERR("param read failed, index %u skipped", snapshot_index);
+            // 取值失败也不能制造 count/index 空洞；任一声明索引缺失都会让 QGC 把整个
+            // VehicleComponent 判为 missing，即使所有校准 Fact 实际已经到达。
+            if (_last_read_failure_index !=
+                    static_cast<int>(snapshot_index)) {
+                PX4_ERR("param read failed, index %u retained",
+                        snapshot_index);
+                _last_read_failure_index = static_cast<int>(snapshot_index);
+            }
+            return false;
         }
+
+        _last_read_failure_index = -1;
+        ++_send_all_index;
 
         if (static_cast<unsigned>(_send_all_index) >= _send_all_count) {
             stop_parameter_stream();
@@ -536,10 +587,8 @@ int MavlinkParameters::send_param(param_t param, std::uint16_t count,
 
     mavlink_param_value_t msg{};
 
-    /*
-     * get param value, since MAVLink encodes float and int params in the same
-     * space during transmission, copy param onto float val_buf
-     */
+    // Classic PARAM_VALUE 共用 float 载荷槽；INT32 按四字节位模式复制，而非数值转 float，
+    // 与 MAV_PARAM_TYPE_INT32 的 bytewise encoding 合同一致。
     if (param_type(param) == PARAM_TYPE_INT32) {
         int32_t param_value;
 
@@ -562,21 +611,14 @@ int MavlinkParameters::send_param(param_t param, std::uint16_t count,
     msg.param_count = count;
     msg.param_index = index;
 
-    /*
-     * The MAVLink spec does not require the string to be NUL-terminated if it
-     * has length 16. In this case the receiving end needs to terminate it
-     * when copying it.
-     */
+    // 规范允许恰好 16 字节的 param_id 不含 NUL，接收方必须按定长字段处理。
     std::strncpy(msg.param_id, param_name(param),
                  MAVLINK_MSG_PARAM_VALUE_FIELD_PARAM_ID_LEN);
 
-    /* query parameter type */
+    // 参数类型来自生成的参数 core 描述符。
     param_type_t type = param_type(param);
 
-    /*
-     * Map onboard parameter type to MAVLink type,
-     * endianess matches (both little endian)
-     */
+    // 板端与 MAVLink 均为小端，可直接保持 INT32/float 的四字节编码。
     if (type == PARAM_TYPE_INT32) {
         msg.param_type = MAVLINK_TYPE_INT32_T;
 

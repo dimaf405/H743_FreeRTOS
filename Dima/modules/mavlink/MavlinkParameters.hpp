@@ -1,28 +1,17 @@
 #pragma once
 /*
- * MAVLink Classic Parameter Protocol handler — ported from
- * PX4-Autopilot v1.17.0 src/modules/mavlink/mavlink_parameters.cpp
- * (commit d6f12ad), class MavlinkParametersManager.
+ * MAVLink Classic Parameter Protocol 处理器，移植自 PX4 v1.17.0。
  *
- * Dima adaptations:
- *   - The Mavlink& channel reference is replaced by a transmit
- *     callback; TX buffer accounting is delegated to the caller.
- *   - UAVCAN parameter forwarding is removed (no UAVCAN on board).
- *   - PARAM_HASH / _HASH_CHECK is omitted: Dima's param core has no
- *     param_hash_check(); _send_all_index starts streaming from 0,
- *     which QGC accepts.
- *   - send_untransmitted() (parameter_update echo of unsaved values)
- *     is kept in simplified form without radio-status throttling.
- *   - Before the first list request, real RC parameters and the fixed rover
- *     identity are explicitly marked used so QGC cannot race the later
- *     RCUpdate startup or fail its Radio-page Airframe prerequisite.
+ * Dima 用发送回调替代 Mavlink 通道引用，链路缓冲核算归调用方；本板没有 UAVCAN 参数
+ * 转发，也不宣称 PARAM_HASH。首次列表请求前必须激活并验证生成的产品参数目录，然后
+ * 冻结本次 count/index/handle 映射，使 QGC 的缺失索引重试始终解析到同一参数。
  */
 
 #include "parameter_update.hpp"
-#include "lib/mavlink/mavlink_bridge.h"
+#include "mavlink/MavlinkBridge.h"
 #include "parameters/param.h"
-#include "parameters/QgcCompatibility.hpp"
-#include "platform/api/Time.hpp"
+#include <parameters/parameter_contract.hpp>
+#include "api/Time.hpp"
 #include "uorb/SubscriptionData.hpp"
 
 #include <cstdint>
@@ -31,32 +20,29 @@ namespace dima::modules::mavlink {
 
 class MavlinkParameters {
 public:
-    /** Transmit callback: finalise + send the prepared mavlink_message_t.
-     *  Returns false when the transport could not accept the frame. */
+    /** 发送回调；false 表示传输层暂时未接收该帧，当前参数索引必须保留待重试。 */
     using SendFn = bool (*)(void *ctx, mavlink_message_t &msg);
 
     MavlinkParameters(SendFn send, void *send_ctx) noexcept;
 
     void reset() noexcept;
 
-    unsigned get_size() const noexcept;
+    /** 激活并验证生成的公开参数目录，禁止在此维护第二份参数清单。 */
+    bool prepare_parameter_catalogue() noexcept;
 
     void handle_message(const mavlink_message_t *msg) noexcept;
 
     /**
-     * Periodic TX entry point — streams pending parameter values.
-     * USB link: try to send up to 20 at once (PX4 semantics).
+     * 周期发送入口；USB 每轮最多尝试 20 个参数，避免参数下载独占 WorkQueue。
      */
     void send() noexcept;
 
 private:
-    using FixedInt32Parameter =
-        dima::parameters::QgcFixedInt32Parameter;
+    using FixedParameterConstraint =
+        dima::generated::parameters::FixedParameterConstraint;
 
-    static const FixedInt32Parameter *fixed_int32_parameter(
-        const char *name) noexcept;
-
-    static bool is_qgc_fixed_parameter(const char *name) noexcept;
+    static const FixedParameterConstraint *fixed_parameter_constraint(
+        param_t param) noexcept;
 
     static bool is_serial_baud_parameter(const char *name) noexcept;
 
@@ -71,8 +57,6 @@ private:
     bool set_serial_function(
         param_t param, const char *name, std::int32_t value) noexcept;
 
-    void mark_qgc_setup_parameters_used() noexcept;
-
     static void append_used_parameter(void *context,
                                       param_t param) noexcept;
 
@@ -80,7 +64,9 @@ private:
 
     void clear_parameter_snapshot() noexcept;
 
-    void snapshot_parameter_stream() noexcept;
+    bool snapshot_parameter_stream() noexcept;
+
+    bool snapshot_contains_qgc_required_parameters() const noexcept;
 
     int parameter_snapshot_index(param_t param) const noexcept;
 
@@ -91,9 +77,7 @@ private:
 
     bool send_untransmitted() noexcept;
 
-    /* 发送下一个参数：send_param 返回 1（传输失败）时保留 index
-     * 待下一轮重发；返回 2（param_get 读取失败）时推进并跳过，
-     * 防止持续读取失败把参数流永久卡在同一 index。 */
+    // 传输不可用或取值失败都保留当前快照索引；已经声明的 PARAM_VALUE 索引绝不跳过。
     bool send_one() noexcept;
 
     int send_param(param_t param) noexcept;
@@ -114,7 +98,8 @@ private:
     unsigned _send_all_count{0U};
     hrt_abstime _param_update_time{0};
     int _param_update_index{0};
-    bool _qgc_setup_parameters_marked{false};
+    int _last_read_failure_index{-1};
+    bool _catalogue_reported{false};
     uORB::SubscriptionData<parameter_update_s> _parameter_update_sub{
         ORB_ID(parameter_update)};
 };

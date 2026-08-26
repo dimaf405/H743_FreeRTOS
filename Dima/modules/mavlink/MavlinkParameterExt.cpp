@@ -1,7 +1,7 @@
 #define MODULE_NAME "mavlink"
 #include "MavlinkParameters.hpp"
 
-#include "lib/format/Format.hpp"
+#include "format/Format.hpp"
 
 #include <cstring>
 
@@ -26,6 +26,7 @@ void MavlinkParameters::handle_param_ext_request_read(
     }
 
     if (req.param_index >= 0) {
+        // EXT 兼容面仅支持按名称读取；索引目录由 Classic PARAM_VALUE 的冻结快照定义。
         send_param_ext_not_found(req.param_id, 0);
         return;
     }
@@ -49,6 +50,7 @@ void MavlinkParameters::handle_param_ext_request_read(
     std::memset(value_str, 0, sizeof(value_str));
     uint8_t ext_type;
 
+    // PARAM_EXT_VALUE 以十进制字符串携带值，不复用 Classic 协议的逐字节 float 槽。
     if (param_type(param) == PARAM_TYPE_INT32) {
         int32_t value;
         if (param_get(param, &value) != 0) {
@@ -71,6 +73,7 @@ void MavlinkParameters::handle_param_ext_request_read(
     int reply_index = param_get_used_index(param);
     const int snapshot_index = parameter_snapshot_index(param);
     if (snapshot_index >= 0) {
+        // 参数列表进行中时沿用冻结的 count/index，防止 EXT 与 Classic 对同名参数报不同索引。
         reply_count = _send_all_count;
         reply_index = snapshot_index;
     }

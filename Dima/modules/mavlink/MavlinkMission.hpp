@@ -19,7 +19,7 @@
  * 应答 target 一律填 GCS 的 sysid/compid（定向回请求方）。
  */
 
-#include "lib/mavlink/mavlink_bridge.h"
+#include "mavlink/MavlinkBridge.h"
 
 #include <cstdint>
 

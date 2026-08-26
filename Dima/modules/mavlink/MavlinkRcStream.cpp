@@ -16,6 +16,7 @@ void MavlinkService::update_rc_input() noexcept
 
 bool MavlinkService::refresh_protocol_parameters() noexcept
 {
+    // RC 可见性超时与系统 ID 作为同一协议快照校验；本产品身份固定为生成合同中的 1。
     float timeout_s = 0.0F;
     std::int32_t system_id = 0;
     rc_loss_timeout_valid_ =
@@ -51,6 +52,7 @@ bool MavlinkService::rc_sample_streamable(std::uint64_t now) const noexcept
         return false;
     }
 
+    // 新鲜度基于接收机最后真实信号时间，不使用 MAVLink 本轮发送时间。
     const std::uint64_t timeout_us = static_cast<std::uint64_t>(
         static_cast<double>(rc_loss_timeout_s_) * 1000000.0);
     return timeout_us > 0U && now - sample_time <= timeout_us;
@@ -63,6 +65,7 @@ bool MavlinkService::send_rc_channels(std::uint64_t now) noexcept
         if (index < channel_count) {
             return latest_input_rc_.values[index];
         }
+        // RC_CHANNELS 规定 0xFFFF 表示该通道未使用/不可用。
         return std::numeric_limits<std::uint16_t>::max();
     };
 
@@ -89,6 +92,7 @@ bool MavlinkService::send_rc_channels(std::uint64_t now) noexcept
     channels.chan17_raw = value(16U);
     channels.chan18_raw = value(17U);
     channels.chancount = channel_count;
+    // RSSI 超出 0..100 时发送 UINT8_MAX，区别于真实的 0% 信号强度。
     channels.rssi = latest_input_rc_.rssi >= 0 &&
                             latest_input_rc_.rssi <= input_rc_s::RSSI_MAX
         ? static_cast<std::uint8_t>(latest_input_rc_.rssi)
@@ -98,26 +102,6 @@ bool MavlinkService::send_rc_channels(std::uint64_t now) noexcept
     mavlink_msg_rc_channels_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
                                    &message, &channels);
     return send_message(message);
-}
-
-void MavlinkService::stream_rc_channels(std::uint64_t now) noexcept
-{
-    if (!rc_sample_streamable(now)) {
-        rc_stream_active_ = false;
-        return;
-    }
-
-    const bool due = !rc_stream_active_ || last_rc_channels_tx_us_ == 0U ||
-                     now < last_rc_channels_tx_us_ ||
-                     now - last_rc_channels_tx_us_ >= kRcChannelsIntervalUs;
-    if (!due) {
-        return;
-    }
-
-    if (send_rc_channels(now)) {
-        last_rc_channels_tx_us_ = now;
-        rc_stream_active_ = true;
-    }
 }
 
 } // namespace dima::modules::mavlink
