@@ -163,6 +163,16 @@ xPack Arm GNU 10.3.1、Go 和带 Dima USB CDC 修补的 Apache `mcumgr`，并按
 make dima_rover upload
 ```
 
+日常 OTA 会进入快速调度：只执行一次真实 Make 依赖图，不再为了构建进度条额外执行“生成物稳定化 +
+全量 dry-run 规划”。这不会跳过生成器、源码重编译、ELF 生命周期检查、签名或上传镜像验证；任何输入
+过期仍会在打开设备前完成重建和校验。架构门禁使用源码与配置内容指纹缓存：相关文件新增、删除或内容
+变化会自动失效并重新执行完整架构检查；单独执行 `make dima_rover`、`make verify`、`make firmware`、
+`make app-check` 或 `make check-architecture` 时仍强制实时检查。完整 Factory 发布流程不走快速调度。
+
+上传日志的每个 `[STAGE]` 现在同时打印 `t=`（从命令开始的累计耗时）和 `delta=`（距上一个阶段的
+耗时），可直接区分主机准备、Recovery/应用重枚举和镜像传输。当前开发阶段的主机上传流程不再等待或
+探测 `image_ok`；板端仍可在健康条件满足后自行确认，但该状态不再作为上传命令的成功门禁。
+
 该命令在用户未显式传入 `-jN` 时自动采用 `-j4`，只构建上传必需的应用 ELF/BIN、签名镜像并缓存
 应用 ELF 与签名校验结果；不会为日常 OTA 重建 MCUboot、Factory HEX 或重跑完整 Factory 布局验收。
 `make dima_rover` 单独执行时仍保留完整发布验收。C 源码的 GCC 汇编 listing 默认关闭；需底层排查时
@@ -170,13 +180,13 @@ make dima_rover upload
 `build/H743_FreeRTOS_signed.bin`，解析本地签名镜像 SHA-256，
 扫描并识别应用或 Recovery 串口；主机工具只解析一次，设备探测不再在构建前额外重复一轮独立
 USB 预检。板上已运行相同 active/confirmed hash 时默认跳过重写并恢复应用运行。
-若当前 Primary 仍是 active 但未 confirmed 的测试镜像，命令会拒绝覆盖 Secondary，避免破坏唯一的
-回滚副本；应先完成健康确认或复位回滚，再发起新的升级事务。
+当前开发阶段不会因 Primary 仍是 active 但未 confirmed 的测试镜像而阻止上传；再次上传会直接覆盖
+Secondary，因此旧镜像的回滚副本也会随之丢失。签名校验、Secondary hash/pending 校验和交换流程不变。
 
 需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、`TEST`，直接从 TEST 响应同时校验 Secondary
-完整 hash 与 pending 状态，再执行 `RESET`、MAVLink 应用身份校验、`HEALTH_CONFIRM`、Primary
-槽完整 hash 的 `active confirmed` 校验，最后再次复位并确认应用已经恢复运行。任何阶段不满足契约
-都会使命令返回非零，不会把只完成传输误报为烧写成功。仓库自举的是带 Dima USB CDC 快速通道的
+完整 hash 与 pending 状态，再执行 `RESET` 和 MAVLink 应用身份校验。应用成功重枚举并通过身份校验
+后上传命令即成功，不再复位探测 Primary 的 confirmed 状态。此前各阶段不满足契约仍会使命令返回非零，
+不会把只完成传输误报为烧写成功。仓库自举的是带 Dima USB CDC 快速通道的
 固定版本 `mcumgr`：在虚拟 921600 波特率下
 取消 Apache 串口传输原有的 20 ms 分片间延时、将 NLIP 帧扩展到 512 字节 MTU，并把非末尾固件
 块对齐到 STM32H743 的 32 字节 Flash 写入粒度。生产默认使用 `--maxwinsize 1` 的 stop-and-wait；
@@ -197,11 +207,10 @@ make dima_rover upload MCUMGR=/absolute/path/to/mcumgr
 ```
 
 `UPLOAD_IMAGE` 可覆盖默认上传包；外部包与本地 ELF stamp 无关联，因此每次都会用 `KEY_FILE` 对
-实际上传文件重新执行签名验证。`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间；
-`UPLOAD_CONFIRM_WAIT_SECONDS` 默认等待 8 秒再验收应用健康确认。`UPLOAD_FORCE=0` 是默认值，
-相同 active/confirmed hash 不再重复擦写；确需强制重写时显式设置 `UPLOAD_FORCE=1`，该特殊路径会
-额外读取一次 Secondary，避免 Primary 与 Secondary 同 hash 时产生歧义。`UPLOAD_VERIFY_CONFIRM=0`
-只用于明确接受跳过最终确认探测的诊断场景，不能作为正式烧写验收。`MCUMGR_BAUD`、`MCUMGR_MTU`
+实际上传文件重新执行签名验证。`UPLOAD_WAIT_SECONDS` 可覆盖默认 60 秒等待时间。`UPLOAD_FORCE=0`
+是默认值，相同 active/confirmed hash 不再重复擦写；确需强制重写时显式设置 `UPLOAD_FORCE=1`，该特殊
+路径会额外读取一次 Secondary，避免 Primary 与 Secondary 同 hash 时产生歧义。主机不再提供或执行
+confirmed 状态验收；如需确认 `image_ok`，应按 3.3 节单独检查。`MCUMGR_BAUD`、`MCUMGR_MTU`
 和 `MCUMGR_MAX_WINDOW` 分别覆盖虚拟波特率、串行 MTU 和窗口；窗口默认值为 1，在完成持续实板压力
 验收前不应调大。`HOST_TOOLS_CACHE_ROOT` 可覆盖包括 Arm GNU、Go、`mcumgr`、pymavlink 和 Python
 依赖在内的统一工具缓存目录。受限网络可通过

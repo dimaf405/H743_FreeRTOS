@@ -39,7 +39,7 @@ Dima Product Rover
   FunctionMotors / MixingOutput
                     ↓
 Dima 公共系统层
-  Parameter / ModuleParams / uORB / WorkQueue
+  Parameter / px4::Param<T> / uORB / WorkQueue
   capability / events / perf / logging / allocator
                     ↓
 独立平台后端
@@ -135,11 +135,11 @@ Storage       128 KiB
 
 已建立窄 `platform/api` capability、独立 FreeRTOS/STM32H7 后端、受控 Heap、TIM2 `hrt_absolute_time()`、持久 ApplicationContext、WorkQueue、uORB、events、perf 和 logging。公共对象由独立 include 集编译，并由 `check-architecture` 禁止底层依赖回流。板上 HRT Overflow、栈高水位和运行期 Heap 余量仍待目标板验证。
 
-### 阶段 2：Parameter 与 ModuleParams（目标构建已通过，板测待完成）
+### 阶段 2：Parameter Core 与类型安全参数包装（目标构建已通过，板测待完成）
 
 阶段 2 以 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 为唯一参数来源，已建立：
 
-- Parameter Layer/Core、AtomicTransaction、稀疏参数层、`param_*`、`px4::Param<T>` 和 `ModuleParams` 兼容接口。
+- Parameter Layer/Core、AtomicTransaction、稀疏参数层、`param_*` 和 `px4::Param<T>` 显式 bind/update 接口。
 - 官方 source parser、XML/JSON 输出和 `px4_parameters.hpp` 模板语义；标准库 renderer 消除系统 Python 缺少 Jinja2 的阻塞，不回退到正则参数解析。
 - TinyBSON 纯 Buffer 子集与 flashparams enumerator/visitor 适配，编码和解码热路径不动态分配。
 - 300 ms debounce、至少 2 s 保存限频、最多 3 次失败重试的 Autosave 策略。
