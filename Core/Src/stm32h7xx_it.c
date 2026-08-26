@@ -24,7 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "boot_diagnostics.h"
 #include "FreeRTOS.h"
-#include "platform/stm32h7/flash/flash_fault.h"
+#include "flash/flash_fault.h"
 #include "task.h"
 /* USER CODE END Includes */
 
@@ -60,7 +60,7 @@ void BusFault_Handler_C(uint32_t *stacked_frame, uint32_t exception_return);
 __attribute__((noreturn)) void UsageFault_Handler_C(uint32_t *stacked_frame,
                                                     uint32_t exception_return);
 void dima_hrt_overflow_isr(void);
-void dima_icm42688_exti_isr(uint16_t pending_pins);
+void dima_interrupt_sources_exti_isr(uint16_t pending_pins);
 void xPortSysTickHandler(void);
 /* USER CODE END PFP */
 
@@ -68,7 +68,8 @@ void xPortSysTickHandler(void);
 /* USER CODE BEGIN 0 */
 void HAL_SuspendTick(void)
 {
-  /* SysTick also drives FreeRTOS, so only suspend the HAL logical counter. */
+  /* SysTick 同时驱动 FreeRTOS，HAL_SuspendTick 只能暂停 HAL 的逻辑毫秒计数；
+   * 不能关闭硬件 SysTick，否则会冻结任务调度与超时。 */
   g_hal_tick_suspended = 1U;
 }
 
@@ -79,6 +80,7 @@ void HAL_ResumeTick(void)
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+extern FDCAN_HandleTypeDef hfdcan1;
 extern PCD_HandleTypeDef hpcd_USB_OTG_FS;
 extern DMA_HandleTypeDef hdma_spi4_rx;
 extern DMA_HandleTypeDef hdma_spi4_tx;
@@ -263,6 +265,15 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
+  * @brief This function handles FDCAN1 interrupt 0.
+  */
+void FDCAN1_IT0_IRQHandler(void)
+{
+  /* HAL 负责清中断源并转入已注册回调；此处不进行 DroneCAN 协议解析。 */
+  HAL_FDCAN_IRQHandler(&hfdcan1);
+}
+
+/**
   * @brief This function handles the TIM2 HRT overflow interrupt.
   */
 void TIM2_IRQHandler(void)
@@ -275,6 +286,8 @@ void TIM2_IRQHandler(void)
   */
 void EXTI15_10_IRQHandler(void)
 {
+  /* INT1/INT2 共用 EXTI15_10：先快照并清除全部 pending 位，再一次性交给
+   * 角色化中断路由，避免分别回调造成重复唤醒或遗漏同拍事件。 */
   uint16_t pending_pins = 0U;
 
   if (__HAL_GPIO_EXTI_GET_IT(ICM42688_INT1_Pin) != 0U)
@@ -289,7 +302,7 @@ void EXTI15_10_IRQHandler(void)
   }
   if (pending_pins != 0U)
   {
-    dima_icm42688_exti_isr(pending_pins);
+    dima_interrupt_sources_exti_isr(pending_pins);
   }
 }
 

@@ -32,7 +32,9 @@ void MX_SPI4_Init(void)
   hspi4.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi4.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi4.Init.NSS = SPI_NSS_SOFT;
-  hspi4.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  /* 实际 SCK = SPI4 kernel clock / 8；运行时 SPI 后端仍会按设备上限选择不超过
+   * 请求频率的离散分频，CubeMX 初值只提供首次初始化的安全基线。 */
+  hspi4.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
   hspi4.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi4.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi4.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -59,4 +61,3 @@ void MX_SPI4_Init(void)
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
-

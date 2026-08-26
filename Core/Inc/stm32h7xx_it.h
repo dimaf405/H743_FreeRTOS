@@ -13,8 +13,11 @@
   * in the root directory of this software component.
   * If no LICENSE file comes with this software, it is provided AS-IS.
   *
- ******************************************************************************
+  ******************************************************************************
   */
+/* Dima 中断入口只承担“确认/清源并转交”的最小职责：Fault 进入启动诊断，
+ * FDCAN/SPI/DMA/USB 交给 HAL，TIM2/EXTI 再交给平台路由；协议和业务逻辑
+ * 不在 ISR 内执行。 */
 /* USER CODE END Header */
 
 /* Define to prevent recursive inclusion -------------------------------------*/
@@ -52,10 +55,12 @@ void MemManage_Handler(void);
 void BusFault_Handler(void);
 void UsageFault_Handler(void);
 void DebugMon_Handler(void);
+void FDCAN1_IT0_IRQHandler(void);
 void TIM2_IRQHandler(void);
 void EXTI15_10_IRQHandler(void);
 void DMA1_Stream0_IRQHandler(void);
 void DMA1_Stream1_IRQHandler(void);
+void DMA1_Stream3_IRQHandler(void);
 void SPI4_IRQHandler(void);
 void OTG_FS_IRQHandler(void);
 /* USER CODE BEGIN EFP */

@@ -2,28 +2,34 @@
 
 #include "PlatformTypes.hpp"
 
+#include <cstddef>
+#include <cstdint>
+
 namespace dima::platform {
 
-enum Icm42688InterruptMask : std::uint32_t {
-    Icm42688InterruptNone = 0U,
-    Icm42688InterruptInt1 = 1U << 0U,
-    Icm42688InterruptInt2 = 1U << 1U,
+enum InterruptSourceMask : std::uint32_t {
+    InterruptSourceNone = 0U,
+    InterruptSource1 = 1U << 0U,
+    InterruptSource2 = 1U << 1U,
 };
 
-struct Icm42688InterruptSnapshot {
+inline constexpr std::size_t kInterruptSourceCount{2U};
+
+struct InterruptSourceSnapshot {
+    /* pending_mask 表示本批次至少发生过一次的源；count 是累计边沿数，timestamp_us
+     * 是各源最近一次 ISR 到达时间，用于驱动层检测丢中断与计算采样间隔。 */
     std::uint32_t pending_mask{0U};
-    std::uint32_t int1_count{0U};
-    std::uint32_t int2_count{0U};
-    std::uint64_t int1_timestamp_us{0U};
-    std::uint64_t int2_timestamp_us{0U};
+    std::uint32_t count[kInterruptSourceCount]{};
+    std::uint64_t timestamp_us[kInterruptSourceCount]{};
 };
 
-class SensorInterrupts {
+class InterruptSources {
 public:
-    virtual ~SensorInterrupts() = default;
-    virtual bool register_icm42688(IsrCallback notification) noexcept = 0;
-    virtual void unregister_icm42688() noexcept = 0;
-    virtual Icm42688InterruptSnapshot consume_icm42688() noexcept = 0;
+    virtual ~InterruptSources() = default;
+    virtual bool register_sources(IsrCallback notification) noexcept = 0;
+    virtual void unregister_sources() noexcept = 0;
+    /* 原子取得 ISR 快照；具体后端负责定义并实现 pending 的消费语义。 */
+    virtual InterruptSourceSnapshot consume() noexcept = 0;
 };
 
 } // namespace dima::platform

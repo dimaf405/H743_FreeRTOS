@@ -1,4 +1,4 @@
-#include "platform/stm32h7/HardwareServices.hpp"
+#include "stm32h7/HardwareServices.hpp"
 
 #include <cstring>
 
@@ -22,6 +22,8 @@ class Stm32DmaMemory final : public DmaMemory {
 public:
     DmaBufferView view(void *buffer, std::size_t length) noexcept override
     {
+        /* DMA 区由链接脚本隔离并按 32-byte cache line 对齐；溢出、空范围、未对齐
+         * 或越界均拒绝，避免 cache 维护误伤相邻对象。 */
         const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(buffer);
         const std::uintptr_t end = begin + length;
         const std::uintptr_t region_begin =
@@ -63,6 +65,8 @@ public:
             return {};
         }
 
+        /* 四个固定 bounce buffer 的占用位由极短 PRIMASK 临界区保护；复制在开中断
+         * 后进行，避免 512 B memcpy 扩大中断延迟。 */
         const std::uint32_t primask = __get_PRIMASK();
         __disable_irq();
         std::size_t index = kBounceCount;
@@ -107,6 +111,7 @@ public:
             buffer = {};
             return;
         }
+        /* RX/双向事务先把 DMA 结果复制回调用方，再释放槽；TX-only 不反向复制。 */
         if (destination != nullptr &&
             direction != DmaDirection::MemoryToPeripheral) {
             std::memcpy(destination, buffer.data, buffer.size);
@@ -125,6 +130,7 @@ private:
     static std::uintptr_t token_for(std::uintptr_t address,
                                     std::size_t length) noexcept
     {
+        /* token 绑定地址与长度，用于发现被截断/替换的 view；它不是密码学认证。 */
         return kTokenSeed ^ address ^ static_cast<std::uintptr_t>(length);
     }
 };

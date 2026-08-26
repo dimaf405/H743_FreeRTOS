@@ -1,15 +1,17 @@
 #include "platform_composition.h"
 
 #include "boot_diagnostics.h"
-#include "platform/api/Boot.hpp"
-#include "platform/api/Flash.hpp"
-#include "platform/api/Services.hpp"
-#include "platform/freertos/Backend.hpp"
-#include "platform/stm32h7/HardwareServices.hpp"
+#include "api/Boot.hpp"
+#include "api/Flash.hpp"
+#include "api/Services.hpp"
+#include "freertos/Backend.hpp"
+#include "stm32h7/HardwareServices.hpp"
 #include "usb_console/UsbConsole.hpp"
 
 namespace {
 
+/* 将平台无关的启动阶段/失败类型映射到板级 NOLOAD 诊断 ABI。下面的静态断言
+ * 固定两个枚举域的数值合同，防止重排枚举后历史诊断被错误解码。 */
 class BoardStartupDiagnostics final
     : public dima::platform::StartupDiagnostics {
 public:
@@ -59,6 +61,8 @@ extern "C" bool dima_platform_early_init(void)
         return true;
     }
 
+    /* 该入口允许幂等调用；首次调用严格按“RTOS 基础设施 -> 时钟/Flash ->
+     * 依赖对象 -> Services 发布”构造，任何一步失败都不会发布半成品服务表。 */
     dima_boot_stage_set(DIMA_BOOT_STAGE_HEAP_INIT);
     if (!freertos::initialize()) {
         return false;
@@ -78,6 +82,8 @@ extern "C" bool dima_platform_early_init(void)
     auto &boot_control = stm32h7::boot_control(
         freertos::flash_transactions(), armed_flash);
 
+    /* Services 保存引用，故所有被引用后端都必须具有静态生命周期。组合根在此
+     * 集中表达资源所有权，业务模块只能经角色接口取用串口、SPI、CAN 和 PWM。 */
     static Services services{
         stm32h7::clock(),
         freertos::execution_context(),
@@ -95,8 +101,11 @@ extern "C" bool dima_platform_early_init(void)
         stm32h7::dma_memory(),
         stm32h7::independent_watchdog(),
         stm32h7::serial_ports(),
-        stm32h7::sbus_input(),
-        stm32h7::sensor_interrupts(),
+        stm32h7::async_serial_port(),
+        stm32h7::timestamped_serial_input(),
+        stm32h7::interrupt_sources(),
+        stm32h7::spi4(),
+        stm32h7::can1(),
         &stm32h7::actuator_pwm(),
     };
 
@@ -108,7 +117,7 @@ extern "C" bool dima_platform_early_init(void)
     return true;
 }
 
-/* Hardware board version — increment when the PCB revision changes. */
+/* 硬件板版本只在 PCB 修订变化时递增，不随固件版本或功能开关变化。 */
 static constexpr std::uint32_t kBoardVersion = 1;
 
 namespace dima::platform {
