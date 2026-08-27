@@ -181,12 +181,12 @@ make dima_rover upload
 扫描并识别应用或 Recovery 串口；主机工具只解析一次，设备探测不再在构建前额外重复一轮独立
 USB 预检。板上已运行相同 active/confirmed hash 时默认跳过重写并恢复应用运行。
 当前开发阶段不会因 Primary 仍是 active 但未 confirmed 的测试镜像而阻止上传；再次上传会直接覆盖
-Secondary，因此旧镜像的回滚副本也会随之丢失。签名校验、Secondary hash/pending 校验和交换流程不变。
+Secondary，因此旧镜像的回滚副本也会随之丢失。签名校验、必要的 TEST 请求、复位和应用身份闭环不变。
 
-需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、`TEST`，直接从 TEST 响应同时校验 Secondary
-完整 hash 与 pending 状态，再执行 `RESET` 和 MAVLink 应用身份校验。应用成功重枚举并通过身份校验
-后上传命令即成功，不再复位探测 Primary 的 confirmed 状态。此前各阶段不满足契约仍会使命令返回非零，
-不会把只完成传输误报为烧写成功。仓库自举的是带 Dima USB CDC 快速通道的
+需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、`TEST`、`RESET` 和 MAVLink 应用身份校验。
+`image test <hash>` 仍是请求 MCUboot 在下次启动交换 Secondary 的必要动作；主机只要求该命令成功，
+不再把某个版本 `image list` 文本中的 `pending` 标志作为上传成功门禁。应用成功重枚举并通过身份校验
+后上传命令即成功，不再复位探测 Primary 的 confirmed 状态。仓库自举的是带 Dima USB CDC 快速通道的
 固定版本 `mcumgr`：在虚拟 921600 波特率下
 取消 Apache 串口传输原有的 20 ms 分片间延时、将 NLIP 帧扩展到 512 字节 MTU，并把非末尾固件
 块对齐到 STM32H743 的 32 字节 Flash 写入粒度。生产默认使用 `--maxwinsize 1` 的 stop-and-wait；
@@ -256,13 +256,9 @@ Secondary；Bootloader 会拒绝 `-n 1`，从实现层禁止 USB 擦写正在运
      image test <secondary-image-hash>
    ```
 
-5. 用 `image list` 确认新镜像已处于 pending/test 状态，然后复位：
+5. 复位。排障时可以先执行一次 `image list` 观察 MCUboot 状态，但其 `pending` 文本不是主机成功条件：
 
    ```bash
-   mcumgr --conntype serial \
-     --connstring "dev=/dev/ttyACM0,baud=115200" \
-     image list
-
    mcumgr --conntype serial \
      --connstring "dev=/dev/ttyACM0,baud=115200" \
      reset
