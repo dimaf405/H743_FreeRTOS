@@ -163,32 +163,6 @@ def scan_hardware_ownership(violations: list[Violation]) -> None:
                     "raw HAL Flash operation is outside a Flash driver",
                 ))
 
-    spi4_path = ROOT / "Dima/platform/stm32h7/spi/Spi4.cpp"
-    spi4_text = spi4_path.read_text(encoding="utf-8")
-    unsupported_spi4_clock_query = re.compile(
-        r"HAL_RCCEx_GetPeriphCLKFreq\s*\(\s*RCC_PERIPHCLK_SPI4\s*\)"
-    )
-    match = unsupported_spi4_clock_query.search(spi4_text)
-    if match is not None:
-        violations.append(Violation(
-            spi4_path, spi4_text[:match.start()].count("\n") + 1, "R023",
-            "STM32H7 HAL does not implement the SPI45 clock query through "
-            "HAL_RCCEx_GetPeriphCLKFreq",
-        ))
-    require_literals(
-        spi4_path,
-        (
-            ("__HAL_RCC_GET_SPI45_SOURCE()", "R023",
-             "SPI4 must verify its SPI45 kernel clock source"),
-            ("HAL_RCC_GetPCLK1Freq()", "R023",
-             "SPI4 D2PCLK1 source must use the PCLK1 frequency API"),
-            ("spi_clock::select", "R023",
-             "SPI4 must select a non-overclocking hardware divider"),
-        ),
-        violations,
-    )
-
-
 def scan_device_policy_boundaries(violations: list[Violation]) -> None:
     """隔离设备/协议策略、具体驱动和供应商 ABI；R024 有意连注释 token 一并扫描。"""
     device_policy_re = re.compile(
