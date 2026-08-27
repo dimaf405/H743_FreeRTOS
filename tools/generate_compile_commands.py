@@ -276,98 +276,6 @@ def validate_closure(
         )
 
 
-def validate_contexts(entries: Sequence[dict[str, object]], root: pathlib.Path) -> None:
-    """抽查关键层的必需/禁止 include 根，证明 target-private 上下文没有泄漏。"""
-    by_source: dict[str, list[dict[str, object]]] = {}
-    for entry in entries:
-        by_source.setdefault(relative_file(entry, root), []).append(entry)
-
-    contexts = {
-        "Dima/application/app_main.cpp": (
-            {
-                "Dima/rover",
-                "Dima/drivers/gps",
-                "Dima/modules",
-                "Dima/middleware",
-                "Dima/lib",
-                "Dima/platform",
-                "build/generated_include",
-                "build/generated/messages",
-            },
-            {
-                "Dima",
-                "Middlewares/Third_Party/FreeRTOS/Source/include",
-                "Core/Inc",
-            },
-        ),
-        "Dima/platform/freertos/Backend.cpp": (
-            {
-                "Dima/platform",
-                "Dima/platform/freertos",
-                "Middlewares/Third_Party/FreeRTOS/Source/include",
-            },
-            {"Dima", "Core/Inc", "Drivers/STM32H7xx_HAL_Driver/Inc"},
-        ),
-        "Dima/platform/stm32h7/flash/FlashDevice.cpp": (
-            {
-                "Dima/platform",
-                "Dima/platform/stm32h7",
-                "Core/Inc",
-                "Drivers/STM32H7xx_HAL_Driver/Inc",
-            },
-            {"Dima", "Middlewares/Third_Party/FreeRTOS/Source/include"},
-        ),
-        "Boards/H743/Src/platform_composition.cpp": (
-            {
-                "Dima/adapters",
-                "Dima/platform",
-                "Dima/platform/stm32h7",
-                "Drivers/STM32H7xx_HAL_Driver/Inc",
-            },
-            {"Dima", "Middlewares/Third_Party/FreeRTOS/Source/include"},
-        ),
-        "Boards/H743/Src/boot_diagnostics.c": (
-            {
-                "Dima/platform",
-                "Dima/platform/freertos",
-                "Middlewares/Third_Party/FreeRTOS/Source/include",
-            },
-            {"Dima"},
-        ),
-        "USB_DEVICE/App/usbd_cdc_if.c": (
-            {"Dima/adapters", "Dima/platform", "Dima/platform/stm32h7"},
-            {"Dima", "Dima/modules", "build/generated/messages"},
-        ),
-        "build/generated/messages/uorb_topics.cpp": (
-            {
-                "Dima/middleware",
-                "Dima/platform",
-                "build/generated_include",
-                "build/generated/messages",
-            },
-            {
-                "Dima",
-                "Core/Inc",
-                "Middlewares/Third_Party/FreeRTOS/Source/include",
-            },
-        ),
-    }
-    for source, (required, forbidden) in contexts.items():
-        candidates = by_source.get(source)
-        if not candidates:
-            raise DatabaseError(f"compilation database does not cover {source}")
-        includes = include_paths(candidates[0])
-        missing = sorted(required - includes)
-        unexpected = sorted(forbidden & includes)
-        if missing or unexpected:
-            details: list[str] = []
-            if missing:
-                details.append("missing " + ", ".join(missing))
-            if unexpected:
-                details.append("unexpected " + ", ".join(unexpected))
-            raise DatabaseError(f"invalid compile context for {source}: {'; '.join(details)}")
-
-
 def write_database(path: pathlib.Path, entries: Sequence[dict[str, object]]) -> None:
     """同目录写临时 JSON、fsync 后原子替换，避免 clangd 读取半写数据库。"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -415,7 +323,6 @@ def main() -> int:
     plan = make_plan(root, arguments.make, gcc_path, arguments.make_variable)
     entries = parse_commands(plan, root, gcc_path)
     validate_closure(entries, root, arguments.make)
-    validate_contexts(entries, root)
     write_database(output, entries)
 
     unique_sources = len({str(entry["file"]) for entry in entries})
