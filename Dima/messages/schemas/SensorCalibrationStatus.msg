@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Dima sensor calibration lifecycle status.
-@queue 1
+uint8 ORB_QUEUE_LENGTH = 1
 
 uint8 TYPE_NONE = 0
 uint8 TYPE_GYRO = 1

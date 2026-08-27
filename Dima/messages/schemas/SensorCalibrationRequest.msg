@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Commander-to-sensor-calibration worker request contract.
-@queue 4
+uint8 ORB_QUEUE_LENGTH = 4
 
 uint32 MESSAGE_VERSION = 0
 uint8 REQUEST_NONE = 0

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Dima Manual/Navigation rover motion boundary.
-@queue 8
+uint8 ORB_QUEUE_LENGTH = 8
 
 uint32 MESSAGE_VERSION = 0
 uint8 SOURCE_MANUAL = 0
