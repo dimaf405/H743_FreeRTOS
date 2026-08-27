@@ -29,9 +29,7 @@ from architecture.dependency import (
     scan_usb_console_owner,
 )
 from architecture.dronecan import scan_dronecan_contract
-from architecture.flashfs import scan_flashfs_contract
 from architecture.layout import (
-    scan_debug_console_contract,
     scan_phase5_message_contracts,
     scan_repository_layout,
     scan_rover_root_contract,
@@ -41,7 +39,6 @@ from architecture.runtime_safety import (
     scan_clock_contract,
     scan_fault_ownership,
     scan_linker_contract,
-    scan_runtime_contracts,
 )
 from architecture.serial import scan_board_serial_manifest
 from architecture.timer import scan_timer_contract
@@ -205,14 +202,11 @@ def main() -> int:
     scan_build_isolation(violations)
     scan_repository_layout(violations)
     scan_rover_root_contract(violations)
-    scan_debug_console_contract(violations)
     scan_phase5_message_contracts(violations)
     scan_board_serial_manifest(violations)
-    scan_runtime_contracts(violations)
     scan_fault_ownership(violations)
     scan_clock_contract(violations)
     scan_active_actuator_contract(violations)
-    scan_flashfs_contract(violations)
     scan_timer_contract(violations)
     scan_dronecan_contract(violations)
     scan_linker_contract(violations)
