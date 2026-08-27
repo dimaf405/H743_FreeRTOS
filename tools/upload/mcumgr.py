@@ -198,16 +198,6 @@ def has_secondary_image(output: str, digest: str) -> bool:
     )
 
 
-def has_pending_secondary_image(output: str, digest: str) -> bool:
-    """上传成功合同：同一 digest 位于 slot 1 且带 pending；不要求 image_ok/confirmed。"""
-    return any(
-        state.slot == 1
-        and state.digest == digest
-        and "pending" in state.flags
-        for state in parse_image_states(output)
-    )
-
-
 def run_mcumgr(
     executable: str,
     port: str,

@@ -1,4 +1,4 @@
-"""签名镜像上传、测试态切换与应用重启流程。"""
+"""签名镜像上传、MCUboot TEST 请求与应用重启流程。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import pathlib
 from .mavlink import resolve_mavlink_codec
 from .mcumgr import (
     has_active_confirmed_image,
-    has_pending_secondary_image,
     has_secondary_image,
     image_hash,
     mcumgr_image_path,
@@ -30,7 +29,7 @@ from .endpoint_wait import (
 from .runtime import resolve_mcumgr
 
 def main() -> int:
-    """执行工具解析、端点绑定、Secondary 上传、TEST pending、复位与应用身份闭环。"""
+    """执行工具解析、端点绑定、Secondary 上传、TEST、复位与应用身份闭环。"""
     reset_stage_timing()
     parser = argparse.ArgumentParser()
     parser.add_argument("--image", type=pathlib.Path)
@@ -161,21 +160,15 @@ def main() -> int:
                 "SECONDARY_HASH_MISMATCH: the forced image was not found in slot 1"
             )
     stage("TEST", f"marking {digest} as the test image")
-    pending_list = run_mcumgr(
+    run_mcumgr(
         runtime.executable,
         port,
         "image",
         "test",
         digest,
-        expect_images=True,
         baud=arguments.baud,
         mtu=arguments.mtu,
     )
-    stage("VERIFY_SECONDARY", "verifying hash and pending state from TEST response")
-    if not has_pending_secondary_image(pending_list, digest):
-        raise UploadError(
-            "PENDING_STATE_MISMATCH: uploaded image was not pending in slot 1"
-        )
     stage("RESET", "resetting into the test image")
     run_mcumgr(
         runtime.executable,

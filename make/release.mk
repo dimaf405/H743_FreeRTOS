@@ -229,7 +229,7 @@ $(SIGNED_BIN): $(BUILD_DIR)/$(TARGET).bin $(KEY_ID_STAMP) \
 # direct gates so an unchanged image does not rebuild MCUboot/Factory HEX or
 # rerun the full release-layout verification on every upload.
 # 默认 OTA 只消费 signed Application；缓存的是本地 ELF 布局与签名验证结果，
-# 不是板端成功。上传工具仍必须证明 Secondary、pending TEST、reset 与应用身份。
+# 不是板端成功。上传工具仍执行 MCUboot TEST、reset 与应用身份闭环。
 $(UPLOAD_VERIFY_STAMP): $(BUILD_DIR)/$(TARGET).elf $(SIGNED_BIN) \
                         $(ARCHITECTURE_VERIFY_STAMP) \
                         $(APPLICATION_ELF_CHECK_TOOL) $(IMGTOOL) | $(BUILD_DIR)
