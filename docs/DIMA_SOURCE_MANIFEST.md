@@ -214,7 +214,15 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` clean acceptance 依次通过前置�
 
 本轮没有新增、修改或扩展任何测试框架、测试文件、runner、harness、fixture、mock 或 test-only API，也没有执行 commit、push、upload 或烧录。结论边界为 `SOURCE/STATIC/WINDOWS BUILD VERIFIED`；QGC 三个校准按钮与六面 UI 实际推进、板端 `[cal]` STATUSTEXT、`HIGHRES_IMU/SCALED_IMU/SYS_STATUS` 频率和值、ICM42688P SPI/DMA/IRQ、DroneCAN RM3100 方向与采样、校准拟合残差、参数断电持久化、USB 长连接与重连仍为 `BOARD/QGC PENDING`。
 
-## 10. 2026-08-27 PX4 原生生成链重构验收
+## 10. 2026-08-26 D2 参数布局与 RC 参数裁剪验收
+
+本节同样保留为重构前历史证据；旧的裁剪消息数量和生成方式已经退役。
+
+Windows 原生 `E:\freertos\H743_FreeRTOS` 依次执行 `make NO_COLOR=1 clean` 和 `make -j4 NO_COLOR=1 dima_rover`，clean build 完整通过 `[264/264]`；共享工作树随后出现并发 UM982/维护协调器输入变化，又执行 `make -j4 NO_COLOR=1 verify` 并通过 `[15/15]`，架构检查保持 `PASS (296 first-party source files)`。生成链实际报告 221 个参数、28 个 uORB 合同和 29 条 MAVLink 消息；参数总数不再作为需要人工同步的固定门禁，解析完整性、名称唯一性、固件/Metadata 顺序一致性及 RC 连续通道合同仍由工具验证。RC1～RC18 共 90 个校准条目完整保留，所有可变 RC 映射范围均为 `0..18`；Flaps/Aux 参数及其后端字段已退役，Arm/Kill 安全链保留。
+
+最终 `verify` 样本的 Application `text/data/bss=285904/12316/400736`，总计 `698956` bytes；Flash `285704/785408`（36.4%）、DTCM `1248/131072`（1.0%）、SRAM `412004/884736`（46.6%），其中 D1 SRAM `311296/524288`（59.4%）、D2 data `93764/262144`（35.8%）、DMA `6720/32768`（20.5%）、D3 diag `224/65536`（0.3%）。Signed BIN 为 `299436` bytes，Factory HEX 为 `836722` bytes，向量仍为 `0x08040400`；Application/MCUboot 未解析符号均为空。五个无后端的可选校准参数在该版本中保持删除；用户随后确认当前缺少它们仍可正常校准，因此“缺少 Fact 会禁用校准页面”不再作为当前结论。该历史构建没有执行新的 QGC/实板回归，因此本段不对 QGC 参数缓存刷新、实板参数迁移或 RC7～RC18 实际接收作验证结论。
+
+## 11. 2026-08-27 PX4 原生生成链重构验收
 
 Windows 原生 `E:\freertos\H743_FreeRTOS` 从 `make NO_COLOR=1 clean` 开始，依次完成 Parameter、uORB、MAVLink 独立生成与确定性复验、`make -j4 NO_COLOR=1 dima_rover`、`verify`、`parameter-metadata-verify` 和 `check-architecture`。Parameter 两次生成的 8 个正式文件逐字节一致，聚合 SHA-256 为 `2010308f1861953ea31ac799e94e609a2d9fdf753ba46408f4d533a1b055f416`；uORB 与 MAVLink 的 verify 入口均在临时目录重新执行原始上游工具后逐文件比较通过。
 
