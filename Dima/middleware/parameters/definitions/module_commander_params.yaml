@@ -1,0 +1,27 @@
+module_name: definitions
+parameters:
+- group: Commander
+  definitions:
+    COM_ARM_STICK_DZ:
+      description:
+        short: "Rover \u89E3\u9501\u65F6 throttle/yaw \u76F8\u5BF9\u4E2D\u4F4D\u5141\
+          \u8BB8\u7684\u6700\u5927\u5F52\u4E00\u5316\u504F\u5DEE\u3002"
+      type: float
+      default: 0.1
+      min: 0.0
+      max: 0.5
+      increment: 0.01
+      decimal: 2
+    COM_ACT_LOSS_T:
+      description:
+        short: Actuator command loss timeout
+        long: |-
+          Maximum age of both the actuator command publication and its original
+          input sample before the physical PWM backend returns to safe-off.
+      type: float
+      default: 0.1
+      unit: s
+      min: 0.02
+      max: 1.0
+      increment: 0.01
+      decimal: 2

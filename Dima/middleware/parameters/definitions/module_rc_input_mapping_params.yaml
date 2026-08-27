@@ -1,0 +1,217 @@
+module_name: definitions
+parameters:
+- group: Commander
+  definitions:
+    COM_RC_IN_MODE:
+      description:
+        short: Manual control input source policy
+        long: |-
+          Dima currently has one production manual-control source: the local RC/SBUS
+          pipeline.  Values which select MAVLink or disable RC are deliberately not
+          accepted until those control-source paths exist.
+      type: enum
+      values:
+        0: RC only
+      default: 0
+      min: 0
+      max: 0
+    COM_RC_LOSS_T:
+      description:
+        short: COM_RC_LOSS_T
+      type: float
+      default: 0.5
+      unit: s
+      min: 0.1
+      max: 35
+      increment: 0.1
+- group: RC Mapping
+  definitions:
+    RC_MAP_ROLL:
+      description:
+        short: RC_MAP_ROLL
+      type: enum
+      values:
+        0: Unassigned
+        1: Channel 1
+        2: Channel 2
+        3: Channel 3
+        4: Channel 4
+        5: Channel 5
+        6: Channel 6
+        7: Channel 7
+        8: Channel 8
+        9: Channel 9
+        10: Channel 10
+        11: Channel 11
+        12: Channel 12
+        13: Channel 13
+        14: Channel 14
+        15: Channel 15
+        16: Channel 16
+        17: Channel 17
+        18: Channel 18
+      default: 0
+      min: 0
+      max: 18
+    RC_MAP_PITCH:
+      description:
+        short: RC_MAP_PITCH
+      type: enum
+      values:
+        0: Unassigned
+        1: Channel 1
+        2: Channel 2
+        3: Channel 3
+        4: Channel 4
+        5: Channel 5
+        6: Channel 6
+        7: Channel 7
+        8: Channel 8
+        9: Channel 9
+        10: Channel 10
+        11: Channel 11
+        12: Channel 12
+        13: Channel 13
+        14: Channel 14
+        15: Channel 15
+        16: Channel 16
+        17: Channel 17
+        18: Channel 18
+      default: 0
+      min: 0
+      max: 18
+    RC_MAP_THROTTLE:
+      description:
+        short: RC_MAP_THROTTLE
+      type: enum
+      values:
+        0: Unassigned
+        1: Channel 1
+        2: Channel 2
+        3: Channel 3
+        4: Channel 4
+        5: Channel 5
+        6: Channel 6
+        7: Channel 7
+        8: Channel 8
+        9: Channel 9
+        10: Channel 10
+        11: Channel 11
+        12: Channel 12
+        13: Channel 13
+        14: Channel 14
+        15: Channel 15
+        16: Channel 16
+        17: Channel 17
+        18: Channel 18
+      default: 1
+      min: 0
+      max: 18
+    RC_MAP_YAW:
+      description:
+        short: RC_MAP_YAW
+      type: enum
+      values:
+        0: Unassigned
+        1: Channel 1
+        2: Channel 2
+        3: Channel 3
+        4: Channel 4
+        5: Channel 5
+        6: Channel 6
+        7: Channel 7
+        8: Channel 8
+        9: Channel 9
+        10: Channel 10
+        11: Channel 11
+        12: Channel 12
+        13: Channel 13
+        14: Channel 14
+        15: Channel 15
+        16: Channel 16
+        17: Channel 17
+        18: Channel 18
+      default: 2
+      min: 0
+      max: 18
+    RC_MAP_ARM_SW:
+      description:
+        short: RC_MAP_ARM_SW
+      type: enum
+      values:
+        0: Unassigned
+        1: Channel 1
+        2: Channel 2
+        3: Channel 3
+        4: Channel 4
+        5: Channel 5
+        6: Channel 6
+        7: Channel 7
+        8: Channel 8
+        9: Channel 9
+        10: Channel 10
+        11: Channel 11
+        12: Channel 12
+        13: Channel 13
+        14: Channel 14
+        15: Channel 15
+        16: Channel 16
+        17: Channel 17
+        18: Channel 18
+      default: 0
+      min: 0
+      max: 18
+    RC_MAP_KILL_SW:
+      description:
+        short: RC_MAP_KILL_SW
+      type: int32
+      default: 0
+      min: 0
+      max: 18
+    RC_MAP_FLTMODE:
+      description:
+        short: RC_MAP_FLTMODE
+      type: enum
+      values:
+        0: Disabled
+      default: 0
+      min: 0
+      max: 0
+    RC_ARMSWITCH_TH:
+      description:
+        short: RC_ARMSWITCH_TH
+      type: float
+      default: 0.75
+      min: -1
+      max: 1
+      increment: 0.01
+    RC_KILLSWITCH_TH:
+      description:
+        short: RC_KILLSWITCH_TH
+      type: float
+      default: 0.75
+      min: 0
+      max: 1
+      increment: 0.01
+- group: Radio Calibration
+  definitions:
+    RC_CHAN_CNT:
+      description:
+        short: RC_CHAN_CNT
+      type: int32
+      default: 0
+      min: 0
+      max: 18
+- group: Radio Configuration
+  definitions:
+    RC_INPUT_PROTO:
+      description:
+        short: RC_INPUT_PROTO
+      type: enum
+      values:
+        0: Disabled
+        2: SBUS
+      default: 2
+      min: 0
+      max: 2
+      reboot_required: true

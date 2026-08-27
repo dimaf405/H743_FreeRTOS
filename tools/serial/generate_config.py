@@ -14,6 +14,8 @@ import json
 import re
 from pathlib import Path
 
+import yaml
+
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PIN_RE = re.compile(r"^P[A-K][0-9]{1,2}$")
@@ -134,74 +136,82 @@ def load_manifest(path: Path) -> tuple[dict, list[dict]]:
     return data, configurable
 
 
-def baud_value_lines(rates: list[int]) -> list[str]:
-    return [
-        " * @value 0 Auto" if rate == 0 else f" * @value {rate} {rate} 8N1"
-        for rate in rates
-    ]
-
-
 def generate_serial_parameters(data: dict, ports: list[dict]) -> str:
-    """由 manifest 生成 PARAM_DEFINE 源，参数名、默认值和枚举不在模板外复制。"""
+    """由板级 manifest 生成 PX4 module YAML，不产生第二套 C 参数定义。"""
     rates = data["supported_baudrates"]
     gps_port_parameter = data["gps_port_parameter"]
-    sections = [
-        "/****************************************************************************",
-        " * Generated from Boards/H743/serial_ports.json. DO NOT EDIT.",
-        " ****************************************************************************/",
-        "",
-        "/**",
-        " * Serial connector used by the primary GPS receiver.",
-        " *",
-        " * The values are Dima board connector indexes, generated in the same role as",
-        " * PX4 GPS_1_CONFIG. A legacy SERIALx_FUNCTION=GPS assignment remains accepted",
-        " * when this parameter is Disabled.",
-        " *",
-        " * @value 0 Disabled",
-        *[
-            f" * @value {port['serial']} Serial {port['serial']}"
-            for port in ports
-        ],
-        f" * @group {gps_port_parameter['group']}",
-        " */",
-        "PARAM_DEFINE_INT32({name}, {default});".format(
-            **gps_port_parameter
-        ),
-        "",
-    ]
-    value_lines = baud_value_lines(rates)
-    function_value_lines = [
-        f" * @value {function['value']} {function['name']}"
-        for function in data["functions"]
-    ]
+    groups: dict[str, dict] = {}
+
+    def definitions(group: str) -> dict:
+        return groups.setdefault(group, {})
+
+    definitions(gps_port_parameter["group"])[gps_port_parameter["name"]] = {
+        "description": {
+            "short": "Serial connector used by the primary GPS receiver",
+            "long": (
+                "The values are Dima board connector indexes, generated in the "
+                "same role as PX4 GPS_1_CONFIG. A legacy "
+                "SERIALx_FUNCTION=GPS assignment remains accepted when this "
+                "parameter is Disabled."
+            ),
+        },
+        "type": "enum",
+        "default": gps_port_parameter["default"],
+        "values": {
+            0: "Disabled",
+            **{port["serial"]: f"Serial {port['serial']}" for port in ports},
+        },
+    }
+
+    baud_values = {
+        rate: "Auto" if rate == 0 else f"{rate} 8N1" for rate in rates
+    }
+    function_values = {
+        function["value"]: function["name"] for function in data["functions"]
+    }
     for port in ports:
         serial = port["serial"]
-        sections.extend([
-            "/**",
-            f" * Baudrate for SERIAL{serial}: {port['role']} ({port['peripheral']}).",
-            " *",
-            f" * Default source: {port['default_source']}.",
-            " * Configure the normal 8N1 baudrate for this physical board port.",
-            " * A protocol driver may temporarily override framing and baudrate while",
-            " * it owns the port.",
-            " *",
-            *value_lines,
-            " * @group Serial",
-            " */",
-            f"PARAM_DEFINE_INT32({port['parameter']}, {port['default_baud']});",
-            "",
-            "/**",
-            f" * Function assigned to SERIAL{serial}: {port['role']} ({port['peripheral']}).",
-            " *",
-            " * Only functions with a production data path are selectable.",
-            *function_value_lines,
-            " * @group Serial",
-            " */",
-            f"PARAM_DEFINE_INT32({port['function_parameter']}, {port['default_function']});",
-            "",
-        ])
+        serial_definitions = definitions("Serial")
+        serial_definitions[port["parameter"]] = {
+            "description": {
+                "short": (
+                    f"Baudrate for SERIAL{serial}: {port['role']} "
+                    f"({port['peripheral']})"
+                ),
+                "long": (
+                    f"Default source: {port['default_source']}. Configure the "
+                    "normal 8N1 baudrate for this physical board port. A "
+                    "protocol driver may temporarily override framing and "
+                    "baudrate while it owns the port."
+                ),
+            },
+            "type": "enum",
+            "default": port["default_baud"],
+            "values": baud_values,
+        }
+        serial_definitions[port["function_parameter"]] = {
+            "description": {
+                "short": (
+                    f"Function assigned to SERIAL{serial}: {port['role']} "
+                    f"({port['peripheral']})"
+                ),
+                "long": "Only functions with a production data path are selectable.",
+            },
+            "type": "enum",
+            "default": port["default_function"],
+            "values": function_values,
+        }
 
-    return "\n".join(sections)
+    document = {
+        "module_name": "serial_config",
+        "parameters": [
+            {"group": group, "definitions": group_definitions}
+            for group, group_definitions in groups.items()
+        ],
+    }
+    return yaml.safe_dump(
+        document, sort_keys=False, allow_unicode=True, default_flow_style=False
+    )
 
 
 def macro(name: str, rows: list[str]) -> list[str]:
@@ -354,7 +364,7 @@ def main() -> int:
         )
     stm32_output = args.output.parent / "stm32h7" / "serial"
     write_generated(
-        args.output / "serial_baud_params.c",
+        args.output / "module_serial.yaml",
         generate_serial_parameters(data, ports),
     )
     write_generated(

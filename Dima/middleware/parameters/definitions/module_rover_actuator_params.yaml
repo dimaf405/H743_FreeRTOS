@@ -1,0 +1,390 @@
+module_name: definitions
+parameters:
+- group: PWM Outputs
+  definitions:
+    PWM_S1_FUNC:
+      description:
+        short: PWM S1 function
+      type: enum
+      values:
+        0: Disabled
+        101: Motor right
+        102: Motor left
+      default: 0
+    PWM_S1_MIN:
+      description:
+        short: PWM S1 minimum pulse
+      type: int32
+      default: 1000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S1_CENT:
+      description:
+        short: PWM S1 center pulse
+      type: int32
+      default: 1500
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S1_MAX:
+      description:
+        short: PWM S1 maximum pulse
+      type: int32
+      default: 2000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S1_REV:
+      description:
+        short: PWM S1 reverse
+      type: enum
+      values:
+        0: Normal
+        1: Reversed
+      default: 0
+      min: 0
+      max: 1
+    PWM_S2_FUNC:
+      description:
+        short: PWM S2 function
+      type: enum
+      values:
+        0: Disabled
+        101: Motor right
+        102: Motor left
+      default: 0
+    PWM_S2_MIN:
+      description:
+        short: PWM S2 minimum pulse
+      type: int32
+      default: 1000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S2_CENT:
+      description:
+        short: PWM S2 center pulse
+      type: int32
+      default: 1500
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S2_MAX:
+      description:
+        short: PWM S2 maximum pulse
+      type: int32
+      default: 2000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S2_REV:
+      description:
+        short: PWM S2 reverse
+      type: enum
+      values:
+        0: Normal
+        1: Reversed
+      default: 0
+      min: 0
+      max: 1
+    PWM_S3_FUNC:
+      description:
+        short: PWM S3 function
+      type: enum
+      values:
+        0: Disabled
+        101: Motor right
+        102: Motor left
+      default: 0
+    PWM_S3_MIN:
+      description:
+        short: PWM S3 minimum pulse
+      type: int32
+      default: 1000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S3_CENT:
+      description:
+        short: PWM S3 center pulse
+      type: int32
+      default: 1500
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S3_MAX:
+      description:
+        short: PWM S3 maximum pulse
+      type: int32
+      default: 2000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S3_REV:
+      description:
+        short: PWM S3 reverse
+      type: enum
+      values:
+        0: Normal
+        1: Reversed
+      default: 0
+      min: 0
+      max: 1
+    PWM_S4_FUNC:
+      description:
+        short: PWM S4 function
+      type: enum
+      values:
+        0: Disabled
+        101: Motor right
+        102: Motor left
+      default: 0
+    PWM_S4_MIN:
+      description:
+        short: PWM S4 minimum pulse
+      type: int32
+      default: 1000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S4_CENT:
+      description:
+        short: PWM S4 center pulse
+      type: int32
+      default: 1500
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S4_MAX:
+      description:
+        short: PWM S4 maximum pulse
+      type: int32
+      default: 2000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S4_REV:
+      description:
+        short: PWM S4 reverse
+      type: enum
+      values:
+        0: Normal
+        1: Reversed
+      default: 0
+      min: 0
+      max: 1
+    PWM_S5_FUNC:
+      description:
+        short: PWM S5 function
+      type: enum
+      values:
+        0: Disabled
+        101: Motor right
+        102: Motor left
+      default: 0
+    PWM_S5_MIN:
+      description:
+        short: PWM S5 minimum pulse
+      type: int32
+      default: 1000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S5_CENT:
+      description:
+        short: PWM S5 center pulse
+      type: int32
+      default: 1500
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S5_MAX:
+      description:
+        short: PWM S5 maximum pulse
+      type: int32
+      default: 2000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S5_REV:
+      description:
+        short: PWM S5 reverse
+      type: enum
+      values:
+        0: Normal
+        1: Reversed
+      default: 0
+      min: 0
+      max: 1
+    PWM_S6_FUNC:
+      description:
+        short: PWM S6 function
+      type: enum
+      values:
+        0: Disabled
+        101: Motor right
+        102: Motor left
+      default: 0
+    PWM_S6_MIN:
+      description:
+        short: PWM S6 minimum pulse
+      type: int32
+      default: 1000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S6_CENT:
+      description:
+        short: PWM S6 center pulse
+      type: int32
+      default: 1500
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S6_MAX:
+      description:
+        short: PWM S6 maximum pulse
+      type: int32
+      default: 2000
+      unit: us
+      min: 500
+      max: 2500
+      increment: 1
+    PWM_S6_REV:
+      description:
+        short: PWM S6 reverse
+      type: enum
+      values:
+        0: Normal
+        1: Reversed
+      default: 0
+      min: 0
+      max: 1
+- group: Rover Differential
+  definitions:
+    RO_CMD_TIMEOUT:
+      description:
+        short: Rover motion request timeout
+        long: Maximum age of both the request publication and its input sample.
+      type: float
+      default: 0.1
+      unit: s
+      min: 0.02
+      max: 1.0
+      increment: 0.01
+      decimal: 2
+    RD_REV_STEER:
+      description:
+        short: Reverse steering in Manual mode
+        long: Keeps the commanded vehicle nose direction intuitive while reversing.
+      type: int32
+      default: 1
+      min: 0
+      max: 1
+    RD_STR_THR_MIX:
+      description:
+        short: Steering versus throttle saturation priority
+        long: |-
+          0 preserves longitudinal command, 0.5 scales both axes proportionally,
+          and 1 preserves steering command.
+      type: float
+      default: 0.5
+      min: 0.0
+      max: 1.0
+      increment: 0.01
+      decimal: 2
+- group: Rover Motors
+  definitions:
+    MOT_THR_MIN:
+      description:
+        short: Minimum nonzero motor output
+        long: |-
+          Static-friction compensation applied only after a nonzero motor command.
+          This is not an RC input deadzone.
+      type: float
+      default: 0.0
+      min: 0.0
+      max: 1.0
+      increment: 0.01
+      decimal: 2
+    MOT_THR_MAX:
+      description:
+        short: Maximum motor output
+      type: float
+      default: 1.0
+      min: 0.05
+      max: 1.0
+      increment: 0.01
+      decimal: 2
+    MOT_SLEW_RATE:
+      description:
+        short: Longitudinal command slew rate
+        long: A value of zero disables slew limiting.
+      type: float
+      default: 1.0
+      unit: 1/s
+      min: 0.0
+      max: 10.0
+      increment: 0.05
+      decimal: 2
+    MOT_REV_DELAY:
+      description:
+        short: Per-side motor reversal delay
+        long: Each side independently holds zero before accepting the opposite sign.
+      type: float
+      default: 0.2
+      unit: s
+      min: 0.0
+      max: 1.0
+      increment: 0.01
+      decimal: 2
+    MOT_THR_EXPO:
+      description:
+        short: Motor thrust curve expo
+        long: |-
+          Zero is linear. Positive values compensate a weak low end; negative values
+          reduce low-end response.
+      type: float
+      default: 0.0
+      min: -1.0
+      max: 1.0
+      increment: 0.01
+      decimal: 2
+    MOT_THR_ASYM:
+      description:
+        short: Forward to reverse thrust asymmetry
+        long: Values above one increase negative motor commands before final limiting.
+      type: float
+      default: 1.0
+      min: 1.0
+      max: 10.0
+      increment: 0.05
+      decimal: 2
+    MOT_ARM_RAMP:
+      description:
+        short: Motor output ramp after arming
+      type: float
+      default: 0.5
+      unit: s
+      min: 0.0
+      max: 5.0
+      increment: 0.05
+      decimal: 2

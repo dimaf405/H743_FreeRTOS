@@ -1,317 +1,566 @@
 #!/usr/bin/env python3
-"""以参数定义 C 源为权威输入，调用 PX4 parser 生成 Dima 参数目录及派生合同。"""
+"""调用锁定的 PX4 Parameter YAML 工具，并生成 Dima 的薄运行时合同。"""
+
+from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any, Iterable
 
-from generate_header import generate
 
-BSD_HEADER = """/****************************************************************************
- * Generated from PX4 parameter definitions. DO NOT EDIT.
+UPSTREAM_RELATIVE_ROOT = Path("tools/upstream/parameter_yaml_20260827")
+PINNED_UPSTREAM_COMMIT = "1f6b6f61f8f42eaab0269c16a442cb580f954d7c"
+SOURCE_MANIFEST_TOOL = (
+    Path(__file__).resolve().parents[1] / "generation/source_manifest.py"
+)
+FORBIDDEN_PARAMETERS = (
+    "CAL_MAG1_ID",
+    "CAL_MAG1_ROT",
+    "CAL_MAG2_ID",
+    "CAL_MAG2_ROT",
+    "SENS_DPRES_OFF",
+)
+RC_CALIBRATION_NAME = re.compile(
+    r"^RC(?P<channel>[1-9][0-9]*)_(?P<field>[A-Z][A-Z0-9_]*)$"
+)
+PARAMETER_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+GENERATED_HEADER = """/****************************************************************************
+ * Generated from PX4 Parameter YAML outputs. DO NOT EDIT.
  ****************************************************************************/
 """
 
-PARAMETER_DEFINITION = re.compile(
-    r"\bPARAM_DEFINE_(?:INT32|FLOAT)\s*\(\s*"
-    r"([A-Z][A-Z0-9_]*)\s*,"
-)
-RC_CALIBRATION_NAME = re.compile(r"^RC(?P<channel>[1-9][0-9]*)_(?P<field>[A-Z][A-Z0-9_]*)$")
 
-
-def ordered_json_parameters(path: Path, ordered_names: list[str]) -> list[dict]:
-    """把 JSON 重排为生成 handle 顺序，并拒绝名称缺失、重复或额外参数。"""
-    data = json.loads(path.read_text(encoding="utf-8"))
-    items = data.get("parameters", [])
-    if not isinstance(items, list):
-        raise RuntimeError("official JSON has no parameters list")
-    by_name = {item["name"]: item for item in items}
-    if len(by_name) != len(items) or set(by_name) != set(ordered_names):
-        raise RuntimeError("JSON catalogue differs from generated handles")
-    items = [by_name[name] for name in ordered_names]
-    data["parameters"] = items
-    path.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    return items
-
-
-def float_literal(value: str) -> str:
-    text = value.strip().rstrip("fF")
-    if text.lower() in ("nan", "+nan", "-nan"):
-        return "NAN"
-    if "." not in text and "e" not in text.lower():
-        text += ".0"
-    return text + "f"
-
-
-def write_metadata(path: Path, parameters) -> None:
-    rows = []
-    for parameter in parameters:
-        attributes = parameter.attrib
-        parameter_type = attributes["type"]
-        if parameter_type == "FLOAT":
-            value = f"{{.f = {float_literal(attributes['default'])}}}"
-        elif parameter_type == "INT32":
-            value = f"{{.i = {attributes['default']}}}"
-        else:
-            raise RuntimeError(f"unsupported parameter type {parameter_type}")
-        rows.append(f'    {{"{attributes["name"]}", PARAM_TYPE_{parameter_type}, {value}}}')
-
-    text = (
-        BSD_HEADER
-        + '#include "parameters/param.h"\n\n'
-        + f"#define PARAM_INFO_COUNT {len(parameters)}\n\n"
-        + "const param_info_s param_info[PARAM_INFO_COUNT] = {\n"
-        + ",\n".join(rows)
-        + "\n};\n\n"
-        + "const uint16_t param_info_count = PARAM_INFO_COUNT;\n"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Generate the Dima parameter catalogue with upstream PX4 tools"
     )
-    path.write_text(text, encoding="utf-8")
+    parser.add_argument("--yaml", action="append", required=True, type=Path)
+    parser.add_argument(
+        "--output", type=Path, default=Path("build/generated/parameters")
+    )
+    parser.add_argument("--include-output", required=True, type=Path)
+    parser.add_argument("--upstream-root", type=Path, default=UPSTREAM_RELATIVE_ROOT)
+    parser.add_argument("--board", default="dima_rover")
+    return parser.parse_args()
 
 
-def fixed_parameter(item: dict) -> bool:
-    return (
-        "min" in item
-        and "max" in item
-        and item["min"] == item["max"]
-        and item["default"] == item["min"]
+def run_tool(arguments: list[str]) -> None:
+    """上游工具始终作为独立进程执行，避免本地导入或改写其解析行为。"""
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["PYTHONUTF8"] = "1"
+    subprocess.run(arguments, check=True, env=environment)
+
+
+def require_file(path: Path, description: str) -> Path:
+    resolved = path.resolve()
+    if not resolved.is_file():
+        raise RuntimeError(f"missing {description}: {path}")
+    return resolved
+
+
+def verify_upstream_source(root: Path) -> None:
+    """先核对上游目录闭包，禁止在固定 commit 名下静默替换脚本或模板。"""
+    resolved_root = root.resolve()
+    run_tool(
+        [
+            sys.executable,
+            str(require_file(SOURCE_MANIFEST_TOOL, "source manifest verifier")),
+            "--root",
+            str(resolved_root),
+            "--output",
+            str(resolved_root / "SOURCE_MANIFEST.json"),
+            "--project",
+            "PX4-Autopilot",
+            "--commit",
+            PINNED_UPSTREAM_COMMIT,
+            "--verify",
+        ]
     )
 
 
-def parameter_names_in_source_order(sources: list[Path]) -> list[str]:
-    """从权威定义文件读取 PARAM_DEFINE 顺序，不在生成器内复制参数列表。"""
+def upstream_tools(root: Path) -> dict[str, Path]:
+    root = root.resolve()
+    return {
+        "validate": require_file(root / "Tools/validate_yaml.py", "PX4 YAML validator"),
+        "schema": require_file(
+            root / "validation/module_schema.yaml", "PX4 module schema"
+        ),
+        "module": require_file(
+            root / "Tools/module_config/generate_params.py",
+            "PX4 module parameter generator",
+        ),
+        "process": require_file(
+            root / "src/lib/parameters/px_process_params.py",
+            "PX4 parameter metadata generator",
+        ),
+        "header": require_file(
+            root / "src/lib/parameters/px_generate_params.py",
+            "PX4 parameter header generator",
+        ),
+    }
+
+
+def reject_forbidden_names(paths: Iterable[Path], stage: str) -> None:
+    """删除参数不得借助 YAML、派生产物或兼容别名重新进入协议目录。"""
+    patterns = {
+        name: re.compile(rf"(?<![A-Z0-9_]){re.escape(name)}(?![A-Z0-9_])")
+        for name in FORBIDDEN_PARAMETERS
+    }
+    violations: list[str] = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for name, pattern in patterns.items():
+            if pattern.search(text):
+                violations.append(f"{path}:{name}")
+    if violations:
+        raise RuntimeError(
+            f"forbidden removed parameters found in {stage}: " + ", ".join(violations)
+        )
+
+
+def load_catalogue(path: Path) -> list[dict[str, Any]]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    parameters = document.get("parameters")
+    if not isinstance(parameters, list) or not parameters:
+        raise RuntimeError("official PX4 JSON has no parameter catalogue")
+
     names: list[str] = []
-    for source in sources:
-        names.extend(PARAMETER_DEFINITION.findall(source.read_text(encoding="utf-8")))
+    for parameter in parameters:
+        if not isinstance(parameter, dict):
+            raise RuntimeError("official PX4 JSON contains a non-object parameter")
+        name = parameter.get("name")
+        parameter_type = parameter.get("type")
+        if not isinstance(name, str) or not PARAMETER_NAME.fullmatch(name):
+            raise RuntimeError(f"invalid parameter name in official JSON: {name!r}")
+        if parameter_type not in ("Int32", "Float"):
+            raise RuntimeError(
+                f"unsupported parameter type in official JSON: {name}={parameter_type!r}"
+            )
+        names.append(name)
+
+    if len(names) != len(set(names)):
+        raise RuntimeError("official PX4 JSON contains duplicate parameter names")
+    return parameters
+
+
+def xml_parameter_names(path: Path) -> list[str]:
+    names = [
+        element.attrib["name"]
+        for element in ET.parse(path).getroot().iter("parameter")
+        if "name" in element.attrib
+    ]
     if not names or len(names) != len(set(names)):
-        raise RuntimeError("parameter definitions are empty or duplicated")
+        raise RuntimeError("official PX4 XML parameter catalogue is empty or duplicated")
     return names
 
 
-def qgc_compatibility_names(sources: list[Path]) -> set[str]:
-    candidates = [path for path in sources if path.name == "qgc_compat_params.c"]
-    if len(candidates) != 1:
-        raise RuntimeError(
-            "parameter generation requires exactly one qgc_compat_params.c source"
-        )
-    names = PARAMETER_DEFINITION.findall(candidates[0].read_text(encoding="utf-8"))
-    if not names or len(names) != len(set(names)):
-        raise RuntimeError("QGC compatibility parameter definitions are empty or duplicated")
-    return set(names)
+def fixed_parameter(parameter: dict[str, Any]) -> bool:
+    return (
+        "min" in parameter
+        and "max" in parameter
+        and parameter["min"] == parameter["max"]
+        and parameter.get("default") == parameter["min"]
+    )
 
 
-def rc_runtime_contract(
-    catalog: list[dict], sources: list[Path]
-) -> tuple[list[tuple[int, list[tuple[str, str]]]], list[str]]:
-    """从权威定义顺序推导 RC 校准结构和非固定功能映射。
+def parameter_storage_capacity(catalogue: list[dict[str, Any]]) -> int:
+    """计算 BSON 全目录最坏大小：文档 5 B，加逐项类型、键、终止符和值。"""
+    return 5 + sum(
+        1
+        + len(parameter["name"].encode("utf-8"))
+        + 1
+        + (8 if parameter["type"] == "Float" else 4)
+        for parameter in catalogue
+    )
 
-    校准字段名取每个 ``RC<通道>_<字段>`` 的真实后缀，通道 1 的定义顺序是
-    结构 schema；所有其余通道必须拥有完全相同的字段序列。映射同样按定义文件
-    顺序生成，并自动排除 min=max 的 QGC 固定兼容句柄。
-    """
-    by_name = {item["name"]: item for item in catalog}
-    source_names = parameter_names_in_source_order(sources)
-    if set(source_names) != set(by_name):
-        raise RuntimeError("parameter source order differs from generated catalogue")
 
+def float_literal(value: Any) -> str:
+    number = float(value)
+    if math.isnan(number):
+        return "NAN"
+    if math.isinf(number):
+        return "INFINITY" if number > 0.0 else "-INFINITY"
+    text = repr(number)
+    if "." not in text and "e" not in text.lower():
+        text += ".0"
+    return text + "F"
+
+
+def snake_to_pascal(value: str) -> str:
+    words = [word for word in value.lower().split("_") if word]
+    if not words:
+        raise RuntimeError("cannot generate an empty C++ identifier")
+    identifier = "".join(word[0].upper() + word[1:] for word in words)
+    if identifier[0].isdigit():
+        identifier = "Role" + identifier
+    return identifier
+
+
+def rc_contract(
+    catalogue: list[dict[str, Any]],
+) -> tuple[
+    list[tuple[int, list[tuple[str, str]]]],
+    list[tuple[str, str]],
+]:
+    """仅从官方 JSON 推导 RC 结构，不回读 YAML 或维护参数名副本。"""
     calibration_by_channel: dict[int, list[tuple[str, str]]] = {}
-    mapping_names: list[str] = []
-    for name in source_names:
-        item = by_name[name]
+    mapping: list[tuple[str, str]] = []
+
+    for parameter in catalogue:
+        name = parameter["name"]
         match = RC_CALIBRATION_NAME.fullmatch(name)
-        if match and item.get("group") == "Radio Calibration":
+        if match and parameter.get("group") == "Radio Calibration":
             channel = int(match.group("channel"))
-            calibration_by_channel.setdefault(channel, []).append(
-                (match.group("field").lower(), name)
-            )
+            field = match.group("field").lower()
+            calibration_by_channel.setdefault(channel, []).append((field, name))
+
         if (
-            item.get("group") == "RC Mapping"
+            parameter.get("group") == "RC Mapping"
             and name.startswith("RC_MAP_")
-            and not fixed_parameter(item)
+            and not fixed_parameter(parameter)
         ):
-            mapping_names.append(name)
+            mapping.append((snake_to_pascal(name.removeprefix("RC_MAP_")), name))
 
     channels = sorted(calibration_by_channel)
     if not channels or channels != list(range(1, channels[-1] + 1)):
         raise RuntimeError("RC calibration channels must be contiguous from channel 1")
-    field_schema = [field for field, _ in calibration_by_channel[1]]
+
+    field_schema = [field for field, _ in calibration_by_channel[channels[0]]]
     if not field_schema or len(field_schema) != len(set(field_schema)):
         raise RuntimeError("RC calibration field schema is empty or duplicated")
     for channel in channels:
         fields = [field for field, _ in calibration_by_channel[channel]]
         if fields != field_schema:
             raise RuntimeError(
-                f"RC{channel} calibration fields differ from channel 1: {fields}"
+                f"RC{channel} calibration fields differ from RC1: {fields}"
             )
-    if not mapping_names:
-        raise RuntimeError("RC runtime mapping contract is empty")
-    return [(channel, calibration_by_channel[channel]) for channel in channels], mapping_names
 
+    mapping.sort(key=lambda item: item[0])
+    roles = [role for role, _ in mapping]
+    if not roles or len(roles) != len(set(roles)):
+        raise RuntimeError("RC mapping roles are empty or duplicated")
 
-def write_parameter_contract(
-    path: Path, parameters, catalog: list[dict], sources: list[Path]
-) -> None:
-    """从 parser 结果生成 MAVLink public/QGC-required/fixed 集合，不手写参数名。"""
-    qgc_required = [
-        parameter.attrib["name"]
-        for parameter in parameters
-        if parameter.attrib.get("qgc_required") == "true"
+    by_name = {parameter["name"]: parameter for parameter in catalogue}
+    channel_limit = channels[-1]
+    channel_count = by_name.get("RC_CHAN_CNT")
+    if (
+        channel_count is None
+        or channel_count.get("min") != 0
+        or channel_count.get("max") != channel_limit
+    ):
+        raise RuntimeError(f"RC_CHAN_CNT range must be 0..{channel_limit}")
+
+    invalid_mapping_ranges = [
+        name
+        for _, name in mapping
+        if by_name[name].get("min") != 0
+        or by_name[name].get("max") != channel_limit
     ]
-    if not qgc_required:
-        raise RuntimeError("no @qgc_required parameters were generated")
-
-    fixed = [item for item in catalog if fixed_parameter(item)]
-    fixed_names = {item["name"] for item in fixed}
-    compatibility_names = qgc_compatibility_names(sources)
-    if not compatibility_names.issubset(fixed_names):
-        missing = sorted(compatibility_names - fixed_names)
+    if invalid_mapping_ranges:
         raise RuntimeError(
-            "QGC compatibility parameters must use identical default/min/max "
-            f"metadata: {missing}"
+            f"RC mapping ranges must be 0..{channel_limit}: "
+            f"{invalid_mapping_ranges}"
         )
 
-    calibration, rc_mapping_names = rc_runtime_contract(catalog, sources)
+    calibration = [
+        (channel, calibration_by_channel[channel]) for channel in channels
+    ]
+    return calibration, mapping
 
-    # 所有数组都从同一 parser/catalogue 推导，运行期只能消费这份生成合同。
-    public_rows = [f"    px4::params::{item['name']}" for item in catalog]
-    required_rows = [f"    px4::params::{name}" for name in qgc_required]
-    fixed_rows = []
-    for item in fixed:
-        if item["type"] == "Int32":
-            fixed_rows.append(
-                "    {px4::params::%s, FixedParameterType::Int32, %d, 0.0F}"
-                % (item["name"], int(item["default"]))
-            )
-        elif item["type"] == "Float":
-            fixed_rows.append(
-                "    {px4::params::%s, FixedParameterType::Float, 0, %s}"
-                % (item["name"], float_literal(str(item["default"])).upper())
-            )
-        else:
-            raise RuntimeError(
-                f"unsupported fixed parameter type {item['type']}: {item['name']}"
-            )
+
+def render_parameter_contract(
+    catalogue: list[dict[str, Any]], xml_names: list[str]
+) -> str:
+    """从官方 XML/JSON 派生 Dima 固定值与 RC 绑定，不复制完整参数目录。"""
+    json_names = {parameter["name"] for parameter in catalogue}
+    if json_names != set(xml_names) or len(catalogue) != len(xml_names):
+        raise RuntimeError(
+            "official XML/JSON parameter catalogues differ: "
+            f"xml={len(xml_names)} json={len(catalogue)}"
+        )
+
+    fixed = [parameter for parameter in catalogue if fixed_parameter(parameter)]
+    if not fixed:
+        raise RuntimeError("Dima fixed-parameter policy resolved to an empty set")
+    calibration, mapping = rc_contract(catalogue)
 
     calibration_fields = [field for field, _ in calibration[0][1]]
-    calibration_member_rows = [
-        f"    px4::params {field};" for field in calibration_fields
-    ]
-    calibration_rows = []
-    for _, fields in calibration:
-        calibration_rows.append(
-            "    {" + ", ".join(
-                f"px4::params::{name}" for _, name in fields
-            ) + "}"
-        )
-    rc_mapping_rows = [
-        f"    px4::params::{name}" for name in rc_mapping_names
+    calibration_members = [f"    px4::params {field};" for field in calibration_fields]
+    calibration_rows = [
+        "    {"
+        + ", ".join(f"px4::params::{name}" for _, name in fields)
+        + "}"
+        for _, fields in calibration
     ]
 
-    text = (
-        BSD_HEADER
-        + "#pragma once\n\n"
-        + "#include <parameters/px4_parameters.hpp>\n\n"
-        + "#include <cstddef>\n"
-        + "#include <cstdint>\n\n"
-        + "namespace dima::generated::parameters {\n\n"
-        + "enum class FixedParameterType : std::uint8_t { Int32, Float };\n\n"
-        + "struct FixedParameterConstraint {\n"
-        + "    px4::params parameter;\n"
-        + "    FixedParameterType type;\n"
-        + "    std::int32_t int32_value;\n"
-        + "    float float_value;\n"
-        + "};\n\n"
-        + "struct RcCalibrationParameters {\n"
-        + "\n".join(calibration_member_rows)
-        + "\n};\n\n"
-        + "inline constexpr RcCalibrationParameters kRcCalibrationParameters[]{\n"
-        + ",\n".join(calibration_rows)
-        + "\n};\n\n"
-        + "inline constexpr px4::params kRcMappingParameters[]{\n"
-        + ",\n".join(rc_mapping_rows)
-        + "\n};\n\n"
-        + "inline constexpr px4::params kMavlinkPublicParameters[]{\n"
-        + ",\n".join(public_rows)
-        + "\n};\n\n"
-        + "inline constexpr px4::params kQgcRequiredParameters[]{\n"
-        + ",\n".join(required_rows)
-        + "\n};\n\n"
-        + "inline constexpr FixedParameterConstraint kFixedParameterConstraints[]{\n"
-        + ",\n".join(fixed_rows)
-        + "\n};\n\n"
-        + "inline constexpr std::size_t kMavlinkPublicParameterCount =\n"
-        + "    sizeof(kMavlinkPublicParameters) / sizeof(kMavlinkPublicParameters[0]);\n"
-        + "inline constexpr std::size_t kQgcRequiredParameterCount =\n"
-        + "    sizeof(kQgcRequiredParameters) / sizeof(kQgcRequiredParameters[0]);\n"
-        + "inline constexpr std::size_t kFixedParameterConstraintCount =\n"
-        + "    sizeof(kFixedParameterConstraints) / sizeof(kFixedParameterConstraints[0]);\n\n"
-        + "inline constexpr std::size_t kRcCalibrationChannelCount =\n"
-        + "    sizeof(kRcCalibrationParameters) / sizeof(kRcCalibrationParameters[0]);\n"
-        + f"inline constexpr std::size_t kRcCalibrationFieldCount = {len(calibration_fields)}U;\n"
-        + "inline constexpr std::size_t kRcMappingParameterCount =\n"
-        + "    sizeof(kRcMappingParameters) / sizeof(kRcMappingParameters[0]);\n\n"
-        + "} // namespace dima::generated::parameters\n"
-    )
-    path.write_text(text, encoding="utf-8")
+    mapping_roles = [f"    {role}," for role, _ in mapping]
+    mapping_rows = [f"    px4::params::{name}," for _, name in mapping]
+
+    fixed_rows: list[str] = []
+    for parameter in fixed:
+        if parameter["type"] == "Int32":
+            fixed_rows.append(
+                "    {px4::params::%s, FixedParameterType::Int32, %d, 0.0F},"
+                % (parameter["name"], int(parameter["default"]))
+            )
+        else:
+            fixed_rows.append(
+                "    {px4::params::%s, FixedParameterType::Float, 0, %s},"
+                % (parameter["name"], float_literal(parameter["default"]))
+            )
+
+    lines = [
+        GENERATED_HEADER.rstrip(),
+        "#pragma once",
+        "",
+        "#include <parameters/param.h>",
+        "",
+        "#include <cstddef>",
+        "#include <cstdint>",
+        "",
+        "namespace dima::generated::parameters {",
+        "",
+        "// 参数总数由官方 XML/JSON 闭包生成，并在编译期与 PX4 头中的表长度互证。",
+        f"inline constexpr std::size_t kParameterCount = {len(catalogue)}U;",
+        "static_assert(kParameterCount ==",
+        "              sizeof(px4::parameters) / sizeof(px4::parameters[0]));",
+        "// BSON 公式为 5 + Σ(type byte + UTF-8 name + NUL + wire value)。",
+        "inline constexpr std::size_t kParameterStorageMaxBytes = "
+        f"{parameter_storage_capacity(catalogue)}U;",
+        "",
+        "enum class FixedParameterType : std::uint8_t { Int32, Float };",
+        "",
+        "struct FixedParameterConstraint {",
+        "    px4::params parameter;",
+        "    FixedParameterType type;",
+        "    std::int32_t int32_value;",
+        "    float float_value;",
+        "};",
+        "",
+        "// min=max=default 的产品约束从官方 JSON 结构化字段派生，消费者不得另列名称。",
+        "inline constexpr FixedParameterConstraint kFixedParameterConstraints[]{",
+        *fixed_rows,
+        "};",
+        "inline constexpr std::size_t kFixedParameterConstraintCount =",
+        "    sizeof(kFixedParameterConstraints) / sizeof(kFixedParameterConstraints[0]);",
+        "",
+        "struct RcCalibrationParameters {",
+        *calibration_members,
+        "};",
+        "",
+        "// 每通道字段和通道数量均从官方 JSON 的 Radio Calibration 分组推导。",
+        "inline constexpr RcCalibrationParameters kRcCalibrationParameters[]{",
+        *[row + "," for row in calibration_rows],
+        "};",
+        "inline constexpr std::size_t kRcCalibrationChannelCount =",
+        "    sizeof(kRcCalibrationParameters) / sizeof(kRcCalibrationParameters[0]);",
+        f"inline constexpr std::size_t kRcCalibrationFieldCount = {len(calibration_fields)}U;",
+        "",
+        "enum class RcMappingRole : std::size_t {",
+        *mapping_roles,
+        "    Count,",
+        "};",
+        "",
+        "// 枚举与数组由同一组 RC_MAP_* 官方 JSON 条目同时生成，索引不会人工漂移。",
+        "inline constexpr px4::params kRcMappingParameters[]{",
+        *mapping_rows,
+        "};",
+        "inline constexpr std::size_t kRcMappingParameterCount =",
+        "    sizeof(kRcMappingParameters) / sizeof(kRcMappingParameters[0]);",
+        "static_assert(kRcMappingParameterCount ==",
+        "              static_cast<std::size_t>(RcMappingRole::Count));",
+        "",
+        "} // namespace dima::generated::parameters",
+        "",
+    ]
+    return "\n".join(lines)
 
 
-def write_forward_header(path: Path, include_target: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f'#pragma once\n#include "{include_target}"\n', encoding="utf-8")
-
-
-def write_include_forwarders(
-    include_output: Path, generated_header: Path, generated_contract: Path
+def write_include_tree(
+    destination: Path, official_header: Path, parameter_contract: Path
 ) -> None:
-    common = include_output / "px4_platform_common"
-    write_forward_header(common / "param.h", "parameters/param.h")
-    # DrvFS 上的转发 include 会把 Windows 盘符写入 GCC .d 文件并破坏 GNU Make 解析。
-    parameter_header = include_output / "parameters" / "px4_parameters.hpp"
-    parameter_header.parent.mkdir(parents=True, exist_ok=True)
-    parameter_header.write_bytes(generated_header.read_bytes())
-    contract_header = include_output / "parameters" / "parameter_contract.hpp"
-    contract_header.write_bytes(generated_contract.read_bytes())
+    parameters = destination / "parameters"
+    common = destination / "px4_platform_common"
+    parameters.mkdir(parents=True, exist_ok=True)
+    common.mkdir(parents=True, exist_ok=True)
+
+    # PX4 当前模板没有 include guard；安装头只增加一次包含保护，
+    # 正文仍与 build/generated 中的官方原始产物完全一致。目录数量
+    # 在派生合同中由 parameters[] 长度验证，不往官方头追加本地 API。
+    header_text = official_header.read_text(encoding="utf-8")
+    (parameters / "px4_parameters.hpp").write_text(
+        "#pragma once\n" + header_text,
+        encoding="utf-8",
+        newline="\n",
+    )
+    (parameters / "parameter_contract.hpp").write_bytes(
+        parameter_contract.read_bytes()
+    )
+    (common / "param.h").write_text(
+        '#pragma once\n#include "parameters/param.h"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--source", action="append", required=True, type=Path)
-    parser.add_argument("--output", type=Path, default=Path("build/generated/parameters"))
-    parser.add_argument("--include-output", required=True, type=Path)
-    return parser.parse_args()
+def make_staging_directory(target: Path) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return Path(
+        tempfile.mkdtemp(prefix=f".{target.name}.tmp-", dir=str(target.parent))
+    )
+
+
+def install_directories_atomically(pairs: list[tuple[Path, Path]]) -> None:
+    """逐文件原子切换完整目录；任一切换失败会恢复全部旧文件。"""
+    backup_roots: list[Path] = []
+    backups: list[tuple[Path, Path]] = []
+    installed: list[Path] = []
+    try:
+        for staged, target in pairs:
+            target.mkdir(parents=True, exist_ok=True)
+            backup_root = Path(
+                tempfile.mkdtemp(
+                    prefix=f".{target.name}.old-{os.getpid()}-",
+                    dir=str(target.parent),
+                )
+            )
+            backup_roots.append(backup_root)
+
+            # Windows 可能拒绝替换一个刚关闭的目录；文件级 os.replace 仍保证
+            # 每份公开合同不会以半写状态出现，stamp 只会在整个事务成功后生成。
+            for old_file in sorted(path for path in target.rglob("*") if path.is_file()):
+                backup_file = backup_root / old_file.relative_to(target)
+                backup_file.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(old_file, backup_file)
+                backups.append((old_file, backup_file))
+
+            for staged_file in sorted(
+                path for path in staged.rglob("*") if path.is_file()
+            ):
+                target_file = target / staged_file.relative_to(staged)
+                target_file.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staged_file, target_file)
+                installed.append(target_file)
+    except Exception:
+        for target_file in reversed(installed):
+            if target_file.exists():
+                target_file.unlink()
+        for target_file, backup_file in reversed(backups):
+            if backup_file.exists():
+                target_file.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(backup_file, target_file)
+        for backup_root in backup_roots:
+            if backup_root.exists():
+                shutil.rmtree(backup_root)
+        raise
+    else:
+        for backup_root in backup_roots:
+            if backup_root.exists():
+                shutil.rmtree(backup_root)
 
 
 def main() -> int:
-    """串联 XML/JSON/header/metadata/forwarder 生成，并交叉核对顺序与数量。"""
     args = parse_args()
-    args.output.mkdir(parents=True, exist_ok=True)
-    process = Path(__file__).with_name("process_parameters.py")
-    xml_path = args.output / "parameters.xml"
-    json_path = args.output / "parameters.json"
-    subprocess.run([
-        sys.executable, str(process), "--src-file",
-        *(str(path) for path in args.source),
-        "--xml", str(xml_path), "--json", str(json_path), "--board", "dima_rover",
-    ], check=True)
+    yaml_files = [require_file(path, "parameter YAML") for path in args.yaml]
+    if len(yaml_files) != len(set(yaml_files)):
+        raise RuntimeError("duplicate parameter YAML input")
+    reject_forbidden_names(yaml_files, "authoritative YAML inputs")
 
-    parameters = generate(xml_path, args.output)
-    xml_names = [parameter.attrib["name"] for parameter in parameters]
-    catalog = ordered_json_parameters(json_path, xml_names)
-    generated_json_names = [item["name"] for item in catalog]
-    if not parameters or xml_names != generated_json_names:
-        raise RuntimeError(
-            f"catalog mismatch: xml/header={len(parameters)} json={len(generated_json_names)}"
+    verify_upstream_source(args.upstream_root)
+    tools = upstream_tools(args.upstream_root)
+    output = args.output.resolve()
+    include_output = args.include_output.resolve()
+    output_stage = make_staging_directory(output)
+    include_stage = make_staging_directory(include_output)
+
+    try:
+        module_params = output_stage / "module_params.c"
+        parameters_xml = output_stage / "parameters.xml"
+        parameters_json = output_stage / "parameters.json"
+
+        # 正式链逐段调用锁定的 PX4 原脚本；本地代码只负责输入、输出和失败边界。
+        run_tool(
+            [
+                sys.executable,
+                str(tools["validate"]),
+                *(str(path) for path in yaml_files),
+                "--schema-file",
+                str(tools["schema"]),
+            ]
+        )
+        run_tool(
+            [
+                sys.executable,
+                str(tools["module"]),
+                "--config-files",
+                *(str(path) for path in yaml_files),
+                "--params-file",
+                str(module_params),
+                "--board",
+                args.board,
+            ]
+        )
+        run_tool(
+            [
+                sys.executable,
+                str(tools["process"]),
+                "--src-path",
+                str(output_stage),
+                "--xml",
+                str(parameters_xml),
+                "--json",
+                str(parameters_json),
+                "--board",
+                args.board,
+            ]
+        )
+        run_tool(
+            [
+                sys.executable,
+                str(tools["header"]),
+                "--xml",
+                str(parameters_xml),
+                "--dest",
+                str(output_stage),
+            ]
         )
 
-    write_metadata(args.output / "parameter_metadata.c", parameters)
-    contract_path = args.output / "parameter_contract.hpp"
-    write_parameter_contract(contract_path, parameters, catalog, args.source)
-    write_include_forwarders(
-        args.include_output, args.output / "px4_parameters.hpp", contract_path
-    )
-    print(f"generated {len(parameters)} parameters in {args.output}")
+        official_header = output_stage / "px4_parameters.hpp"
+        require_file(official_header, "PX4 generated parameter header")
+        catalogue = load_catalogue(parameters_json)
+        xml_names = xml_parameter_names(parameters_xml)
+        contract = output_stage / "parameter_contract.hpp"
+        contract.write_text(
+            render_parameter_contract(catalogue, xml_names),
+            encoding="utf-8",
+            newline="\n",
+        )
+        reject_forbidden_names(
+            [module_params, parameters_xml, parameters_json, official_header, contract],
+            "official and adapted parameter outputs",
+        )
+        write_include_tree(include_stage, official_header, contract)
+
+        install_directories_atomically(
+            [(output_stage, output), (include_stage, include_output)]
+        )
+    finally:
+        for stage in (output_stage, include_stage):
+            if stage.exists():
+                shutil.rmtree(stage)
+
+    print(f"generated {len(catalogue)} PX4 YAML parameters in {output}")
     return 0
 
 

@@ -1,0 +1,382 @@
+module_name: definitions
+parameters:
+- group: Radio Calibration
+  definitions:
+    RC1_MIN:
+      description:
+        short: RC1_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC1_TRIM:
+      description:
+        short: RC1_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC1_MAX:
+      description:
+        short: RC1_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC1_REV:
+      description:
+        short: RC1_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC1_DZ:
+      description:
+        short: RC1_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC2_MIN:
+      description:
+        short: RC2_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC2_TRIM:
+      description:
+        short: RC2_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC2_MAX:
+      description:
+        short: RC2_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC2_REV:
+      description:
+        short: RC2_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC2_DZ:
+      description:
+        short: RC2_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC3_MIN:
+      description:
+        short: RC3_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC3_TRIM:
+      description:
+        short: RC3_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC3_MAX:
+      description:
+        short: RC3_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC3_REV:
+      description:
+        short: RC3_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC3_DZ:
+      description:
+        short: RC3_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC4_MIN:
+      description:
+        short: RC4_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC4_TRIM:
+      description:
+        short: RC4_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC4_MAX:
+      description:
+        short: RC4_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC4_REV:
+      description:
+        short: RC4_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC4_DZ:
+      description:
+        short: RC4_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC5_MIN:
+      description:
+        short: RC5_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC5_TRIM:
+      description:
+        short: RC5_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC5_MAX:
+      description:
+        short: RC5_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC5_REV:
+      description:
+        short: RC5_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC5_DZ:
+      description:
+        short: RC5_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC6_MIN:
+      description:
+        short: RC6_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC6_TRIM:
+      description:
+        short: RC6_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC6_MAX:
+      description:
+        short: RC6_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC6_REV:
+      description:
+        short: RC6_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC6_DZ:
+      description:
+        short: RC6_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC7_MIN:
+      description:
+        short: RC7_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC7_TRIM:
+      description:
+        short: RC7_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC7_MAX:
+      description:
+        short: RC7_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC7_REV:
+      description:
+        short: RC7_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC7_DZ:
+      description:
+        short: RC7_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC8_MIN:
+      description:
+        short: RC8_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC8_TRIM:
+      description:
+        short: RC8_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC8_MAX:
+      description:
+        short: RC8_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC8_REV:
+      description:
+        short: RC8_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC8_DZ:
+      description:
+        short: RC8_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500
+    RC9_MIN:
+      description:
+        short: RC9_MIN
+      type: float
+      default: 1000.0
+      unit: us
+      min: 800
+      max: 1500
+    RC9_TRIM:
+      description:
+        short: RC9_TRIM
+      type: float
+      default: 1500.0
+      unit: us
+      min: 800
+      max: 2200
+    RC9_MAX:
+      description:
+        short: RC9_MAX
+      type: float
+      default: 2000.0
+      unit: us
+      min: 1500
+      max: 2200
+    RC9_REV:
+      description:
+        short: RC9_REV
+      type: float
+      values:
+        -1: Reverse
+        1: Normal
+      default: 1.0
+      min: -1
+      max: 1
+    RC9_DZ:
+      description:
+        short: RC9_DZ
+      type: float
+      default: 0.0
+      unit: us
+      min: 0
+      max: 500

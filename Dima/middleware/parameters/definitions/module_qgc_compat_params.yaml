@@ -1,0 +1,78 @@
+module_name: definitions
+parameters:
+- group: Commander
+  definitions:
+    NAV_RCL_ACT:
+      description:
+        short: RC-loss action
+        long: |-
+          Commander currently fails closed by disarming on RC loss.  Other PX4
+          actions require navigation or landing capabilities which are not present.
+      type: enum
+      values:
+        6: Disarm
+      default: 6
+      min: 6
+      max: 6
+    NAV_DLL_ACT:
+      description:
+        short: GCS data-link-loss action
+        long: |-
+          USB/GCS is not a Dima control source in this stage, so disconnect has no
+          navigation action.
+      type: enum
+      values:
+        0: Disabled
+      default: 0
+      min: 0
+      max: 0
+    COM_LOW_BAT_ACT:
+      description:
+        short: Low-battery action compatibility value
+        long: 'UI-only in this stage: no battery detector or low-battery action exists.'
+      type: enum
+      values:
+        0: No implemented action
+      default: 0
+      min: 0
+      max: 0
+- group: MAVLink
+  definitions:
+    MAV_SYS_ID:
+      description:
+        short: MAVLink system ID
+        long: |-
+          The current Dima protocol surface uses the fixed system/component identity
+          1/1 for every encoder and target filter.
+      type: int32
+      default: 1
+      min: 1
+      max: 1
+      reboot_required: true
+- group: System
+  definitions:
+    SYS_AUTOSTART:
+      description:
+        short: PX4-compatible airframe identity
+        long: |-
+          Dima is a fixed differential rover product.  This value matches PX4's
+          Generic Rover Differential airframe, but does not enable runtime airframe
+          selection or PX4 startup scripts.
+      type: enum
+      values:
+        50000: Generic Rover Differential
+      default: 50000
+      min: 50000
+      max: 50000
+    SYS_AUTOCONFIG:
+      description:
+        short: PX4 airframe autoconfiguration request
+        long: |-
+          Dima has no PX4 airframe-default transaction.  The fixed zero value means
+          keep the current product configuration; requests to set one are rejected.
+      type: enum
+      values:
+        0: Keep current product configuration
+      default: 0
+      min: 0
+      max: 0

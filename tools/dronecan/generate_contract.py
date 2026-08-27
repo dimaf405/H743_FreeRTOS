@@ -956,7 +956,7 @@ def render_parameter_contract(manifest: dict[str, Any]) -> str:
         "#pragma once",
         "",
         "// Generated DroneCAN parameter binding. DO NOT EDIT.",
-        "#include <parameters/px4_parameters.hpp>",
+        "#include <parameters/param.h>",
         "",
         "#include <cstddef>",
         "#include <cstdint>",
@@ -1004,46 +1004,46 @@ def render_parameter_contract(manifest: dict[str, Any]) -> str:
     ])
 
 
-def format_default(parameter: dict[str, Any]) -> str:
-    if parameter["type"] == "INT32":
-        return str(parameter["default"])
-    value = float(parameter["default"])
-    text = format(value, ".9g")
-    if "." not in text and "e" not in text.lower():
-        text += ".0"
-    return text + "f"
-
-
 def render_parameters(manifest: dict[str, Any]) -> str:
-    """把 manifest 参数 metadata 渲染为 PARAM_DEFINE 权威派生源。"""
-    lines = [
-        "/****************************************************************************",
-        " * Generated from the authoritative dronecan_contract.json manifest.",
-        " * DO NOT EDIT.",
-        " ****************************************************************************/",
-        "",
-    ]
+    """把 manifest 参数投影为 PX4 module YAML，供官方参数链统一处理。"""
+    # YAML 仅在正式生成阶段加载；Make 的 manifest/source 发现路径保持纯标准库，
+    # 这样首次 bootstrap host-tools 前也能构造依赖图。
+    import yaml
+
+    groups: dict[str, dict[str, Any]] = {}
     for parameter in manifest["parameters"]:
-        lines.extend(("/**", f" * {parameter['description'][0]}"))
-        for description in parameter["description"][1:]:
-            lines.append(" *")
-            lines.append(f" * {description}")
-        if "unit" in parameter:
-            lines.append(" *")
-            lines.append(f" * @unit {parameter['unit']}")
-        if "min" in parameter:
-            lines.append(f" * @min {parameter['min']}")
-        if "max" in parameter:
-            lines.append(f" * @max {parameter['max']}")
-        for value in parameter.get("values", []):
-            lines.append(f" * @value {value['value']} {value['name']}")
-        lines.extend((
-            f" * @group {parameter['group']}",
-            " */",
-            f"PARAM_DEFINE_{parameter['type']}({parameter['name']}, {format_default(parameter)});",
-            "",
-        ))
-    return "\n".join(lines)
+        description = {"short": parameter["description"][0]}
+        if len(parameter["description"]) > 1:
+            description["long"] = "\n\n".join(parameter["description"][1:])
+        definition: dict[str, Any] = {
+            "description": description,
+            "type": (
+                "enum" if parameter.get("values")
+                else "int32" if parameter["type"] == "INT32"
+                else "float"
+            ),
+            "default": parameter["default"],
+        }
+        for field in ("min", "max", "unit"):
+            if field in parameter:
+                definition[field] = parameter[field]
+        if parameter.get("values"):
+            definition["values"] = {
+                value["value"]: value["name"]
+                for value in parameter["values"]
+            }
+        groups.setdefault(parameter["group"], {})[parameter["name"]] = definition
+
+    document = {
+        "module_name": "dronecan",
+        "parameters": [
+            {"group": group, "definitions": definitions}
+            for group, definitions in groups.items()
+        ],
+    }
+    return yaml.safe_dump(
+        document, sort_keys=False, allow_unicode=True, default_flow_style=False
+    )
 
 
 def make_list(name: str, values: Iterable[str]) -> list[str]:
@@ -1079,7 +1079,7 @@ def render_make_fragment(output_relative: str, generated: pathlib.Path) -> str:
     lines = [
         "# Generated from dronecan_contract.json. DO NOT EDIT.",
         *make_list("DIMA_DRONECAN_GENERATED_C_SOURCES", sources),
-        f"DIMA_DRONECAN_PARAMETER_SOURCE := {output_relative}/dronecan_params.c",
+        f"DIMA_DRONECAN_PARAMETER_YAML := {output_relative}/module_dronecan.yaml",
         f"DIMA_DRONECAN_PROTOCOL_HEADER := {output_relative}/DroneCanContract.hpp",
         f"DIMA_DRONECAN_PARAMETER_HEADER := {output_relative}/DroneCanParameterContract.hpp",
         f"DIMA_DRONECAN_GENERATED_STAMP := {output_relative}/.generated.json",
@@ -1118,7 +1118,7 @@ def build_generated_tree(
         generated / "DroneCanParameterContract.hpp",
         render_parameter_contract(manifest),
     )
-    write_text(generated / "dronecan_params.c", render_parameters(manifest))
+    write_text(generated / "module_dronecan.yaml", render_parameters(manifest))
     try:
         output_relative = logical_output.resolve().relative_to(root.resolve()).as_posix()
     except ValueError as error:
