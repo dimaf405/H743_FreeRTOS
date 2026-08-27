@@ -135,30 +135,31 @@ SECTIONS
     PROVIDE_HIDDEN (__fini_array_end = .);
   } >FLASH
 
-  /* Flash programming code runs from DTCM. It is copied together with .data
-     by the existing startup loop, but retains executable-only permissions. */
+  /* MCUboot 与应用共用 Reset_Handler，因此也使用独立 ramfunc/.data 复制边界；
+     MCUboot 自身的普通数据仍保留在 DTCM，不改变引导阶段内存策略。 */
   .dima_ramfunc :
   {
     . = ALIGN(4);
-    _sdata = .;
+    _sramfunc = .;
     KEEP(*(.dima_ramfunc))
     KEEP(*(.dima_ramfunc*))
     . = ALIGN(32);
+    _eramfunc = .;
   } >DTCMRAM AT> FLASH
-
-  /* used by the startup to initialize DTCM code and data */
-  _sidata = LOADADDR(.dima_ramfunc);
+  _siramfunc = LOADADDR(.dima_ramfunc);
 
   /* Initialized data sections goes into RAM, load LMA copy after code */
   .data :
   {
     . = ALIGN(4);
+    _sdata = .;
     *(.data)           /* .data sections */
     *(.data*)          /* .data* sections */
 
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */
   } >DTCMRAM AT> FLASH
+  _sidata = LOADADDR(.data);
 
   
   /* Uninitialized data section */
@@ -194,9 +195,8 @@ SECTIONS
 
   ASSERT(_etext <= ORIGIN(FLASH) + LENGTH(FLASH),
          "MCUboot exceeds its 128 KiB code sector")
-  ASSERT((ADDR(.data) - ADDR(.dima_ramfunc)) ==
-         (LOADADDR(.data) - LOADADDR(.dima_ramfunc)),
-         "Startup DTCM copy span must have identical load and run gaps")
+  ASSERT(ADDR(.data) >= ADDR(.dima_ramfunc) + SIZEOF(.dima_ramfunc),
+         "MCUboot .data overlaps the DTCM ramfunc section")
 }
 
 

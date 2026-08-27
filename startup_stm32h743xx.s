@@ -32,6 +32,10 @@
 .global  g_pfnVectors
 .global  Default_Handler
 
+/* DTCM ramfunc 的 Flash 加载地址、运行起点和运行终点，由链接脚本定义。 */
+.word  _siramfunc
+.word  _sramfunc
+.word  _eramfunc
 /* start address for the initialization values of the .data section.
 defined in linker script */
 .word  _sidata
@@ -63,7 +67,25 @@ Reset_Handler:
 /* Call the clock system initialization function.*/
   bl  SystemInit
 
+/* ramfunc 与 .data 分属 DTCM/D2，运行地址不连续，必须先独立复制 ramfunc。 */
+  ldr r0, =_sramfunc
+  ldr r1, =_eramfunc
+  ldr r2, =_siramfunc
+  movs r3, #0
+  b LoopCopyRamfuncInit
+
+CopyRamfuncInit:
+  ldr r4, [r2, r3]
+  str r4, [r0, r3]
+  adds r3, r3, #4
+
+LoopCopyRamfuncInit:
+  adds r4, r0, r3
+  cmp r4, r1
+  bcc CopyRamfuncInit
+
 /* Copy the data segment initializers from flash to SRAM */
+/* SystemInit 已打开 D2 SRAM1/2 时钟，此处再复制普通初始化数据。 */
   ldr r0, =_sdata
   ldr r1, =_edata
   ldr r2, =_sidata
@@ -80,6 +102,7 @@ LoopCopyDataInit:
   cmp r4, r1
   bcc CopyDataInit
 /* Zero fill the bss segment. */
+/* _sbss/_ebss 现在指向 D2，单一清零循环覆盖全部普通零初始化数据。 */
   ldr r2, =_sbss
   ldr r4, =_ebss
   movs r3, #0

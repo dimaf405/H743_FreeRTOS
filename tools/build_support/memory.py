@@ -29,15 +29,14 @@ def artifact_line(label: str, path: pathlib.Path, address: int | None = None) ->
     return f"  {label:<10} {normalized_path(str(path))} ({size} bytes{location})"
 
 
-# Section-name → memory-region classification for the MCUboot-managed H743 app.
+# Flash 常驻段可按名称识别；运行期 RAM 必须以 VMA 为准，不能再把
+# 名为 .data/.bss 的段硬编码为 DTCM，否则 D2 迁移后报告会静默失真。
 _FLASH_SECTIONS = frozenset({
     ".text", ".rodata", ".ARM.extab", ".ARM.exidx",
     ".preinit_array", ".init_array", ".fini_array",
     ".eh_frame", ".glue_7", ".glue_7t",
 })
 _FLASH_SECTION_PREFIXES = (".text.", ".rodata.")
-_DTCM_SECTIONS = frozenset({".dima_ramfunc", ".data", ".bss"})
-_DTCM_SECTION_PREFIXES = (".data.", ".bss.")
 
 
 def _section_belongs(name: str, exact: frozenset[str], prefixes: tuple[str, ...]) -> bool:
@@ -154,11 +153,7 @@ def parse_elf_memory_usage(
         if _section_belongs(name, _FLASH_SECTIONS, _FLASH_SECTION_PREFIXES):
             counts["flash"] += size
             continue
-        # DTCM sections (.dima_ramfunc, .data, .bss).
-        if _section_belongs(name, _DTCM_SECTIONS, _DTCM_SECTION_PREFIXES):
-            counts["dtcm"] += size
-            continue
-        # Classify remaining sections by VMA address range.
+        # 普通 .data/.bss 默认位于 D2，所有运行期 RAM 段统一按 VMA 归属。
         if 0x08000000 <= vma < 0x08200000:
             # Flash-mapped (e.g. .isr_vector, .ARM).
             counts["flash"] += size
@@ -229,7 +224,7 @@ def print_memory_summary(
         f"  {_fmt_pct(flash_used, flash_total)}  {flash_bar}"
     )
 
-    # DTCM line (code-executable RAM + .data + .bss).
+    # DTCM 仅统计 RAM 执行代码和 MSP 最小保留，不再包含普通 .data/.bss。
     dtcm_bar = _bar(dtcm_used, dtcm_total, enabled=enabled)
     print(
         f"    {'DTCM':<10} {dtcm_used:>7,} / {dtcm_total:>7,} B"
@@ -248,8 +243,8 @@ def print_memory_summary(
     )
     # Sub-lines for each SRAM region (only if non-zero).
     for label, used, capacity in [
-        ("  D1 heap", ram_d1_used, ram_d1_total),
-        ("  D2 SRAM", ram_d2_used, ram_d2_total),
+        ("  D1 SRAM", ram_d1_used, ram_d1_total),
+        ("  D2 data", ram_d2_used, ram_d2_total),
         ("  DMA",     ram_dma_used, ram_dma_total),
         ("  D3 diag", ram_d3_used, ram_d3_total),
     ]:

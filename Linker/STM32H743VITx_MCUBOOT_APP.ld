@@ -141,37 +141,38 @@ SECTIONS
     PROVIDE_HIDDEN (__fini_array_end = .);
   } >FLASH
 
-  /* Flash programming code runs from DTCM. It is copied together with .data
-     by the existing startup loop, but retains executable-only permissions. */
-  /* 擦写 Bank1 时 Flash 不可取指，因此 ramfunc 与 .data 共用连续 LMA/VMA 差值
-     由启动代码一次搬运；末尾 32 字节对齐同时满足 cache line。 */
+  /* Flash programming code runs from DTCM while ordinary initialized data
+     lives in D2 SRAM1/2. */
+  /* 擦写 Bank1 时 Flash 不可取指，因此 ramfunc 必须保留在 DTCM；它与位于
+     D2 的 .data 地址不连续，Reset_Handler 必须分别完成两段复制。 */
   .dima_ramfunc :
   {
     . = ALIGN(4);
-    _sdata = .;
+    _sramfunc = .;
     KEEP(*(.dima_ramfunc))
     KEEP(*(.dima_ramfunc*))
     . = ALIGN(32);
+    _eramfunc = .;
   } >DTCMRAM AT> FLASH
+  _siramfunc = LOADADDR(.dima_ramfunc);
 
-  /* used by the startup to initialize DTCM code and data */
-  _sidata = LOADADDR(.dima_ramfunc);
-
-  /* Initialized data sections goes into RAM, load LMA copy after code */
-  .data :
+  /* 普通初始化数据固定从 D2 SRAM1 基址开始，加载副本仍顺序保存在 Flash。 */
+  .data ORIGIN(RAM_D2) :
   {
     . = ALIGN(4);
+    _sdata = .;
     *(.data)           /* .data sections */
     *(.data*)          /* .data* sections */
 
     . = ALIGN(4);
     _edata = .;        /* define a global symbol at data end */
-  } >DTCMRAM AT> FLASH
+  } >RAM_D2 AT> FLASH
+  _sidata = LOADADDR(.data);
 
-  /* Uninitialized data section */
-  . = ALIGN(4);
-  .bss :
+  /* 普通零初始化数据紧随 .data 放入 D2 SRAM1/2；DMA 专用 SRAM3 不参与。 */
+  .bss (NOLOAD) :
   {
+    . = ALIGN(32);
     /* This is used by the startup in order to initialize the .bss secion */
     _sbss = .;         /* define a global symbol at data start */
     __bss_start__ = _sbss;
@@ -179,10 +180,10 @@ SECTIONS
     *(.bss*)
     *(COMMON)
 
-    . = ALIGN(4);
+    . = ALIGN(32);
     _ebss = .;         /* define a global symbol at bss end */
     __bss_end__ = _ebss;
-  } >DTCMRAM
+  } >RAM_D2
 
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
@@ -257,10 +258,17 @@ SECTIONS
          "Boot diagnostics must stay at the documented fixed address")
   ASSERT(SIZEOF(.dima_boot_diag) <= 0x200,
          "Boot diagnostics record exceeds its fixed 512-byte budget")
-  ASSERT((ADDR(.data) - ADDR(.dima_ramfunc)) ==
-         (LOADADDR(.data) - LOADADDR(.dima_ramfunc)),
-         "Startup DTCM copy span must have identical load and run gaps")
-  /* 上式保证 run_gap == load_gap，启动代码才能从 _sidata 连续复制 ramfunc+.data。 */
+  /* 默认 .data/.bss 必须完整位于 D2 SRAM1/2，防止后续链接规则静默退回 DTCM。 */
+  ASSERT(ADDR(.data) == ORIGIN(RAM_D2),
+         "Application .data must start at D2 SRAM1 base")
+  ASSERT(ADDR(.bss) >= ADDR(.data) + SIZEOF(.data),
+         "Application .bss must follow .data in D2 SRAM")
+  ASSERT(ADDR(.bss) + SIZEOF(.bss) <= ORIGIN(RAM_D2) + LENGTH(RAM_D2),
+         "Application .data/.bss exceed D2 SRAM1/2 capacity")
+  /* DTCM 低 64 KiB 是静态占用硬上限，至少为向下增长的 MSP 留出 64 KiB。 */
+  ASSERT(ADDR(._user_heap_stack) + SIZEOF(._user_heap_stack) <=
+         ORIGIN(DTCMRAM) + 64K,
+         "DTCM static footprint exceeds the 64 KiB budget")
   ASSERT(ADDR(.dima_dma) == 0x30040000,
          "DMA region must start at D2 SRAM3 base")
   ASSERT((ADDR(.dima_dma) & 31) == 0,
