@@ -41,7 +41,9 @@
 class ParamLayer
 {
 public:
-	static constexpr param_t PARAM_COUNT = static_cast<param_t>(px4::param_info_count);
+	// 层容量由官方生成的 parameters[] 唯一推导。
+	static constexpr param_t PARAM_COUNT = static_cast<param_t>(
+		sizeof(px4::parameters) / sizeof(px4::parameters[0]));
 
 	ParamLayer(ParamLayer *parent = nullptr) : _parent(parent) {}
 

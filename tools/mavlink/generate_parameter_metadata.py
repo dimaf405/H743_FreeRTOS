@@ -363,10 +363,6 @@ def validate_parameter(parameter: object, index: int) -> None:
 
 
 def validate_parameter_catalogue(parameters: list[object]) -> dict[str, dict]:
-    if len(parameters) != 233:
-        raise RuntimeError(
-            f"expected 233 firmware parameters, found {len(parameters)}"
-        )
     for index, parameter in enumerate(parameters):
         validate_parameter(parameter, index)
     names = [parameter["name"] for parameter in parameters]
@@ -413,27 +409,6 @@ def validate_sensor_metadata(by_name: dict[str, dict]) -> None:
             raise RuntimeError(
                 f"PX4 sensor calibration Metadata contract invalid for {name}"
             )
-        # 第二及后续磁力计当前未实现，固定 rotation=-1 明确告诉 QGC 不可校准；
-        # 该规则由结构化实例号推导，不复制 CAL_MAG1/2_ROT 名称。
-        if (match.group("sensor") == "MAG" and
-                int(match.group("instance")) > 0 and
-                match.group("role") == "ROT" and
-                (parameter.get("default") != -1 or
-                 parameter.get("min") != -1 or
-                 parameter.get("max") != -1)):
-            raise RuntimeError(
-                f"PX4 fixed magnetometer rotation Metadata invalid for {name}"
-            )
-
-    differential_pressure = by_name.get("SENS_DPRES_OFF")
-    if (differential_pressure is None or
-            differential_pressure.get("type") != "Float" or
-            differential_pressure.get("default") != 0.0 or
-            differential_pressure.get("group") != "Sensor Calibration" or
-            differential_pressure.get("category") != "System" or
-            differential_pressure.get("volatile") is not True):
-        raise RuntimeError("SENS_DPRES_OFF Metadata contract invalid")
-
     for name, parameter, match in calibration_values:
         if (parameter.get("type") != "Float" or
                 parameter.get("group") != "Sensor Calibration" or

@@ -6,11 +6,12 @@
 #include "parameters/flashfs.h"
 #include "parameters/autosave.h"
 #include "parameters/param.h"
+#include <parameters/parameter_contract.hpp>
 #include "api/Execution.hpp"
 #include "api/Flash.hpp"
 #include "api/ParameterFileStore.hpp"
 #include "api/Synchronization.hpp"
-#include "uorb/Publication.hpp"
+#include "uORB/Publication.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include <cstddef>
@@ -45,7 +46,8 @@ private:
     static constexpr std::uint64_t kSdPollIntervalUs = 3000000ULL;
     static constexpr std::size_t kSnapshotHeaderBytes = 20U;
     static constexpr std::size_t kPayloadCapacity =
-        px4::parameter_storage_max_bytes + kSnapshotHeaderBytes;
+        dima::generated::parameters::kParameterStorageMaxBytes +
+        kSnapshotHeaderBytes;
 
     enum class PersistenceKind : std::uint8_t {
         None,

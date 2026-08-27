@@ -16,7 +16,9 @@
 
 namespace dima::parameters::internal {
 
-constexpr size_t kCount = px4::param_info_count;
+// 参数 Core 容量直接取官方生成值表长度，不维护第二份目录计数。
+constexpr size_t kCount =
+    sizeof(px4::parameters) / sizeof(px4::parameters[0]);
 
 // Core 与持久化适配仅通过此私有边界共享状态，模块层不得直接引用。
 extern DynamicSparseLayer *g_runtime_defaults;

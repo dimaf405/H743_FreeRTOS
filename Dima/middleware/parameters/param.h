@@ -44,23 +44,14 @@ typedef union param_value_u {
 
 typedef struct param_info_s {
     const char *name;
-    param_type_t type;
-    param_value_u default_value;
+    /* 字段布局严格匹配 PX4 官方 px4_parameters.hpp 模板；类型位于并行的
+     * parameters_type 表，不能在本地重新渲染一份合并目录。 */
+    param_value_u val;
 } param_info_s;
 
-typedef struct parameter_update_s {
-    /* timestamp 由通知适配层填写；instance 每次合并通知递增，get/set/find/export
-     * 是诊断累计计数，active/changed/custom_default 是通知时刻的数量快照。 */
-    uint64_t timestamp;
-    uint32_t instance;
-    uint32_t get_count;
-    uint32_t set_count;
-    uint32_t find_count;
-    uint32_t export_count;
-    uint16_t active;
-    uint16_t changed;
-    uint16_t custom_default;
-} parameter_update_s;
+/* parameter_update_s 的唯一布局由 PX4 .msg 官方生成头定义。
+ * C ABI 在此仅需不完整类型声明，避免参数层复制一份消息结构。 */
+typedef struct parameter_update_s parameter_update_s;
 
 typedef void (*param_notify_callback_t)(const parameter_update_s *update, void *context);
 typedef void (*param_lock_callback_t)(void *context);
@@ -90,9 +81,6 @@ typedef struct param_storage_backend_s {
                 void *backend_context);
     int (*status)(param_storage_status_s *status, void *backend_context);
 } param_storage_backend_s;
-
-extern const param_info_s param_info[];
-extern const uint16_t param_info_count;
 
 void param_init(void);
 bool param_shutdown(void) PARAM_NOEXCEPT;
@@ -136,6 +124,10 @@ int param_register_storage_backend(const param_storage_backend_s *backend,
 int param_storage_get_status(param_storage_status_s *status) PARAM_NOEXCEPT;
 
 #ifdef __cplusplus
+}
+
+namespace px4 {
+enum class params : uint16_t;
 }
 
 #include <parameters/px4_parameters.hpp>

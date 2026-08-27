@@ -70,7 +70,7 @@ public:
 			return {0};
 		}
 
-		return param_info[param].default_value;
+		return px4::parameters[param].val;
 	}
 
 	void reset(param_t param) override

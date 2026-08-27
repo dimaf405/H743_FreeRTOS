@@ -12,7 +12,7 @@
 #include "parameters/param.h"
 #include <parameters/parameter_contract.hpp>
 #include "api/Time.hpp"
-#include "uorb/SubscriptionData.hpp"
+#include "uORB/SubscriptionData.hpp"
 
 #include <cstdint>
 
@@ -66,8 +66,6 @@ private:
 
     bool snapshot_parameter_stream() noexcept;
 
-    bool snapshot_contains_qgc_required_parameters() const noexcept;
-
     int parameter_snapshot_index(param_t param) const noexcept;
 
     static bool write_value_allowed(param_t param,
@@ -93,7 +91,8 @@ private:
 
     SendFn send_{nullptr};
     void *send_ctx_{nullptr};
-    param_t _send_all_snapshot[px4::param_info_count]{};
+    param_t _send_all_snapshot[
+        dima::generated::parameters::kParameterCount]{};
     int _send_all_index{-1};
     unsigned _send_all_count{0U};
     hrt_abstime _param_update_time{0};

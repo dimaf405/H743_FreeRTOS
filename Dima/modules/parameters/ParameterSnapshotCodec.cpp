@@ -52,8 +52,13 @@ bool is_fixed_parameter(const char *name) noexcept
 int load_mutable_parameter(const char *name, param_type_t type,
                            const void *value, void *context) noexcept
 {
-    if (context == nullptr) {
+    if (name == nullptr || value == nullptr || context == nullptr) {
         return -EINVAL;
+    }
+    // 参数目录收缩后，旧快照可能仍携带已退役的 Aux/Flaps/QGC 兼容名称；
+    // 只丢弃当前目录不存在的条目，保留同一快照中的 RC1～RC18 等有效配置。
+    if (param_find_no_notification(name) == PARAM_INVALID) {
+        return 0;
     }
     auto &filtered = *static_cast<FilteredLoadContext *>(context);
     if (is_fixed_parameter(name)) {
@@ -111,7 +116,8 @@ int inspect(const std::uint8_t *data, std::size_t size,
     if (header.magic != kSnapshotMagic || header.format != kSnapshotFormat ||
         header.generation == 0U ||
         header.payload_size != size - sizeof(SnapshotHeader) ||
-        header.payload_size > px4::parameter_storage_max_bytes) {
+        header.payload_size >
+            dima::generated::parameters::kParameterStorageMaxBytes) {
         return -EILSEQ;
     }
     const auto *payload = data + sizeof(SnapshotHeader);
@@ -151,7 +157,8 @@ int validate(const std::uint8_t *data, std::size_t size,
         }
         const param_t parameter = param_find_no_notification(name);
         if (parameter == PARAM_INVALID) {
-            return -ENOENT;
+            // CRC 正确但目录中已无此名称，视为已退役参数并允许其余条目迁移。
+            return 0;
         }
         return param_type(parameter) == type ? 0 : -EINVAL;
     };

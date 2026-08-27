@@ -26,41 +26,40 @@ void MavlinkParameters::reset() noexcept
 bool MavlinkParameters::prepare_parameter_catalogue() noexcept
 {
     namespace contract = dima::generated::parameters;
-    // 公开参数集合由生成合同唯一给出；编译期数量和运行期 core/used 数量必须同时一致。
-    static_assert(contract::kMavlinkPublicParameterCount ==
-                      px4::param_info_count,
-                  "generated MAVLink catalogue must cover every parameter");
+    // MAVLink 直接遍历 PX4 官方目录的连续 handle；只校验生成总数，不再生成或
+    // 维护第二份公开参数数组。
+    static_assert(contract::kParameterCount ==
+                      sizeof(px4::parameters) / sizeof(px4::parameters[0]),
+                  "official parameter catalogues must have the same size");
 
     if (!param_is_ready() || param_count() !=
-            contract::kMavlinkPublicParameterCount) {
+            contract::kParameterCount) {
         PX4_ERR("parameter catalogue unavailable: core=%u generated=%u",
                 param_count(),
-                static_cast<unsigned>(contract::kMavlinkPublicParameterCount));
+                static_cast<unsigned>(contract::kParameterCount));
         return false;
     }
 
-    for (const px4::params parameter : contract::kMavlinkPublicParameters) {
-        param_set_used(param_handle(parameter));
+    for (param_t handle = 0U; handle < contract::kParameterCount; ++handle) {
+        param_set_used(handle);
     }
-    for (const px4::params parameter : contract::kMavlinkPublicParameters) {
-        const param_t handle = param_handle(parameter);
+    for (param_t handle = 0U; handle < contract::kParameterCount; ++handle) {
         if (!param_used(handle)) {
             PX4_ERR("parameter catalogue activation failed: %s",
                     param_name(handle));
             return false;
         }
     }
-    if (param_count_used() != contract::kMavlinkPublicParameterCount) {
+    if (param_count_used() != contract::kParameterCount) {
         PX4_ERR("parameter catalogue count mismatch: active=%u generated=%u",
                 param_count_used(),
-                static_cast<unsigned>(contract::kMavlinkPublicParameterCount));
+                static_cast<unsigned>(contract::kParameterCount));
         return false;
     }
 
     if (!_catalogue_reported) {
-        PX4_INFO("MAVLink parameter catalogue ready: %u params, %u QGC facts",
-                 static_cast<unsigned>(contract::kMavlinkPublicParameterCount),
-                 static_cast<unsigned>(contract::kQgcRequiredParameterCount));
+        PX4_INFO("MAVLink parameter catalogue ready: %u params",
+                 static_cast<unsigned>(contract::kParameterCount));
         _catalogue_reported = true;
     }
     return true;
@@ -355,7 +354,8 @@ void MavlinkParameters::append_used_parameter(
         return;
     }
     auto &self = *static_cast<MavlinkParameters *>(context);
-    if (self._send_all_count < px4::param_info_count) {
+    if (self._send_all_count <
+            dima::generated::parameters::kParameterCount) {
         self._send_all_snapshot[self._send_all_count++] = param;
     }
 }
@@ -374,7 +374,7 @@ void MavlinkParameters::clear_parameter_snapshot() noexcept
 bool MavlinkParameters::snapshot_parameter_stream() noexcept
 {
     namespace contract = dima::generated::parameters;
-    static_assert(px4::param_info_count <= 0xFFFFU,
+    static_assert(contract::kParameterCount <= 0xFFFFU,
                   "MAVLink parameter count exceeds uint16_t");
     if (!prepare_parameter_catalogue()) {
         clear_parameter_snapshot();
@@ -385,32 +385,17 @@ bool MavlinkParameters::snapshot_parameter_stream() noexcept
     _send_all_count = 0U;
     param_foreach(&MavlinkParameters::append_used_parameter, this,
                   false, true);
-    if (_send_all_count != contract::kMavlinkPublicParameterCount ||
-        !snapshot_contains_qgc_required_parameters()) {
+    // 完整数量闭包直接覆盖 PX4 官方目录，不再维护第二份 QGC 必需参数名单。
+    if (_send_all_count != contract::kParameterCount) {
         PX4_ERR("parameter snapshot incomplete: snapshot=%u generated=%u",
                 _send_all_count,
-                static_cast<unsigned>(contract::kMavlinkPublicParameterCount));
+                static_cast<unsigned>(contract::kParameterCount));
         clear_parameter_snapshot();
         return false;
     }
     _send_all_index = _send_all_count == 0U ? -1 : 0;
     _last_read_failure_index = -1;
     return _send_all_index >= 0;
-}
-
-bool MavlinkParameters::snapshot_contains_qgc_required_parameters()
-    const noexcept
-{
-    namespace contract = dima::generated::parameters;
-    for (const px4::params parameter : contract::kQgcRequiredParameters) {
-        const param_t handle = param_handle(parameter);
-        if (parameter_snapshot_index(handle) < 0) {
-            PX4_ERR("QGC setup parameter missing from snapshot: %s",
-                    param_name(handle));
-            return false;
-        }
-    }
-    return true;
 }
 
 int MavlinkParameters::parameter_snapshot_index(param_t param) const noexcept
