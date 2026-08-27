@@ -688,9 +688,9 @@ $(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) $(PARAMETER_METADATA_STAMP) \
 	$(MESSAGE_GENERATED_STAMP) $(MAVLINK_GENERATED_STAMP) \
 	$(DIMA_DRONECAN_GENERATED_STAMP) \
 	$(FIRMWARE_IDENTITY_GENERATED_STAMP) $(SENSOR_DEVICE_GENERATED_STAMP) \
-	$(UM982_GENERATED_STAMP) architecture-ready
-# 所有项目对象编译前先收敛生成合同与架构门禁；使用 order-only 是为了避免
-# 内容未变但 stamp mtime 更新时无意义重编译，真实内容漂移由生成输出依赖触发。
+	$(UM982_GENERATED_STAMP)
+# 项目对象只等待实际编译所需的生成合同；这些 order-only 依赖避免 stamp 的
+# mtime 更新触发无意义重编译，生成输出的真实内容依赖仍由各自规则维护。
 override OBJECTS += $(PROJECT_OBJECTS)
 
 # Object files share one Application build directory.  Keep a single profile
@@ -831,7 +831,7 @@ $(DIMA_CUBEMX_USB_CONSOLE_BRIDGE_OBJECT): C_INCLUDES += \
 	$(DIMA_ADAPTER_INCLUDES)
 
 ifneq ($(strip $(CUBEMX_OBJECTS)),)
-$(CUBEMX_OBJECTS): GNUmakefile make/project.mk | architecture-ready
+$(CUBEMX_OBJECTS): GNUmakefile make/project.mk
 endif
 
 DIMA_REAL_CC := $(CC)
