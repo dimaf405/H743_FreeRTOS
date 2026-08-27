@@ -133,7 +133,8 @@ bool RcManualInput::mapped_channel(const rc_channels_s &channels,
 
     if (channel < 0 ||
         static_cast<std::uint8_t>(channel) >= channels.channel_count ||
-        static_cast<std::uint8_t>(channel) >= 18U) {
+        static_cast<std::size_t>(channel) >=
+            sizeof(channels.channels) / sizeof(channels.channels[0])) {
         value = kUnavailableControl;
         return false;
     }
@@ -165,13 +166,6 @@ void RcManualInput::process_rc_channels(const rc_channels_s &channels) noexcept
             setpoint.pitch = kUnavailableControl;
             setpoint.yaw = kUnavailableControl;
             setpoint.throttle = kUnavailableControl;
-            setpoint.flaps = kUnavailableControl;
-            setpoint.aux1 = kUnavailableControl;
-            setpoint.aux2 = kUnavailableControl;
-            setpoint.aux3 = kUnavailableControl;
-            setpoint.aux4 = kUnavailableControl;
-            setpoint.aux5 = kUnavailableControl;
-            setpoint.aux6 = kUnavailableControl;
             (void)setpoint_publication_.publish(setpoint);
             lost_invalid_published_ = true;
         }
@@ -192,13 +186,6 @@ void RcManualInput::process_rc_channels(const rc_channels_s &channels) noexcept
         channels, rc_channels_s::FUNCTION_YAW, setpoint.yaw);
     (void)mapped_channel(channels, rc_channels_s::FUNCTION_ROLL, setpoint.roll);
     (void)mapped_channel(channels, rc_channels_s::FUNCTION_PITCH, setpoint.pitch);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_FLAPS, setpoint.flaps);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_AUX_1, setpoint.aux1);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_AUX_2, setpoint.aux2);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_AUX_3, setpoint.aux3);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_AUX_4, setpoint.aux4);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_AUX_5, setpoint.aux5);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_AUX_6, setpoint.aux6);
 
     setpoint.valid = throttle_mapped && yaw_mapped;
     setpoint.sticks_moving = false;

@@ -1,21 +1,14 @@
 #include "uORB.hpp"
 
 #include "api/Execution.hpp"
+#include <uORB/topics/uORBTopics.hpp>
 
+#include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 namespace uORB {
-
-extern "C" {
-#if defined(H743_APPLICATION_IMAGE)
-extern const orb_metadata __dima_orb_meta_start__[];
-extern const orb_metadata __dima_orb_meta_end__[];
-#else
-extern const orb_metadata __start_dima_orb_meta[] __attribute__((weak));
-extern const orb_metadata __stop_dima_orb_meta[] __attribute__((weak));
-#endif
-}
 
 namespace {
 
@@ -23,10 +16,10 @@ Allocator g_allocator{nullptr, nullptr};
 bool g_initialized{false};
 uint64_t g_lifecycle_epoch{0U};
 
-/* metadata 目录由每个 ORB_DEFINE 放入链接 section 后形成，不维护手写消息表。
- * 启动时必须验证 section 对齐、元素完整性、名称唯一性和运行态数组不别名。 */
+/* metadata 目录与顺序由 PX4 官方 uORBTopics.cpp 汇总，不维护手写消息表。
+ * 启动时仍验证元素完整性、ID 连续性、名称唯一性和运行态数组不别名。 */
 struct MetadataRange {
-    const orb_metadata *begin{nullptr};
+    const orb_metadata *const *topics{nullptr};
     size_t count{0U};
 };
 
@@ -37,34 +30,10 @@ bool in_isr() noexcept
 
 bool metadata_range(MetadataRange &range) noexcept
 {
-#if defined(H743_APPLICATION_IMAGE)
-    const orb_metadata *const begin = __dima_orb_meta_start__;
-    const orb_metadata *const end = __dima_orb_meta_end__;
-#else
-    const orb_metadata *const begin = __start_dima_orb_meta;
-    const orb_metadata *const end = __stop_dima_orb_meta;
-    if (begin == nullptr || end == nullptr) {
-        if (begin == end) {
-            range = MetadataRange{};
-            return true;
-        }
-        return false;
-    }
-#endif
-
-    const uintptr_t begin_address = reinterpret_cast<uintptr_t>(begin);
-    const uintptr_t end_address = reinterpret_cast<uintptr_t>(end);
-    if ((begin_address % alignof(orb_metadata)) != 0U ||
-        end_address < begin_address) {
-        return false;
-    }
-    const uintptr_t bytes = end_address - begin_address;
-    if ((bytes % sizeof(orb_metadata)) != 0U) {
-        return false;
-    }
-    range.begin = begin;
-    range.count = static_cast<size_t>(bytes / sizeof(orb_metadata));
-    return true;
+    // Topic 指针数组及其顺序由 PX4 官方 uORBTopics.cpp 唯一生成。
+    range.topics = orb_get_topics();
+    range.count = orb_topics_count();
+    return range.topics != nullptr && range.count > 0U;
 }
 
 bool valid_topic_name(const char *name) noexcept
@@ -83,8 +52,9 @@ bool valid_topic_name(const char *name) noexcept
 
 bool valid_metadata(const orb_metadata &metadata) noexcept
 {
-    return valid_topic_name(metadata.name) && metadata.object_size != 0U &&
-           metadata.queue_size != 0U &&
+    return valid_topic_name(metadata.o_name) && metadata.o_size != 0U &&
+           metadata.o_size_no_padding <= metadata.o_size &&
+           metadata.o_queue != 0U &&
            metadata.max_instances == kMaximumInstances &&
            metadata.instances != nullptr &&
            (reinterpret_cast<uintptr_t>(metadata.instances) %
@@ -94,14 +64,16 @@ bool valid_metadata(const orb_metadata &metadata) noexcept
 bool validate_catalog(const MetadataRange &range) noexcept
 {
     for (size_t index = 0U; index < range.count; ++index) {
-        const orb_metadata &metadata = range.begin[index];
-        if (!valid_metadata(metadata)) {
+        const orb_metadata *const metadata = range.topics[index];
+        if (metadata == nullptr || !valid_metadata(*metadata) ||
+            metadata->o_id != index) {
             return false;
         }
         for (size_t prior = 0U; prior < index; ++prior) {
-            const orb_metadata &candidate = range.begin[prior];
-            if (strcmp(metadata.name, candidate.name) == 0 ||
-                metadata.instances == candidate.instances) {
+            const orb_metadata *const candidate = range.topics[prior];
+            if (candidate == nullptr ||
+                strcmp(metadata->o_name, candidate->o_name) == 0 ||
+                metadata->instances == candidate->instances) {
                 return false;
             }
         }
@@ -140,9 +112,9 @@ bool initialize(const Allocator &allocator) noexcept
     g_allocator = allocator;
     for (size_t metadata_index = 0U; metadata_index < range.count;
          ++metadata_index) {
-        const orb_metadata *const metadata = &range.begin[metadata_index];
-        const size_t bytes = static_cast<size_t>(metadata->object_size) *
-                             metadata->queue_size;
+        const orb_metadata *const metadata = range.topics[metadata_index];
+        const size_t bytes = static_cast<size_t>(metadata->o_size) *
+                             metadata->o_queue;
         for (uint8_t index = 0U; index < metadata->max_instances; ++index) {
             auto &instance = metadata->instances[index];
             instance.buffer = static_cast<uint8_t *>(allocator.allocate(bytes, 8U));
@@ -176,7 +148,7 @@ void shutdown() noexcept
     if (metadata_range(range)) {
         for (size_t metadata_index = 0U; metadata_index < range.count;
              ++metadata_index) {
-            const orb_metadata *const metadata = &range.begin[metadata_index];
+            const orb_metadata *const metadata = range.topics[metadata_index];
             if (metadata->instances == nullptr ||
                 metadata->max_instances > kMaximumInstances) {
                 continue;
@@ -231,9 +203,9 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
          * callback 指针在锁内快照，实际调度移到锁外，避免 Run/取消路径重入锁。 */
         const uint64_t next_generation = instance->generation + 1U;
         const size_t slot = static_cast<size_t>((next_generation - 1U) %
-                                                metadata->queue_size);
-        memcpy(instance->buffer + slot * metadata->object_size, data,
-               metadata->object_size);
+                                                metadata->o_queue);
+        memcpy(instance->buffer + slot * metadata->o_size, data,
+               metadata->o_size);
         instance->generation = next_generation;
         for (uint8_t index = 0U; index < kMaximumCallbacksPerInstance;
              ++index) {
@@ -270,11 +242,11 @@ bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
     }
     if (newest != generation) {
         uint64_t target = newest;
-        if (metadata->queue_size > 1U) {
+        if (metadata->o_queue > 1U) {
             /* 环形队列当前最老代：oldest=max(1,newest-queue+1)。订阅首次读取、
              * generation 越界或落后超过保留窗口时从 oldest 恢复，否则逐代读取。 */
-            const uint64_t oldest = newest > metadata->queue_size
-                                        ? newest - metadata->queue_size + 1U
+            const uint64_t oldest = newest > metadata->o_queue
+                                        ? newest - metadata->o_queue + 1U
                                         : 1U;
             if (generation == 0U || generation > newest ||
                 generation < oldest - 1U) {
@@ -284,9 +256,9 @@ bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
             }
         }
         const size_t slot = static_cast<size_t>((target - 1U) %
-                                                metadata->queue_size);
-        memcpy(destination, instance->buffer + slot * metadata->object_size,
-               metadata->object_size);
+                                                metadata->o_queue);
+        memcpy(destination, instance->buffer + slot * metadata->o_size,
+               metadata->o_size);
         generation = target;
         copied = true;
     }
@@ -444,4 +416,15 @@ void Subscription::unregisterCallback() noexcept
 }
 
 } // namespace uORB
+
+void orb_print_message_internal(const orb_metadata *meta, const void *data,
+                                bool print_topic_name)
+{
+    // 固件不实现 PX4 shell 的字段格式化器；保留官方生成符号并只输出 Topic 名称，
+    // 避免为调试打印重新解释消息字段描述。
+    (void)data;
+    if (print_topic_name && meta != nullptr && meta->o_name != nullptr) {
+        std::printf("%s\n", meta->o_name);
+    }
+}
 

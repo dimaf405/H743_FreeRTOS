@@ -9,7 +9,7 @@
 #include "vehicle_control_mode.hpp"
 #include "vehicle_status.hpp"
 
-#include "uorb/SubscriptionData.hpp"
+#include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include <cstdint>

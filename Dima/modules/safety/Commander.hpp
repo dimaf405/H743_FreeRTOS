@@ -48,8 +48,8 @@
 #include "maintenance/RuntimeMaintenanceCoordinator.hpp"
 #include "parameters/param.h"
 #include "api/Flash.hpp"
-#include "uorb/Publication.hpp"
-#include "uorb/SubscriptionData.hpp"
+#include "uORB/Publication.hpp"
+#include "uORB/SubscriptionData.hpp"
 #include "work_queue/WorkQueue.hpp"
 
 #include <cstdint>
@@ -133,7 +133,7 @@ private:
     bool handle_vehicle_command(std::uint64_t now) noexcept;
     void answer_command(const vehicle_command_s &command, std::uint8_t result,
                         std::uint64_t now,
-                        std::uint32_t result_param2 = 0U) noexcept;
+                        std::int32_t result_param2 = 0) noexcept;
     bool handle_publication_failure(std::uint64_t now) noexcept;
     void handle_scheduling_failure(std::uint64_t now) noexcept;
     void enter_error(const char *reason) noexcept;

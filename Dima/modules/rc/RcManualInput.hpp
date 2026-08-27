@@ -10,8 +10,8 @@
 #include "rc_channels.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
-#include "uorb/Publication.hpp"
-#include "uorb/SubscriptionData.hpp"
+#include "uORB/Publication.hpp"
+#include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include <cstdint>

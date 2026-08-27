@@ -9,8 +9,8 @@
 #include "api/Flash.hpp"
 #include "maintenance/RuntimeMaintenanceCoordinator.hpp"
 #include "sensor_mag.hpp"
-#include "uorb/Publication.hpp"
-#include "uorb/uORB.hpp"
+#include "uORB/Publication.hpp"
+#include "uORB/uORB.hpp"
 #include "work_queue/WorkQueue.hpp"
 
 #include <cstddef>

@@ -16,7 +16,7 @@
 #include "sensor_accel_fifo.hpp"
 #include "sensor_gyro.hpp"
 #include "sensor_gyro_fifo.hpp"
-#include "uorb/Publication.hpp"
+#include "uORB/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"
 
 #include <cstddef>

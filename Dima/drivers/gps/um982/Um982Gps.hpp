@@ -14,9 +14,8 @@
 #include "estimator_gps_status.hpp"
 #include "sensor_gps.hpp"
 #include "serial/SerialPortAssignments.hpp"
-#include "uorb/Publication.hpp"
-#include "uorb/SubscriptionData.hpp"
-#include "vehicle_gps_position.hpp"
+#include "uORB/Publication.hpp"
+#include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include <cstddef>
@@ -154,7 +153,9 @@ private:
         ORB_ID(parameter_update)};
     uORB::Publication<sensor_gps_s> sensor_gps_publication_{
         ORB_ID(sensor_gps)};
-    uORB::Publication<vehicle_gps_position_s> vehicle_gps_publication_{
+    /* vehicle_gps_position 是 SensorGps.msg 声明的 Topic alias，官方布局
+     * 仍然是 sensor_gps_s，不为 alias 复制第二个消息结构。 */
+    uORB::Publication<sensor_gps_s> vehicle_gps_publication_{
         ORB_ID(vehicle_gps_position)};
     uORB::Publication<estimator_gps_status_s> gps_status_publication_{
         ORB_ID(estimator_gps_status)};

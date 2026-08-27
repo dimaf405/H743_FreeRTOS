@@ -6,7 +6,7 @@
 
 #include "events/events.hpp"
 #include "logging/logging.hpp"
-#include "uorb/uORB.hpp"
+#include "uORB/uORB.hpp"
 #include "work_queue/WorkQueue.hpp"
 
 namespace dima::rover {

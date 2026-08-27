@@ -146,8 +146,9 @@ bool LogService::structured_sink(void *context, dima::logging::Level level,
     mavlink_log_s record{};
     record.timestamp = hrt_absolute_time();
     record.severity = mav_severity(level);
+    // 文本容量直接从 PX4 生成结构推导，不复制 schema 中的数组长度。
     const std::size_t copy =
-        std::min(length, static_cast<std::size_t>(mavlink_log_s::TEXT_LEN - 1U));
+        std::min(length, sizeof(record.text) - 1U);
     std::memcpy(record.text, text, copy);
     record.text[copy] = '\0';
     return mavlink_log_publication_.publish(record);

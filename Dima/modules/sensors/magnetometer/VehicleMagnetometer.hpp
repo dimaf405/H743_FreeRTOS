@@ -14,8 +14,8 @@
 #include "parameters/param.h"
 #include "api/Flash.hpp"
 #include "sensor_mag.hpp"
-#include "uorb/Publication.hpp"
-#include "uorb/uORB.hpp"
+#include "uORB/Publication.hpp"
+#include "uORB/uORB.hpp"
 #include "vehicle_magnetometer.hpp"
 #include "work_queue/WorkQueue.hpp"
 

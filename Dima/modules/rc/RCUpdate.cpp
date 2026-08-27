@@ -226,7 +226,6 @@ bool RCUpdate::initialize_parameter_handles() noexcept
     static_assert(contract::kRcCalibrationChannelCount == kChannelCount);
     static_assert(contract::kRcCalibrationFieldCount ==
                   kCalibrationFieldCount);
-    static_assert(contract::kRcMappingParameterCount == kMappingCount);
 
     bool valid = true;
 
@@ -350,6 +349,8 @@ float RCUpdate::normalize(std::size_t channel, std::uint16_t raw) const noexcept
 
 std::uint8_t RCUpdate::effective_channel_count() const noexcept
 {
+    // 输入通道数受 input_rc/SBUS 的 18 路协议容量约束，RC_CHAN_CNT 非零时
+    // 仍可显式收缩当前使用的通道数，但不会永久裁掉链路的第 7～18 路能力。
     const std::uint8_t received = latest_input_.channel_count > input_rc_s::RC_INPUT_MAX_CHANNELS ?
                                   input_rc_s::RC_INPUT_MAX_CHANNELS : latest_input_.channel_count;
     return configured_channel_count_ > 0 ?
@@ -383,15 +384,8 @@ void RCUpdate::rebuild_functions(std::uint8_t channel_count) noexcept
     assign(Mapping::Pitch, rc_channels_s::FUNCTION_PITCH);
     assign(Mapping::Throttle, rc_channels_s::FUNCTION_THROTTLE);
     assign(Mapping::Yaw, rc_channels_s::FUNCTION_YAW);
-    assign(Mapping::Arm, rc_channels_s::FUNCTION_ARMSWITCH);
-    assign(Mapping::Kill, rc_channels_s::FUNCTION_KILLSWITCH);
-    assign(Mapping::Flaps, rc_channels_s::FUNCTION_FLAPS);
-    assign(Mapping::Aux1, rc_channels_s::FUNCTION_AUX_1);
-    assign(Mapping::Aux2, rc_channels_s::FUNCTION_AUX_2);
-    assign(Mapping::Aux3, rc_channels_s::FUNCTION_AUX_3);
-    assign(Mapping::Aux4, rc_channels_s::FUNCTION_AUX_4);
-    assign(Mapping::Aux5, rc_channels_s::FUNCTION_AUX_5);
-    assign(Mapping::Aux6, rc_channels_s::FUNCTION_AUX_6);
+    assign(Mapping::ArmSw, rc_channels_s::FUNCTION_ARMSWITCH);
+    assign(Mapping::KillSw, rc_channels_s::FUNCTION_KILLSWITCH);
 }
 
 void RCUpdate::publish_current(std::uint64_t now_us) noexcept
@@ -456,8 +450,6 @@ void RCUpdate::publish_switches(std::uint64_t sample_time) noexcept
     switches.timestamp_sample = sample_time;
     switches.arm_switch = switch_position(rc_channels_s::FUNCTION_ARMSWITCH, arm_threshold_);
     switches.kill_switch = switch_position(rc_channels_s::FUNCTION_KILLSWITCH, kill_threshold_);
-    switches.photo_switch = switch_position(rc_channels_s::FUNCTION_AUX_3, 0.5F);
-    switches.video_switch = switch_position(rc_channels_s::FUNCTION_AUX_4, 0.5F);
     switches.switch_changes = last_switches_.switch_changes;
 
     if (switches_initialized_ && !switches_equal(switches, last_switches_)) {
@@ -486,14 +478,10 @@ std::uint8_t RCUpdate::switch_position(std::uint8_t function, float threshold) c
 bool RCUpdate::switches_equal(const manual_control_switches_s &lhs,
                               const manual_control_switches_s &rhs) const noexcept
 {
-    return lhs.mode_slot == rhs.mode_slot && lhs.arm_switch == rhs.arm_switch &&
-           lhs.return_switch == rhs.return_switch && lhs.loiter_switch == rhs.loiter_switch &&
-           lhs.offboard_switch == rhs.offboard_switch && lhs.kill_switch == rhs.kill_switch &&
-           lhs.termination_switch == rhs.termination_switch && lhs.gear_switch == rhs.gear_switch &&
-           lhs.transition_switch == rhs.transition_switch && lhs.photo_switch == rhs.photo_switch &&
-           lhs.video_switch == rhs.video_switch &&
-           lhs.engage_main_motor_switch == rhs.engage_main_motor_switch &&
-           lhs.payload_power_switch == rhs.payload_power_switch;
+    // 当前产品只生产 Arm/Kill 两个离散开关，其余 PX4 兼容字段保持零值，
+    // 不再让已删除的 Aux/Flaps 功能参与变化计数。
+    return lhs.arm_switch == rhs.arm_switch &&
+           lhs.kill_switch == rhs.kill_switch;
 }
 
 void RCUpdate::set_signal_lost(bool lost) noexcept

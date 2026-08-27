@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <cmath>
-#include <cstring>
 
 namespace dima::modules::safety {
 namespace {
@@ -18,14 +17,6 @@ namespace calibration = dima::lib::sensors::calibration;
 
 constexpr std::uint8_t kMavAutopilotSystemId = 1U;
 constexpr std::uint8_t kMavAutopilotComponentId = 1U;
-
-float command_parameter(std::uint32_t raw) noexcept
-{
-    // vehicle_command 保存 MAVLink float 的原始位模式；memcpy 避免别名规则未定义行为。
-    float value = 0.0F;
-    std::memcpy(&value, &raw, sizeof(value));
-    return value;
-}
 
 } // namespace
 
@@ -41,18 +32,17 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
              cmd.target_component != kMavAutopilotComponentId)) {
             continue;
         }
-        std::uint8_t result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+        std::uint8_t result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
 
         switch (cmd.command) {
-        case vehicle_command_s::NAV_CMD_COMPONENT_ARM_DISARM: {
-            float param1 = 0.0F;
-            std::memcpy(&param1, &cmd.param1_raw, sizeof(param1));
+        case vehicle_command_s::VEHICLE_CMD_COMPONENT_ARM_DISARM: {
+            const float param1 = cmd.param1;
             int action = -1;
             if (std::isfinite(param1) && param1 >= -0.5F && param1 <= 1.5F) {
                 action = static_cast<int>(std::lround(param1));
             }
             if (action != 0 && action != 1) {
-                result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
             } else {
                 const std::uint8_t reason = cmd.from_external
                     ? vehicle_status_s::ARM_DISARM_REASON_COMMAND_EXTERNAL
@@ -62,21 +52,23 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                 state_changed = transition == TransitionResult::Changed ||
                                 state_changed;
                 result = transition == TransitionResult::Denied
-                    ? vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED
-                    : vehicle_command_ack_s::RESULT_ACCEPTED;
+                    ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED
+                    : vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
             }
             break;
         }
 
-        case vehicle_command_s::NAV_CMD_PREFLIGHT_CALIBRATION: {
+        case vehicle_command_s::VEHICLE_CMD_PREFLIGHT_CALIBRATION: {
+            // PX4 官方结构将坐标位 param5/6 保存为 double；校准命令的
+            // wire 来源仍是 float，此处收窄后交给现有 PX4 校准分类器。
             const float parameters[7]{
-                command_parameter(cmd.param1_raw),
-                command_parameter(cmd.param2_raw),
-                command_parameter(cmd.param3_raw),
-                command_parameter(cmd.param4_raw),
-                command_parameter(cmd.param5_raw),
-                command_parameter(cmd.param6_raw),
-                command_parameter(cmd.param7_raw),
+                cmd.param1,
+                cmd.param2,
+                cmd.param3,
+                cmd.param4,
+                static_cast<float>(cmd.param5),
+                static_cast<float>(cmd.param6),
+                cmd.param7,
             };
             const calibration::PreflightCalibrationRequest request =
                 calibration::classify_preflight_calibration_request(
@@ -92,7 +84,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                 if (actuator_armed_.armed ||
                     vehicle_status_.calibration_enabled) {
                     result = vehicle_command_ack_s::
-                        RESULT_TEMPORARILY_REJECTED;
+                        VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
                     break;
                 }
                 if (!vehicle_status_.rc_calibration_in_progress) {
@@ -100,7 +92,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                     state_changed = true;
                     PX4_INFO("Calibration: Disabling RC control actions");
                 }
-                result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
                 break;
             }
 
@@ -114,7 +106,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                 if (vehicle_status_.calibration_enabled) {
                     if (!worker_status_fresh) {
                         result = vehicle_command_ack_s::
-                            RESULT_TEMPORARILY_REJECTED;
+                            VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
                     } else {
                         sensor_calibration_request_s worker_request{};
                         worker_request.timestamp = now;
@@ -123,13 +115,13 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                         result =
                             sensor_calibration_request_publication_.publish(
                                 worker_request)
-                            ? vehicle_command_ack_s::RESULT_ACCEPTED
-                            : vehicle_command_ack_s::RESULT_FAILED;
+                            ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED
+                            : vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
                     }
                 } else {
                     // PX4 treats an idle all-zero calibration command as an
                     // accepted idempotent end/cancel request.
-                    result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                    result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
                 }
                 break;
             }
@@ -152,7 +144,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
 
             if (worker_request_type ==
                     sensor_calibration_request_s::REQUEST_NONE) {
-                result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
                 break;
             }
 
@@ -161,7 +153,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                 vehicle_status_.calibration_enabled ||
                 !worker_status_fresh) {
                 result = vehicle_command_ack_s::
-                    RESULT_TEMPORARILY_REJECTED;
+                    VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
                 break;
             }
 
@@ -179,49 +171,48 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                     worker_request)) {
                 vehicle_status_.calibration_enabled = false;
                 sensor_calibration_dispatch_time_ = 0U;
-                result = vehicle_command_ack_s::RESULT_FAILED;
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
                 break;
             }
 
             state_changed = true;
-            result = vehicle_command_ack_s::RESULT_ACCEPTED;
+            result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
             break;
         }
 
-        case vehicle_command_s::NAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN: {
+        case vehicle_command_s::VEHICLE_CMD_PREFLIGHT_REBOOT_SHUTDOWN: {
             // 仅 Disarmed 允许重启，避免 Armed 车辆因远端命令突然失去控制。
             if (actuator_armed_.armed) {
-                result = vehicle_command_ack_s::RESULT_DENIED;
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED;
             } else {
-                float param1 = 0.0F;
-                std::memcpy(&param1, &cmd.param1_raw, sizeof(param1));
-                const int mode = static_cast<int>(param1);
+                const int mode = static_cast<int>(cmd.param1);
                 if (mode == 0) {
                     // mode=0 是幂等空操作，按已接受返回但不触发复位。
-                    result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                    result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
                 } else if (mode == 1 || mode == 3) {
                     // 1=普通复位，3=MCUboot Recovery。这里只把 mode 放入 ACK；
                     // MavlinkService 等 USB ACK 发送完成后才执行真实复位。
-                    result = vehicle_command_ack_s::RESULT_ACCEPTED;
+                    result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
                     answer_command(cmd, result, now,
-                                   static_cast<std::uint32_t>(mode));
+                                   static_cast<std::int32_t>(mode));
                     PX4_INFO("Reboot (mode %d) permitted by Commander", mode);
                     continue;   // 已发送带复位 mode 的 ACK，跳过下方普通 ACK。
                 } else {
-                    result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+                    result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
                 }
             }
             break;
         }
 
-        case vehicle_command_s::NAV_CMD_REQUEST_MESSAGE:
+        case vehicle_command_s::VEHICLE_CMD_REQUEST_MESSAGE:
             // MavlinkService 通过自己的订阅处理请求，Commander 不抢占消息所有权。
-            result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+            result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
             break;
 
         default:
-            PX4_WARN("Commander: unsupported command %u", cmd.command);
-            result = vehicle_command_ack_s::RESULT_UNSUPPORTED;
+            PX4_WARN("Commander: unsupported command %lu",
+                     static_cast<unsigned long>(cmd.command));
+            result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
             break;
         }
 
@@ -232,7 +223,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
 
 void Commander::answer_command(const vehicle_command_s &command,
                                std::uint8_t result, std::uint64_t now,
-                               std::uint32_t result_param2) noexcept
+                               std::int32_t result_param2) noexcept
 {
     vehicle_command_ack_s ack{};
     ack.timestamp = now;

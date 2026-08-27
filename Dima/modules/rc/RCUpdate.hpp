@@ -9,8 +9,9 @@
 #include "rc_channels.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
+#include <parameters/parameter_contract.hpp>
 #include "perf/perf_counter.h"
-#include "uorb/Publication.hpp"
+#include "uORB/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"
 
 #include <array>
@@ -28,9 +29,13 @@ public:
     dima::middleware::lifecycle::ModuleState state() const override;
 
 private:
-    static constexpr std::size_t kChannelCount = input_rc_s::RC_INPUT_MAX_CHANNELS;
+    // RC 链路保留 input_rc/SBUS 的完整 18 路容量；参数生成合同会在初始化处
+    // 静态校验校准通道数与此协议上限一致，避免两侧能力发生漂移。
+    static constexpr std::size_t kChannelCount =
+        input_rc_s::RC_INPUT_MAX_CHANNELS;
     static constexpr std::size_t kCalibrationFieldCount = 5U;
-    static constexpr std::size_t kMappingCount = 13U;
+    static constexpr std::size_t kMappingCount =
+        dima::generated::parameters::kRcMappingParameterCount;
     static constexpr std::uint32_t kPollIntervalUs = 20000U;
     static constexpr std::uint64_t kRecoveryStableUs = 100000ULL;
 
@@ -42,21 +47,8 @@ private:
         float deadzone{0.0F};
     };
 
-    enum class Mapping : std::size_t {
-        Roll,
-        Pitch,
-        Throttle,
-        Yaw,
-        Arm,
-        Kill,
-        Flaps,
-        Aux1,
-        Aux2,
-        Aux3,
-        Aux4,
-        Aux5,
-        Aux6,
-    };
+    // 角色枚举与参数数组由官方 JSON 同时生成，运行时不再复制 RC_MAP_* 顺序。
+    using Mapping = dima::generated::parameters::RcMappingRole;
 
     void Run() override;
     void reset_runtime_state() noexcept;

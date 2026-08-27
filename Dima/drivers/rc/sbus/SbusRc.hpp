@@ -10,7 +10,7 @@
 #include "perf/perf_counter.h"
 #include "api/Serial.hpp"
 #include "serial/SerialPortAssignments.hpp"
-#include "uorb/Publication.hpp"
+#include "uORB/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"
 
 #include <cstddef>

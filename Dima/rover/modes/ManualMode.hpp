@@ -6,8 +6,8 @@
 #include "vehicle_control_mode.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
-#include "uorb/Publication.hpp"
-#include "uorb/uORB.hpp"
+#include "uORB/Publication.hpp"
+#include "uORB/uORB.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include <cstdint>

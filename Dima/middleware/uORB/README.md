@@ -5,6 +5,13 @@
 - **上游 API 保留：** 保留上游 Topic 结构、消息字段和发布订阅接口语义；后端可由 Dima FreeRTOS 实现替换。
 - 普通 `Publication` 允许多个发布者共享同一 Topic instance；Runtime 以引用计数维护广告存续，任一发布者释放时不得使其他发布者失效。`PublicationMulti` 只从尚无发布者的 instance 中分配。
 
+## 生成物边界
+
+- Runtime 直接消费 PX4 官方生成的 `orb_get_topics()`、`orb_topics_count()`、`ORB_ID` 与 `orb_metadata`；Topic 注册不再依赖 linker section、静态构造器或本地 registry。
+- `uORB.h`、`uORB.hpp`、`Publication.hpp` 与 `SubscriptionData.hpp` 只提供使 PX4 生成物在 Dima Runtime 上编译和运行的薄接口，不定义消息字段、Topic ID 或消息 hash。
+- 旧 `.dima_orb_meta`、`MetadataRegistrar`、ABI lock、producer/consumer 名单均已退役。公开旧 `.hpp` 包含路径由生成器根据官方 `ORB_DECLARE` 动态生成 include-only 转发头。
+- schema、上游来源与 `build/generated/uORB/.generated.json` 的输入/输出 SHA-256 闭包由架构门禁动态核对；这里不维护消息名称或数量列表。
+
 ## Application Runtime 生命周期
 
 - 每次成功 `initialize()` 推进上电期单调 lifecycle epoch；`shutdown()` 释放当前 Runtime 的 Topic Buffer 和 instance 状态，但 epoch 不回退。
