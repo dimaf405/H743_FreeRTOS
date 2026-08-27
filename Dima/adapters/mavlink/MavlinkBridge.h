@@ -12,11 +12,9 @@
  *   submodule pointer of PX4-Autopilot v1.17.0 commit d6f12ad) via
  *   mavgen --lang C --wire-protocol 2.0.
  *
- * The dialect is trimmed by tools/mavlink/build_trimmed_dialect.py from the
- * pinned XML definitions and lock file. Those generator inputs and the
- * generated manifest are the authoritative message inventory; this adapter
- * does not duplicate that list. A message enters the dialect only with its
- * corresponding implemented capability.
+ * The root dima.xml includes the pinned upstream common.xml and is passed
+ * directly to the pinned mavgen.py. The separate runtime YAML controls only
+ * scheduling and handlers; this adapter never duplicates wire definitions.
  *
  * Platform adaptations:
  *   - Single communication buffer: the USB CDC link is the only
@@ -25,8 +23,8 @@
  *     with mavlink_msg_*_encode() + mavlink_msg_to_send_buffer()
  *     and writes the bytes through the platform Console.
  */
-/* 中文边界：MAVLink 消息清单、ID、CRC extra 和 codec 只来自固定 XML、lock 与
- * 生成 manifest；本适配头只配置单路 USB channel 和生成库编译开关，禁止复制
+/* 中文边界：MAVLink ID、CRC extra、payload 和 codec 只来自 dima.xml 与
+ * 锁定 mavgen.py；本适配头只配置单路 USB channel 和生成库编译开关，禁止复制
  * 或手写第二份消息表。MavlinkService 是该 parser/sequence 状态的唯一所有者。 */
 
 #ifndef MAVLINK_COMM_NUM_BUFFERS

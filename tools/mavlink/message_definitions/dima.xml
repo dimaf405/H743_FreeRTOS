@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!--
+  Dima MAVLink 2 wire root. Standard messages, enums, IDs, CRCs and payload
+  layouts come from the pinned common.xml. Product-specific wire messages may
+  only be added to this dialect.
+-->
+<mavlink>
+  <include>common.xml</include>
+  <version>3</version>
+  <dialect>0</dialect>
+  <messages/>
+</mavlink>

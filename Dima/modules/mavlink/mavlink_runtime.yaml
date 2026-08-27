@@ -1,0 +1,105 @@
+version: 1
+
+# 该文件只定义 Dima 的发送频率、调度阶段和业务 handler。
+# wire ID、CRC、payload 字段及编解码规则始终由 dima.xml + mavgen.py 决定。
+outbound:
+  - message: HEARTBEAT
+    handler: Heartbeat
+    requestable: true
+    scheduler: heartbeat
+    default_interval_us: 1000000
+    interval_configurable: false
+
+  - message: AUTOPILOT_VERSION
+    handler: AutopilotVersion
+    requestable: true
+    scheduler: none
+
+  - message: PROTOCOL_VERSION
+    handler: ProtocolVersion
+    requestable: true
+    scheduler: none
+
+  - message: COMPONENT_METADATA
+    handler: ComponentMetadata
+    requestable: true
+    scheduler: none
+
+  - message: COMPONENT_INFORMATION
+    handler: ComponentInformation
+    requestable: true
+    scheduler: none
+
+  - message: RC_CHANNELS
+    handler: RcChannels
+    requestable: true
+    scheduler: service
+    tx_stage: pre_metadata
+    default_interval_us: 200000
+    interval_configurable: true
+
+  - message: HIGHRES_IMU
+    handler: HighresImu
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 20000
+    interval_configurable: true
+
+  - message: SCALED_IMU
+    handler: ScaledImu
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 40000
+    interval_configurable: true
+
+  - message: GPS_RAW_INT
+    handler: GpsRawInt
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 200000
+    interval_configurable: true
+
+  - message: SYS_STATUS
+    handler: SystemStatus
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 1000000
+    interval_configurable: true
+
+inbound:
+  - message: PARAM_REQUEST_LIST
+    handler: ParameterList
+
+  - message: PARAM_REQUEST_READ
+    handler: Parameters
+
+  - message: PARAM_SET
+    handler: Parameters
+
+  - message: PARAM_EXT_REQUEST_READ
+    handler: Parameters
+
+  - message: COMMAND_LONG
+    handler: Commands
+
+  - message: COMMAND_INT
+    handler: Commands
+
+  - message: MISSION_REQUEST_LIST
+    handler: Mission
+
+  - message: MISSION_CLEAR_ALL
+    handler: Mission
+
+  - message: FILE_TRANSFER_PROTOCOL
+    handler: MetadataFtp
+
+  - message: TIMESYNC
+    handler: Timesync
+
+  - message: PING
+    handler: Ping

@@ -38,7 +38,32 @@ def file_sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def validate_source(source_root: pathlib.Path, version: str) -> bool:
+def source_tree_sha256(source_root: pathlib.Path) -> str:
+    """对 pymavlink 源码闭包做路径+内容聚合哈希，忽略 Python 运行缓存。"""
+    digest = hashlib.sha256()
+    files = sorted(
+        (
+            path for path in source_root.rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path.suffix != ".pyc"
+        ),
+        key=lambda path: path.relative_to(source_root).as_posix(),
+    )
+    for path in files:
+        relative = path.relative_to(source_root).as_posix().encode("utf-8")
+        digest.update(relative)
+        digest.update(b"\0")
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def validate_source(
+    source_root: pathlib.Path, version: str, expected_tree_sha256: str | None
+) -> bool:
     required = (
         source_root / "__init__.py",
         source_root / "generator" / "mavgen.py",
@@ -52,7 +77,12 @@ def validate_source(source_root: pathlib.Path, version: str) -> bool:
     except OSError:
         return False
     match = re.search(r"__version__\s*=\s*['\"]([^'\"]+)['\"]", version_text)
-    return match is not None and match.group(1) == version
+    if match is None or match.group(1) != version:
+        return False
+    return (
+        expected_tree_sha256 is None
+        or source_tree_sha256(source_root) == expected_tree_sha256
+    )
 
 
 def download_archive(archive: dict, destination: pathlib.Path) -> None:
@@ -96,6 +126,7 @@ def download_archive(archive: dict, destination: pathlib.Path) -> None:
 
 
 def safe_extract(archive_path: pathlib.Path, destination: pathlib.Path) -> pathlib.Path:
+    """只解包固定 hash 的普通目录树，并拒绝链接与越界路径。"""
     resolved_destination = destination.resolve()
     try:
         with tarfile.open(archive_path, "r:gz") as package:
@@ -128,14 +159,18 @@ def provision_pymavlink(
     lock_path: pathlib.Path,
     source_override: pathlib.Path | None = None,
 ) -> pathlib.Path:
+    """复用通过完整树 hash 的缓存，否则下载、复验后再原子发布。"""
     lock = load_lock(lock_path)
     package = lock["pymavlink"]
     version = package["version"]
     commit = package["commit"]
+    expected_tree_sha256 = package.get("source_tree_sha256")
 
     if source_override is not None:
         source = source_override.expanduser().resolve()
-        if source.name != "pymavlink" or not validate_source(source, version):
+        if source.name != "pymavlink" or not validate_source(
+            source, version, expected_tree_sha256
+        ):
             raise BootstrapError(
                 f"PYMAVLINK_ROOT must be a package directory named pymavlink "
                 f"at version {version}: {source}"
@@ -143,7 +178,7 @@ def provision_pymavlink(
         return source
 
     installation = cache_root / "pymavlink" / f"{version}-{commit}" / "pymavlink"
-    if validate_source(installation, version):
+    if validate_source(installation, version, expected_tree_sha256):
         return installation
 
     installation.parent.mkdir(parents=True, exist_ok=True)
@@ -156,9 +191,12 @@ def provision_pymavlink(
         unpack_root.mkdir()
         download_archive(package["archive"], archive_path)
         source = safe_extract(archive_path, unpack_root)
-        if not validate_source(source, version):
+        if not validate_source(source, version, expected_tree_sha256):
+            actual_tree_sha256 = source_tree_sha256(source)
             raise BootstrapError(
-                f"downloaded pymavlink source did not report version {version}"
+                "downloaded pymavlink source failed the pinned closure: "
+                f"version={version}, expected tree SHA-256 "
+                f"{expected_tree_sha256}, got {actual_tree_sha256}"
             )
         candidate = temporary / "source"
         shutil.copytree(source, candidate)
@@ -166,7 +204,7 @@ def provision_pymavlink(
             shutil.rmtree(installation)
         os.replace(candidate, installation)
 
-    if not validate_source(installation, version):
+    if not validate_source(installation, version, expected_tree_sha256):
         raise BootstrapError("cached pymavlink failed final validation")
     return installation
 
