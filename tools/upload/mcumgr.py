@@ -119,6 +119,42 @@ def protocol_error(output: str) -> str | None:
     return None
 
 
+def _stop_owned_mcumgr(
+    process: subprocess.Popen[bytes], reader: threading.Thread | None
+) -> None:
+    """终止本次上传器创建的 mcumgr，并等待输出线程释放管道和串口句柄。"""
+    # Windows 上 mcumgr 持有排他的 COM 句柄；只 kill 不 wait 会让取消上传后的
+    # 句柄释放时机不确定。这里严格限定为当前 Popen 子进程，不扫描或结束其他用户进程。
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            # 子进程可能恰好在 poll 与 kill 之间退出，后续 wait 仍负责回收句柄。
+            pass
+    try:
+        process.wait(timeout=5.0)
+    except subprocess.TimeoutExpired:
+        # kill 后仍未退出属于宿主异常；再次请求终止并继续执行有界回收，不能让
+        # 上传器永久卡在清理路径。
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+    if reader is None or reader.ident is None:
+        return
+    reader.join(timeout=1.0)
+    if reader.is_alive() and process.stdout is not None:
+        # 极端情况下 Windows 管道读仍未返回；关闭父端 pipe 使 daemon reader
+        # 尽快退出。reader 不参与协议状态，因此不得阻塞上传器关停。
+        process.stdout.close()
+        reader.join(timeout=1.0)
+
+
 def try_image_list(
     executable: str, port: str, baud: int, mtu: int
 ) -> tuple[bool, str]:
@@ -243,63 +279,78 @@ def run_mcumgr(
         name="mcumgr-output",
         daemon=True,
     )
-    reader.start()
     deadline = started + timeout_seconds
     timed_out = False
     reader_done = False
     last_byte = b"\n"
-    while not reader_done:
-        if not timed_out and time.monotonic() >= deadline:
-            timed_out = True
-            if process.poll() is None:
-                process.kill()
+    try:
+        reader.start()
+        while not reader_done:
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
+            try:
+                chunk = output_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                reader_done = True
+                continue
+            chunks.append(chunk)
+            last_byte = chunk[-1:]
+            output_buffer = getattr(sys.stdout, "buffer", None)
+            if output_buffer is not None:
+                output_buffer.write(chunk)
+                output_buffer.flush()
+            else:
+                sys.stdout.write(chunk.decode("utf-8", errors="replace"))
+                sys.stdout.flush()
+        if timed_out:
+            raise UploadError(
+                "mcumgr command timed out: " + " ".join(arguments)
+            )
         try:
-            chunk = output_queue.get(timeout=0.1)
-        except queue.Empty:
-            continue
-        if chunk is None:
-            reader_done = True
-            continue
-        chunks.append(chunk)
-        last_byte = chunk[-1:]
-        output_buffer = getattr(sys.stdout, "buffer", None)
-        if output_buffer is not None:
-            output_buffer.write(chunk)
-            output_buffer.flush()
-        else:
-            sys.stdout.write(chunk.decode("utf-8", errors="replace"))
-            sys.stdout.flush()
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired as error:
+            raise UploadError(
+                "mcumgr closed its output but did not exit within 5s"
+            ) from error
+        reader.join(timeout=1.0)
+        if chunks and last_byte != b"\n":
+            print()
 
-    process.wait()
-    reader.join(timeout=1.0)
-    if chunks and last_byte != b"\n":
-        print()
+        if reader_errors:
+            raise UploadError(f"unable to read mcumgr output: {reader_errors[0]}")
 
-    if timed_out:
-        raise UploadError("mcumgr command timed out: " + " ".join(arguments))
-    if reader_errors:
-        raise UploadError(f"unable to read mcumgr output: {reader_errors[0]}")
-
-    output = decode_output(b"".join(chunks))
-    if process.returncode != 0:
-        raise UploadError(
-            f"mcumgr command failed with exit status {process.returncode}: "
-            + " ".join(arguments)
-        )
-    device_error = protocol_error(output)
-    if device_error is not None:
-        raise UploadError(
-            f"MCUboot rejected {' '.join(arguments)} ({device_error})"
-        )
-    if expect_images and MCUMGR_IMAGES_RE.search(output) is None:
-        raise UploadError("mcumgr response returned no Images section")
-    if measure_bytes is not None:
-        elapsed = time.monotonic() - started
-        # 速率 = 镜像字节数 / 实际墙钟秒 / 1024，仅作传输诊断，不作为成功条件。
-        rate = measure_bytes / max(elapsed, 0.001) / 1024.0
-        print(
-            f"Transferred {measure_bytes} bytes in {elapsed:.2f}s "
-            f"({rate:.2f} KiB/s)",
-            flush=True,
-        )
-    return output
+        output = decode_output(b"".join(chunks))
+        if process.returncode != 0:
+            raise UploadError(
+                f"mcumgr command failed with exit status {process.returncode}: "
+                + " ".join(arguments)
+            )
+        device_error = protocol_error(output)
+        if device_error is not None:
+            raise UploadError(
+                f"MCUboot rejected {' '.join(arguments)} ({device_error})"
+            )
+        if expect_images and MCUMGR_IMAGES_RE.search(output) is None:
+            raise UploadError("mcumgr response returned no Images section")
+        if measure_bytes is not None:
+            elapsed = time.monotonic() - started
+            # 速率 = 镜像字节数 / 实际墙钟秒 / 1024，仅作传输诊断，不作为成功条件。
+            rate = measure_bytes / max(elapsed, 0.001) / 1024.0
+            print(
+                f"Transferred {measure_bytes} bytes in {elapsed:.2f}s "
+                f"({rate:.2f} KiB/s)",
+                flush=True,
+            )
+        return output
+    finally:
+        # reader 启动、输出转发、超时、Ctrl+C、返回码检查任一路径退出时，都先回收
+        # 本函数拥有的 mcumgr；不得让它脱离 make/python 后继续独占 Windows COM。
+        if process.poll() is None or (
+            reader.ident is not None and reader.is_alive()
+        ):
+            _stop_owned_mcumgr(process, reader)
+        if process.stdout is not None:
+            process.stdout.close()
