@@ -17,7 +17,6 @@ from pathlib import Path
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 PIN_RE = re.compile(r"^P[A-K][0-9]{1,2}$")
-EXPECTED_SERIALS = list(range(9))
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,68 +33,87 @@ def require_identifier(value: object, field: str) -> str:
 
 
 def load_manifest(path: Path) -> tuple[dict, list[dict]]:
-    """校验板卡身份、物理顺序、引脚、波特率和唯一 RC 默认 owner。"""
+    """校验 manifest 结构、唯一标识及内部引用，不冻结端口表或产品默认值。"""
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("format_version") != 1 or data.get("board") != "dimah743":
+    if (data.get("format_version") != 1 or
+            not isinstance(data.get("board"), str) or not data["board"]):
         raise RuntimeError("unsupported serial manifest identity")
-    expected_hardware_reference = {
-        "source": "H743_FreeRTOS.ioc",
-        "schematic": "VCU-H7-低成本版 V1.0 (2025-12-10)",
-        "serial_order": "OTG1 USART1 USART2 USART3 UART4 UART5 USART6 UART7 UART8",
-    }
-    if data.get("hardware_reference") != expected_hardware_reference:
-        raise RuntimeError("board serial order lacks the locked hardware reference")
+    hardware_reference = data.get("hardware_reference")
+    if (not isinstance(hardware_reference, dict) or
+            not isinstance(hardware_reference.get("source"), str) or
+            not hardware_reference["source"]):
+        raise RuntimeError("serial manifest lacks its hardware source")
 
     gps_port_parameter = data.get("gps_port_parameter")
-    if gps_port_parameter != {
-        "name": "GPS_1_CONFIG",
-        "default": 0,
-        "group": "GPS",
-    }:
-        raise RuntimeError(
-            "gps_port_parameter must retain the primary PX4 GPS port contract"
-        )
+    if (not isinstance(gps_port_parameter, dict) or
+            not isinstance(gps_port_parameter.get("default"), int) or
+            not isinstance(gps_port_parameter.get("group"), str) or
+            not gps_port_parameter["group"]):
+        raise RuntimeError("invalid primary GPS port parameter declaration")
+    require_identifier(gps_port_parameter.get("name"), "gps parameter")
 
     ports = data.get("ports")
-    if not isinstance(ports, list) or [port.get("serial") for port in ports] != EXPECTED_SERIALS:
-        raise RuntimeError("serial manifest must define SERIAL0..SERIAL8 in order")
+    if not isinstance(ports, list) or not ports:
+        raise RuntimeError("serial manifest ports must be a non-empty list")
+    serials = [
+        port.get("serial") for port in ports if isinstance(port, dict)
+    ]
+    if (len(serials) != len(ports) or
+            any(type(serial) is not int or serial < 0 for serial in serials) or
+            len(serials) != len(set(serials)) or 0 not in serials):
+        raise RuntimeError("serial port indexes must be unique and include port 0")
 
     rates = data.get("supported_baudrates")
-    if (not isinstance(rates, list) or not rates or rates[0] != 0 or
+    if (not isinstance(rates, list) or not rates or
             rates != sorted(set(rates)) or
             any(not isinstance(rate, int) or rate < 0 for rate in rates)):
-        raise RuntimeError("supported_baudrates must be a sorted unique integer list starting at Auto/0")
+        raise RuntimeError(
+            "supported_baudrates must be a sorted unique non-negative list"
+        )
 
     functions = data.get("functions")
-    if functions != [
-        {"value": 0, "name": "Disabled"},
-        {"value": 1, "name": "RC Input"},
-        {"value": 2, "name": "GPS"},
-    ]:
+    if not isinstance(functions, list) or not functions:
+        raise RuntimeError("serial functions must be a non-empty list")
+    function_values = [
+        function.get("value") for function in functions
+        if isinstance(function, dict)
+    ]
+    function_names = [
+        function.get("name") for function in functions
+        if isinstance(function, dict)
+    ]
+    function_roles = [
+        function.get("role") for function in functions
+        if isinstance(function, dict)
+    ]
+    if (len(function_values) != len(functions) or
+            any(type(value) is not int for value in function_values) or
+            any(not isinstance(name, str) or not name
+                for name in function_names) or
+            any(not isinstance(role, str) or not role
+                for role in function_roles) or
+            len(function_values) != len(set(function_values)) or
+            len(function_names) != len(set(function_names)) or
+            len(function_roles) != len(set(function_roles))):
+        raise RuntimeError("serial function values, names and roles must be unique")
+    # 现有运行时代码消费这三个语义角色；manifest 可继续增加其他功能项，
+    # 生成器不再冻结完整功能列表、数值或顺序。
+    required_roles = {"disabled", "rc_input", "gps"}
+    if not required_roles.issubset(function_roles):
         raise RuntimeError(
-            "current product serial functions must be exactly "
-            "Disabled/RC Input/GPS"
+            f"serial functions are missing runtime roles: "
+            f"{sorted(required_roles - set(function_roles))}"
         )
 
     configurable = []
     for port in ports:
         serial = port["serial"]
         if serial == 0:
-            if port.get("peripheral") != "USB_OTG1" or port.get("configurable_baud") is not False:
-                raise RuntimeError("SERIAL0 must remain the MAVLink-only USB OTG1 port")
             continue
 
-        expected_parameter = f"SERIAL{serial}_BAUD"
-        if port.get("parameter") != expected_parameter:
-            raise RuntimeError(
-                f"SERIAL{serial} parameter must be named {expected_parameter}"
-            )
-        expected_function = f"SERIAL{serial}_FUNCTION"
-        if port.get("function_parameter") != expected_function:
-            raise RuntimeError(
-                f"SERIAL{serial} function must be named {expected_function}"
-            )
-        if port.get("default_function") not in (0, 1, 2):
+        require_identifier(port.get("parameter"), "baud parameter")
+        require_identifier(port.get("function_parameter"), "function parameter")
+        if port.get("default_function") not in function_values:
             raise RuntimeError(f"unsupported function for SERIAL{serial}")
         default_baud = port.get("default_baud")
         if default_baud not in rates:
@@ -112,16 +130,6 @@ def load_manifest(path: Path) -> tuple[dict, list[dict]]:
         if port.get("rx_index") != int(str(port["rx"])[2:]):
             raise RuntimeError(f"RX pin/index mismatch for SERIAL{serial}")
         configurable.append(port)
-
-    default_rc_port = data.get("default_rc_port")
-    if default_rc_port not in [port["serial"] for port in configurable]:
-        raise RuntimeError("default_rc_port is not a real external serial port")
-    rc_defaults = [
-        port["serial"] for port in configurable
-        if port["default_function"] == 1
-    ]
-    if rc_defaults != [default_rc_port]:
-        raise RuntimeError("exactly the real default RC port must own RC Input")
 
     return data, configurable
 
@@ -222,18 +230,12 @@ def generate_serial_contract(data: dict, ports: list[dict]) -> str:
     function_values = ", ".join(
         str(function["value"]) for function in data["functions"]
     )
-    function_disabled = next(
-        function["value"] for function in data["functions"]
-        if function["name"] == "Disabled"
-    )
-    function_rc = next(
-        function["value"] for function in data["functions"]
-        if function["name"] == "RC Input"
-    )
-    function_gps = next(
-        function["value"] for function in data["functions"]
-        if function["name"] == "GPS"
-    )
+    functions_by_role = {
+        function["role"]: function["value"] for function in data["functions"]
+    }
+    function_disabled = functions_by_role["disabled"]
+    function_rc = functions_by_role["rc_input"]
+    function_gps = functions_by_role["gps"]
 
     lines = [
         "#pragma once",
@@ -364,8 +366,8 @@ def main() -> int:
         generate_uart_resources(ports),
     )
     print(
-        f"generated SERIAL0..SERIAL8 contract and STM32H7 resources "
-        f"for {data['board']}"
+        f"generated {len(ports)} configurable serial ports and STM32H7 "
+        f"resources for {data['board']}"
     )
     return 0
 

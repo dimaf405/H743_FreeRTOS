@@ -6,7 +6,6 @@
     "schematic": "VCU-H7-低成本版 V1.0 (2025-12-10)",
     "serial_order": "OTG1 USART1 USART2 USART3 UART4 UART5 USART6 UART7 UART8"
   },
-  "default_rc_port": 6,
   "gps_port_parameter": {
     "name": "GPS_1_CONFIG",
     "default": 0,
@@ -14,14 +13,17 @@
   },
   "functions": [
     {
+      "role": "disabled",
       "value": 0,
       "name": "Disabled"
     },
     {
+      "role": "rc_input",
       "value": 1,
       "name": "RC Input"
     },
     {
+      "role": "gps",
       "value": 2,
       "name": "GPS"
     }
