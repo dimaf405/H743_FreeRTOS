@@ -69,13 +69,17 @@ DIMA_PARAMETER_GENERATED_INCLUDES := \
 	-I$(BUILD_DIR)/generated_include
 
 DIMA_SERIAL_GENERATED_INCLUDES := -I$(BUILD_DIR)/generated/serial
-DIMA_MESSAGE_GENERATED_INCLUDES := -I$(BUILD_DIR)/generated/messages
+DIMA_MESSAGE_GENERATED_INCLUDES := \
+	-I$(BUILD_DIR)/generated/messages \
+	-I$(BUILD_DIR)/generated
 DIMA_UM982_GENERATED_INCLUDES := -I$(BUILD_DIR)/generated/gps
 DIMA_BOARD_SERIAL_GENERATED_INCLUDES := \
 	-I$(BUILD_DIR)/generated/stm32h7/serial
 DIMA_COMPONENT_GENERATED_INCLUDES := \
 	-I$(BUILD_DIR)/generated/component_metadata
-DIMA_MAVLINK_GENERATED_INCLUDES := -I$(MAVLINK_GENERATED_DIR)
+# mavgen 产物是未修改的第三方头；作为 system include 只隔离上游
+# inline codec 的编译器警告，项目自身代码仍保持 -Werror。
+DIMA_MAVLINK_GENERATED_INCLUDES := -isystem $(MAVLINK_GENERATED_DIR)
 DIMA_FIRMWARE_IDENTITY_GENERATED_INCLUDES := \
 	-I$(FIRMWARE_IDENTITY_GENERATED_DIR)
 DIMA_SENSOR_DEVICE_GENERATED_INCLUDES := -I$(SENSOR_DEVICE_GENERATED_DIR)
@@ -124,6 +128,17 @@ DIMA_STM32_USB_INCLUDES := \
 DIMA_BOARD_INCLUDES := $(DIMA_STM32_INCLUDES)
 
 PARAMETER_GENERATOR := tools/parameters/generate_parameters.py
+SOURCE_MANIFEST_TOOL := tools/generation/source_manifest.py
+PARAMETER_UPSTREAM_ROOT := tools/upstream/parameter_yaml_20260827
+PARAMETER_SOURCE_MANIFEST := $(PARAMETER_UPSTREAM_ROOT)/SOURCE_MANIFEST.json
+PARAMETER_UPSTREAM_DEPS := \
+	$(wildcard $(PARAMETER_UPSTREAM_ROOT)/Tools/*.py) \
+	$(wildcard $(PARAMETER_UPSTREAM_ROOT)/Tools/module_config/*.py) \
+	$(wildcard $(PARAMETER_UPSTREAM_ROOT)/src/lib/parameters/*.py) \
+	$(wildcard $(PARAMETER_UPSTREAM_ROOT)/src/lib/parameters/px4params/*.py) \
+	$(wildcard $(PARAMETER_UPSTREAM_ROOT)/src/lib/parameters/templates/*) \
+	$(PARAMETER_UPSTREAM_ROOT)/src/lib/mixer_module/output_functions.yaml \
+	$(PARAMETER_UPSTREAM_ROOT)/validation/module_schema.yaml
 FIRMWARE_IDENTITY_GENERATOR := \
 	tools/firmware/generate_identity_contract.py
 FIRMWARE_IDENTITY_MANIFEST := Boards/H743/firmware_identity.json
@@ -168,14 +183,18 @@ DRONECAN_GENERATOR_DEPS := $(DRONECAN_CONTRACT_GENERATOR) \
 ARCHITECTURE_CHECK_TOOL := tools/check_architecture.py
 APPLICATION_ELF_CHECK_TOOL := tools/verify_application_elf.py
 COMPILE_COMMANDS_TOOL := tools/generate_compile_commands.py
-MAVLINK_GENERATOR := tools/mavlink/build_trimmed_dialect.py
 MAVLINK_BOOTSTRAP := tools/mavlink/bootstrap_pymavlink.py
 MAVLINK_LOCK := tools/mavlink/mavlink.lock.json
 MAVLINK_XML_DIR := tools/mavlink/message_definitions
-MAVLINK_XML_INPUTS := \
+MAVLINK_DIALECT := $(MAVLINK_XML_DIR)/dima.xml
+MAVLINK_UPSTREAM_XML_INPUTS := \
 	$(MAVLINK_XML_DIR)/common.xml \
 	$(MAVLINK_XML_DIR)/standard.xml \
 	$(MAVLINK_XML_DIR)/minimal.xml
+MAVLINK_RUNTIME_POLICY := Dima/modules/mavlink/mavlink_runtime.yaml
+MAVLINK_RUNTIME_GENERATOR := tools/mavlink/generate_runtime_contract.py
+MAVLINK_GENERATED_WORK_DIR := $(MAVLINK_GENERATED_DIR).work
+MAVLINK_VERIFY_WORK_DIR := $(MAVLINK_GENERATED_DIR).verify.work
 MAVLINK_GENERATED_STAMP := $(MAVLINK_GENERATED_DIR)/.generated.json
 MAVLINK_LIBRARY_HEADER := $(MAVLINK_GENERATED_DIR)/dima/mavlink.h
 MAVLINK_STREAM_CONTRACT_HEADER := \
@@ -183,13 +202,16 @@ MAVLINK_STREAM_CONTRACT_HEADER := \
 MAVLINK_GENERATED_OUTPUTS := \
 	$(MAVLINK_LIBRARY_HEADER) \
 	$(MAVLINK_STREAM_CONTRACT_HEADER)
-MAVLINK_GENERATOR_DEPS := \
-	$(MAVLINK_GENERATOR) $(MAVLINK_BOOTSTRAP) $(MAVLINK_LOCK) \
-	$(MAVLINK_XML_INPUTS)
-# dialect XML、lock、bootstrap 与生成器共同构成 MAVLink 依赖闭包；lock 同时
-# 生成 mavlink_stream_contract.hpp，request/interval/dispatch 不再手写清单。
+MAVLINK_GENERATION_DEPS := \
+	$(MAVLINK_BOOTSTRAP) $(MAVLINK_LOCK) $(MAVLINK_DIALECT) \
+	$(MAVLINK_UPSTREAM_XML_INPUTS) $(MAVLINK_RUNTIME_POLICY) \
+	$(MAVLINK_RUNTIME_GENERATOR)
+# dima.xml 是唯一 wire 根，Make 直接调用锁定 mavgen.py；YAML 只派生
+# request/interval/dispatch 合同，不参与 ID、CRC、payload 或编解码。
 COMPILE_COMMANDS_OUTPUT ?= compile_commands.json
-PARAMETER_GENERATOR_DEPS := $(wildcard tools/parameters/*.py tools/parameters/dima_params/*.py)
+PARAMETER_GENERATOR_DEPS := \
+	$(PARAMETER_GENERATOR) $(SOURCE_MANIFEST_TOOL) \
+	$(PARAMETER_SOURCE_MANIFEST) $(PARAMETER_UPSTREAM_DEPS)
 SERIAL_CONFIG_GENERATOR := tools/serial/generate_config.py
 SERIAL_PORT_MANIFEST := Boards/H743/serial_ports.json
 UM982_CONTRACT_GENERATOR := tools/gps/generate_um982_contract.py
@@ -200,35 +222,37 @@ UM982_CONTRACT_HEADER := $(UM982_GENERATED_DIR)/Um982MessageContract.hpp
 SERIAL_GENERATED_DIR := $(BUILD_DIR)/generated/serial
 STM32_SERIAL_GENERATED_DIR := $(BUILD_DIR)/generated/stm32h7/serial
 SERIAL_GENERATED_STAMP := $(SERIAL_GENERATED_DIR)/.generated
-SERIAL_BAUD_PARAMETERS := $(SERIAL_GENERATED_DIR)/serial_baud_params.c
+SERIAL_PARAMETER_YAML := $(SERIAL_GENERATED_DIR)/module_serial.yaml
 SERIAL_CONTRACT_HEADER := $(SERIAL_GENERATED_DIR)/SerialContract.hpp
 STM32_UART_RESOURCES_HEADER := \
 	$(STM32_SERIAL_GENERATED_DIR)/BoardUartResources.hpp
 SERIAL_GENERATED_OUTPUTS := \
-	$(SERIAL_BAUD_PARAMETERS) \
+	$(SERIAL_PARAMETER_YAML) \
 	$(SERIAL_CONTRACT_HEADER) \
 	$(STM32_UART_RESOURCES_HEADER)
 MESSAGE_GENERATOR := tools/uorb/generate_messages.py
 MESSAGE_SCHEMA_DIR := Dima/messages/schemas
 MESSAGE_SCHEMAS := $(sort $(wildcard $(MESSAGE_SCHEMA_DIR)/*.msg))
-MESSAGE_ABI_LOCK := Dima/messages/uorb_abi.lock.json
-MESSAGE_GENERATED_DIR := $(BUILD_DIR)/generated/messages
-MESSAGE_GENERATED_STAMP := $(MESSAGE_GENERATED_DIR)/.generated
-MESSAGE_NAMES := $(notdir $(basename $(MESSAGE_SCHEMAS)))
-MESSAGE_GENERATED_HEADERS := \
-	$(addprefix $(MESSAGE_GENERATED_DIR)/,$(addsuffix .hpp,$(MESSAGE_NAMES)))
-MESSAGE_GENERATED_SOURCE := $(MESSAGE_GENERATED_DIR)/uorb_topics.cpp
-MESSAGE_GENERATED_CATALOG := $(MESSAGE_GENERATED_DIR)/uorb_catalog.json
-MESSAGE_GENERATED_OUTPUTS := \
-	$(MESSAGE_GENERATED_HEADERS) \
-	$(MESSAGE_GENERATED_SOURCE) \
-	$(MESSAGE_GENERATED_CATALOG)
-# uORB topic 名完全由 schemas/*.msg 推导，ABI lock 只固定布局；新增消息必须
-# 修改 schema/lock 并运行生成器，不能把 .hpp/.cpp 直接列入源码树。
-$(DRONECAN_GENERATED_MAKEFILE): make/project.mk $(DRONECAN_GENERATOR_DEPS)
+UORB_UPSTREAM_ROOT := tools/upstream/uorb_v1_17
+UORB_SOURCE_MANIFEST := $(UORB_UPSTREAM_ROOT)/SOURCE_MANIFEST.json
+UORB_UPSTREAM_DEPS := \
+	$(wildcard $(UORB_UPSTREAM_ROOT)/Tools/msg/*.py) \
+	$(wildcard $(UORB_UPSTREAM_ROOT)/Tools/msg/templates/uorb/*)
+MESSAGE_GENERATED_DIR := $(BUILD_DIR)/generated/uORB
+MESSAGE_COMPAT_GENERATED_DIR := $(BUILD_DIR)/generated/messages
+MESSAGE_GENERATED_MAKEFILE := $(MESSAGE_GENERATED_DIR)/uorb_sources.mk
+MESSAGE_GENERATOR_DEPS := \
+	$(MESSAGE_GENERATOR) $(SOURCE_MANIFEST_TOOL) \
+	$(UORB_SOURCE_MANIFEST) $(UORB_UPSTREAM_DEPS)
+# Topic 头、源文件、ID、hash、JSON 与注册目录全部由 PX4 v1.17 原工具派生；
+# Make 只包含生成的 source fragment，不维护消息或 producer/consumer 名单。
+$(DRONECAN_GENERATED_MAKEFILE): make/project.mk $(DRONECAN_GENERATOR_DEPS) | \
+		$(HOST_TOOLS_STAMP)
 	$(DIMA_PROGRESS_RUN) --label DRONECAN_GEN --target "$@" \
 		--display "$(DRONECAN_GENERATED_DIR)" -- \
-		$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) \
 			--manifest $(DRONECAN_CONTRACT_MANIFEST) \
 			--output $(DRONECAN_GENERATED_DIR)
 	@touch "$@"
@@ -244,24 +268,26 @@ dronecan-generated: $(DIMA_DRONECAN_GENERATED_OUTPUTS)
 dronecan-generated-verify: $(DIMA_DRONECAN_GENERATED_OUTPUTS)
 	$(DIMA_PROGRESS_RUN) --label DRONECAN_GEN --target "$@" \
 		--display "verify $(DRONECAN_GENERATED_DIR)" -- \
-		$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) \
 			--manifest $(DRONECAN_CONTRACT_MANIFEST) \
 			--output $(DRONECAN_GENERATED_DIR) --verify
 
 PARAMETER_DEFINITION_DIR := Dima/middleware/parameters/definitions
-PARAMETER_DEFINITIONS := \
-	$(sort $(wildcard $(PARAMETER_DEFINITION_DIR)/*.c)) \
-	$(SERIAL_BAUD_PARAMETERS) \
-	$(DIMA_DRONECAN_PARAMETER_SOURCE)
+PARAMETER_YAML_DEFINITIONS := \
+	$(sort $(wildcard $(PARAMETER_DEFINITION_DIR)/module_*.yaml)) \
+	$(SERIAL_PARAMETER_YAML) \
+	$(DIMA_DRONECAN_PARAMETER_YAML)
 PARAMETER_GENERATED_DIR := $(BUILD_DIR)/generated/parameters
 PARAMETER_INCLUDE_DIR := $(BUILD_DIR)/generated_include
 PARAMETER_GENERATED_STAMP := $(PARAMETER_GENERATED_DIR)/.generated
 PARAMETER_GENERATED_OUTPUTS := \
+	$(PARAMETER_GENERATED_DIR)/module_params.c \
 	$(PARAMETER_GENERATED_DIR)/parameters.xml \
 	$(PARAMETER_GENERATED_DIR)/parameters.json \
 	$(PARAMETER_GENERATED_DIR)/px4_parameters.hpp \
 	$(PARAMETER_GENERATED_DIR)/parameter_contract.hpp \
-	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c \
 	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/param.h \
 	$(PARAMETER_INCLUDE_DIR)/parameters/px4_parameters.hpp \
 	$(PARAMETER_INCLUDE_DIR)/parameters/parameter_contract.hpp
@@ -277,10 +303,13 @@ PARAMETER_METADATA_OUTPUTS := \
 	$(PARAMETER_METADATA_DIR)/actuators.json \
 	$(PARAMETER_METADATA_DIR)/actuators.json.xz \
 	$(PARAMETER_METADATA_HEADER)
-$(SERIAL_GENERATED_STAMP): make/project.mk $(SERIAL_CONFIG_GENERATOR) $(SERIAL_PORT_MANIFEST)
+$(SERIAL_GENERATED_STAMP): make/project.mk $(SERIAL_CONFIG_GENERATOR) \
+		$(SERIAL_PORT_MANIFEST) | $(HOST_TOOLS_STAMP)
 	$(DIMA_PROGRESS_RUN) --label SERIAL --target "$@" \
 		--display "$(SERIAL_GENERATED_DIR)" -- \
-		$(PYTHON) $(SERIAL_CONFIG_GENERATOR) \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(SERIAL_CONFIG_GENERATOR) \
 			--manifest $(SERIAL_PORT_MANIFEST) \
 			--output $(SERIAL_GENERATED_DIR)
 	@touch "$@"
@@ -345,36 +374,77 @@ $(UM982_GENERATED_STAMP): make/project.mk $(UM982_CONTRACT_GENERATOR) \
 $(UM982_CONTRACT_HEADER): | $(UM982_GENERATED_STAMP)
 	@test -f $@
 
-$(MESSAGE_GENERATED_STAMP): make/project.mk $(MESSAGE_GENERATOR) \
-		$(MESSAGE_SCHEMAS) $(MESSAGE_ABI_LOCK)
+$(MESSAGE_GENERATED_MAKEFILE): make/project.mk $(MESSAGE_GENERATOR_DEPS) \
+		$(MESSAGE_SCHEMAS) | $(HOST_TOOLS_STAMP)
 	$(DIMA_PROGRESS_RUN) --label UORB_GEN --target "$@" \
 		--display "$(MESSAGE_GENERATED_DIR)" -- \
-		$(PYTHON) $(MESSAGE_GENERATOR) \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(MESSAGE_GENERATOR) \
 			--schemas $(MESSAGE_SCHEMA_DIR) \
-			--lock $(MESSAGE_ABI_LOCK) \
-			--output $(MESSAGE_GENERATED_DIR)
-	@touch "$@"
+			--upstream-root $(UORB_UPSTREAM_ROOT) \
+			--output $(MESSAGE_GENERATED_DIR) \
+			--compat-output $(MESSAGE_COMPAT_GENERATED_DIR)
 
-$(MESSAGE_GENERATED_OUTPUTS): | $(MESSAGE_GENERATED_STAMP)
+include $(MESSAGE_GENERATED_MAKEFILE)
+
+MESSAGE_GENERATED_STAMP := $(DIMA_UORB_GENERATED_STAMP)
+MESSAGE_GENERATED_OUTPUTS := $(DIMA_UORB_GENERATED_OUTPUTS)
+
+$(MESSAGE_GENERATED_OUTPUTS): | $(MESSAGE_GENERATED_MAKEFILE)
 	@test -f $@
 
+.PHONY: uorb-generated uorb-generated-verify
+uorb-generated: $(MESSAGE_GENERATED_OUTPUTS)
+	$(DIMA_PROGRESS_RUN) --label UORB_SOURCE --target "$@" \
+		--display "$(UORB_SOURCE_MANIFEST)" -- \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			$(PYTHON) $(SOURCE_MANIFEST_TOOL) \
+			--root $(UORB_UPSTREAM_ROOT) \
+			--output $(UORB_SOURCE_MANIFEST) \
+			--project PX4-Autopilot \
+			--commit d6f12ad1c4f70ad3230afd7d86e971421e02fef4 \
+			--verify
+
+uorb-generated-verify: $(MESSAGE_GENERATED_OUTPUTS)
+	$(DIMA_PROGRESS_RUN) --label UORB_VERIFY --target "$@" -- \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(MESSAGE_GENERATOR) \
+			--schemas $(MESSAGE_SCHEMA_DIR) \
+			--upstream-root $(UORB_UPSTREAM_ROOT) \
+			--output $(MESSAGE_GENERATED_DIR) \
+			--compat-output $(MESSAGE_COMPAT_GENERATED_DIR) --verify
+
 $(PARAMETER_GENERATED_STAMP): make/project.mk $(PARAMETER_GENERATOR_DEPS) \
-		$(SERIAL_GENERATED_OUTPUTS) $(PARAMETER_DEFINITIONS)
+		$(PARAMETER_YAML_DEFINITIONS) | $(HOST_TOOLS_STAMP)
 	$(DIMA_PROGRESS_RUN) --label PARAM --target "$@" \
 		--display "$(PARAMETER_GENERATED_DIR)" -- \
-		$(PYTHON) $(PARAMETER_GENERATOR) \
-		$(foreach source,$(PARAMETER_DEFINITIONS),--source $(source)) \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(PARAMETER_GENERATOR) \
+		$(foreach definition,$(PARAMETER_YAML_DEFINITIONS),--yaml "$(definition)") \
+		--upstream-root $(PARAMETER_UPSTREAM_ROOT) \
 		--output $(PARAMETER_GENERATED_DIR) \
 		--include-output $(PARAMETER_INCLUDE_DIR)
 	@touch "$@"
-# 参数定义、串口生成参数与 DroneCAN 合同汇入同一次生成；px4::params、元数据、
-# 参数合同和兼容头因此共享一套索引与名称来源。
+# 源码 YAML、串口 YAML 与 DroneCAN YAML 只进入 PX4 官方链；Dima 合同随后仅从
+# 官方 XML/JSON/Header 派生，因此类型、默认值、索引和 volatile 语义没有第二解释器。
 
 $(PARAMETER_GENERATED_OUTPUTS): | $(PARAMETER_GENERATED_STAMP)
 	@test -f $@
 
 .PHONY: parameter-generated
 parameter-generated: $(PARAMETER_GENERATED_OUTPUTS)
+	$(DIMA_PROGRESS_RUN) --label PARAM_SOURCE --target "$@" \
+		--display "$(PARAMETER_SOURCE_MANIFEST)" -- \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			$(PYTHON) $(SOURCE_MANIFEST_TOOL) \
+			--root $(PARAMETER_UPSTREAM_ROOT) \
+			--output $(PARAMETER_SOURCE_MANIFEST) \
+			--project PX4-Autopilot \
+			--commit 1f6b6f61f8f42eaab0269c16a442cb580f954d7c \
+			--verify
 
 $(PARAMETER_METADATA_STAMP): make/project.mk $(PARAMETER_METADATA_GENERATOR) \
 		$(PARAMETER_GENERATED_DIR)/parameters.json
@@ -398,24 +468,59 @@ parameter-metadata-verify: $(PARAMETER_METADATA_OUTPUTS) \
 			--parameters $(PARAMETER_GENERATED_DIR)/parameters.json \
 			--output $(PARAMETER_METADATA_DIR) --verify
 
-$(MAVLINK_GENERATED_STAMP): make/project.mk $(MAVLINK_GENERATOR_DEPS)
-	$(DIMA_PROGRESS_RUN) --label MAVLINK --target "$@" \
-		--display "$(MAVLINK_GENERATED_DIR)" -- \
-		env PYTHONDONTWRITEBYTECODE=1 $(PYTHON) $(MAVLINK_GENERATOR) \
-			--xml-dir $(MAVLINK_XML_DIR) \
-			--output-dir $(MAVLINK_GENERATED_DIR) \
-			--lock $(MAVLINK_LOCK) \
+# host 工具不固定 lxml；显式关闭 XSD，改由 XML 解析、来源 hash、include
+# 闭包和生成符号门禁提供跨主机一致的失败边界。
+$(MAVLINK_GENERATED_STAMP): make/project.mk $(MAVLINK_GENERATION_DEPS) | \
+		$(HOST_TOOLS_STAMP)
+	@set -eu; \
+		rm -rf "$(MAVLINK_GENERATED_WORK_DIR)"; \
+		pymavlink_root="$$(env PYTHONDONTWRITEBYTECODE=1 \
+			$(PYTHON) $(MAVLINK_BOOTSTRAP) --lock $(MAVLINK_LOCK) \
 			--cache-root "$(HOST_TOOLS_CACHE_ROOT)" \
-			$(if $(strip $(PYMAVLINK_ROOT)),--pymavlink-root "$(PYMAVLINK_ROOT)",)
-	@touch "$@"
-# stamp 仅在完整生成成功后写入；消费者依赖 MAVLINK_GENERATED_OUTPUTS，缺少任一
-# 头文件都会失败，不能以旧 dialect 掩盖新运行时合同。
+			$(if $(strip $(PYMAVLINK_ROOT)),--source-root "$(PYMAVLINK_ROOT)",))"; \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
+			$(PYTHON) "$$pymavlink_root/tools/mavgen.py" \
+			--lang C --wire-protocol 2.0 --no-validate \
+			--output "$(MAVLINK_GENERATED_WORK_DIR)" \
+			$(MAVLINK_DIALECT); \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(MAVLINK_RUNTIME_GENERATOR) \
+			--generated-dir "$(MAVLINK_GENERATED_WORK_DIR)" \
+			--output-dir "$(MAVLINK_GENERATED_DIR)" \
+			--dialect $(MAVLINK_DIALECT) \
+			$(foreach xml,$(MAVLINK_UPSTREAM_XML_INPUTS),--upstream-xml "$(xml)") \
+			--policy $(MAVLINK_RUNTIME_POLICY) --lock $(MAVLINK_LOCK)
+# .generated.json 由薄策略生成器在 mavgen 完成后写入并原子安装；
+# 任一阶段失败都不会用半棵新头文件覆盖已安装树。
 
 $(MAVLINK_GENERATED_OUTPUTS): | $(MAVLINK_GENERATED_STAMP)
 	@test -f "$@"
 
-.PHONY: mavlink
-mavlink: $(MAVLINK_GENERATED_OUTPUTS)
+.PHONY: mavlink mavlink-generated mavlink-generated-verify
+mavlink: mavlink-generated
+mavlink-generated: $(MAVLINK_GENERATED_OUTPUTS)
+
+mavlink-generated-verify: $(MAVLINK_GENERATED_OUTPUTS) | $(HOST_TOOLS_STAMP)
+	@set -eu; \
+		rm -rf "$(MAVLINK_VERIFY_WORK_DIR)"; \
+		pymavlink_root="$$(env PYTHONDONTWRITEBYTECODE=1 \
+			$(PYTHON) $(MAVLINK_BOOTSTRAP) --lock $(MAVLINK_LOCK) \
+			--cache-root "$(HOST_TOOLS_CACHE_ROOT)" \
+			$(if $(strip $(PYMAVLINK_ROOT)),--source-root "$(PYMAVLINK_ROOT)",))"; \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
+			$(PYTHON) "$$pymavlink_root/tools/mavgen.py" \
+			--lang C --wire-protocol 2.0 --no-validate \
+			--output "$(MAVLINK_VERIFY_WORK_DIR)" \
+			$(MAVLINK_DIALECT); \
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(MAVLINK_RUNTIME_GENERATOR) \
+			--generated-dir "$(MAVLINK_VERIFY_WORK_DIR)" \
+			--output-dir "$(MAVLINK_GENERATED_DIR)" \
+			--dialect $(MAVLINK_DIALECT) \
+			$(foreach xml,$(MAVLINK_UPSTREAM_XML_INPUTS),--upstream-xml "$(xml)") \
+			--policy $(MAVLINK_RUNTIME_POLICY) --lock $(MAVLINK_LOCK) --verify
 
 # newlib-nano lazily allocates its three standard FILE objects on the first
 # setvbuf/printf call.  Keep standard-stream setup independent of the shared
@@ -442,8 +547,6 @@ $(FREERTOS_DYNAMIC_HEAP_OBJECT):
 # so sources with identical basenames in different Dima modules cannot collide.
 CUBEMX_OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(OBJECTS))
 override OBJECTS := $(filter-out $(FREERTOS_DYNAMIC_HEAP_OBJECT),$(CUBEMX_OBJECTS))
-DIMA_COMMON_C_SOURCES := \
-	$(PARAMETER_GENERATED_DIR)/parameter_metadata.c
 DIMA_DRONECAN_C_SOURCES := \
 	Middlewares/Third_Party/libcanard/canard.c \
 	$(DIMA_DRONECAN_GENERATED_C_SOURCES)
@@ -466,7 +569,6 @@ DIMA_BOARD_C_SOURCES := \
 	Boards/H743/Src/motor_pwm.c \
 	$(DIMA_FATFS_BOARD_C_SOURCES)
 PROJECT_C_SOURCES := \
-	$(DIMA_COMMON_C_SOURCES) \
 	$(DIMA_DRONECAN_C_SOURCES) \
 	$(DIMA_FREERTOS_C_SOURCES) \
 	$(DIMA_STM32_C_SOURCES) \
@@ -538,7 +640,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/maintenance/RuntimeMaintenanceCoordinator.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
-	Dima/middleware/uorb/uORB.cpp \
+	Dima/middleware/uORB/uORB.cpp \
 	Dima/middleware/parameters/param.cpp \
 	Dima/middleware/parameters/param_storage.cpp \
 	Dima/middleware/parameters/autosave.cpp \
@@ -548,7 +650,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/parameters/FileStorage.cpp \
 	Dima/middleware/parameters/flashfs.cpp \
 	Dima/modules/rc/RcManualInput.cpp \
-	$(MESSAGE_GENERATED_SOURCE) \
+	$(DIMA_UORB_GENERATED_SOURCES) \
 	Dima/middleware/events/events.cpp \
 	Dima/middleware/perf/perf_counter.cpp \
 	Dima/middleware/logging/logging.cpp
@@ -665,15 +767,15 @@ DIMA_SERIAL_CONTRACT_OBJECTS := \
 	$(BUILD_DIR)/Dima/drivers/rc/sbus/SbusRc.o
 DIMA_MIDDLEWARE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/middleware/%,$(PROJECT_OBJECTS))
+DIMA_UORB_RUNTIME_OBJECT := \
+	$(BUILD_DIR)/Dima/middleware/uORB/uORB.o
 DIMA_PARAMETER_MIDDLEWARE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/middleware/parameters/%,$(PROJECT_OBJECTS))
 DIMA_LOG_EVENT_MIDDLEWARE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/middleware/logging/% \
 		$(BUILD_DIR)/Dima/middleware/events/%,$(PROJECT_OBJECTS))
-DIMA_PARAMETER_METADATA_OBJECT := \
-	$(addprefix $(BUILD_DIR)/,$(DIMA_COMMON_C_SOURCES:.c=.o))
 DIMA_MESSAGE_GENERATED_OBJECT := \
-	$(addprefix $(BUILD_DIR)/,$(MESSAGE_GENERATED_SOURCE:.cpp=.o))
+	$(addprefix $(BUILD_DIR)/,$(DIMA_UORB_GENERATED_SOURCES:.cpp=.o))
 DIMA_STM32_UART_RESOURCE_OBJECT := \
 	$(BUILD_DIR)/Dima/platform/stm32h7/serial/UartResources.o
 DIMA_STM32_USB_TRANSPORT_OBJECT := \
@@ -790,13 +892,15 @@ $(DIMA_SERIAL_CONFIG_OBJECT): DIMA_PRIVATE_INCLUDES += \
 
 $(DIMA_MIDDLEWARE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_MIDDLEWARE_INCLUDES) $(DIMA_PLATFORM_INCLUDES)
+# uORB Runtime 需要读取官方 uORBTopics.hpp 聚合目录；只对该对象
+# 开放生成 include 根，不把消息合同扩散到其他中间件。
+$(DIMA_UORB_RUNTIME_OBJECT): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_MESSAGE_GENERATED_INCLUDES)
 $(DIMA_PARAMETER_MIDDLEWARE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_LIB_INCLUDES) $(DIMA_MESSAGE_GENERATED_INCLUDES) \
 	$(DIMA_PARAMETER_GENERATED_INCLUDES)
 $(DIMA_LOG_EVENT_MIDDLEWARE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_LIB_INCLUDES) $(DIMA_MESSAGE_GENERATED_INCLUDES)
-$(DIMA_PARAMETER_METADATA_OBJECT): DIMA_PRIVATE_INCLUDES += \
-	$(DIMA_MIDDLEWARE_INCLUDES)
 $(DIMA_MESSAGE_GENERATED_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_MESSAGE_GENERATED_INCLUDES) $(DIMA_MIDDLEWARE_INCLUDES) \
 	$(DIMA_PLATFORM_INCLUDES) $(DIMA_PARAMETER_GENERATED_INCLUDES)

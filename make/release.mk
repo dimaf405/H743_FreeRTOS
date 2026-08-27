@@ -101,7 +101,9 @@ $(ARCHITECTURE_VERIFY_STAMP): $(ARCHITECTURE_FORCE_PREREQUISITE) \
 		parameter-metadata-verify $(BUILD_DIR)
 	$(DIMA_PROGRESS_RUN) --label ARCH --target "$@" \
 		--display "check-architecture" -- \
-		$(PYTHON) $(ARCHITECTURE_CHECK_TOOL) --stamp "$@"
+		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
+			PYTHONPATH="$(HOST_PYTHON_DIR)" \
+			$(PYTHON) $(ARCHITECTURE_CHECK_TOOL) --stamp "$@"
 
 architecture-ready: $(ARCHITECTURE_VERIFY_STAMP)
 	@:
@@ -138,7 +140,13 @@ __dima_clean_progress:
 	$(DIMA_PROGRESS_RUN) --label CLEAN --target "$(BUILD_DIR)" \
 		--display "$(BUILD_DIR)" -- rm -fR "$(BUILD_DIR)"
 
-$(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt
+GENERATION_HOST_REQUIREMENTS := tools/generation/requirements-windows.txt
+
+# 生成器依赖使用固定归档哈希并禁用隐式依赖解析，避免 PyPI 最新版本改变
+# 参数、uORB 或 Metadata 产物。二进制 wheel 与正式 PlatformIO Python 3.11 x64
+# 环境绑定，其他主机只负责发起 Windows 原生构建。
+$(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt \
+		$(GENERATION_HOST_REQUIREMENTS) make/release.mk
 	@set -eu; \
 		mkdir -p "$(HOST_TOOLS_CACHE_ROOT)"; \
 		tmp="$(HOST_PYTHON_DIR).tmp.$$$$"; \
@@ -163,6 +171,10 @@ $(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt
 		fi; \
 		$(PYTHON) -m pip install --disable-pip-version-check \
 			--target "$$tmp" -r "$<"; \
+		$(PYTHON) -m pip install --disable-pip-version-check \
+			--upgrade --no-deps --require-hashes \
+			--only-binary=PyYAML,MarkupSafe \
+			--target "$$tmp" -r "$(GENERATION_HOST_REQUIREMENTS)"; \
 		if test -e "$(HOST_PYTHON_DIR)"; then \
 			mv "$(HOST_PYTHON_DIR)" "$$old"; \
 		fi; \
