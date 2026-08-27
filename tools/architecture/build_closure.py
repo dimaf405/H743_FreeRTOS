@@ -40,7 +40,6 @@ class CompileUnit:
     output: str
     includes: tuple[str, ...]
     project_owned: bool
-    target_private_includes: bool
 
 
 @dataclass(frozen=True)
@@ -55,15 +54,6 @@ class BuildClosure:
     @property
     def source_outputs(self) -> frozenset[tuple[str, str]]:
         return frozenset((unit.source, unit.output) for unit in self.units)
-
-    @property
-    def application_units(self) -> tuple[CompileUnit, ...]:
-        return tuple(unit for unit in self.units if unit.owner == "application")
-
-    @property
-    def project_units(self) -> tuple[CompileUnit, ...]:
-        return tuple(unit for unit in self.application_units if unit.project_owned)
-
 
 @dataclass(frozen=True)
 class _MakeDatabase:
@@ -247,7 +237,7 @@ def _validate_units(
 
 
 def _application_units(database: _MakeDatabase) -> tuple[CompileUnit, ...]:
-    """从应用 Make 数据库派生真实编译单元、对象路径及每目标私有 include 闭包。"""
+    """从应用 Make 数据库派生真实编译单元、对象路径及有效 include 闭包。"""
     build_dir = _normalize_path(database.words("BUILD_DIR")[0])
     cubemx_sources = tuple(
         _normalize_path(source) for source in database.words("C_SOURCES")
@@ -276,7 +266,6 @@ def _application_units(database: _MakeDatabase) -> tuple[CompileUnit, ...]:
             output=output,
             includes=(*global_includes, *extra_includes),
             project_owned=False,
-            target_private_includes=False,
         ))
 
     for source in project_sources:
@@ -288,7 +277,6 @@ def _application_units(database: _MakeDatabase) -> tuple[CompileUnit, ...]:
             output=output,
             includes=_includes(target_context or ""),
             project_owned=True,
-            target_private_includes=target_context is not None,
         ))
 
     result = tuple(units)
@@ -334,7 +322,6 @@ def _bootloader_units(database: _MakeDatabase) -> tuple[CompileUnit, ...]:
                 else global_includes
             ),
             project_owned=False,
-            target_private_includes=False,
         ))
     result = tuple(units)
     _validate_units("MCUboot", result, database.words("OBJECTS"))
