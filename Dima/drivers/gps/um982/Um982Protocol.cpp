@@ -54,6 +54,38 @@ std::size_t split(char *text, char delimiter, char **fields,
     return count;
 }
 
+std::size_t split_whitespace(char *text, char **fields,
+                             std::size_t capacity) noexcept
+{
+    // UNILOGLIST 使用对齐空格而不是固定分隔符；连续空白必须折叠，避免把手册
+    // 示例中的缩进误解析为空字段。输入始终位于增量解析器的有界帧缓冲内；
+    // R4.10 的 '<' 行没有 CRC，因此后续仍须严格验证消息名、端口和周期结构。
+    if (text == nullptr || fields == nullptr || capacity == 0U) return 0U;
+    std::size_t count = 0U;
+    char *cursor = text;
+    while (*cursor != '\0') {
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (*cursor == '\0') break;
+        if (count < capacity) fields[count++] = cursor;
+        while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t') {
+            ++cursor;
+        }
+        if (*cursor != '\0') *cursor++ = '\0';
+    }
+    return count;
+}
+
+void assign_message_contract(
+    Um982Protocol::Frame &frame, generated::MessageRole role) noexcept
+{
+    // 语义角色到位号的映射由生成合同完成；驱动诊断只消费索引，不能把六类
+    // UM982 消息名称或排列顺序复制到手写源码。
+    const std::size_t index = generated::find_message_role(role);
+    if (index < generated::kMessageContractCount) {
+        frame.message_contract_index = static_cast<std::uint8_t>(index);
+    }
+}
+
 bool parse_unsigned_prefix(const char *text, const char *&end,
                            std::uint32_t &value) noexcept
 {
@@ -360,9 +392,17 @@ bool parse_gga(char **fields, std::size_t count,
     if (count < 13U) return false;
     std::uint32_t quality = 0U;
     std::uint32_t satellites = 0U;
-    if (!parse_unsigned(fields[6], quality) || quality > 8U ||
-        !parse_unsigned(fields[7], satellites) ||
-        satellites > UINT8_MAX) {
+    if (!parse_unsigned(fields[6], quality) || quality > 8U) {
+        return false;
+    }
+    // UM982 在尚未定位时会输出 quality=0 且卫星数字段为空；此时空值等价于 0，
+    // 仍能证明接收机数据面在线。声称有效 fix 时则必须提供合法卫星数。
+    if (fields[7][0] != '\0') {
+        if (!parse_unsigned(fields[7], satellites) ||
+            satellites > UINT8_MAX) {
+            return false;
+        }
+    } else if (quality != 0U) {
         return false;
     }
     frame.gga.fix_quality = static_cast<std::uint8_t>(quality);
@@ -544,46 +584,64 @@ bool parse_rmc(char **fields, std::size_t count,
 
 bool parse_unilog(char *body, Um982Protocol::Frame &frame) noexcept
 {
-    // 只遍历生成合同中的日志名，并按 COM 分别统计存在位、实例数与周期；
-    // instance_count 饱和到 UINT8_MAX，使重复实例不会因回绕伪装成单实例。
-    for (std::size_t index = 0U;
-         index < generated::kMessageContractCount; ++index) {
-        char *search = body;
-        const char *const log_name =
-            generated::kMessageContracts[index].log_name;
-        const std::size_t name_length = std::strlen(log_name);
-        while (char *const entry = std::strstr(search,
-                                               log_name)) {
-            search = entry + name_length;
-            const char *cursor = search;
-            while (*cursor == ' ') ++cursor;
-            if (std::strncmp(cursor, "COM", 3U) != 0) continue;
-            cursor += 3U;
-
-            const char *end = nullptr;
-            std::uint32_t port = 0U;
-            if (!parse_unsigned_prefix(cursor, end, port) || port < 1U ||
-                port > Um982Protocol::kReceiverPortCount) {
-                continue;
-            }
-            cursor = end;
-            while (*cursor == ' ') ++cursor;
-            double parsed_period = 0.0;
-            if (!parse_decimal_prefix(cursor, end, parsed_period)) continue;
-            const float period = static_cast<float>(parsed_period);
-            if (!std::isfinite(period) || period <= 0.0F) continue;
-
-            const std::uint8_t port_index =
-                static_cast<std::uint8_t>(port - 1U);
-            frame.unilog_list.present_mask[port_index] |=
-                static_cast<std::uint8_t>(1U << index);
-            std::uint8_t &instance_count =
-                frame.unilog_list.instance_count[port_index][index];
-            if (instance_count != UINT8_MAX) ++instance_count;
-            frame.unilog_list.period_s[port_index][index] = period;
+    // R1.15 示例为“< MESSAGE COMn period”，表格还允许 ONTIME period/ONCE。
+    // 必须逐行精确匹配生成名称；子字符串搜索会把长消息或兼容别名重复计数。
+    bool list_entry_seen = false;
+    char *line = body;
+    while (line != nullptr && *line != '\0') {
+        char *next = std::strpbrk(line, "\r\n");
+        if (next != nullptr) {
+            *next++ = '\0';
+            while (*next == '\r' || *next == '\n') ++next;
         }
+
+        while (*line == ' ' || *line == '\t') ++line;
+        if (*line == '<') {
+            ++line;
+            while (*line == ' ' || *line == '\t') ++line;
+        }
+
+        char *fields[5]{};
+        const std::size_t count = split_whitespace(line, fields, 5U);
+        if (count >= 3U) {
+            std::uint32_t port = 0U;
+            if (std::strncmp(fields[1], "COM", 3U) == 0 &&
+                parse_unsigned(fields[1] + 3U, port) && port >= 1U &&
+                port <= Um982Protocol::kReceiverPortCount) {
+                // 合同外日志同样属于真实 UNILOGLIST 活动，可用于等待响应静默；
+                // 但只有生成合同精确匹配项才能写入配置快照。
+                list_entry_seen = true;
+                const std::size_t contract_index =
+                    generated::find_message_contract(fields[0]);
+                if (contract_index >= generated::kMessageContractCount) {
+                    line = next;
+                    continue;
+                }
+                const std::uint8_t port_index =
+                    static_cast<std::uint8_t>(port - 1U);
+                frame.unilog_list.present_mask[port_index] |=
+                    static_cast<std::uint8_t>(1U << contract_index);
+                std::uint8_t &instances = frame.unilog_list.instance_count[
+                    port_index][contract_index];
+                if (instances != UINT8_MAX) ++instances;
+
+                // ONCE 或损坏的 trigger 也要计入实例，使一个有效 ONTIME 加一个
+                // ONCE 不会伪装成单实例；只有两种手册周期表达能写入正周期。
+                const char *period_text = count == 3U ? fields[2] : nullptr;
+                if (count == 4U && std::strcmp(fields[2], "ONTIME") == 0) {
+                    period_text = fields[3];
+                }
+                float period = 0.0F;
+                if (period_text != nullptr && parse_float(period_text, period) &&
+                    period > 0.0F) {
+                    frame.unilog_list.period_s[port_index][contract_index] =
+                        period;
+                }
+            }
+        }
+        line = next;
     }
-    return true;
+    return list_entry_seen;
 }
 
 bool leap_year(int year) noexcept
@@ -612,21 +670,63 @@ bool Um982Protocol::feed(std::uint8_t byte, Frame &frame) noexcept
 {
     frame = Frame{};
     const char value = static_cast<char>(byte);
-    // 空闲态只接受 '$' 或 '#'；其他线路噪声直接忽略，不产生逐字节错误事件。
+    // R4.10 的 UNILOGLIST 清单项不是 '$'/'#' 校验帧，而是 '<' 开头、CR/LF
+    // 结束的独立文本行。只把这种明确前缀纳入解析，其他线路噪声仍逐字节忽略。
     if (start_ == '\0') {
-        if (value != '$' && value != '#') return false;
+        if (value != '$' && value != '#' && value != '<') return false;
         start_ = value;
-        checksum_digits_required_ = value == '$' ? 2U : 8U;
+        checksum_digits_required_ = value == '$' ? 2U
+                                     : value == '#' ? 8U
+                                                    : 0U;
         buffer_[0] = value;
         length_ = 1U;
         return false;
     }
 
-    // 校验段开始前出现新的起始符，说明上一帧截断：直接以新帧重新同步。
-    if ((value == '$' || value == '#') && checksum_digits_ == 0U) {
+    if (start_ == '<') {
+        // 无校验清单行以第一个 CR/LF 原子完成；parse_unilog 继续通过生成的
+        // find_message_contract 精确识别消息名，合同外日志只保留为响应活动。
+        if (value == '\r' || value == '\n') {
+            buffer_[length_] = '\0';
+            const bool parsed = parse_unilog(buffer_, frame);
+            reset();
+            frame.kind = parsed ? Kind::UnilogListEntry : Kind::Unknown;
+            return true;
+        }
+
+        // 若上一条清单缺少换行，新的合法起始符仍必须重新同步，不能把后续
+        // NMEA/Unicore 帧吞进控制行缓冲。
+        if (value == '$' || value == '#' || value == '<') {
+            reset();
+            start_ = value;
+            checksum_digits_required_ = value == '$' ? 2U
+                                         : value == '#' ? 8U
+                                                        : 0U;
+            buffer_[0] = value;
+            length_ = 1U;
+            return false;
+        }
+
+        if (length_ >= kMaximumFrameBytes) {
+            reset();
+            frame.kind = Kind::Overflow;
+            return true;
+        }
+        buffer_[length_++] = value;
+        buffer_[length_] = '\0';
+        return false;
+    }
+
+    // UM982 的 UNILOGLIST 可能紧跟在无校验控制头或被截断的测量帧之后；校验段
+    // 尚未开始时，'$'/'#'/'<' 都是权威新边界，必须放弃旧帧重新同步。当前 NMEA
+    // 前端只服务 UM982，因此不会为其他接收机保留含 '<' 的私有正文方言。
+    if ((value == '$' || value == '#' || value == '<') &&
+        checksum_digits_ == 0U) {
         reset();
         start_ = value;
-        checksum_digits_required_ = value == '$' ? 2U : 8U;
+        checksum_digits_required_ = value == '$' ? 2U
+                                     : value == '#' ? 8U
+                                                    : 0U;
         buffer_[0] = value;
         length_ = 1U;
         return false;
@@ -678,10 +778,20 @@ bool Um982Protocol::complete(Frame &frame) noexcept
     const std::size_t checksum_offset = checksum_offset_;
     const std::uint32_t supplied = parse_hex(
         &buffer_[checksum_offset + 1U], checksum_length);
-    // 校验范围都排除起始符与 '*'：NMEA 为正文 XOR，Unicore 为正文 CRC-32。
-    const std::uint32_t calculated = start == '$'
+    const char *const body = &buffer_[1];
+    const std::size_t body_length = checksum_offset - 1U;
+    std::uint32_t calculated = start == '$'
         ? nmea_xor(&buffer_[1], checksum_offset - 1U)
         : unicore_crc32(&buffer_[1], checksum_offset - 1U);
+    // R4.10 的普通 NMEA 校验排除 '$'，但接收机生成的 $CONFIG/$command 控制响应
+    // 把起始 '$' 也计入 XOR。只按这两个 UM982 控制头切换校验域，不能对所有
+    // NMEA 同时接受两种结果，否则单比特损坏可能被错误放行。
+    const bool um982_control_response = start == '$' &&
+        ((body_length >= 7U && std::memcmp(body, "CONFIG,", 7U) == 0) ||
+         (body_length >= 8U && std::memcmp(body, "command,", 8U) == 0));
+    if (um982_control_response) {
+        calculated ^= static_cast<std::uint8_t>('$');
+    }
     if (supplied != calculated) {
         reset();
         frame.kind = Kind::BadChecksum;
@@ -689,17 +799,17 @@ bool Um982Protocol::complete(Frame &frame) noexcept
     }
 
     buffer_[checksum_offset] = '\0';
-    char *body = &buffer_[1];
+    char *mutable_body = &buffer_[1];
     bool parsed = false;
     // 校验正确后再原地分割。未知但语法/校验合法的消息返回 Unknown；只有已知
     // 消息字段不满足合同才返回 BadStructure，便于上层采用不同健康语义。
     if (start == '$') {
-        if (std::strncmp(body, "CONFIG,", 7U) == 0) {
-            parsed = parse_config(body, frame);
+        if (std::strncmp(mutable_body, "CONFIG,", 7U) == 0) {
+            parsed = parse_config(mutable_body, frame);
             frame.kind = parsed ? Kind::ConfigPort : Kind::BadStructure;
         } else {
             char *fields[24]{};
-            const std::size_t count = split(body, ',', fields, 24U);
+            const std::size_t count = split(mutable_body, ',', fields, 24U);
             const char *name = count > 0U ? fields[0] : "";
             const std::size_t name_length = std::strlen(name);
             const char *suffix = name_length >= 3U
@@ -707,43 +817,73 @@ bool Um982Protocol::complete(Frame &frame) noexcept
                                      : name;
             if (std::strcmp(suffix, "GGA") == 0) {
                 parsed = parse_gga(fields, count, frame);
+                if (parsed) {
+                    assign_message_contract(
+                        frame, generated::MessageRole::Gga);
+                }
                 frame.kind = parsed ? Kind::Gga : Kind::BadStructure;
             } else if (std::strcmp(suffix, "GST") == 0) {
                 parsed = parse_gst(fields, count, frame);
+                if (parsed) {
+                    assign_message_contract(
+                        frame, generated::MessageRole::Gst);
+                }
                 frame.kind = parsed ? Kind::Gst : Kind::BadStructure;
             } else if (std::strcmp(suffix, "GSA") == 0) {
                 parsed = parse_gsa(fields, count, frame);
+                if (parsed) {
+                    assign_message_contract(
+                        frame, generated::MessageRole::Gsa);
+                }
                 frame.kind = parsed ? Kind::Gsa : Kind::BadStructure;
             } else if (std::strcmp(suffix, "RMC") == 0) {
                 parsed = parse_rmc(fields, count, frame);
+                if (parsed) {
+                    assign_message_contract(
+                        frame, generated::MessageRole::Rmc);
+                }
                 frame.kind = parsed ? Kind::Rmc : Kind::BadStructure;
             } else {
                 frame.kind = Kind::Unknown;
             }
         }
     } else {
-        char *semicolon = std::strchr(body, ';');
+        char *semicolon = std::strchr(mutable_body, ';');
         if (semicolon != nullptr) {
             *semicolon = '\0';
             char message[24]{};
-            const char *comma = std::strchr(body, ',');
+            const char *comma = std::strchr(mutable_body, ',');
             const std::size_t message_length = comma == nullptr
-                ? std::strlen(body)
-                : static_cast<std::size_t>(comma - body);
+                ? std::strlen(mutable_body)
+                : static_cast<std::size_t>(comma - mutable_body);
             const std::size_t copied = message_length < sizeof(message) - 1U
                                            ? message_length
                                            : sizeof(message) - 1U;
-            std::memcpy(message, body, copied);
+            std::memcpy(message, mutable_body, copied);
             char *data = semicolon + 1;
+            const std::size_t contract_index =
+                generated::find_message_contract(message);
+            const auto role = contract_index < generated::kMessageContractCount
+                ? generated::kMessageContracts[contract_index].role
+                : generated::MessageRole::Gga;
             if (std::strcmp(message, "VERSIONA") == 0) {
                 parsed = parse_version(data, frame);
                 frame.kind = parsed ? Kind::Version : Kind::BadStructure;
-            } else if (std::strcmp(message, "AGRICA") == 0 ||
-                       std::strcmp(message, "UNIAGRICA") == 0) {
-                parsed = parse_agrica(body, data, frame);
+            } else if (contract_index < generated::kMessageContractCount &&
+                       role == generated::MessageRole::Agrica) {
+                parsed = parse_agrica(mutable_body, data, frame);
+                if (parsed) {
+                    frame.message_contract_index =
+                        static_cast<std::uint8_t>(contract_index);
+                }
                 frame.kind = parsed ? Kind::Agrica : Kind::BadStructure;
-            } else if (std::strcmp(message, "UNIHEADINGA") == 0) {
-                parsed = parse_heading(body, data, frame);
+            } else if (contract_index < generated::kMessageContractCount &&
+                       role == generated::MessageRole::Heading) {
+                parsed = parse_heading(mutable_body, data, frame);
+                if (parsed) {
+                    frame.message_contract_index =
+                        static_cast<std::uint8_t>(contract_index);
+                }
                 frame.kind = parsed ? Kind::Heading : Kind::BadStructure;
             } else if (std::strcmp(message, "UNILOGLIST") == 0) {
                 parsed = parse_unilog(data, frame);

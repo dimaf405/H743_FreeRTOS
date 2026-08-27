@@ -7,7 +7,6 @@
 
 namespace dima::middleware::maintenance {
 
-
 class RuntimeMaintenanceCoordinator final {
 public:
     using Ticket = std::uint32_t;
@@ -16,6 +15,18 @@ public:
         Waiting,
         Ready,
         Denied,
+    };
+
+    // 保留 maintenance 被撤销的第一原因；调用方必须在 cancel() 释放票据前读取，
+    // 从而把运行健康、维护安全、无真实进度和整笔硬截止分别暴露给故障边沿。
+    enum class FailureReason : std::uint8_t {
+        None,
+        RuntimeUnhealthy,
+        MaintenanceUnsafe,
+        ProgressTimeout,
+        HardDeadline,
+        InvalidTicket,
+        InvalidProgress,
     };
 
     explicit RuntimeMaintenanceCoordinator(
@@ -29,6 +40,7 @@ public:
     Permit permit(Ticket ticket, dima::platform::TimeUs now_us) noexcept;
     bool report_progress(Ticket ticket, std::uint32_t progress,
                          dima::platform::TimeUs now_us) noexcept;
+    FailureReason failure_reason(Ticket ticket) const noexcept;
     void complete(Ticket ticket) noexcept;
     void cancel(Ticket ticket) noexcept;
     bool in_progress() const noexcept;
@@ -50,6 +62,7 @@ private:
     static constexpr dima::platform::TimeUs kProgressTimeoutUs = 750000ULL;
 
     bool deadline_expired(dima::platform::TimeUs now_us) const noexcept;
+    void cancel_locked(FailureReason reason) noexcept;
     void reset_locked() noexcept;
 
     dima::platform::CriticalSection &critical_;
@@ -59,6 +72,7 @@ private:
     dima::platform::TimeUs deadline_us_{0U};
     dima::platform::TimeUs last_progress_us_{0U};
     State state_{State::Idle};
+    FailureReason failure_reason_{FailureReason::None};
 };
 
 } // namespace dima::middleware::maintenance

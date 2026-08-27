@@ -58,7 +58,7 @@ protected:
 private:
     // 配置状态机严格按以下方向推进：
     // WaitAssignment -> Detect -> ReadConfiguration ->
-    // ApplyConfiguration -> SaveConfiguration -> WaitRestart -> Run。
+    // ApplyConfiguration -> VerifyConfiguration -> SaveConfiguration -> Run。
     // 任意串口分配变化返回 WaitAssignment；接收超时返回 Detect；配置失败则保持
     // 数据接收并在 30 s 后重试，不能让配置写入失败拖垮 GPS 运行数据面。
     enum class Phase : std::uint8_t {
@@ -66,8 +66,8 @@ private:
         Detect,
         ReadConfiguration,
         ApplyConfiguration,
+        VerifyConfiguration,
         SaveConfiguration,
-        WaitRestart,
         Run,
     };
 
@@ -86,7 +86,6 @@ private:
     static constexpr std::uint32_t kConfigProgressUs = 200000U;
     static constexpr std::uint32_t kConfigurationRetryUs = 30000000U;
     static constexpr std::uint32_t kMaintenanceRetryUs = 1000000U;
-    static constexpr std::uint32_t kReceiverRestartWaitUs = 1000000U;
     static constexpr std::uint32_t kInitialBackoffUs = 500000U;
     static constexpr std::uint32_t kMaximumBackoffUs = 8000000U;
     static constexpr std::uint32_t kReceiveScheduleUs = 100000U;
@@ -94,6 +93,10 @@ private:
     // 避免持续串口流量饿死同一 WorkQueue 上的其他驱动。
     static constexpr std::size_t kRxReadBudgetBytes = 2048U;
     static constexpr std::uint32_t kRxYieldUs = 1000U;
+    // 每 10 s 汇总一次六类 UM982 测量计数；0.1 Hz 足以判断缺流，同时不会再次
+    // 填满深度 8 的 mavlink_log/STATUSTEXT 队列。
+    static constexpr std::uint64_t kDiagnosticReportIntervalUs =
+        10000000ULL;
     static constexpr std::uint64_t kValidationReportIntervalUs = 30000000ULL;
     static constexpr std::uint32_t kGpsDeviceBase = 0x554D9800U;
 
@@ -102,6 +105,11 @@ private:
     void schedule(std::uint32_t delay_us = 0U) noexcept;
     bool drain_uart() noexcept;
     void clear_measurement_cache() noexcept;
+    void reset_diagnostics() noexcept;
+    void record_diagnostic_frame(
+        const dima::protocols::um982::Um982Protocol::Frame &frame,
+        std::uint64_t arrival_us) noexcept;
+    void maybe_report_diagnostics(std::uint64_t now_us) noexcept;
     void handle_frame(const dima::protocols::um982::Um982Protocol::Frame &frame,
                       std::uint64_t arrival_us) noexcept;
     void publish_receiver_status(std::uint64_t now_us) noexcept;
@@ -133,14 +141,21 @@ private:
     bool send_command(const char *body) noexcept;
     void complete_probe() noexcept;
     void begin_configuration_read() noexcept;
-    void run_configuration_read(std::uint64_t now_us) noexcept;
+    void begin_configuration_verification() noexcept;
+    void begin_configuration_query(Phase phase) noexcept;
+    void run_configuration_read(std::uint64_t now_us,
+                                bool verification) noexcept;
     void begin_configuration_apply() noexcept;
     void run_configuration_apply(std::uint64_t now_us) noexcept;
     void run_configuration_save(std::uint64_t now_us) noexcept;
-    bool keep_configuration_alive(std::uint64_t now_us) noexcept;
+    bool configuration_maintenance_valid(std::uint64_t now_us) noexcept;
+    bool report_configuration_progress(std::uint64_t now_us) noexcept;
     void release_configuration_maintenance(bool complete) noexcept;
     void defer_configuration(bool rescan, const char *reason) noexcept;
     bool identify_receiver_port() noexcept;
+    void consume_unilog_list_entry(
+        const dima::protocols::um982::Um982Protocol::UnilogList &entry,
+        std::uint64_t arrival_us) noexcept;
     void build_log_update_mask() noexcept;
 
     dima::platform::AsyncSerialPort &uart_;
@@ -193,9 +208,12 @@ private:
     std::uint64_t last_agrica_arrival_us_{0U};
     std::uint64_t last_heading_arrival_us_{0U};
     std::uint64_t last_receiver_status_publish_us_{0U};
+    std::uint64_t last_config_response_arrival_us_{0U};
+    std::uint64_t last_unilog_entry_arrival_us_{0U};
     std::uint64_t configuration_retry_after_us_{0U};
     std::uint64_t maintenance_retry_after_us_{0U};
     std::uint64_t last_validation_report_us_{0U};
+    std::uint64_t diagnostic_window_started_us_{0U};
     std::uint32_t rx_budget_yields_{0U};
     std::uint32_t maintenance_progress_{0U};
     GpsErrorCounter gps_error_counter_{};
@@ -206,6 +224,10 @@ private:
     std::uint32_t protocol_overflow_errors_{0U};
     std::uint32_t timestamp_errors_{0U};
     std::uint32_t sample_structure_errors_{0U};
+    // 位号由生成合同索引决定；每个 10 s 窗口饱和计数，避免长期运行回绕。
+    std::uint16_t diagnostic_frame_counts_[
+        dima::protocols::um982::Um982Protocol::kMaximumTrackedLogs]{};
+    std::uint16_t diagnostic_other_frames_{0U};
     param_t yaw_offset_handle_{PARAM_INVALID};
     float yaw_offset_rad_{0.0F};
     std::int32_t active_port_{0};
@@ -221,6 +243,8 @@ private:
     std::uint8_t log_update_mask_{0U};
     std::uint8_t configuration_read_step_{0U};
     std::uint8_t configuration_command_index_{0U};
+    std::uint8_t diagnostic_fix_type_{0U};
+    std::uint8_t diagnostic_satellites_{0U};
     Phase phase_{Phase::WaitAssignment};
     ReceiverStatus receiver_status_{ReceiverStatus::Unassigned};
     dima::middleware::lifecycle::ModuleState module_state_{
@@ -230,12 +254,26 @@ private:
     bool heading_new_{false};
     bool version_seen_{false};
     bool unilog_seen_{false};
+    // R4.10 的 UNILOGLIST 是多条无校验文本；entry_seen/last_arrival 用静默窗口
+    // 将增量行封成快照，progress_pending 只在收到有效清单行时推进维护票据。
+    bool unilog_entry_seen_{false};
+    bool unilog_entry_progress_pending_{false};
     bool configuration_complete_{false};
     bool candidate_active_{false};
     bool command_pending_{false};
     bool baud_change_complete_{false};
     bool maintenance_ready_{false};
     bool maintenance_interlock_acquired_{false};
+    // 查询命令进入 UART 队列不等于发送完成；该状态保证每条 CONFIG/VERSIONA/
+    // UNILOGLIST 只在真实 TX-complete 边沿报告一次 maintenance 进度。
+    bool configuration_query_tx_complete_{false};
+    // CONFIG 的首次端口响应必须立即续报真实进度，不能等到查询总超时才承认；
+    // 否则 750 ms 查询边界会与 maintenance 的 750 ms no-progress 门限竞争。
+    bool config_response_progress_pending_{false};
+    // fault_active 只控制边沿日志，persistence_pending 表示运行配置已修改但还没有
+    // 完整发送 SAVECONFIG；两者都不能再复用 30 s retry 时间戳表达。
+    bool configuration_fault_active_{false};
+    bool configuration_persistence_pending_{false};
     bool rx_schedule_suppressed_{false};
     bool validation_fault_active_{false};
 };

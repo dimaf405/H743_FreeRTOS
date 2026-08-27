@@ -1,5 +1,6 @@
 #define MODULE_NAME "um982"
 #include "Um982Gps.hpp"
+#include "Um982QgcLog.hpp"
 
 namespace dima::drivers::gps {
 namespace {
@@ -73,6 +74,11 @@ void Um982Gps::complete_probe() noexcept
     receiver_status_ = ReceiverStatus::Operational;
     retry_backoff_us_ = kInitialBackoffUs;
     candidate_active_ = false;
+    // online 只在离线/探测到有效 UM982 测量的边沿输出一次，不按帧重复；结合
+    // 后续 10 s 接收计数即可区分“串口已锁定”和“六类业务消息均持续到达”。
+    UM982_QGC_INFO("GPS online S%ld b=%lu",
+             static_cast<long>(active_port_),
+             static_cast<unsigned long>(detected_baudrate_));
     configuration_complete_ = false;
     selected_receiver_port_ = 0U;
     config_mask_ = 0U;

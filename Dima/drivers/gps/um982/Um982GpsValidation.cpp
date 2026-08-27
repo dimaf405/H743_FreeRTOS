@@ -35,6 +35,8 @@ void Um982Gps::run_assignment() noexcept
     configuration_complete_ = false;
     configuration_retry_after_us_ = 0U;
     maintenance_retry_after_us_ = 0U;
+    configuration_fault_active_ = false;
+    configuration_persistence_pending_ = false;
     build_scan_baudrates(active_target_baudrate_);
     transition(Phase::Detect);
 }
@@ -49,6 +51,8 @@ void Um982Gps::run_normal(std::uint64_t now_us) noexcept
         fail();
     } else if (!configuration_complete_ &&
                now_us >= configuration_retry_after_us_) {
+        // retry 时间只负责调度；进入新一轮读取后立即清零，故障边沿由独立锁存管理。
+        configuration_retry_after_us_ = 0U;
         begin_configuration_read();
     } else {
         schedule(kReceiveScheduleUs);

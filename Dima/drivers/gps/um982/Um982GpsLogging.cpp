@@ -1,9 +1,9 @@
 #define MODULE_NAME "um982"
 #include "Um982Gps.hpp"
 #include "Um982MessageContract.hpp"
+#include "Um982QgcLog.hpp"
 
 #include "format/Format.hpp"
-#include "logging/logging.hpp"
 
 #include <cmath>
 
@@ -25,6 +25,31 @@ constexpr std::uint8_t kReadWaitConfig = 1U;
 constexpr std::uint8_t kReadProbePort = 2U;
 constexpr std::uint8_t kReadSendUnilog = 3U;
 constexpr std::uint8_t kReadWaitUnilog = 4U;
+// CONFIG 可能返回一个或多个端口行；首次响应后等待 200 ms 静默即可封存，
+// 不能把查询等待拖到 maintenance 同为 750 ms 的 no-progress 边界。
+constexpr std::uint32_t kConfigResponseQuietUs = 200000U;
+// R4.10 将 UNILOGLIST 拆成约 20 ms 间隔的多行文本。最后一条合同项之后保持
+// 200 ms 静默才封存快照，既能收齐重复项，又明显小于 750 ms 查询/维护超时。
+constexpr std::uint32_t kUnilogListQuietUs = 200000U;
+
+const char *maintenance_reason_name(
+    dima::middleware::maintenance::RuntimeMaintenanceCoordinator::
+        FailureReason reason) noexcept
+{
+    using FailureReason = dima::middleware::maintenance::
+        RuntimeMaintenanceCoordinator::FailureReason;
+    // 文本只用于一次性故障边沿；枚举值由协调器记录，不能再用 expired 混淆原因。
+    switch (reason) {
+    case FailureReason::None: return "none";
+    case FailureReason::RuntimeUnhealthy: return "health";
+    case FailureReason::MaintenanceUnsafe: return "unsafe";
+    case FailureReason::ProgressTimeout: return "no-progress";
+    case FailureReason::HardDeadline: return "deadline";
+    case FailureReason::InvalidTicket: return "ticket";
+    case FailureReason::InvalidProgress: return "progress";
+    }
+    return "unknown";
+}
 
 constexpr dima::platform::SerialLineConfiguration
 um982_line_configuration(std::uint32_t baudrate) noexcept
@@ -62,6 +87,16 @@ bool Um982Gps::send_command(const char *body) noexcept
 
 void Um982Gps::begin_configuration_read() noexcept
 {
+    begin_configuration_query(Phase::ReadConfiguration);
+}
+
+void Um982Gps::begin_configuration_verification() noexcept
+{
+    begin_configuration_query(Phase::VerifyConfiguration);
+}
+
+void Um982Gps::begin_configuration_query(Phase phase) noexcept
+{
     // 配置读取从干净快照开始：先 CONFIG 收集三个 COM 波特率，再唯一识别当前
     // 物理端口，最后 UNILOGLIST 比对生成合同。
     for (auto &configuration : port_config_) {
@@ -74,9 +109,15 @@ void Um982Gps::begin_configuration_read() noexcept
     log_update_mask_ = 0U;
     configuration_read_step_ = kReadSendConfig;
     command_pending_ = false;
+    configuration_query_tx_complete_ = false;
+    config_response_progress_pending_ = false;
     version_seen_ = false;
     unilog_seen_ = false;
-    transition(Phase::ReadConfiguration);
+    unilog_entry_seen_ = false;
+    unilog_entry_progress_pending_ = false;
+    last_config_response_arrival_us_ = 0U;
+    last_unilog_entry_arrival_us_ = 0U;
+    transition(phase);
 }
 
 bool Um982Gps::identify_receiver_port() noexcept
@@ -96,6 +137,48 @@ bool Um982Gps::identify_receiver_port() noexcept
     if (matches != 1U) return false;
     selected_receiver_port_ = candidate;
     return true;
+}
+
+void Um982Gps::consume_unilog_list_entry(
+    const dima::protocols::um982::Um982Protocol::UnilogList &entry,
+    std::uint64_t arrival_us) noexcept
+{
+    // 无校验清单行只允许污染当前 UNILOGLIST 查询快照；运行期偶发 '<' 文本或
+    // 延迟到达的旧响应一律忽略，避免错误触发配置收敛。
+    const bool query_phase = phase_ == Phase::ReadConfiguration ||
+                             phase_ == Phase::VerifyConfiguration;
+    if (!query_phase || configuration_read_step_ != kReadWaitUnilog ||
+        unilog_seen_) {
+        return;
+    }
+
+    for (std::uint8_t port = 0U;
+         port < dima::protocols::um982::Um982Protocol::kReceiverPortCount;
+         ++port) {
+        for (std::size_t index = 0U;
+             index < dima::protocols::um982::generated::kMessageContractCount;
+             ++index) {
+            const std::uint8_t incoming =
+                entry.instance_count[port][index];
+            if (incoming == 0U) continue;
+
+            // 实例数采用饱和加法；重复清单项必须保持 count>1，不能因 uint8
+            // 回绕伪装成单实例。名称/索引仍全部来自生成合同。
+            std::uint8_t &instances =
+                unilog_.instance_count[port][index];
+            instances = instances > UINT8_MAX - incoming
+                            ? UINT8_MAX
+                            : static_cast<std::uint8_t>(instances + incoming);
+            unilog_.present_mask[port] |=
+                static_cast<std::uint8_t>(1U << index);
+            unilog_.period_s[port][index] = entry.period_s[port][index];
+        }
+    }
+    // 合同外清单行不参与收敛判定，但仍用于延长响应活动窗口；否则大量附加
+    // 日志可能把后续合同项隔开 200 ms，导致快照过早封存。
+    unilog_entry_seen_ = true;
+    unilog_entry_progress_pending_ = true;
+    last_unilog_entry_arrival_us_ = arrival_us;
 }
 
 void Um982Gps::build_log_update_mask() noexcept
@@ -123,25 +206,87 @@ void Um982Gps::build_log_update_mask() noexcept
     }
 }
 
-void Um982Gps::run_configuration_read(std::uint64_t now_us) noexcept
+void Um982Gps::run_configuration_read(std::uint64_t now_us,
+                                      bool verification) noexcept
 {
     // 读取子状态机使用发送/等待分相，绝不在 WorkQueue 上阻塞等待串口响应。
     // 每次等待由 200 ms 进度检查和 750 ms 总超时共同约束。
+    if (verification && !configuration_maintenance_valid(now_us)) {
+        defer_configuration(false, "verify maintenance");
+        return;
+    }
     switch (configuration_read_step_) {
     case kReadSendConfig:
         if (!uart_.tx_complete() || !send_command("CONFIG")) {
             schedule(kCommandRetryUs);
             return;
         }
+        command_pending_ = true;
+        configuration_query_tx_complete_ = false;
         configuration_read_step_ = kReadWaitConfig;
         phase_started_us_ = now_us;
-        schedule(kConfigProgressUs);
+        schedule(kCommandRetryUs);
         return;
 
-    case kReadWaitConfig:
-        if ((config_mask_ & kAllPortsMask) != kAllPortsMask &&
-            now_us - phase_started_us_ < kConfigTimeoutUs) {
-            schedule(kConfigProgressUs);
+    case kReadWaitConfig: {
+        if (!configuration_query_tx_complete_) {
+            if (!uart_.tx_complete()) {
+                schedule(kCommandRetryUs);
+                return;
+            }
+            command_pending_ = false;
+            configuration_query_tx_complete_ = true;
+            phase_started_us_ = now_us;
+            if (verification &&
+                !report_configuration_progress(now_us)) {
+                defer_configuration(false, "CONFIG TX progress");
+                return;
+            }
+        }
+        if (verification && config_response_progress_pending_) {
+            if (!report_configuration_progress(now_us)) {
+                defer_configuration(false, "CONFIG response progress");
+                return;
+            }
+            config_response_progress_pending_ = false;
+        }
+        const bool all_ports_seen =
+            (config_mask_ & kAllPortsMask) == kAllPortsMask;
+        const bool response_quiet = config_mask_ != 0U &&
+            now_us >= last_config_response_arrival_us_ &&
+            now_us - last_config_response_arrival_us_ >=
+                kConfigResponseQuietUs;
+        const bool query_time_valid = now_us >= phase_started_us_;
+        const std::uint64_t query_elapsed = query_time_valid
+            ? now_us - phase_started_us_
+            : UINT64_MAX;
+        if (!all_ports_seen && !response_quiet && query_time_valid &&
+            query_elapsed < kConfigTimeoutUs) {
+            std::uint32_t delay_us = kConfigProgressUs;
+            if (config_mask_ != 0U &&
+                now_us >= last_config_response_arrival_us_) {
+                const std::uint64_t quiet_elapsed =
+                    now_us - last_config_response_arrival_us_;
+                if (quiet_elapsed < kConfigResponseQuietUs) {
+                    const auto quiet_remaining = static_cast<std::uint32_t>(
+                        kConfigResponseQuietUs - quiet_elapsed);
+                    if (quiet_remaining < delay_us) {
+                        delay_us = quiet_remaining;
+                    }
+                }
+            } else {
+                const auto timeout_remaining = static_cast<std::uint32_t>(
+                    kConfigTimeoutUs - query_elapsed);
+                if (timeout_remaining < delay_us) {
+                    delay_us = timeout_remaining;
+                }
+            }
+            schedule(delay_us);
+            return;
+        }
+        if (verification && config_mask_ != 0U &&
+            !report_configuration_progress(now_us)) {
+            defer_configuration(false, "CONFIG progress");
             return;
         }
         if (identify_receiver_port()) {
@@ -153,12 +298,31 @@ void Um982Gps::run_configuration_read(std::uint64_t now_us) noexcept
         }
         schedule();
         return;
+    }
 
     case kReadProbePort:
         // CONFIG 波特率无法唯一映射时，对 COM1..COM3 逐一发送 VERSIONA；
         // UART RX 在每个候选前清空，避免上一端口的延迟响应误认当前端口。
         if (command_pending_) {
+            if (!configuration_query_tx_complete_) {
+                if (!uart_.tx_complete()) {
+                    schedule(kCommandRetryUs);
+                    return;
+                }
+                configuration_query_tx_complete_ = true;
+                phase_started_us_ = now_us;
+                if (verification &&
+                    !report_configuration_progress(now_us)) {
+                    defer_configuration(false, "VERSION TX progress");
+                    return;
+                }
+            }
             if (version_seen_) {
+                if (verification &&
+                    !report_configuration_progress(now_us)) {
+                    defer_configuration(false, "VERSION progress");
+                    return;
+                }
                 selected_receiver_port_ = port_probe_index_;
                 command_pending_ = false;
                 configuration_read_step_ = kReadSendUnilog;
@@ -195,8 +359,9 @@ void Um982Gps::run_configuration_read(std::uint64_t now_us) noexcept
                 return;
             }
             command_pending_ = true;
+            configuration_query_tx_complete_ = false;
             phase_started_us_ = now_us;
-            schedule(kConfigProgressUs);
+            schedule(kCommandRetryUs);
         }
         return;
 
@@ -207,32 +372,109 @@ void Um982Gps::run_configuration_read(std::uint64_t now_us) noexcept
             schedule(kCommandRetryUs);
             return;
         }
+        command_pending_ = true;
+        configuration_query_tx_complete_ = false;
         configuration_read_step_ = kReadWaitUnilog;
         phase_started_us_ = now_us;
-        schedule(kConfigProgressUs);
+        schedule(kCommandRetryUs);
         return;
 
-    case kReadWaitUnilog:
+    case kReadWaitUnilog: {
+        if (!configuration_query_tx_complete_) {
+            if (!uart_.tx_complete()) {
+                schedule(kCommandRetryUs);
+                return;
+            }
+            command_pending_ = false;
+            configuration_query_tx_complete_ = true;
+            phase_started_us_ = now_us;
+            if (verification &&
+                !report_configuration_progress(now_us)) {
+                defer_configuration(false, "UNILOGLIST TX progress");
+                return;
+            }
+        }
+        if (verification && unilog_entry_progress_pending_) {
+            // 新的有效清单行已经到达，属于真实且不可重复的接收进度；按批次
+            // 续报一次即可，合同外日志只延长活动窗口而不进入收敛快照。
+            if (!report_configuration_progress(now_us)) {
+                defer_configuration(false, "UNILOGLIST entry progress");
+                return;
+            }
+            unilog_entry_progress_pending_ = false;
+        }
+
+        // 带 CRC 的整帧仍可立即完成；R4.10 增量行则在最后一条之后等待固定
+        // 静默窗口。arrival 时间倒退时保持未完成并交由总超时失败关闭。
+        if (!unilog_seen_ && unilog_entry_seen_ &&
+            now_us >= last_unilog_entry_arrival_us_ &&
+            now_us - last_unilog_entry_arrival_us_ >=
+                kUnilogListQuietUs) {
+            unilog_seen_ = true;
+        }
         if (!unilog_seen_ &&
             now_us - phase_started_us_ < kConfigTimeoutUs) {
-            schedule(kConfigProgressUs);
+            std::uint32_t delay_us = kConfigProgressUs;
+            if (unilog_entry_seen_ &&
+                now_us >= last_unilog_entry_arrival_us_) {
+                const std::uint64_t quiet_elapsed =
+                    now_us - last_unilog_entry_arrival_us_;
+                if (quiet_elapsed < kUnilogListQuietUs) {
+                    const auto quiet_remaining = static_cast<std::uint32_t>(
+                        kUnilogListQuietUs - quiet_elapsed);
+                    if (quiet_remaining < delay_us) {
+                        delay_us = quiet_remaining;
+                    }
+                }
+            }
+            schedule(delay_us);
             return;
         }
-        // UNILOGLIST 超时按“全部需要更新”处理，而不是猜测接收机已经正确配置。
-        if (!unilog_seen_) {
-            log_update_mask_ = kAllLogsMask;
-        } else {
-            build_log_update_mask();
+        // 若清单恰好贴近 750 ms 总超时到达，使用已经收集的保守快照；缺失项
+        // 仍会进入 update mask，绝不把不完整回读误判为收敛。
+        if (!unilog_seen_ && unilog_entry_seen_) {
+            unilog_seen_ = true;
         }
-        if (detected_baudrate_ == active_target_baudrate_ &&
-            log_update_mask_ == 0U) {
+        // “没有收到清单”是未知态，不等价于六项全部缺失。此时只能回到 Run，
+        // 延后重试只读查询；禁止在没有回读证据时执行 UNLOG/LOG/SAVECONFIG，
+        // 否则解析或链路异常会被放大成周期性全量重配并挤压 MAVLink/QGC。
+        if (!unilog_seen_) {
+            defer_configuration(false, "UNILOGLIST unavailable");
+            return;
+        }
+        build_log_update_mask();
+        if (verification &&
+            !report_configuration_progress(now_us)) {
+            defer_configuration(false, "UNILOGLIST progress");
+            return;
+        }
+        const bool converged =
+            detected_baudrate_ == active_target_baudrate_ &&
+            log_update_mask_ == 0U;
+        if (verification) {
+            // UM982 命令即时修改运行配置；只有 CONFIG/UNILOGLIST 回读完全收敛
+            // 才允许 SAVECONFIG，避免把未被接收机接受的命令写入 NVM。
+            if (!converged) {
+                defer_configuration(false, "verify mismatch");
+            } else {
+                transition(Phase::SaveConfiguration);
+            }
+        } else if (converged && !configuration_persistence_pending_) {
             configuration_complete_ = true;
             configuration_retry_after_us_ = 0U;
+            configuration_fault_active_ = false;
+            UM982_QGC_INFO("GPS cfg ready COM%u b=%lu logs=%u",
+                     static_cast<unsigned int>(selected_receiver_port_),
+                     static_cast<unsigned long>(detected_baudrate_),
+                     static_cast<unsigned int>(
+                         dima::protocols::um982::generated::
+                             kMessageContractCount));
             transition(Phase::Run, kReceiveScheduleUs);
         } else {
             begin_configuration_apply();
         }
         return;
+    }
 
     default:
         defer_configuration(false, "configuration read step invalid");
@@ -242,8 +484,16 @@ void Um982Gps::run_configuration_read(std::uint64_t now_us) noexcept
 
 void Um982Gps::begin_configuration_apply() noexcept
 {
+    // apply 是唯一会进入写配置控制面的边沿；保留 mask 可直接判断后续是否发生
+    // 非预期重复修复，同时不输出逐条 UNLOG/LOG 命令原文。
+    UM982_QGC_INFO("GPS cfg apply COM%u b=%lu logs=0x%02x save=%u",
+             static_cast<unsigned int>(selected_receiver_port_),
+             static_cast<unsigned long>(detected_baudrate_),
+             static_cast<unsigned int>(log_update_mask_),
+             configuration_persistence_pending_ ? 1U : 0U);
     configuration_command_index_ = 0U;
     command_pending_ = false;
+    configuration_query_tx_complete_ = false;
     baud_change_complete_ =
         detected_baudrate_ == active_target_baudrate_;
     maintenance_ready_ = false;
@@ -251,14 +501,26 @@ void Um982Gps::begin_configuration_apply() noexcept
     transition(Phase::ApplyConfiguration, kReceiveScheduleUs);
 }
 
-bool Um982Gps::keep_configuration_alive(std::uint64_t now_us) noexcept
+bool Um982Gps::configuration_maintenance_valid(
+    std::uint64_t now_us) noexcept
 {
-    // 配置写入期间每次推进都续报 maintenance 进度；武装、票据过期或进度计数
-    // 饱和任一条件成立即失败关闭，防止写接收机 Flash 与车辆运行并发。
+    // permit 轮询只确认票据仍有效，不更新 last_progress；TX 或回读卡住时必须让
+    // 协调器的 750 ms 无真实进度保护按设计触发。
     return maintenance_ticket_ != 0U && !armed_.armed() &&
-           maintenance_progress_ != UINT32_MAX &&
-           maintenance_.report_progress(
-               maintenance_ticket_, ++maintenance_progress_, now_us);
+           maintenance_.permit(maintenance_ticket_, now_us) ==
+               dima::middleware::maintenance::
+                   RuntimeMaintenanceCoordinator::Permit::Ready;
+}
+
+bool Um982Gps::report_configuration_progress(
+    std::uint64_t now_us) noexcept
+{
+    // 只有调用点已经完成一次不可重复的状态迁移才递增；饱和时失败关闭，禁止
+    // uint32 回绕把旧进度重新伪装成新进度。
+    if (maintenance_progress_ == UINT32_MAX) return false;
+    ++maintenance_progress_;
+    return maintenance_.report_progress(
+        maintenance_ticket_, maintenance_progress_, now_us);
 }
 
 void Um982Gps::release_configuration_maintenance(bool complete) noexcept
@@ -283,10 +545,27 @@ void Um982Gps::release_configuration_maintenance(bool complete) noexcept
 
 void Um982Gps::defer_configuration(bool rescan, const char *reason) noexcept
 {
-    const bool report_failure = configuration_retry_after_us_ == 0U;
+    using FailureReason = dima::middleware::maintenance::
+        RuntimeMaintenanceCoordinator::FailureReason;
+    const bool report_failure = !configuration_fault_active_;
+    const FailureReason maintenance_failure = maintenance_ticket_ == 0U
+        ? FailureReason::None
+        : maintenance_.failure_reason(maintenance_ticket_);
+    const auto failed_phase = phase_;
+    const std::uint8_t failed_command = configuration_command_index_;
+    const std::uint8_t failed_logs = log_update_mask_;
+    const std::uint8_t failed_config_mask = config_mask_;
+    // list=0 表示没有合法清单行，1 表示已收到增量行但快照未封存，2 表示已有
+    // 可用于判定的清单快照；比逐帧原文更直接地定位配置回读卡在哪一层。
+    const std::uint8_t failed_list_state = unilog_seen_
+        ? 2U
+        : (unilog_entry_seen_ ? 1U : 0U);
+    const bool tx_complete = uart_.tx_complete();
     release_configuration_maintenance(false);
     configuration_complete_ = false;
+    configuration_fault_active_ = true;
     command_pending_ = false;
+    configuration_query_tx_complete_ = false;
     const std::uint64_t now_us = clock_.now_us();
     // 配置失败不使 GPS 数据面离线：按饱和加法设置 30 s 重试点，期间回到 Run；
     // 只有本地波特率切换失败等会话失配场景才立即重新扫描。
@@ -295,8 +574,17 @@ void Um982Gps::defer_configuration(bool rescan, const char *reason) noexcept
             ? UINT64_MAX
             : now_us + kConfigurationRetryUs;
     if (report_failure) {
-        PX4_ERR("GPS config failed: %s",
-                reason == nullptr ? "unknown" : reason);
+        // 一条边沿日志保留失败点、协调器第一原因、TX 和待更新位；重试期间不刷屏。
+        UM982_QGC_ERR("GPS cfg %s m=%s p=%u i=%u tx=%u cfg=0x%02x "
+                "list=%u logs=0x%02x",
+                reason == nullptr ? "unknown" : reason,
+                maintenance_reason_name(maintenance_failure),
+                static_cast<unsigned int>(failed_phase),
+                static_cast<unsigned int>(failed_command),
+                tx_complete ? 1U : 0U,
+                static_cast<unsigned int>(failed_config_mask),
+                static_cast<unsigned int>(failed_list_state),
+                static_cast<unsigned int>(failed_logs));
     }
     if (rescan) {
         receiver_status_ = ReceiverStatus::Probing;
@@ -309,10 +597,10 @@ void Um982Gps::defer_configuration(bool rescan, const char *reason) noexcept
 
 void Um982Gps::run_configuration_save(std::uint64_t now_us) noexcept
 {
-    // SAVECONFIG 是唯一写接收机非易失存储的步骤。命令完全发送后才释放维护锁，
-    // 随后等待接收机重启并重新探测，不能直接沿用保存前的串口会话状态。
-    if (!maintenance_ready_ || !keep_configuration_alive(now_us)) {
-        defer_configuration(false, "maintenance expired before save");
+    // R1.15 明确规定 SAVECONFIG 只写 NVM，不会重启接收机；运行配置已经在前一
+    // 阶段回读验证，因此 TX 完成后直接沿用当前 UART 会话进入 Run。
+    if (!maintenance_ready_ || !configuration_maintenance_valid(now_us)) {
+        defer_configuration(false, "save maintenance");
         return;
     }
     if (!command_pending_) {
@@ -328,12 +616,23 @@ void Um982Gps::run_configuration_save(std::uint64_t now_us) noexcept
         schedule(kCommandRetryUs);
         return;
     }
+    if (!report_configuration_progress(now_us)) {
+        defer_configuration(false, "SAVECONFIG progress");
+        return;
+    }
 
     command_pending_ = false;
-    release_configuration_maintenance(true);
-    configuration_complete_ = false;
+    configuration_persistence_pending_ = false;
+    configuration_complete_ = true;
     configuration_retry_after_us_ = 0U;
-    transition(Phase::WaitRestart, kReceiverRestartWaitUs);
+    configuration_fault_active_ = false;
+    UM982_QGC_INFO("GPS cfg saved COM%u b=%lu logs=%u",
+             static_cast<unsigned int>(selected_receiver_port_),
+             static_cast<unsigned long>(detected_baudrate_),
+             static_cast<unsigned int>(
+                 dima::protocols::um982::generated::kMessageContractCount));
+    release_configuration_maintenance(true);
+    transition(Phase::Run, kReceiveScheduleUs);
 }
 
 void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
@@ -375,8 +674,8 @@ void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
         maintenance_ready_ = true;
     }
 
-    if (!keep_configuration_alive(now_us)) {
-        defer_configuration(false, "maintenance expired");
+    if (!configuration_maintenance_valid(now_us)) {
+        defer_configuration(false, "apply maintenance");
         return;
     }
 
@@ -402,6 +701,9 @@ void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
                 return;
             }
             command_pending_ = true;
+            // write 接受后即保守认为接收机可能收到完整命令；即使随后 TX 完成事件
+            // 丢失，下一轮回读正确时也必须补做 SAVECONFIG。
+            configuration_persistence_pending_ = true;
             schedule(kCommandRetryUs);
             return;
         }
@@ -421,6 +723,11 @@ void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
         detected_baudrate_ = active_target_baudrate_;
         last_confirmed_baudrate_ = detected_baudrate_;
         baud_change_complete_ = true;
+        configuration_persistence_pending_ = true;
+        if (!report_configuration_progress(now_us)) {
+            defer_configuration(false, "baud progress");
+            return;
+        }
         schedule(kReceiveScheduleUs);
         return;
     }
@@ -442,7 +749,9 @@ void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
     }
     if (configuration_command_index_ >= kConfigurationCommandCount) {
         command_pending_ = false;
-        transition(Phase::SaveConfiguration);
+        // 所有修改命令 TX 完成后先回读当前易失配置。纯阶段迁移不得续报进度；
+        // 下一次真实进度只能来自查询命令 TX-complete 或有效响应回读。
+        begin_configuration_verification();
         return;
     }
 
@@ -453,6 +762,11 @@ void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
         }
         command_pending_ = false;
         ++configuration_command_index_;
+        configuration_persistence_pending_ = true;
+        if (!report_configuration_progress(now_us)) {
+            defer_configuration(false, "log command progress");
+            return;
+        }
         schedule();
         return;
     }
@@ -480,6 +794,7 @@ void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
         return;
     }
     command_pending_ = true;
+    configuration_persistence_pending_ = true;
     schedule(kCommandRetryUs);
 }
 

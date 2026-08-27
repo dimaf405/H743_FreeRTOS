@@ -5,15 +5,16 @@
 
 namespace dima::protocols::um982 {
 
-// 无动态分配的增量式 UM982 解析器。它同时接受 '$' 开头的 NMEA/配置响应
-// 和 '#' 开头的 Unicore 二进制风格 ASCII 日志，并把校验错误、结构错误、
-// 超长帧和未知但合法消息分开，供驱动采用不同失败语义。
+// 无动态分配的增量式 UM982 解析器。它同时接受 '$' 开头的 NMEA/配置响应、
+// '#' 开头的 Unicore 二进制风格 ASCII 日志，以及 R4.10 UNILOGLIST 返回的
+// '<' 开头无校验清单行，并把校验错误、结构错误、超长帧和未知消息分开。
 class Um982Protocol final {
 public:
     // 4096 B 是单帧硬上限（另留一个 NUL）；跟踪的日志数由生成合同限制为 8，
     // 接收机物理 COM 端口固定为 3。所有容量均编译期确定。
     static constexpr std::size_t kMaximumFrameBytes = 4096U;
     static constexpr std::uint8_t kMaximumTrackedLogs = 8U;
+    static constexpr std::uint8_t kInvalidMessageContract = UINT8_MAX;
     static constexpr std::uint8_t kReceiverPortCount = 3U;
 
     enum class Kind : std::uint8_t {
@@ -31,6 +32,9 @@ public:
         BadChecksum,
         BadStructure,
         Overflow,
+        // R4.10 会把 UNILOGLIST 拆成多条“<\tMESSAGE COMn period”文本；
+        // 单条只表达清单增量，必须由驱动在查询窗口内聚合后再判定完整快照。
+        UnilogListEntry,
     };
 
     struct Version {
@@ -114,6 +118,9 @@ public:
 
     struct Frame {
         Kind kind{Kind::None};
+        // 测量帧在生成合同中的索引；控制响应、未知帧和错误保持无效值。
+        // 诊断统计据此跟随 um982_messages.json，不能维护第二份消息顺序。
+        std::uint8_t message_contract_index{kInvalidMessageContract};
         Version version{};
         ConfigPort config_port{};
         UnilogList unilog_list{};
@@ -144,7 +151,8 @@ private:
     bool complete(Frame &frame) noexcept;
 
     // checksum_digits_ 从看到 '*' 起以 1 计数；NMEA 总共需要 2 个十六进制位，
-    // Unicore 需要 8 个。start_=='\0' 表示当前没有正在组装的帧。
+    // Unicore 需要 8 个；'<' 控制行以 CR/LF 结束且不带 checksum。
+    // start_=='\0' 表示当前没有正在组装的帧。
     char buffer_[kMaximumFrameBytes + 1U]{};
     std::size_t length_{0U};
     std::size_t checksum_offset_{0U};

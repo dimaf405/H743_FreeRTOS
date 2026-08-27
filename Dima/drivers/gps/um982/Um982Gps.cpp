@@ -1,7 +1,7 @@
 #define MODULE_NAME "um982"
 #include "Um982Gps.hpp"
-
-#include "logging/logging.hpp"
+#include "Um982MessageContract.hpp"
+#include "Um982QgcLog.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +42,13 @@ bool sample_is_fresh(std::uint64_t now_us, std::uint64_t arrival_us,
 void saturating_increment(std::uint32_t &counter) noexcept
 {
     if (counter != std::numeric_limits<std::uint32_t>::max()) {
+        ++counter;
+    }
+}
+
+void saturating_increment(std::uint16_t &counter) noexcept
+{
+    if (counter != std::numeric_limits<std::uint16_t>::max()) {
         ++counter;
     }
 }
@@ -96,6 +103,13 @@ bool Um982Gps::start() noexcept
     configuration_complete_ = false;
     configuration_retry_after_us_ = 0U;
     maintenance_retry_after_us_ = 0U;
+    configuration_fault_active_ = false;
+    configuration_persistence_pending_ = false;
+    last_config_response_arrival_us_ = 0U;
+    last_unilog_entry_arrival_us_ = 0U;
+    config_response_progress_pending_ = false;
+    unilog_entry_seen_ = false;
+    unilog_entry_progress_pending_ = false;
     __atomic_store_n(&rx_schedule_suppressed_, false, __ATOMIC_RELEASE);
     clear_measurement_cache();
     (void)parameter_subscription_.update();
@@ -206,7 +220,7 @@ void Um982Gps::fail() noexcept
     if (report_offline) {
         update_uart_error_count();
         const auto stats = uart_.stats();
-        PX4_ERR("GPS offline S%ld target=%lu b=%lu rx=%lu uart=%lu/%lu flags=0x%lx proto=%lu/%lu/%lu",
+        UM982_QGC_ERR("GPS offline S%ld target=%lu b=%lu rx=%lu uart=%lu/%lu flags=0x%lx proto=%lu/%lu/%lu",
                 static_cast<long>(active_port_),
                 static_cast<unsigned long>(active_target_baudrate_),
                 static_cast<unsigned long>(
@@ -243,7 +257,8 @@ bool Um982Gps::drain_uart() noexcept
         if (count == 0U) break;
         processed += count;
         for (std::size_t index = 0U; index < count; ++index) {
-            if (protocol_.feed(bytes[index], frame)) {
+            const bool frame_complete = protocol_.feed(bytes[index], frame);
+            if (frame_complete) {
                 handle_frame(frame, arrival_us == 0U ? clock_.now_us()
                                                      : arrival_us);
                 frame = {};
@@ -291,6 +306,103 @@ void Um982Gps::clear_measurement_cache() noexcept
     gga_new_ = false;
     agrica_new_ = false;
     heading_new_ = false;
+    reset_diagnostics();
+}
+
+void Um982Gps::reset_diagnostics() noexcept
+{
+    // 诊断窗口与当前 UART/波特率会话绑定；切换候选或时钟倒退时，旧计数不能
+    // 混入新会话并伪造某类消息仍在持续到达。
+    for (auto &count : diagnostic_frame_counts_) {
+        count = 0U;
+    }
+    diagnostic_other_frames_ = 0U;
+    diagnostic_window_started_us_ = 0U;
+    diagnostic_fix_type_ = 0U;
+    diagnostic_satellites_ = 0U;
+}
+
+void Um982Gps::record_diagnostic_frame(
+    const dima::protocols::um982::Um982Protocol::Frame &frame,
+    std::uint64_t arrival_us) noexcept
+{
+    namespace generated = dima::protocols::um982::generated;
+    if (frame.message_contract_index < generated::kMessageContractCount) {
+        saturating_increment(
+            diagnostic_frame_counts_[frame.message_contract_index]);
+        if (diagnostic_window_started_us_ == 0U) {
+            diagnostic_window_started_us_ = arrival_us;
+        }
+    } else if (frame.kind ==
+               dima::protocols::um982::Um982Protocol::Kind::Unknown) {
+        // GSV 等合同外但校验合法的 UM982/NMEA 帧单独汇总，不把它们当错误，
+        // 也不能让其掩盖六类产品合同消息中的缺流。
+        saturating_increment(diagnostic_other_frames_);
+    }
+}
+
+void Um982Gps::maybe_report_diagnostics(std::uint64_t now_us) noexcept
+{
+    namespace generated = dima::protocols::um982::generated;
+    using Role = generated::MessageRole;
+    if (receiver_status_ != ReceiverStatus::Operational ||
+        diagnostic_window_started_us_ == 0U) {
+        return;
+    }
+    if (now_us < diagnostic_window_started_us_) {
+        reset_diagnostics();
+        return;
+    }
+    const std::uint64_t elapsed_us =
+        now_us - diagnostic_window_started_us_;
+    if (elapsed_us < kDiagnosticReportIntervalUs) {
+        return;
+    }
+
+    const auto role_count = [this](Role role) noexcept -> std::uint16_t {
+        const std::size_t index = generated::find_message_role(role);
+        return index < generated::kMessageContractCount
+                   ? diagnostic_frame_counts_[index]
+                   : 0U;
+    };
+    const auto display_count = [](std::uint32_t value) noexcept
+        -> unsigned int {
+        // 文本字段钳位到三位数，既覆盖正常 10 s/10 Hz 的约 100 帧，也保证
+        // 整条状态不超过 mavlink_log 的 126 字节有效载荷。
+        return static_cast<unsigned int>(
+            std::min<std::uint32_t>(value, 999U));
+    };
+    const std::uint64_t rounded_seconds =
+        (elapsed_us + 500000ULL) / 1000000ULL;
+    const auto seconds = static_cast<unsigned long>(
+        std::min<std::uint64_t>(rounded_seconds, 999ULL));
+    // gga/agr/hdg/gst/gsa/rmc 是协议语义角色，实际名称及其位号仍由生成合同
+    // 决定。10 s 窗口在 10 Hz 正常情况下各约为 100，某项为 0 可直接判缺流。
+    UM982_QGC_INFO("GPS S%ld b=%lu cfg=%u fix=%u sat=%u dt=%lus "
+             "gga=%u agr=%u hdg=%u gst=%u gsa=%u rmc=%u oth=%u "
+             "e=%u/%u/%u",
+             static_cast<long>(active_port_),
+             static_cast<unsigned long>(detected_baudrate_),
+             configuration_complete_ ? 1U : 0U,
+             static_cast<unsigned int>(diagnostic_fix_type_),
+             static_cast<unsigned int>(diagnostic_satellites_),
+             seconds,
+             display_count(role_count(Role::Gga)),
+             display_count(role_count(Role::Agrica)),
+             display_count(role_count(Role::Heading)),
+             display_count(role_count(Role::Gst)),
+             display_count(role_count(Role::Gsa)),
+             display_count(role_count(Role::Rmc)),
+             display_count(diagnostic_other_frames_),
+             display_count(protocol_checksum_errors_),
+             display_count(protocol_structure_errors_),
+             display_count(protocol_overflow_errors_));
+
+    for (auto &count : diagnostic_frame_counts_) {
+        count = 0U;
+    }
+    diagnostic_other_frames_ = 0U;
+    diagnostic_window_started_us_ = now_us;
 }
 
 void Um982Gps::handle_frame(
@@ -314,6 +426,7 @@ void Um982Gps::handle_frame(
             dima::lib::sensors::validation::StreamFailureTimestamp, 0U);
     }
     last_frame_arrival_us_ = arrival_us;
+    record_diagnostic_frame(frame, arrival_us);
     // 配置响应更新控制面；六类测量按各自到达时间缓存。GGA 触发一次融合发布，
     // GST/GSA/RMC/AGRICA/HEADING 只作为有 freshness 上限的辅助来源。
     switch (frame.kind) {
@@ -324,14 +437,29 @@ void Um982Gps::handle_frame(
         if (frame.config_port.port >= 1U &&
             frame.config_port.port <=
                 dima::protocols::um982::Um982Protocol::kReceiverPortCount) {
-            port_config_[frame.config_port.port - 1U] = frame.config_port;
-            config_mask_ |= static_cast<std::uint8_t>(
+            const std::uint8_t port_bit = static_cast<std::uint8_t>(
                 1U << (frame.config_port.port - 1U));
+            const bool first_response = (config_mask_ & port_bit) == 0U;
+            port_config_[frame.config_port.port - 1U] = frame.config_port;
+            config_mask_ |= port_bit;
+            const bool configuration_query =
+                phase_ == Phase::ReadConfiguration ||
+                phase_ == Phase::VerifyConfiguration;
+            if (first_response && configuration_query) {
+                // 同一端口的重复回显不能无限伪造进度；只有本轮首次出现的新端口
+                // 才更新时间并在 Verify 中触发一次 maintenance 进度。
+                last_config_response_arrival_us_ = arrival_us;
+                config_response_progress_pending_ =
+                    phase_ == Phase::VerifyConfiguration;
+            }
         }
         break;
     case Kind::UnilogList:
         unilog_ = frame.unilog_list;
         unilog_seen_ = true;
+        break;
+    case Kind::UnilogListEntry:
+        consume_unilog_list_entry(frame.unilog_list, arrival_us);
         break;
     case Kind::Gga:
         gga_ = frame.gga;
@@ -614,6 +742,8 @@ bool Um982Gps::publish_validated(sensor_gps_s &output,
         return false;
     }
     validation_fault_active_ = false;
+    diagnostic_fix_type_ = output.fix_type;
+    diagnostic_satellites_ = output.satellites_used;
 
     const validation::GpsSolutionStatus solution =
         solution_checker_.update(sample, now_us);
@@ -697,7 +827,7 @@ void Um982Gps::report_validation_failure(
         return;
     }
     last_validation_report_us_ = now_us;
-    PX4_ERR("GPS invalid structure=0x%lx stream=0x%lx errors=%lu density=%lu",
+    UM982_QGC_ERR("GPS invalid structure=0x%lx stream=0x%lx errors=%lu density=%lu",
             static_cast<unsigned long>(structure_mask),
             static_cast<unsigned long>(stream_mask),
             static_cast<unsigned long>(gps_error_counter_.total()),
@@ -748,6 +878,7 @@ void Um982Gps::Run()
         return;
     }
 
+    maybe_report_diagnostics(now_us);
     // 单一 switch 是配置状态机的唯一调度入口，阶段函数只负责本阶段推进。
     switch (phase_) {
     case Phase::WaitAssignment:
@@ -759,29 +890,19 @@ void Um982Gps::Run()
         return;
 
     case Phase::ReadConfiguration:
-        run_configuration_read(now_us);
+        run_configuration_read(now_us, false);
         return;
 
     case Phase::ApplyConfiguration:
         run_configuration_apply(now_us);
         return;
 
-    case Phase::SaveConfiguration:
-        run_configuration_save(now_us);
+    case Phase::VerifyConfiguration:
+        run_configuration_read(now_us, true);
         return;
 
-    case Phase::WaitRestart:
-        if (now_us - phase_started_us_ >= kReceiverRestartWaitUs) {
-            (void)uart_.stop();
-            protocol_.reset();
-            clear_measurement_cache();
-            build_scan_baudrates(active_target_baudrate_);
-            candidate_active_ = false;
-            transition(Phase::Detect);
-        } else {
-            schedule(kReceiverRestartWaitUs - static_cast<std::uint32_t>(
-                now_us - phase_started_us_));
-        }
+    case Phase::SaveConfiguration:
+        run_configuration_save(now_us);
         return;
 
     case Phase::Run:

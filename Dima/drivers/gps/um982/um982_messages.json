@@ -1,11 +1,17 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "contract": "px4_um982_nmea_10hz",
   "upstream": {
     "repository": "PX4/PX4-GPSDrivers",
     "commit": "0b9695881bd1e8f830ab4538ab3acc0050019eba",
     "source": "src/nmea.cpp",
     "lines": "1053-1091"
+  },
+  "receiver_manual": {
+    "title": "Unicore Reference Commands Manual For N4 High Precision Products",
+    "version": "V2 EN R1.15",
+    "date": "2026-06",
+    "sections": ["4.2", "7.5.9", "7.5.99", "7.5.101", "8.3", "8.4"]
   },
   "rate_policy": {
     "message_rate_hz": 10,
@@ -15,32 +21,44 @@
     {
       "log_name": "GPGGA",
       "command_name": "GPGGA",
-      "period_s": "0.1"
+      "period_s": "0.1",
+      "role": "gga",
+      "aliases": []
     },
     {
       "log_name": "AGRICA",
-      "command_name": "UNIAGRICA",
-      "period_s": "0.1"
+      "command_name": "AGRICA",
+      "period_s": "0.1",
+      "role": "agrica",
+      "aliases": ["UNIAGRICA"]
     },
     {
       "log_name": "UNIHEADINGA",
       "command_name": "UNIHEADINGA",
-      "period_s": "0.1"
+      "period_s": "0.1",
+      "role": "heading",
+      "aliases": []
     },
     {
       "log_name": "GPGST",
       "command_name": "GPGST",
-      "period_s": "0.1"
+      "period_s": "0.1",
+      "role": "gst",
+      "aliases": []
     },
     {
       "log_name": "GPGSA",
       "command_name": "GPGSA",
-      "period_s": "0.1"
+      "period_s": "0.1",
+      "role": "gsa",
+      "aliases": []
     },
     {
       "log_name": "GPRMC",
       "command_name": "GPRMC",
-      "period_s": "0.1"
+      "period_s": "0.1",
+      "role": "rmc",
+      "aliases": []
     }
   ]
 }
