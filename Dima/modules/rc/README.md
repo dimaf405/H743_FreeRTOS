@@ -49,4 +49,4 @@ MavlinkService 在原始样本新鲜且通道数有效时，从校准前的 `inp
 
 Arm 只实现二段开关。启用 QGC Advanced UI 后在 Parameters 页面配置 `RC_MAP_ARM_SW=1..18` 和 `RC_ARMSWITCH_TH=-1..1`；正阈值高端为 ON，负阈值反向。Runtime 启动、RC 恢复或 Arm/Kill 映射及阈值变化后的第一份状态只建立基线，随后 OFF→ON 请求 Arm、ON→OFF 请求 Disarm，配置过程不会合成解锁边沿。当前没有可选择模式：`COM_FLTMODE1..6` 不再定义，`RC_MAP_FLTMODE` 仅保留既有 QGC/参数 handle 兼容且固定为 `0=Disabled`，RCUpdate 与 Commander 不消费 mode-slot。瞬时按键、长按 Toggle 和完整多模式能力不在本阶段。
 
-`COM_RC_IN_MODE` 只允许 `0=RC only`，其他控制源模式在协议写入时拒绝、在存储加载时 fail-closed。`RC_MAP_FLAPS` 与已有 Aux 映射进入 `rc_channels`/`manual_control_setpoint`；`PARAM_MAP_RC` 在线参数调节不在本阶段。
+`COM_RC_IN_MODE` 只允许 `0=RC only`，其他控制源模式在协议写入时拒绝、在存储加载时 fail-closed。固定翼 Flaps 与通用 Aux 映射及其后端 uORB 字段已退役；RC1～RC18 校准能力和其余功能映射仍保留完整的 `0..18` 范围。`PARAM_MAP_RC` 在线参数调节不在本阶段。

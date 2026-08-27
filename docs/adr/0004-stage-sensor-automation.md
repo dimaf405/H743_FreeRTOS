@@ -41,7 +41,7 @@
 
 ## 工程结构
 
-- 参数定义：`Dima/middleware/parameters/definitions/sensor_params.c`
+- 参数定义：`Dima/middleware/parameters/definitions/module_sensor_params.yaml`；经锁定 PX4 YAML 工具生成中间 C、XML/JSON 与 Header，源码树不再保留参数 C 定义
 - IMU 参数消费者：`Dima/modules/sensors/imu/VehicleImu.*`
 - 磁力计校准/限频消费者：`Dima/modules/sensors/magnetometer/VehicleMagnetometer.*`；只发布原始 `sensor_mag` 的 DroneCAN 设备链位于 `Dima/drivers/magnetometer/dronecan_mag2/`
 - 校准事务：`Dima/modules/sensors/calibration/`

@@ -43,7 +43,7 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 │   ├── rover/                DifferentialDrive 纯算法
 │   ├── timesync/             时间同步库
 │   └── tinybson/             TinyBSON 编解码
-├── messages/                 uORB schema 与 ABI lock，Topic 由工具生成
+├── messages/                 uORB schema 权威定义，Topic 与 catalog 由工具生成
 └── rover/                    唯一 Rover 产品域
     ├── control/              RoverDifferential 消息/参数/安全运行适配
     └── modes/                ManualMode 等 Rover 产品模式
@@ -183,7 +183,7 @@ manual_control_setpoint
 ## 6. 消息、参数和状态估计边界
 
 - 生产消息接口统一采用 uORB 兼容 Publication/Subscription；启动健康观察 Commander 三个安全 Topic 和 `actuator_output_status`，不建立示例心跳 Topic。
-- 参数系统采用 Parameter Core 与显式 bind/update 的 `px4::Param<T>`，参数数量由生成器产生，不设置固定运行期上限。生成器只扫描 Make 显式输入，当前 233 项按参数名排序；GPS、UAVCAN、Magnetometer、Sensors、Sensor Calibration 与 Serial 使用 PX4/QGC group 分类，全部 `CAL_*` 依 PX4 标记为 `System` category，offset/scale 同时带 `volatile`、三位小数和有效范围；不保留旧固件 handle、stable-tail、旧键或迁移版本参数，固件目录与公开 Metadata 使用同一顺序。
+- 参数系统采用 Parameter Core 与显式 bind/update 的 `px4::Param<T>`，参数数量由生成器从权威定义计算，不设置固定运行期上限或需要手工同步的总数门禁。生成器只扫描 Make 显式输入并按参数名排序；GPS、UAVCAN、Magnetometer、Sensors、Sensor Calibration 与 Serial 使用 PX4/QGC group 分类，全部 `CAL_*` 依 PX4 标记为 `System` category，offset/scale 同时带 `volatile`、三位小数和有效范围；不保留旧固件 handle、stable-tail、旧键或迁移版本参数，固件目录与公开 Metadata 使用同一顺序。
 - 传感器发布分层固定采用 PX4 单实例子集：ICM42688P 驱动发布原始 `sensor_accel/sensor_gyro`，`VehicleImu` 应用 correction、旋转和积分后发布 `vehicle_imu/vehicle_imu_status`；DroneCAN Mag2 驱动只发布原始 `sensor_mag`，独立 `VehicleMagnetometer` 按 device ID 选择匹配校准或 identity correction 后发布 `vehicle_magnetometer`。校准事务持有 arming interlock 时，两个前端直接在 Disarmed 状态应用 correction，不得二次获取同一不可重入互锁；提交与回滚均以同一 `parameter_update.instance` 和 active correction 逐项匹配作为完成握手，在前端确认前不得释放互锁。gyro/accel/mag 校准命令与 QGC `[cal]` 状态机运行于非实时 `wq:lp_default`，与 PX4 Commander worker 的非实时职责一致；项目日志层连 RAW 记录也拒绝实时上下文格式化，因此禁止把校准事务放入 `wq:sensors`。Accel 固定六面稳定采样；Mag 固定六面、每面 0.5 rad 净旋转、7 s 内 40 个空间去重点，共 240 点，scale 范围与 PX4 Metadata/前端统一为 0.1..3.0。
 - 单路 USB CDC 的 Application data plane 由 MavlinkService 独占；在线参数使用 MAVLink Classic/Ext 协议。General Metadata 声明 Parameter type 1 和 Actuator type 5，MavlinkService 提供 General/Parameter/Actuator 三个只读 FTP 虚拟文件，不提供目录、写操作或 Event/Peripheral Metadata。Actuator Metadata 只开放六路 PWM 分配与参数编辑，MotorRight/MotorLeft 排除执行器测试；固件不实现 `MAV_CMD_ACTUATOR_TEST` 或 `SERVO_OUTPUT_RAW`。原始 RC 样本新鲜且通道数有效时把校准前 `input_rc` 以 5 Hz 发布为 `RC_CHANNELS`；完全无帧或样本超时才停流，恢复立即发送。PX4 USB/QGC 配置流的单实例子集以 50 Hz `HIGHRES_IMU` 发布校准/旋转后的 `vehicle_imu` 与 `vehicle_magnetometer`（SI/Gauss），并以 25 Hz `SCALED_IMU` 发布第 1 套 `vehicle_imu` 与原始 `sensor_mag`（mG/mrad/s/milliGauss）；GPS 以 5 Hz `GPS_RAW_INT` 发布，1 Hz `SYS_STATUS` 分别表达 gyro/accel/mag/GPS 的 present、enabled 与 health。周期流相互独立，不以 health 位作为发送门禁；均支持不受周期 last-send 限制的 one-shot `MAV_CMD_REQUEST_MESSAGE` 以及 PX4 `SET/GET_MESSAGE_INTERVAL` 语义。固定 PX4 v1.17 没有注册 `RAW_IMU`，因此不把 SI 数据伪装成比例未定义的 raw 消息。MAVLink 手柄、`PARAM_MAP_RC` 和 Offboard 仍不声明。
 - 参数核心只依赖公共 execution/memory/synchronization/ParameterFileStore 接口。SD/FatFs 强制编译，FlashFS 为主存储，SD 为 generation 排序的镜像和恢复源；同 generation 以 payload CRC 识别分裂。运行期 Flash 按 32-byte、FatFs 按 512-byte 分步写入/回读，最终 commit/rename 前保持旧快照有效；维护票据的安全状态、硬截止时间或单调进度失效时停止健康 generation，存储层没有 IWDG capability。无卡检测 GPIO 时每 3 秒软件探测，插卡可恢复 ENOSPC Autosave 并独立重试 SD 镜像。当前快照只接受现有参数名和类型，未知旧键整份拒绝；固件不暴露无人驱动的恢复出厂 erase API，部署清除由显式维护流程负责。传感器校准与 PX4 v1.17 一样在参数通知和运行时前端应用成功后报告 done，不把 QGC 完成状态阻塞到 `param_save_default(true)`；Flash/SD 物理提交继续由 autosave 完成，断电重启保持性属于板端验收。
@@ -193,7 +193,7 @@ manual_control_setpoint
 - Wheel Encoder 先通过 Dima Odometry Adapter 转为受支持的速度或里程计观测，不直接修改 EKF Core。
 - Arming 状态与 PWM 外设是否启动分离；RoverDifferential 只发布两路双向 Motor 命令，最终六路输出必须再经过 MotorOutput 的独立 Failsafe、命令新鲜度和板级 safe-off Gate。
 - 当前控制源只有 RC Manual，`COM_RC_IN_MODE` 只接受 `0=RC only`。板级唯一清单把 `SERIAL0` 固定为 USB OTG1，并让 `SERIAL1..8` 直接对应 STM32 USART/UART1..8；八路外部端口各自生成 `SERIALx_BAUD/FUNCTION`，Function 当前允许 Disabled/RC Input/GPS，默认 `SERIAL6=USART6/PC7` 独占 RC。`GPS_1_CONFIG=1..8` 直接选择物理串口；其为 0 时仅为兼容旧配置接受唯一 `SERIALx_FUNCTION=GPS`，目标速率继续读取所选 `SERIALx_BAUD`。SerialConfig 先建立普通 8N1，SBUS 再把唯一 RC owner 临时切换为 100000/8E2/RXINV/RX-only，GPS 则由 UM982 驱动扫描当前速率并在 Disarmed 维护事务中切换到目标速率。默认 Throttle/Yaw 映射到物理通道 1/2，Roll/Pitch 仅保留为 QGC Radio 通道映射页面兼容字段，不进入 Rover 控制；完整四轴校准流程不属于当前验收范围。RC 与外部 MAVLink ARM 共用同一预检并要求 RC 新鲜、Throttle/Yaw 居中。Arm 只支持 Advanced Parameters 配置的二段开关；启动、RC 恢复及开关配置变化后先建立无动作基线。当前无可选择模式，`COM_FLTMODE1..6` 与 `RTL_*` 不进入固件，`RC_MAP_FLTMODE` 只保留为固定 Disabled 的 QGC 兼容参数，RC/Commander 不生成 mode-slot 动作；RC 丢失策略固定 `NAV_RCL_ACT=6`（Disarm），GCS 丢失策略固定 `NAV_DLL_ACT=0`（Disabled）。
-- MAVLink HEARTBEAT 从 Commander 的 `vehicle_status`/`vehicle_control_mode` 投影 PX4 custom mode；正常 Manual 使用 `0x00010000`，Disarmed/Armed 的 base mode 为 65/193，由 QGC 本地化显示 Manual/手动。每次 `PARAM_REQUEST_LIST` 冻结全部 233 个 used 句柄的不可变快照；构建生成的 version 1 Parameter JSON 通过 Component Metadata/只读 FTP 交给 QGC，使 GPS、UAVCAN、Magnetometer、Sensors、Sensor Calibration、Serial 等 group、category、描述和枚举均来自同一参数源。
+- MAVLink HEARTBEAT 从 Commander 的 `vehicle_status`/`vehicle_control_mode` 投影 PX4 custom mode；正常 Manual 使用 `0x00010000`，Disarmed/Armed 的 base mode 为 65/193，由 QGC 本地化显示 Manual/手动。每次 `PARAM_REQUEST_LIST` 冻结当次构建的全部 used 句柄并形成不可变快照；构建生成的 version 1 Parameter JSON 通过 Component Metadata/只读 FTP 交给 QGC，使参数数量、顺序、group、category、描述和枚举均来自同一参数源。
 
 ## 7. Flash、构建与恢复边界
 
@@ -212,7 +212,8 @@ Storage       128 KiB
 - 阶段 0 不缩小升级 Slot，也不改变 MCUboot 地址。
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源。
 - 默认构建读取 `GNUmakefile` 和 `make/project.mk`；禁止使用 `make -f Makefile` 绕过项目叠加层。
-- MAVLink XML 固定为 upstream `33af200d`，pymavlink 固定为 `fcaa2c7d`/2.4.47；`make clean` 删除 `build/generated/mavlink` 与 `build/generated/component_metadata`，正式构建从受校验共享缓存重新生成 29 条消息的方言和确定性 General/Parameter/Actuator JSON、XZ、CRC 及 Flash 数组，不读取源码树历史生成物。
+- MAVLink XML 固定为 upstream `33af200d`，pymavlink 固定为 `fcaa2c7d`/2.4.47；`dima.xml` 只 include 固定 common 方言，正式构建直接运行原始 mavgen 生成当前 230-message wire 闭包。运行频率与 handler 由独立 YAML 策略派生，不能反向定义 ID、CRC 或 payload。`make clean` 删除 `build/generated/mavlink` 与 `build/generated/component_metadata`，不读取源码树历史生成物。
+- Parameter 的唯一源码定义为通过 PX4 schema 的 YAML；串口与 DroneCAN 只在 `build/generated` 生成 YAML 片段，再进入同一套官方 YAML→中间 C→XML/JSON→Header 链。uORB 的唯一消息输入为 PX4 原生 `.msg`，Topic ID/hash/JSON/注册目录由 PX4 v1.17 原始工具生成。三条链的上游目录和派生产物均由逐文件 SHA-256 门禁闭合。
 - `tools/check_architecture.py` 在源码阶段拒绝重复 Rover 根、逆向依赖、越权硬件访问、生命周期契约缺失、非零 PWM compare 和未授权执行器消费者；`tools/verify_application_elf.py` 在最终应用 ELF 上检查向量、ISR 强弱绑定、section 地址/容量、SBUS DMA/CPU Ring、生命周期符号、初始化数组白名单，并要求唯一六路安全 PWM 链的 HAL、board 和 MotorOutput 符号实际链接。源码扫描通过不等于 ELF、目标构建或板测通过。
 - VS Code 的 Microsoft C/C++ 插件只使用 `make intellisense` 从真实 Make 配方生成的主机本地 `compile_commands.json`。数据库同时覆盖 Application、MCUboot 和各层私有 include/define；源码清单或编译参数变化后必须重新生成。`.vscode/` 中的编译器绝对路径、数据库、符号索引和主机配置全部保持本地，不纳入源码。
 - MCUboot CDC + `mcumgr` 和 ROM USB DFU 恢复链不得因 Dima 重构而改变。

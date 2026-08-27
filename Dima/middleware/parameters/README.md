@@ -1,59 +1,51 @@
 # Dima Parameter 中间件
 
-## 阶段 2 状态
+## 唯一参数定义与生成链
 
-- PX4 来源：v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`。
-- 状态：Parameter 基础链代码与目标构建验证完成；实车验收待完成。
-- 许可证：`PENDING`；最终处理 `DEFERRED`，不阻塞当前移植和调试。
-
-## 模块链
+- Parameter YAML 工具固定为 PX4 commit `1f6b6f61f8f42eaab0269c16a442cb580f954d7c`；`tools/upstream/parameter_yaml_20260827/SOURCE_MANIFEST.json` 对原始脚本、schema、模板和 helper 做逐文件 SHA-256 闭包校验。
+- `definitions/module_*.yaml` 是产品参数的唯一受版本控制定义。板级串口与 DroneCAN 分别以自身 schema/manifest 为权威输入，但只能在 `build/generated` 生成 PX4 YAML 片段，再并入同一条正式链。
+- 源码树禁止 `PARAM_DEFINE_*`、本地 C 注释 parser/renderer、`qgc_required` 扩展、手写参数目录和运行时参数名名单。
 
 ```text
-PX4 PARAM_DEFINE_* 参数定义
-→ 官方 process parser / scanner
+PX4 Parameter YAML
+→ Tools/validate_yaml.py + validation/module_schema.yaml
+→ Tools/module_config/generate_params.py
+→ build/generated/parameters/module_params.c
+→ src/lib/parameters/px_process_params.py
 → parameters.xml + parameters.json
-→ px4_parameters.hpp + parameter_metadata.c
-→ Parameter Layer/Core + AtomicTransaction
-→ px4::Param<T> 显式 bind/update / parameter_update
-→ Autosave / MAVLink Parameter Protocol
-→ TinyBSON flashparams Buffer
-→ 平台无关 FlashFS（Flash）/ FileStorage（SD 卡策略）
-→ STM32H7 FlashPartition / ParameterFileStore capability
-→ FreeRTOS FatFs file backend / Boards H743 SDMMC disk port
+→ src/lib/parameters/px_generate_params.py
+→ px4_parameters.hpp
+→ Dima 薄运行时合同与 Component Metadata
 ```
 
-`definitions/` 是当前固件参数目录的集中输入区，不是 Parameter 中间件对 Commander、RC、Rover 或 MotorOutput 业务的运行时所有权声明。板级串口的 `SERIAL1..8_BAUD/FUNCTION` 与 `GPS_1_CONFIG` 例外地由 `Boards/H743/serial_ports.json` 通过 `tools/serial/generate_config.py` 生成；GPS 驱动策略参数 `GPS_1_PROTOCOL` 仍由 sensor schema 定义。全部输入仍由 `make/project.mk` 显式列出；实际参数消费和生命周期归各自模块。
+`module_params.c` 只是在构建目录中串接两段 PX4 官方工具的中间产物，不进入源码树，也不得人工修改。采用较新的 YAML 工具只替换生成方式，不导入 PX4 主线的新参数、新默认值或新产品策略。
 
-## 当前实现
+## 生成物与下游边界
 
-- 参数数量完全由生成结果决定，不设置固定 64、128 等容量。
-- 当前固件和公开 Parameter Metadata 均为 233 项。`qgc_compat_params.c` 只保留 11 项 QGC 身份、校准摘要与失联策略合同；未实现的 `COM_FLTMODE1..6`、`RTL_*`、旧板级键和迁移版本参数不进入固件或 Metadata。`Boards/H743/serial_ports.json` 另行生成八组 `SERIAL1..8_BAUD/FUNCTION`。串口编号直接对应 VCU-H7 板载 USART/UART1..8，Function 固定公开 `0=Disabled`、`1=RC Input`、`2=GPS`；CAL/低电量条目只是固定外部兼容值，不代表相关未来能力已实现。
-- 首批目录包含 24 项差速 Rover 参数：20 项 `RO_*` 和 4 项 `RD_*`。
-- 官方 parser 只扫描 `make/project.mk` 显式列出的定义文件并输出 XML/JSON；Header renderer 只等价实现官方模板语义，不依赖 Jinja2。参数按当前目录名称排序，不保留旧固件 handle 或 stable-tail 排序；Header、类型表、`param_info` 和 JSON 使用同一顺序。
-- Component Metadata 生成器从同一 JSON 构造含全部 233 项参数的 QGC version 1 Parameter 文件和六路 output-only Actuator 文件，XZ 压缩并计算 PX4 CRC；General JSON 声明 Parameter type 1 与 Actuator type 5。三份 XZ 作为只读 Flash 数组由 MavlinkService/FTP 交付，Parameter Core 不感知传输层。
-- 参数生成器会确定性生成 `build/generated_include` 转发头；删除生成目录后可从源码重新构建。
-- Parameter Core 的运行期状态、事务及 get/set/reset 位于 `param.cpp`；持久化后端注册、save/load/status/erase 位于 `param_storage.cpp`，两者仅通过私有 `param_internal.hpp` 共享状态。公开兼容接口仍统一由 `param.h` 提供。
+- 参数数量、handle、类型、默认值、范围、枚举、单位、volatile 与 reboot 语义完全由官方 XML、JSON 和生成头决定，不设置固定容量或第二份排序表。
+- `parameter_contract.hpp`、公开转发头、Component Metadata JSON/XZ/Flash 数组、Dima 只读策略与持久化适配只读取官方产物，不重新解释 YAML 或中间 C。
+- MAVLink Classic/Ext 参数协议按官方连续 handle 遍历完整目录；LIST、按 index 补读、READ/SET 与 ACK 使用同一目录索引，不再先维护一份 QGC/public 参数名单。
+- `CAL_MAG1_ID`、`CAL_MAG1_ROT`、`CAL_MAG2_ID`、`CAL_MAG2_ROT`、`SENS_DPRES_OFF` 保持删除，不出现在 YAML、生成头、Metadata、参数协议目录、别名或虚拟参数中。当前产品在缺少这些参数时仍能正常进入并执行校准，这是本次重构必须保持的行为基线。
+- 现有 `CAL_ACC0_*`、`CAL_GYRO0_*`、`CAL_MAG0_*` 等实际校准参数的名称、默认值、持久化和算法语义保持不变。
+
+## Parameter Core 与持久化
+
+- 固件通过官方 `px4::parameters`、`parameters_type` 与 `px4::Param<T>` 访问参数；`Param<T>` 构造不访问 Core，模块每次 start 显式 `bind()`。
+- Parameter Core 的运行期状态、事务及 get/set/reset 位于 `param.cpp`；持久化后端注册、save/load/status 位于 `param_storage.cpp`，公开兼容接口统一由 `param.h` 提供。
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
-- Autosave 在首次变化后至少等待 300 ms，连续新保存间隔至少 2 s；异步存储小步按 10 ms 推进。ENOSPC 只进入可恢复暂停态，SD 从 unavailable 转为 available 时恢复一次受控保存，其他人工停用和 shutdown 不会被热插卡误唤醒。
-- ParameterService 不持有或读取 Console，只负责 Core、FlashFS/FileStorage、Autosave 和 Flash 事务；在线参数由 MavlinkService 通过 Classic/Ext 协议访问。
-- MavlinkService 在每次 LIST 开始前一次性激活全部 QGC 固定参数及 16 项公开 `SERIALx_BAUD/FUNCTION`，并在参数锁内冻结 used 句柄快照；整轮 PARAM_VALUE、按 index 缺帧补读以及快照内参数的 READ/SET 回包都复用该 count/index。固定参数仅允许同值写回；串口 Function 只允许 Disabled/RC Input/GPS，RC 和 GPS 各自维持唯一 owner，同一 UART 不得同时分配给二者，并向 QGC 回传事务中全部受影响参数。
-- SD/FatFs 在唯一固件配置中强制编译，不存在板级开关。FlashFS 是持续可用的主存储，SD 是带 generation 的镜像和恢复源；同 generation 还比较 payload CRC，差异时按既有 Flash 优先规则独立重建 SD。同一 TinyBSON 快照先分步写 Flash，再以临时文件分块写入、回读和 rename 轮换写入 SD 主/备文件。无 card-detect GPIO 时，ParameterService 每 3 秒通过 `disk_status` 软件探测；无卡启动只做一次初始探测，重新插入后执行 HAL deinit/init、重挂载并恢复 ENOSPC 或独立镜像重试。
-- FlashFS 位于 `0x081E0000～0x08200000` 单个 128 KiB 扇区，采用追加记录和最终 commit 字；STM32H7 `FlashPartition` 负责 ECC 安全读、32-byte program、sector erase、回读和 cache 一致性。只有当前快照格式、CRC、BSON 结构、参数名和类型全部有效时才参与 generation 选择。
-- 扫描不执行整段 cache invalidate；program/erase 成功后仅由 STM32 cache helper 失效实际修改范围，D-cache 关闭时 helper 防御性 no-op。
-- DBECC 只有在活动安全读窗口、地址属于参数分区且 Bank 2 标志匹配时才允许 BusFault 恢复；其他 BusFault 一律进入启动诊断和复位。
-- FlashFS 每条记录保存原始 payload 长度，CRC 只覆盖有效 payload；扫描选择同 token 的最后一条 CRC/commit 均有效记录。空间不足返回 ENOSPC，不自动擦除仍含有效快照的扇区。
-- 不提供旧 `ParameterJournal`、旧键名或旧板级参数目录迁移。快照中出现未知参数名、类型不符或非当前格式时整份拒绝；开发板升级后直接擦除并按当前参数重新配置。
-- 当前快照解码边界忽略 11 项只读 QGC 固定合同以及固定 Disabled 的 `RC_MAP_FLTMODE` 存储值；16 项 `SERIALx_BAUD/FUNCTION` 与其他可配置参数一样恢复并由 Autosave 持久化。当前固件未暴露恢复出厂命令，已删除无人驱动且无法完成异步票据的 erase API；部署清除仍由显式维护流程负责。
-- 每次 load 都重新读取并验证条目 CRC；最新记录损坏或未 commit 时回退到更早的有效 FlashFS 记录。
+- Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，并按 10 ms 小步推进。ENOSPC 进入可恢复暂停态，SD 从 unavailable 转为 available 后恢复受控保存。
+- FlashFS 是持续可用的主存储，SD 是带 generation 的镜像和恢复源；同 generation 还比较 payload CRC，差异时按既有 Flash 优先规则重建 SD。
+- FlashFS 位于 `0x081E0000～0x08200000` 的单个 128 KiB 扇区，使用追加记录、最终 commit 字、32-byte program、回读与 cache 一致性。空间不足返回 ENOSPC，不自动擦除仍含有效快照的扇区。
+- CRC/格式有效的旧快照若含当前目录已不存在的退役名称，只跳过对应条目；已知参数类型不符或快照格式无效时仍整份拒绝。当前固件不提供旧键别名或参数目录迁移表。
 
 ## Application Runtime 生命周期
 
-- `Param<T>` 构造只执行编译期类型约束，不调用 `param_get()` 或 `param_set_used()`；模块每次 start 必须显式 `bind()`，bind 失败时不得继续沿用上一 Runtime 的值。
-- `param_shutdown()` 停止 Autosave，注销 notify/storage/lock callback，清除 ready、used、unsaved、动态 Layer、值 cache 和运行期同步对象；下一次 init 从未绑定状态开始。
-- `ParameterService::shutdown()` 在释放自身 Mutex 前关闭 Parameter Core。FlashFS 无需显式关闭，FileStorage 的 SD 卡挂载和存储互斥量在进程生命周期内保持。
-- Armed/Flash coordinator 仍独立于 Application Runtime，确保 ARMED 时 save/erase/confirm 延后；维护票据由 BootHealth 在严格 Disarmed 且 neutral/hard-safe 输出下批准，`appMain` 完成真实 IWDG reload 后激活。整个维护事务持有 arming interlock，按单调进度和硬截止时间推进；存储层没有 IWDG capability，也不得自行续命。
-- 以上是源码生命周期契约。同上电 `shutdown → init → start`、掉电恢复、损坏回退和 ENOSPC 仍需目标板验收，不能由源码或主机生成结果代替。
+- `param_shutdown()` 停止 Autosave，注销 notify/storage/lock callback，并清除 ready、used、unsaved、动态 Layer、值 cache 和运行期同步对象；下一次 init 从未绑定状态开始。
+- `ParameterService::shutdown()` 在释放自身 Mutex 前关闭 Parameter Core。FlashFS 无需显式关闭，FileStorage 的 SD 挂载和存储互斥量在进程生命周期内保持。
+- Armed/Flash coordinator 独立于 Application Runtime。运行期维护必须在 Disarmed 且输出 neutral/hard-safe 时由 BootHealth 批准，并持有 arming interlock；存储层没有 IWDG capability，也不得自行续命。
 
-## 当前验证边界
+## 验证边界
 
-参数生成链当前确定性产出 233 项固件参数和 233 项公开 Metadata；JSON/XZ 与 CRC 由正式生成链统一给出。整机 `.text/.data/.bss`、签名镜像和 Factory HEX 属于全项目构建结果，只在 `docs/DIMA_SOURCE_MANIFEST.md` 记录最新 Windows 原生 clean build，避免本模块 README 复制一份易陈旧的资源数字。未新增或运行测试框架、测试文件、SITL 或仿真；MAVLink 在线调参、SD 物理拔插、掉电恢复、CRC 损坏回退和 ENOSPC 仍为实板验收项。
+正式 Make 入口会验证上游来源清单、PX4 YAML schema、官方 XML/JSON/Header 一致性、派生 Metadata、五个删除参数的全闭包缺失和架构边界。未新增或修改测试文件、测试框架、runner、fixture、mock 或 test-only API。
+
+Windows 生成、编译和 ELF 检查不能代替实板证明。同上电 `shutdown → init → start`、掉电恢复、损坏回退、ENOSPC、在线 MAVLink 调参，以及 QGC 5.1.3 陀螺仪/加速度计/磁力计校准回归仍按最终报告标记 `BOARD/QGC PENDING`。

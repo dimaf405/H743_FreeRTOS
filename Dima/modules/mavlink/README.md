@@ -4,9 +4,13 @@
 
 传感器流合同固定对照 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 的 `MAVLINK_MODE_CONFIG`、`HIGHRES_IMU.hpp` 与 `SCALED_IMU.hpp`；本地适配只保留实际存在的单套 IMU/磁力计实例和固定内存发送路径。IMU 新样本驱动对应周期发送，最近一次合法磁场值则保持可见；磁力计 freshness 只属于 `SYS_STATUS` 健康判定，不反向阻断或清零诊断流。
 
-## 裁剪方言
+## 原生方言与运行策略
 
-方言固定为 29 条消息。相对原 24 条合同新增标准消息：
+`tools/mavlink/message_definitions/dima.xml` 是唯一 wire 根，只 include 固定 MAVLink definitions commit `33af200d25ec6f0925b49b1ba82bbf1294ea5f72` 的 `common.xml`。正式 Make 直接执行 pymavlink 2.4.47 commit `fcaa2c7d25e3169dc66155929c338487941555e9` 的原始 `mavgen.py --lang C --wire-protocol 2.0`；消息 ID、字段、CRC、payload 和 codec 不在 Dima Python/C++ 中复制。
+
+`mavlink_runtime.yaml` 只声明产品实际发送频率、请求行为和 inbound handler。薄生成器从 mavgen 已生成头验证符号并生成 C++ 调度合同，所有 message ID 都引用 `MAVLINK_MSG_ID_*` 宏。完整 common wire 定义不等于固件宣称实现全部业务能力；只有运行策略和 handler 闭合的消息才进入实际收发路径。
+
+当前真实传感器流行为包括：
 
 - `HIGHRES_IMU`：按 PX4 USB 默认 50 Hz 发布经过校准/旋转的 `vehicle_imu` 与最近一次合法 `vehicle_magnetometer`；accel、gyro、mag 分别使用 m/s²、rad/s、Gauss，`time_usec` 固定使用 IMU 样本时间，磁场更新位只在新磁力计样本进入时置位。
 - `SCALED_IMU`：这是 PX4 注册的原始传感器 MAVLink 流，按 USB 默认 25 Hz 发布第 1 套 `vehicle_imu`、`vehicle_imu_status` 温度与最近一次合法 raw `sensor_mag`；accel、gyro、mag 分别转换为 mG、mrad/s、milliGauss，温度使用 cdegC。当前产品只有实例 0，不伪造 `SCALED_IMU2/3` 或 PX4 未注册的 `RAW_IMU`。

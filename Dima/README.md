@@ -14,7 +14,7 @@
 - `platform/common/`：MCU/OS 无关的 capability 实现，只依赖 `platform/api/` 与平台无关库，不拥有板级资源或产品生命周期。
 - `platform/freertos/`：Task、Mutex、Signal、Heap、Flash transaction 和 `storage/` FatFs 文件后端。
 - `platform/stm32h7/`：根部只保留硬件工厂声明；`system/`、`memory/`、`flash/`、`serial/`、`can/`、`spi/`、`interrupts/`、`pwm/` 和 `usb/` 只承载 MCU 基础配置、读写、中断与统计。
-- `messages/`：uORB schema 与 ABI lock；Topic 头和 metadata 由工具生成。
+- `messages/`：uORB schema 权威定义；Topic 头、metadata 和 catalog 由工具生成。
 - `lib/`：平台无关的算法、容器、协议和移植库；`lib/protocols/` 只处理协议编解码，`lib/rover/` 只放纯 Rover 算法，不拥有 WorkQueue、uORB 或 Parameter 生命周期。
 
 ## 容易混淆的分层
@@ -44,7 +44,7 @@
 ## 头文件引用
 
 - 同目录头文件引用只写文件名。
-- 跨目录 include 最多保留一层职责名，例如 `uorb/Publication.hpp`、`sbus/SbusRc.hpp`。
+- 跨目录 include 最多保留一层职责名，例如 `uORB/Publication.hpp`、`sbus/SbusRc.hpp`。
 - 禁止两层及以上的首方 include；不得写 `platform/api/Execution.hpp`、完整 `Dima/...` 或 `Boards/H743/Inc/...` 路径。存在同名头时通过精确 include root 和一层职责名消歧，不扩大为仓库全局路径。
 - 自有 `.hpp` 只保留声明、类型、模板、`constexpr` 和极短访问器；普通函数、协议状态机与算法实现放入同名 `.cpp`。
 - 只有模板、生成代码或经文档明确说明的上游合同可以采用 header-only；不得用 header-only 规避 `make/project.mk` 的显式翻译单元清单。
