@@ -350,7 +350,7 @@ def _evaluate_build_closure(
     )
     parameter_inputs = frozenset(
         _normalize_path(source)
-        for source in application.words("PARAMETER_DEFINITIONS")
+        for source in application.words("PARAMETER_YAML_DEFINITIONS")
     )
     return BuildClosure(
         units=(*_application_units(application), *_bootloader_units(bootloader)),

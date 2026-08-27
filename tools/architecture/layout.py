@@ -98,8 +98,10 @@ def scan_phase5_message_contracts(violations: list[Violation]) -> None:
         (
             ("MESSAGE_GENERATOR := tools/uorb/generate_messages.py", "R341",
              "uORB schema generator is not part of the build contract"),
-            ("$(MESSAGE_GENERATED_SOURCE)", "R341",
-             "generated uORB metadata source is not built"),
+            ("include $(MESSAGE_GENERATED_MAKEFILE)", "R341",
+             "generated uORB source manifest is not included"),
+            ("$(DIMA_UORB_GENERATED_SOURCES)", "R341",
+             "official generated uORB sources are not built"),
         ),
         violations,
     )

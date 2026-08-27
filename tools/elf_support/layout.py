@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from .reader import (
     SHT_NOBITS,
-    STT_OBJECT,
     Elf32,
     ElfVerificationError,
     Section,
@@ -72,47 +71,6 @@ def verify_vector_symbol(elf: Elf32) -> None:
         )
 
 
-def verify_orb_metadata_section(elf: Elf32) -> None:
-    """验证 uORB metadata 链接段边界和等长描述符结构。"""
-    section = elf.section(".dima_orb_meta")
-    assert section is not None
-    if not range_contains(APP_VECTOR, APP_FLASH_SIZE,
-                          section.address, section.size):
-        raise ElfVerificationError(
-            ".dima_orb_meta must be a non-empty Flash section"
-        )
-
-    start = elf.symbol("__dima_orb_meta_start__")
-    end = elf.symbol("__dima_orb_meta_end__")
-    if start.value != section.address or end.value != section.address + section.size:
-        raise ElfVerificationError(
-            "uORB metadata linker boundaries do not match .dima_orb_meta"
-        )
-
-    descriptors = elf.symbols_matching(
-        lambda symbol: symbol.section_index == section.index and
-        symbol.symbol_type == STT_OBJECT and
-        symbol.name.startswith("__orb_")
-    )
-    if not descriptors:
-        raise ElfVerificationError(".dima_orb_meta has no topic descriptors")
-    descriptor_size = descriptors[0].size
-    if descriptor_size == 0 or any(
-            descriptor.size != descriptor_size for descriptor in descriptors):
-        raise ElfVerificationError("uORB descriptors have inconsistent sizes")
-    if section.size != len(descriptors) * descriptor_size:
-        raise ElfVerificationError(
-            ".dima_orb_meta contains padding or non-descriptor data"
-        )
-    constructors = elf.symbols_matching(
-        lambda symbol: symbol.name.startswith("_GLOBAL__sub_I___orb_")
-    )
-    if constructors:
-        raise ElfVerificationError(
-            "uORB descriptors must not create static constructors"
-        )
-
-
 def verify_memory_layout(elf: Elf32) -> None:
     """核对 Application Flash、DTCM、D1/D2/D3、DMA 与启动边界。"""
     vector = elf.section(".isr_vector")
@@ -175,4 +133,3 @@ def verify_memory_layout(elf: Elf32) -> None:
         elf, ".dima_boot_diag", D3_DIAGNOSTICS_BASE,
         D3_DIAGNOSTICS_SIZE,
     )
-    verify_orb_metadata_section(elf)

@@ -30,7 +30,7 @@ def _scan_generated_serial_contract(
         spec.loader.exec_module(generator)
         manifest, ports = generator.load_manifest(manifest_path)
         expected_outputs = {
-            ROOT / "build/generated/serial/serial_baud_params.c":
+            ROOT / "build/generated/serial/module_serial.yaml":
                 generator.generate_serial_parameters(manifest, ports),
             ROOT / "build/generated/serial/SerialContract.hpp":
                 generator.generate_serial_contract(manifest, ports),
@@ -170,8 +170,8 @@ def scan_board_serial_manifest(violations: list[Violation]) -> None:
              "R342", "build must use the board serial manifest"),
             ("$(SERIAL_GENERATED_OUTPUTS)", "R342",
              "build must consume generated serial outputs"),
-            ("$(SERIAL_BAUD_PARAMETERS)", "R342",
-             "parameter generation must consume serial definitions"),
+            ("$(SERIAL_PARAMETER_YAML)", "R342",
+             "parameter generation must consume serial YAML"),
         ),
         violations,
     )

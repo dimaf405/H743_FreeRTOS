@@ -328,8 +328,8 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
     # Thin forwarding headers that delegate to a namesake .hpp
     # which already carries the namespace declaration.
     forwarding_header_ok = {
-        "Dima/middleware/uorb/Publication.hpp",
-        "Dima/middleware/uorb/SubscriptionData.hpp",
+        "Dima/middleware/uORB/Publication.hpp",
+        "Dima/middleware/uORB/SubscriptionData.hpp",
         "Dima/middleware/work_queue/ScheduledWorkItem.hpp",
     }
     c_abi_files = {
@@ -340,6 +340,10 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
         "Dima/adapters/mavlink/MavlinkChannelState.cpp",
         "Dima/middleware/logging/logging.cpp",
         "Dima/middleware/logging/logging.hpp",
+        # PX4 生成模板要求 orb_metadata 与打印入口位于全局 C ABI；
+        # Runtime 内部仍保持在 uORB 命名空间，此处只放行这两个薄边界文件。
+        "Dima/middleware/uORB/uORB.cpp",
+        "Dima/middleware/uORB/uORB.hpp",
         "Dima/middleware/parameters/autosave.cpp",
         "Dima/middleware/parameters/flashparams/flashparams.cpp",
         "Dima/middleware/parameters/param.cpp",

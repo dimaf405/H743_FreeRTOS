@@ -42,6 +42,7 @@ from architecture.runtime_safety import (
 )
 from architecture.serial import scan_board_serial_manifest
 from architecture.timer import scan_timer_contract
+from architecture.uorb import scan_uorb_generation_contract
 
 
 INCLUDE_WITH_DELIMITER_RE = re.compile(
@@ -209,6 +210,7 @@ def main() -> int:
     scan_active_actuator_contract(violations)
     scan_timer_contract(violations)
     scan_dronecan_contract(violations)
+    scan_uorb_generation_contract(violations)
     scan_linker_contract(violations)
     scan_first_party_include_depth(violations)
     scan_namespace_convention(violations)
