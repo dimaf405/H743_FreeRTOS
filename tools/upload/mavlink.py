@@ -139,8 +139,17 @@ class MavlinkCodec:
             and message.get_srcComponent() == MAVLINK_APP_COMPONENT_ID
         )
 
-    def application_identity(self, payload: bytes) -> ApplicationIdentity | None:
-        """仅接受来源 1/1 且 rover/PX4、版本、能力、UID 全部匹配的应用。"""
+    def application_identity(
+        self,
+        payload: bytes,
+        *,
+        require_target_build: bool,
+    ) -> ApplicationIdentity | None:
+        """识别兼容 Dima 应用，并按阶段决定是否核对本次目标 Git 身份。
+
+        升级前板端通常运行旧提交，不能要求 custom version 等于待上传镜像；
+        reset 后则必须精确匹配生成合同，才能证明启动的是本次构建。
+        """
         heartbeat = None
         version = None
         for message in self.parse(payload):
@@ -157,12 +166,18 @@ class MavlinkCodec:
             or heartbeat.autopilot != self._dialect.MAV_AUTOPILOT_PX4
             or int(version.flight_sw_version) != self._expected_flight_sw_version
             or int(version.board_version) != self._expected_board_version
-            or tuple(int(value) for value in version.flight_custom_version)
-            != self._expected_custom_version
             or (
                 int(version.capabilities) & self._expected_capabilities
             ) != self._expected_capabilities
             or int(version.uid) == 0
+        ):
+            return None
+        # flight_sw_version 表示生成 manifest 声明的 PX4 线协议兼容版本；
+        # flight_custom_version 才是随每次 Git 提交变化的目标镜像身份。
+        if (
+            require_target_build
+            and tuple(int(value) for value in version.flight_custom_version)
+            != self._expected_custom_version
         ):
             return None
         return ApplicationIdentity(

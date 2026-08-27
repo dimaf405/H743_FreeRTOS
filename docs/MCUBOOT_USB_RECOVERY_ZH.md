@@ -74,9 +74,12 @@ make \
    broadcast `0/0` 和 targeted `1/0`。
 3. 未显式指定端口时使用安全自动发现：通过固定版本 pymavlink 请求 `HEARTBEAT` 与
    `AUTOPILOT_VERSION`。当前应用必须同时匹配 system/component
-   `1/1`、Ground Rover、PX4 autopilot、固件版本 `0.1.0`、板版本 `1`、能力位和非零硬件 UID；识别后
-   发送三轮 broadcast/targeted MAVLink reboot。Windows 在一个 PowerShell `SerialPort` 实例内完成
-   全部二进制写入，POSIX 在一个 raw file descriptor 内完成，避免每一帧重新开关端口。
+   `1/1`、Ground Rover、PX4 autopilot、生成身份合同声明的 PX4 线协议兼容版本与板版本、能力位和
+   非零硬件 UID；识别后发送三轮 broadcast/targeted MAVLink reboot。升级前允许板端
+   `flight_custom_version` 来自旧 Git 提交，否则正常的跨版本 OTA 会在进入 Recovery 前被错误拒绝；
+   新镜像复位后才要求该字段精确等于本次生成合同，以证明真正启动了目标构建。Windows 在一个
+   PowerShell `SerialPort` 实例内完成全部二进制写入，POSIX 在一个 raw file descriptor 内完成，
+   避免每一帧重新开关端口。
 4. 应用确认当前未 armed 后，在 RTC 备份寄存器写入一次性 Recovery 请求并执行
    `NVIC_SystemReset()`。
 5. MCUboot 读取该请求后持续运行 USB Recovery，不受普通 3 秒窗口限制；USB 初始化成功后请求被
@@ -198,7 +201,8 @@ Linux 会枚举 `/dev/serial/by-id/`、`/dev/ttyACM*` 和 `/dev/ttyUSB*`，并�
 再使用自动缓存的 Windows `mcumgr.exe` 完成 Recovery 传输。VID/PID、COM 号和设备名称都不作为
 烧写授权，只有当前 MAVLink 复合身份或 MCUboot `image list` 协议响应才确认
 身份；MAVLink 的 64-bit hardware UID 用于约束复位前后的应用关联，但不作为密码学设备身份。普通
-端口打开失败或协议不匹配只会被跳过；
+端口打开失败或协议不匹配会在等待窗口内继续重试；若 QGC、串口监视器等进程始终排他占用端口，
+期限结束后返回包含具体 COM 的 `PORT_BUSY`，上传器不会擅自终止用户进程；
 若识别到多个 Dima 协议端点，命令会拒绝猜测目标，此时必须覆盖端口：
 
 ```bash

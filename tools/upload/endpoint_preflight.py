@@ -48,6 +48,7 @@ def endpoint_preflight(
     print(f"  Scan limit : {wait_seconds}s", flush=True)
     deadline = time.monotonic() + wait_seconds
     last_error = "no serial ports detected"
+    last_busy_error = ""
     # 每个端口最多 1 Hz 探测，避免反复打开同一 COM 干扰 USB 重枚举或其他工具。
     probe_after: dict[str, float] = {}
     while time.monotonic() < deadline:
@@ -68,24 +69,33 @@ def endpoint_preflight(
                 continue
             if output:
                 last_error = f"{port}: {output}"
-            if explicit_port and port_busy(output):
-                raise UploadError(
-                    f"PORT_BUSY: {port} is already open by another process ({output})"
-                )
+            if port_busy(output):
+                last_busy_error = f"{port}: {output}"
+                if explicit_port:
+                    raise UploadError(
+                        f"PORT_BUSY: {port} is already open by another process "
+                        f"({output})"
+                    )
 
             _, identity, identify_output = try_application_identify(
-                codec, runtime.serial_backend, port, deadline
+                codec,
+                runtime.serial_backend,
+                port,
+                deadline,
+                require_target_build=False,
             )
             if identity is not None:
                 matches.append((port, identity.summary()))
                 continue
             if identify_output:
                 last_error = f"{port}: {identify_output[-240:]}"
-            if explicit_port and port_busy(identify_output):
-                raise UploadError(
-                    f"PORT_BUSY: {port} is already open by another process "
-                    f"({identify_output})"
-                )
+            if port_busy(identify_output):
+                last_busy_error = f"{port}: {identify_output}"
+                if explicit_port:
+                    raise UploadError(
+                        f"PORT_BUSY: {port} is already open by another process "
+                        f"({identify_output})"
+                    )
 
         if len(matches) > 1:
             raise UploadError(
@@ -101,6 +111,13 @@ def endpoint_preflight(
             return port, endpoint
         time.sleep(0.25)
 
+    # 自动发现会在整个窗口内等待串口释放；期限结束后优先保留排他占用根因，
+    # 避免最后一次 deadline expired 覆盖真正可处理的错误。
+    if last_busy_error:
+        raise UploadError(
+            "PORT_BUSY: automatic USB discovery could not open a detected "
+            f"serial endpoint ({last_busy_error})"
+        )
     raise UploadError(
         f"HOST_PREFLIGHT: no compatible endpoint was found within "
         f"{wait_seconds}s ({last_error})"

@@ -62,7 +62,10 @@ def try_application_identify(
     serial_backend: SerialBackend,
     port: str,
     deadline: float | None = None,
+    *,
+    require_target_build: bool,
 ) -> tuple[bool, ApplicationIdentity | None, str]:
+    """探测运行态应用；升级前允许旧提交，升级后要求目标构建身份。"""
     remaining = None if deadline is None else deadline - time.monotonic()
     if remaining is not None and remaining <= 0:
         return False, None, "application probe deadline expired"
@@ -74,10 +77,16 @@ def try_application_identify(
         read_seconds=mavlink_read_seconds,
     )
     if mavlink_sent:
-        identity = codec.application_identity(binary_output)
+        identity = codec.application_identity(
+            binary_output,
+            require_target_build=require_target_build,
+        )
         if identity is not None:
             return True, identity, identity.summary()
-        mavlink_error = "no matching Dima Rover MAVLink identity was received"
+        expected = "target-build" if require_target_build else "compatible"
+        mavlink_error = (
+            f"no {expected} Dima Rover MAVLink identity was received"
+        )
     return mavlink_sent, None, mavlink_error
 
 

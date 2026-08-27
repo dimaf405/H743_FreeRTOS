@@ -44,6 +44,7 @@ def wait_for_recovery(
     incompatible_response_seen = False
     application_identity: ApplicationIdentity | None = None
     application_binding: str | None = None
+    last_busy_error = ""
     probe_after: dict[str, float] = {}
     while time.monotonic() < deadline:
         # 选中应用后只扫描同一物理 USB binding；若退回所有串口，重启窗口中新插入的
@@ -76,10 +77,13 @@ def wait_for_recovery(
                 continue
             if output:
                 last_error = f"{port}: {output}"
-            if explicit_port and not reboot_requested and port_busy(output):
-                raise UploadError(
-                    f"PORT_BUSY: {port} is already open by another process ({output})"
-                )
+            if port_busy(output):
+                last_busy_error = f"{port}: {output}"
+                if explicit_port and not reboot_requested:
+                    raise UploadError(
+                        f"PORT_BUSY: {port} is already open by another process "
+                        f"({output})"
+                    )
 
             if reboot_requested:
                 continue
@@ -109,7 +113,11 @@ def wait_for_recovery(
                 break
 
             sent, identity, identify_output = try_application_identify(
-                codec, runtime.serial_backend, port, deadline
+                codec,
+                runtime.serial_backend,
+                port,
+                deadline,
+                require_target_build=False,
             )
             if identity is None:
                 if sent and identify_output:
@@ -117,15 +125,13 @@ def wait_for_recovery(
                     last_error = f"{port}: {identify_output[-240:]}"
                 elif identify_output:
                     last_error = f"{port}: {identify_output[-240:]}"
-                if (
-                    explicit_port
-                    and not reboot_requested
-                    and port_busy(identify_output)
-                ):
-                    raise UploadError(
-                        f"PORT_BUSY: {port} is already open by another process "
-                        f"({identify_output})"
-                    )
+                if port_busy(identify_output):
+                    last_busy_error = f"{port}: {identify_output}"
+                    if explicit_port and not reboot_requested:
+                        raise UploadError(
+                            f"PORT_BUSY: {port} is already open by another process "
+                            f"({identify_output})"
+                        )
                 continue
 
             application_matches.append((port, identity, identify_output))
@@ -184,6 +190,13 @@ def wait_for_recovery(
             last_error = f"{port}: application reboot requested; Recovery not enumerated yet"
         time.sleep(0.25)
 
+    if not reboot_requested and last_busy_error:
+        # 自动模式仍等待完整窗口，允许 QGC/串口监视器主动释放；超时后再报告
+        # 排他占用，绝不擅自终止用户进程。
+        raise UploadError(
+            "PORT_BUSY: automatic USB discovery could not open a detected "
+            f"serial endpoint ({last_busy_error})"
+        )
     if not reboot_requested:
         if incompatible_response_seen:
             last_error += (
@@ -216,6 +229,7 @@ def wait_for_application(
     )
     deadline = time.monotonic() + wait_seconds
     last_error = "no serial ports detected"
+    last_busy_error = ""
     probe_after: dict[str, float] = {}
     while time.monotonic() < deadline:
         ports = (
@@ -232,7 +246,11 @@ def wait_for_application(
                 continue
             probe_after[port] = now + 1.0
             sent, identity, output = try_application_identify(
-                codec, runtime.serial_backend, port, deadline
+                codec,
+                runtime.serial_backend,
+                port,
+                deadline,
+                require_target_build=True,
             )
             if identity is not None:
                 if (
@@ -251,6 +269,8 @@ def wait_for_application(
                 matches.append((port, identity, binding))
             elif output:
                 last_error = f"{port}: {output[-240:]}"
+                if port_busy(output):
+                    last_busy_error = f"{port}: {output}"
             elif not sent:
                 last_error = f"{port}: application identify could not be sent"
         if len(matches) > 1:
@@ -266,6 +286,11 @@ def wait_for_application(
             )
             return port, identity, binding
         time.sleep(0.25)
+    if last_busy_error:
+        raise UploadError(
+            "PORT_BUSY: application re-enumerated but remained owned by another "
+            f"process ({last_busy_error})"
+        )
     raise UploadError(
         f"APPLICATION_REENUM: application was not reached within "
         f"{wait_seconds}s ({last_error})"
