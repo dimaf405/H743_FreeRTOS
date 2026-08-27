@@ -5,19 +5,9 @@
 #include "api/Time.hpp"
 
 #include <cmath>
-#include <cstring>
 
 namespace dima::modules::mavlink {
 namespace {
-
-float command_parameter(std::uint32_t raw) noexcept
-{
-    // vehicle_command 以 uint32 保存 COMMAND_* 浮点参数的原始 IEEE-754 位模式；
-    // 必须用 memcpy 还原，数值 static_cast 会把位模式本身当作整数再转换。
-    float value = 0.0F;
-    std::memcpy(&value, &raw, sizeof(value));
-    return value;
-}
 
 bool message_id_from_float(float value, std::uint16_t &message_id) noexcept
 {
@@ -91,7 +81,7 @@ bool MavlinkCommands::evaluate_target_ok(
 
 void MavlinkCommands::acknowledge(std::uint8_t sysid, std::uint8_t compid,
                                   std::uint16_t command, std::uint8_t result,
-                                  std::uint8_t result_param2) noexcept
+                                  std::int32_t result_param2) noexcept
 {
     // ACK 先发布到 uORB，由 MAVLink 输出侧统一编码；target 指回原始发送端，
     // from_external 保留跨安全边界的来源属性。
@@ -116,7 +106,7 @@ std::uint8_t MavlinkCommands::handle_request_message_command(
     if (request_message_ != nullptr) {
         return request_message_(callback_ctx_, message_id);
     }
-    return vehicle_command_ack_s::RESULT_UNSUPPORTED;
+    return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
 }
 
 void MavlinkCommands::handle_message_command_long(
@@ -141,19 +131,19 @@ void MavlinkCommands::handle_message_command_long(
         cmd_mavlink.param6 <= after_int32_max) {
         PX4_ERR("param5/param6 invalid of command %u", cmd_mavlink.command);
         acknowledge(msg->sysid, msg->compid, cmd_mavlink.command,
-                    vehicle_command_ack_s::RESULT_DENIED);
+                    vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED);
         return;
     }
 
-    /* Dima 的 vehicle_command 合同保存 param1..7 的 IEEE-754 原始位模式，使 NaN
-     * 哨兵和 -0 等值不在 MAVLink -> Commander 边界被数值转换规范化。 */
-    std::memcpy(&vcmd.param1_raw, &cmd_mavlink.param1, sizeof(float));
-    std::memcpy(&vcmd.param2_raw, &cmd_mavlink.param2, sizeof(float));
-    std::memcpy(&vcmd.param3_raw, &cmd_mavlink.param3, sizeof(float));
-    std::memcpy(&vcmd.param4_raw, &cmd_mavlink.param4, sizeof(float));
-    std::memcpy(&vcmd.param5_raw, &cmd_mavlink.param5, sizeof(float));
-    std::memcpy(&vcmd.param6_raw, &cmd_mavlink.param6, sizeof(float));
-    std::memcpy(&vcmd.param7_raw, &cmd_mavlink.param7, sizeof(float));
+    /* 严格遵循 PX4 v1.17：COMMAND_LONG 的 float 参数直接进入官方
+     * vehicle_command_s，只将 param5/6 扩展为 double，不引入本地位模式字段。 */
+    vcmd.param1 = cmd_mavlink.param1;
+    vcmd.param2 = cmd_mavlink.param2;
+    vcmd.param3 = cmd_mavlink.param3;
+    vcmd.param4 = cmd_mavlink.param4;
+    vcmd.param5 = static_cast<double>(cmd_mavlink.param5);
+    vcmd.param6 = static_cast<double>(cmd_mavlink.param6);
+    vcmd.param7 = cmd_mavlink.param7;
     vcmd.command = cmd_mavlink.command;
     vcmd.target_system = cmd_mavlink.target_system;
     vcmd.target_component = cmd_mavlink.target_component;
@@ -182,35 +172,28 @@ void MavlinkCommands::handle_message_command_int(
     if (cmd_mavlink.x == 0x7ff80000 && cmd_mavlink.y == 0x7ff80000) {
         PX4_ERR("x/y invalid of command %u", cmd_mavlink.command);
         acknowledge(msg->sysid, msg->compid, cmd_mavlink.command,
-                    vehicle_command_ack_s::RESULT_DENIED);
+                    vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED);
         return;
     }
 
-    // param1..4、z 原本就是 float，继续保留其原始位模式；x/y 在下方按
-    // COMMAND_INT 的定点坐标合同转换为内部 float。
-    std::memcpy(&vcmd.param1_raw, &cmd_mavlink.param1, sizeof(float));
-    std::memcpy(&vcmd.param2_raw, &cmd_mavlink.param2, sizeof(float));
-    std::memcpy(&vcmd.param3_raw, &cmd_mavlink.param3, sizeof(float));
-    std::memcpy(&vcmd.param4_raw, &cmd_mavlink.param4, sizeof(float));
+    // param1..4 与 z 直接保持 MAVLink float；x/y 按 PX4 定点坐标合同
+    // 转为 double，避免旧本地 float 布局丢失经纬度精度。
+    vcmd.param1 = cmd_mavlink.param1;
+    vcmd.param2 = cmd_mavlink.param2;
+    vcmd.param3 = cmd_mavlink.param3;
+    vcmd.param4 = cmd_mavlink.param4;
 
-    float param5;
-    float param6;
     if (cmd_mavlink.x == INT32_MAX && cmd_mavlink.y == INT32_MAX) {
         // MAVLink 以 x=y=INT32_MAX 表示“不提供位置”；内部继续用 NaN 表达缺省，
         // Commander 因而不会把哨兵整数误当作 214.7483647 度。
-        param5 = NAN;
-        param6 = NAN;
+        vcmd.param5 = static_cast<double>(NAN);
+        vcmd.param6 = static_cast<double>(NAN);
     } else {
-        // COMMAND_INT 的 x/y 单位为 1e-7 度：degrees=int32/1e7。先用 double 做
-        // 除法以减少中间舍入，最后再按 Dima 的 float 位模式合同收窄。
-        param5 = static_cast<float>(
-            static_cast<double>(cmd_mavlink.x) / 1e7);
-        param6 = static_cast<float>(
-            static_cast<double>(cmd_mavlink.y) / 1e7);
+        // 公式与 PX4 一致：degrees = int32 / 1e7，全程使用 double。
+        vcmd.param5 = static_cast<double>(cmd_mavlink.x) / 1e7;
+        vcmd.param6 = static_cast<double>(cmd_mavlink.y) / 1e7;
     }
-    std::memcpy(&vcmd.param5_raw, &param5, sizeof(float));
-    std::memcpy(&vcmd.param6_raw, &param6, sizeof(float));
-    std::memcpy(&vcmd.param7_raw, &cmd_mavlink.z, sizeof(float));
+    vcmd.param7 = cmd_mavlink.z;
 
     vcmd.command = cmd_mavlink.command;
     vcmd.target_system = cmd_mavlink.target_system;
@@ -236,7 +219,7 @@ void MavlinkCommands::handle_message_command_both(
     bool target_ok = evaluate_target_ok(command, target_system,
                                         target_component);
     bool send_ack = true;
-    std::uint8_t result = vehicle_command_ack_s::RESULT_ACCEPTED;
+    std::uint8_t result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
 
     if (!target_ok) {
         PX4_INFO("Ignore command %d from %d/%d to %d/%d",
@@ -255,26 +238,26 @@ void MavlinkCommands::handle_message_command_both(
         result = handle_request_message_command(MAVLINK_MSG_ID_PROTOCOL_VERSION);
 
     } else if (command == MAV_CMD_SET_MESSAGE_INTERVAL) {
-        // param1 是目标 message id；param2/3/4/7 的原始位模式分别承载 interval
+        // param1 是目标 message id；param2/3/4/7 分别承载 interval
         // 及扩展参数，具体限频和支持性由生成 stream 合同的回调判定。
         std::uint16_t message_id = 0U;
         if (!message_id_from_float(param1, message_id) ||
             set_message_interval_ == nullptr) {
-            result = vehicle_command_ack_s::RESULT_FAILED;
+            result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
         } else {
             result = set_message_interval_(
                 callback_ctx_, message_id,
-                command_parameter(vehicle_command.param2_raw),
-                command_parameter(vehicle_command.param3_raw),
-                command_parameter(vehicle_command.param4_raw),
-                command_parameter(vehicle_command.param7_raw));
+                vehicle_command.param2,
+                vehicle_command.param3,
+                vehicle_command.param4,
+                vehicle_command.param7);
         }
 
     } else if (command == MAV_CMD_GET_MESSAGE_INTERVAL) {
         std::uint16_t message_id = 0U;
         if (!message_id_from_float(param1, message_id) ||
             get_message_interval_ == nullptr) {
-            result = vehicle_command_ack_s::RESULT_FAILED;
+            result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
         } else {
             result = get_message_interval_(callback_ctx_, message_id);
         }
@@ -282,16 +265,15 @@ void MavlinkCommands::handle_message_command_both(
     } else if (command == MAV_CMD_REQUEST_MESSAGE) {
         std::uint16_t message_id = 0U;
         if (!message_id_from_float(param1, message_id)) {
-            result = vehicle_command_ack_s::RESULT_FAILED;
+            result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
         } else if (message_id == MAVLINK_MSG_ID_MESSAGE_INTERVAL) {
             // 请求 MESSAGE_INTERVAL 时，param2 才是要查询的实际 message id；
             // 查询回调会先发送响应消息，再由本函数发送命令 ACK。
             std::uint16_t requested_message_id = 0U;
-            const float requested = command_parameter(
-                vehicle_command.param2_raw);
+            const float requested = vehicle_command.param2;
             if (!message_id_from_float(requested, requested_message_id) ||
                 get_message_interval_ == nullptr) {
-                result = vehicle_command_ack_s::RESULT_FAILED;
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
             } else {
                 result = get_message_interval_(callback_ctx_,
                                                requested_message_id);

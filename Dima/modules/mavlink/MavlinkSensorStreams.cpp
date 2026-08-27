@@ -135,7 +135,7 @@ void MavlinkService::reset_sensor_streams() noexcept
     latest_vehicle_imu_ = vehicle_imu_s{};
     latest_vehicle_imu_status_ = vehicle_imu_status_s{};
     latest_vehicle_magnetometer_ = vehicle_magnetometer_s{};
-    latest_vehicle_gps_ = vehicle_gps_position_s{};
+    latest_vehicle_gps_ = sensor_gps_s{};
     latest_estimator_gps_status_ = estimator_gps_status_s{};
     reset_sensor_link_state();
     accel_seen_ = false;

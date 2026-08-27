@@ -17,17 +17,17 @@
 #include "sensor_mag.hpp"
 #include "vehicle_command.hpp"
 #include "vehicle_command_ack.hpp"
-#include "vehicle_gps_position.hpp"
+#include "sensor_gps.hpp"
 #include "vehicle_imu.hpp"
 #include "vehicle_imu_status.hpp"
 #include "vehicle_magnetometer.hpp"
+#include "mavlink/MavlinkBridge.h"
 #include "mavlink_stream_contract.hpp"
 #include "lifecycle/module_base.hpp"
-#include "mavlink/MavlinkBridge.h"
 #include "api/Boot.hpp"
 #include "api/Console.hpp"
 #include "parameters/param.h"
-#include "uorb/SubscriptionData.hpp"
+#include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include "HeartbeatPacer.hpp"
@@ -158,7 +158,8 @@ private:
         vehicle_imu_status_subscription_{ORB_ID(vehicle_imu_status)};
     uORB::SubscriptionData<vehicle_magnetometer_s>
         vehicle_magnetometer_subscription_{ORB_ID(vehicle_magnetometer)};
-    uORB::SubscriptionData<vehicle_gps_position_s>
+    // vehicle_gps_position 只是 Topic alias，payload 类型遵循官方 sensor_gps_s。
+    uORB::SubscriptionData<sensor_gps_s>
         vehicle_gps_subscription_{ORB_ID(vehicle_gps_position)};
     uORB::SubscriptionData<estimator_gps_status_s>
         estimator_gps_status_subscription_{ORB_ID(estimator_gps_status)};
@@ -187,7 +188,7 @@ private:
     vehicle_imu_s latest_vehicle_imu_{};
     vehicle_imu_status_s latest_vehicle_imu_status_{};
     vehicle_magnetometer_s latest_vehicle_magnetometer_{};
-    vehicle_gps_position_s latest_vehicle_gps_{};
+    sensor_gps_s latest_vehicle_gps_{};
     estimator_gps_status_s latest_estimator_gps_status_{};
     param_t rc_loss_timeout_handle_{PARAM_INVALID};
     param_t mav_system_id_handle_{PARAM_INVALID};

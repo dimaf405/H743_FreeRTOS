@@ -17,7 +17,7 @@
 #include "vehicle_status.hpp"
 #include "mavlink/MavlinkBridge.h"
 #include "mavlink_stream_contract.hpp"
-#include "uorb/SubscriptionData.hpp"
+#include "uORB/SubscriptionData.hpp"
 
 #include "MavlinkIdentity.hpp"
 

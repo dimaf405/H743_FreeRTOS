@@ -31,7 +31,7 @@
 #include "vehicle_command.hpp"
 #include "vehicle_command_ack.hpp"
 #include "mavlink/MavlinkBridge.h"
-#include "uorb/Publication.hpp"
+#include "uORB/Publication.hpp"
 
 #include <cstdint>
 
@@ -63,7 +63,7 @@ private:
 
     void acknowledge(std::uint8_t sysid, std::uint8_t compid,
                      std::uint16_t command, std::uint8_t result,
-                     std::uint8_t result_param2 = 0) noexcept;
+                     std::int32_t result_param2 = 0) noexcept;
 
     std::uint8_t handle_request_message_command(
         std::uint16_t message_id) noexcept;

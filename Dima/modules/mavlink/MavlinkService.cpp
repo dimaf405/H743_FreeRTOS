@@ -439,18 +439,18 @@ std::uint8_t MavlinkService::request_message(void *ctx,
                                              std::uint16_t message_id) noexcept
 {
     if (ctx == nullptr) {
-        return vehicle_command_ack_s::RESULT_UNSUPPORTED;
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
     }
     auto &self = *static_cast<MavlinkService *>(ctx);
     const stream_contract::MessageContract *contract =
         stream_contract::find_message(message_id);
     if (contract == nullptr || !contract->requestable) {
-        return vehicle_command_ack_s::RESULT_UNSUPPORTED;
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
     }
     return self.send_contract_message(
                contract->handler, hrt_absolute_time(), true)
-        ? vehicle_command_ack_s::RESULT_ACCEPTED
-        : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
+        ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED
+        : vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
 }
 
 std::uint8_t MavlinkService::set_message_interval(
@@ -458,14 +458,14 @@ std::uint8_t MavlinkService::set_message_interval(
     float param3, float param4, float param7) noexcept
 {
     if (ctx == nullptr || !std::isfinite(interval_us)) {
-        return vehicle_command_ack_s::RESULT_FAILED;
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
     }
     const auto unsupported_nonzero = [](float value) {
         return !std::isfinite(value) || std::lround(value) != 0L;
     };
     if (unsupported_nonzero(param3) || unsupported_nonzero(param4) ||
         unsupported_nonzero(param7)) {
-        return vehicle_command_ack_s::RESULT_FAILED;
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
     }
 
     auto &self = *static_cast<MavlinkService *>(ctx);
@@ -473,11 +473,11 @@ std::uint8_t MavlinkService::set_message_interval(
         stream_contract::find_message(message_id);
     if (contract == nullptr || !contract->interval_configurable ||
         contract->scheduler != stream_contract::Scheduler::Service) {
-        return vehicle_command_ack_s::RESULT_FAILED;
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
     }
     const std::size_t index = stream_contract::service_index(contract->handler);
     if (index >= self.configured_streams_.size()) {
-        return vehicle_command_ack_s::RESULT_FAILED;
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
     }
 
     // MAV_CMD_SET_MESSAGE_INTERVAL：负值禁用，0 恢复产品默认值，正值按微秒四舍五入，
@@ -490,7 +490,7 @@ std::uint8_t MavlinkService::set_message_interval(
             static_cast<double>(interval_us));
         if (rounded_interval > static_cast<double>(
                 std::numeric_limits<std::int32_t>::max())) {
-            return vehicle_command_ack_s::RESULT_FAILED;
+            return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
         }
         selected_interval = static_cast<std::int32_t>(
             std::max(1.0, rounded_interval));
@@ -501,13 +501,13 @@ std::uint8_t MavlinkService::set_message_interval(
         selected_interval < 0) {
         self.rc_stream_active_ = false;
     }
-    return vehicle_command_ack_s::RESULT_ACCEPTED;
+    return vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
 }
 
 std::uint8_t MavlinkService::get_message_interval(
     void *ctx, std::uint16_t message_id) noexcept
 {
-    if (ctx == nullptr) return vehicle_command_ack_s::RESULT_FAILED;
+    if (ctx == nullptr) return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
     auto &self = *static_cast<MavlinkService *>(ctx);
     std::int32_t interval_us = -1;
     const stream_contract::MessageContract *contract =
@@ -531,8 +531,8 @@ std::uint8_t MavlinkService::get_message_interval(
                                         MAVLINK_COMPONENT_ID,
                                         &message, &report);
     return self.send_message(message)
-        ? vehicle_command_ack_s::RESULT_ACCEPTED
-        : vehicle_command_ack_s::RESULT_TEMPORARILY_REJECTED;
+        ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED
+        : vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
 }
 
 void MavlinkService::process_command_acks() noexcept
@@ -551,15 +551,17 @@ void MavlinkService::process_command_acks() noexcept
         mavlink_command_ack_t command_ack{};
         command_ack.command = ack.command;
         command_ack.result = ack.result;
-        command_ack.progress = 0;
-        command_ack.result_param2 = static_cast<std::int32_t>(ack.result_param2);
+        // 按 PX4 原生 ACK 投影 result_param1/progress 与 result_param2，
+        // 不丢弃生成消息恢复的进度和附加结果字段。
+        command_ack.progress = ack.result_param1;
+        command_ack.result_param2 = ack.result_param2;
         command_ack.target_system = ack.target_system;
         command_ack.target_component = ack.target_component;
 
         const bool is_reboot =
             ack.command ==
-                vehicle_command_s::NAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN &&
-            ack.result == vehicle_command_ack_s::RESULT_ACCEPTED &&
+                vehicle_command_s::VEHICLE_CMD_PREFLIGHT_REBOOT_SHUTDOWN &&
+            ack.result == vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED &&
             (ack.result_param2 == 1U || ack.result_param2 == 3U);
         if (is_reboot) {
             // 重启 mode 只接受 Commander 在 ACK.result_param2 中批准的 1/3。
