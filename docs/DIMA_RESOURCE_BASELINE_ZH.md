@@ -191,11 +191,11 @@ Timer Task                       1,024 bytes
 Event Ring：128 条，ELF 静态状态约 4,192 bytes
 Log Ring：8 KiB，ELF 静态状态约 8,220 bytes
 Perf Pool：容量 64；当前没有生产计数器引用，链接器可裁剪未引用实现
-uORB metadata：1 个 Topic，16 bytes，地址 0x20000944～0x20000954
-uORB heartbeat runtime：4 个实例，静态状态 224 bytes
+uORB Topic metadata：由 PX4 `uORBTopics.hpp/.cpp` 和每 Topic 官方源文件生成
+uORB Runtime Buffer：按 schema 队列深度与实际实例在初始化期分配
 ```
 
-`.dima_orb_meta` 已在链接脚本 `.data` 中显式 `KEEP`，当前注册仍由 `MetadataRegistrar` 在静态初始化阶段建立链表；section 同时用于保留和资源审计。
+早期基线使用 linker section 与静态构造器注册单个 Topic，该实现已经退役。当前 Runtime 直接消费官方生成的 `orb_get_topics()` 与 `orb_topics_count()`；不再存在专用 metadata section、边界符号或对应 ELF 保留断言，实际 Flash/Heap 占用以本轮 Windows clean build 为准。
 
 uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始化中途失败和正常 shutdown 都会释放已创建 Buffer、清除 generation、advertise 状态和 callback。
 

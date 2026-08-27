@@ -113,17 +113,6 @@ SECTIONS
     . = ALIGN(4);
   } >FLASH
 
-  /* Immutable uORB topic descriptors are enumerated directly from Flash. */
-  /* 链接区间 [start,end) 是运行时唯一 topic catalog，不维护手写消费者列表。 */
-  .dima_orb_meta :
-  {
-    . = ALIGN(4);
-    __dima_orb_meta_start__ = .;
-    KEEP(*(.dima_orb_meta))
-    __dima_orb_meta_end__ = .;
-    . = ALIGN(4);
-  } >FLASH
-
   .ARM.extab   : { *(.ARM.extab* .gnu.linkonce.armextab.*) } >FLASH
   .ARM : {
     __exidx_start = .;
