@@ -1,0 +1,25 @@
+{
+  "commit": "1f6b6f61f8f42eaab0269c16a442cb580f954d7c",
+  "files": {
+    "LICENSE": "0e31cba0e521c572e59a350286c6d1272abff7a7b6ebecb0e7d9eee6547a2106",
+    "Tools/migrate_c_params.py": "e9097869af2463bbcc35f8f147270399023166d9db3fb3738d1d00c3e673bc20",
+    "Tools/module_config/generate_params.py": "ab80b874cee5f8e72beefd3e56fa603a15e2a25a63d4ade76c84f72e996d7ad8",
+    "Tools/module_config/output_groups_from_timer_config.py": "efe52a1b6354613e305d2d7285cb3bd0e4f29d85857344e5a05c66aa22057984",
+    "Tools/validate_yaml.py": "4d7099190abb604e6e2e4ce5a03557bf1110e39dd5e12f48ccb12227772fffbe",
+    "src/lib/mixer_module/output_functions.yaml": "8e994197379ae10e9f6d1d004a9944c1b2e47c44a542cc7db168817a4dff1dca",
+    "src/lib/parameters/px4params/__init__.py": "4d63a98838f49d03ef6e021d49bc009208a74e6f3ce71458d1e0182b62f3ff9d",
+    "src/lib/parameters/px4params/injectxmlparams.py": "aa14a3f0872f8eab2c521ac0f3f251b2058926280a42e5d4ec75f9a031e28e51",
+    "src/lib/parameters/px4params/jsonout.py": "eaebf1f188253f5fefc59adada5c9733c0b7c49a37cb694051cdd4c58ac8718b",
+    "src/lib/parameters/px4params/markdownout.py": "ebfa7ba7c48e5129dd3790cf539a5e70c193353f6390519c48df676c4374f7a3",
+    "src/lib/parameters/px4params/readonly_config.py": "579c1b326924731b029890cc06d024ac236a062db375c42efba833f156e93c89",
+    "src/lib/parameters/px4params/srcparser.py": "12619f78f508e2b8a0823a5ee277f132ce165aea9bf9e5a3224a8eceb688697c",
+    "src/lib/parameters/px4params/srcscanner.py": "f5e3b352f46a73f4d5e913e4d6dfedefd4e4c901172d1bfc0c21864c48e0ce41",
+    "src/lib/parameters/px4params/xmlout.py": "d680498a38279f77d12b3c6e4e59fa1031ae9924c77ef3e973d5e45564c30eec",
+    "src/lib/parameters/px_generate_params.py": "852c3eb3c5e113def6fae8a3301b5c184c7d99f2b45e4e7bfc389f8a8dd0b014",
+    "src/lib/parameters/px_process_params.py": "7b1e3cdbbeb95ef78d65d50a1819c5e1404155c77d972018c530e83a7b7e8638",
+    "src/lib/parameters/templates/px4_parameters.hpp.jinja": "e121d44509637ffc9a587154046f12edc600b4590ff82dae3aa2e56a097f7569",
+    "validation/module_schema.yaml": "aeaf26b97341f3c6777c571164f1974f7f3c827b703e76d99578e0a1c90831b3"
+  },
+  "format": 1,
+  "project": "PX4-Autopilot"
+}

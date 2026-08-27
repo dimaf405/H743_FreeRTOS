@@ -1,0 +1,14 @@
+# 生成链只在正式支持的 PlatformIO Windows Python 3.11 x64 主机上执行。
+# 每个归档均固定版本与 SHA-256；--no-deps 要求所有传递依赖在此显式列出。
+empy==3.3.4 \
+    --hash=sha256:73ac49785b601479df4ea18a7c79bc1304a8a7c34c02b9472cf1206ae88f01b3
+pyros-genmsg==0.5.8 \
+    --hash=sha256:2319ae7e66f8f3d03d13d9927cf5938131fdeaacc38cc1727c9af1b11c29a784
+PyYAML==6.0.2 \
+    --hash=sha256:e10ce637b18caea04431ce14fabcf5c64a1c61ec9c56b071a4b7ca131ca52d44
+Cerberus==1.3.7 \
+    --hash=sha256:180e7d1fa1a5765cbff7b5c716e52fddddfab859dc8f625b0d563ace4b7a7ab3
+Jinja2==3.1.6 \
+    --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
+MarkupSafe==3.0.2 \
+    --hash=sha256:70a87b411535ccad5ef2f1df5136506a10775d267e197e4cf531ced10537bd6b
