@@ -72,7 +72,7 @@ ifneq ($(filter-out 0 1,$(UPLOAD_FORCE)),)
 $(error UPLOAD_FORCE must be 0 or 1)
 endif
 .PHONY: architecture-ready check-architecture app-check intellisense mavlink firmware mcuboot host-tools verify dima_rover \
-		upload-ready upload-preflight upload install-hooks \
+		upload-ready upload-preflight upload \
 		__dima_clean_progress __dima_prepare_make_includes \
 		__dima_prepare_generated __dima_summary \
 		FORCE_ARCHITECTURE_CHECK FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
@@ -108,13 +108,6 @@ architecture-ready: $(ARCHITECTURE_VERIFY_STAMP)
 
 check-architecture: architecture-ready
 	@:
-
-# Install git hooks so that architecture check runs automatically on commit.
-GIT_HOOKS_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null)/.git/hooks
-install-hooks:
-	@cp hooks/pre-commit $(GIT_HOOKS_DIR)/pre-commit && \
-	chmod +x $(GIT_HOOKS_DIR)/pre-commit && \
-	echo "Installed pre-commit hook → $(GIT_HOOKS_DIR)/pre-commit"
 
 # Fast application-only gate for local iterations.  It deliberately excludes
 # image signing, MCUboot and Factory HEX generation; `verify` remains the full
