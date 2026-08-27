@@ -23,7 +23,7 @@ STT_OBJECT = 1
 STT_FUNC = 2
 
 class ElfVerificationError(RuntimeError):
-    """An ELF file violates a required application contract."""
+    """An ELF file violates a required binary-layout contract."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -165,7 +165,7 @@ class Elf32:
         ]
         if not symbol_sections:
             raise ElfVerificationError(
-                "ELF has no static symbol table; lifecycle gates cannot run"
+                "ELF has no static symbol table; linker boundaries cannot be checked"
             )
         symbol_size = struct.calcsize("<IIIBBH")
         for section in symbol_sections:
@@ -233,4 +233,3 @@ class Elf32:
             symbol for symbol in self.symbols
             if symbol.defined and predicate(symbol)
         ]
-
