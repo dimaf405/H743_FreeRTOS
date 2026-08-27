@@ -1,9 +1,4 @@
 PROJECT_ROOT := .
-DIMA_WINDOWS_NATIVE := $(filter Windows_NT,$(OS))
-ifeq ($(DIMA_WINDOWS_NATIVE),)
-$(error Windows-native GNU Make is required (OS=$(OS)); WSL/Linux builds are disabled)
-endif
-
 DIMA_USERPROFILE_POSIX := $(subst \,/,$(USERPROFILE))
 DIMA_PLATFORMIO_PYTHON := $(DIMA_USERPROFILE_POSIX)/.platformio/penv/Scripts/python.exe
 

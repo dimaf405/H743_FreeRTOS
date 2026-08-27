@@ -4,13 +4,6 @@
 # 这是用户维护的唯一构建入口：CubeMX 可重生成 Makefile，但项目源码闭包、
 # 生成合同与发布链分别固定在 project.mk/release.mk，避免生成器覆盖产品规则。
 
-DIMA_WINDOWS_NATIVE := $(filter Windows_NT,$(OS))
-# 固件验收只承认 Windows 原生工具链；WSL 可作为控制终端，但不能产生可提交的
-# build 证据，防止两套路径/换行/对象目录交叉污染同一个工作区。
-ifeq ($(DIMA_WINDOWS_NATIVE),)
-$(error Windows-native GNU Make is required (OS=$(OS)); WSL/Linux builds are disabled)
-endif
-
 DIMA_USERPROFILE_POSIX := $(subst \,/,$(USERPROFILE))
 DIMA_PLATFORMIO_PYTHON := $(DIMA_USERPROFILE_POSIX)/.platformio/penv/Scripts/python.exe
 PYTHON ?= $(if $(wildcard $(DIMA_PLATFORMIO_PYTHON)),$(DIMA_PLATFORMIO_PYTHON),python.exe)
