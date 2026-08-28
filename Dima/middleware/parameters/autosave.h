@@ -43,8 +43,8 @@
 class ParamAutosave : public px4::ScheduledWorkItem
 {
 public:
-    /* request 只合并待保存标记，由 lp_default WorkQueue 执行实际持久化。armed 时
-     * writeAllowed=false，不能以参数保存阻塞控制链或触发 Flash 访问。 */
+    /* request 只合并待保存标记，由独立 storage WorkQueue 执行实际持久化。armed
+     * 时 writeAllowed=false；慢卡/坏卡不得阻塞 MAVLink、日志或控制链。 */
     using CancelSaveFn = void (*)(void *context) noexcept;
 
     explicit ParamAutosave(

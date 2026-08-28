@@ -21,7 +21,7 @@ public:
 namespace {
 
 constexpr std::size_t kMaximumItemsPerQueue = 32U;
-constexpr std::size_t kQueueCount = 7U;
+constexpr std::size_t kQueueCount = 8U;
 
 struct QueueRuntime {
     const wq_config_t *config{nullptr};
@@ -93,8 +93,8 @@ void configure_runtime() noexcept
     const wq_config_t *configs[kQueueCount] = {
         &wq_configurations::estimator, &wq_configurations::rate_ctrl,
         &wq_configurations::sensors,   &wq_configurations::io,
-        &wq_configurations::nav,       &wq_configurations::hp_default,
-        &wq_configurations::lp_default,
+        &wq_configurations::nav,        &wq_configurations::hp_default,
+        &wq_configurations::lp_default, &wq_configurations::storage,
     };
     for (std::size_t index = 0U; index < kQueueCount; ++index) {
         g_queues[index].config = configs[index];
@@ -247,9 +247,12 @@ const wq_config_t sensors{"wq:sensors", 6U, 4096U, true};
 const wq_config_t io{"wq:io", 5U, 4096U, false};
 const wq_config_t nav{"wq:nav", 4U, 4096U, false};
 const wq_config_t hp_default{"wq:hp_default", 3U, 2048U, false};
-/* Parameter, structured logging and MAVLink share this call stack.  A live
- * QGC connection measured PSP 56 bytes below the former 2 KiB stack base. */
+/* 结构化日志、校准和 MAVLink 共用此调用栈；实板 QGC 长连接曾测得
+ * PSP 低于旧 2 KiB 栈底 56 bytes，因此固定保留 4 KiB。 */
 const wq_config_t lp_default{"wq:lp_default", 2U, 4096U, false};
+/* SD/FatFs/HAL 允许同步等待，只能位于比通信更低优先级的独立执行域；即使坏卡
+ * 耗尽单次有限超时，也不能饿死 HEARTBEAT、传感器遥测或结构化日志。 */
+const wq_config_t storage{"wq:storage", 1U, 4096U, false};
 } // namespace wq_configurations
 
 hrt_abstime work_queue_time_us() noexcept
@@ -398,7 +401,7 @@ bool work_queue_init() noexcept
     }
 
     /* 每队列先建 signal 再建静态任务；任一失败统一进入 shutdown 回滚已创建项，
-     * 只有七个队列全部就绪才把全局状态发布为 Running。 */
+     * 只有八个队列全部就绪才把全局状态发布为 Running。 */
     for (auto &queue : g_queues) {
         queue.signal = services.synchronization.create_signal();
         if (!queue.signal) {

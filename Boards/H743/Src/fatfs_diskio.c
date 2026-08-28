@@ -13,7 +13,10 @@
 
 /* Private defines ---------------------------------------------------------*/
 
-#define SD_TIMEOUT_MS      500U  /* Stay below the application IWDG window. */
+#ifndef DIMA_SD_BLOCKING_TIMEOUT_MS
+#define DIMA_SD_BLOCKING_TIMEOUT_MS 500U
+#endif
+#define SD_TIMEOUT_MS DIMA_SD_BLOCKING_TIMEOUT_MS
 #define SD_BLOCK_SIZE    512U
 
 /*
@@ -26,8 +29,17 @@ static uint8_t scratch[SD_BLOCK_SIZE]
 /* Private variables -------------------------------------------------------*/
 
 static volatile DSTATUS Stat = STA_NOINIT;
+/* 介质级错误必须粘住“强制重初始化”状态；新卡常复用相同 RCA，仅凭旧 handle 的
+ * CMD13 返回 TRANSFER 不能证明它仍是上一代介质。 */
+static uint8_t ReinitializeRequired = 1U;
 
 /* Private functions -------------------------------------------------------*/
+
+static void SD_InvalidateSession(void)
+{
+  Stat = STA_NOINIT;
+  ReinitializeRequired = 1U;
+}
 
 static void SD_ConfigureHandle(void)
 {
@@ -45,18 +57,22 @@ static void SD_ConfigureHandle(void)
 static DSTATUS SD_CheckStatus(void)
 {
   Stat = STA_NOINIT;
-  if (hsd1.Instance != SDMMC1) {
+  if (ReinitializeRequired != 0U || hsd1.Instance != SDMMC1) {
     return Stat;
   }
   if (HAL_SD_GetCardState(&hsd1) == HAL_SD_CARD_TRANSFER) {
     Stat &= ~STA_NOINIT;
+  } else {
+    // 一旦卡状态不再是 TRANSFER，后续 disk_initialize 必须走完整 DeInit/Init，
+    // 不能让另一次状态查询把错误会话重新标成 ready。
+    ReinitializeRequired = 1U;
   }
   return Stat;
 }
 
 static DSTATUS SD_Reinitialize(void)
 {
-  Stat = STA_NOINIT;
+  SD_InvalidateSession();
   if (hsd1.Instance == SDMMC1) {
     (void)HAL_SD_DeInit(&hsd1);
   }
@@ -64,7 +80,12 @@ static DSTATUS SD_Reinitialize(void)
   if (HAL_SD_Init(&hsd1) != HAL_OK) {
     return Stat;
   }
-  return SD_CheckStatus();
+  ReinitializeRequired = 0U;
+  const DSTATUS status = SD_CheckStatus();
+  if (status != 0U) {
+    SD_InvalidateSession();
+  }
+  return status;
 }
 
 static DRESULT SD_WaitReady(void)
@@ -73,7 +94,7 @@ static DRESULT SD_WaitReady(void)
 
   while (HAL_SD_GetCardState(&hsd1) != HAL_SD_CARD_TRANSFER) {
     if ((HAL_GetTick() - started) >= SD_TIMEOUT_MS) {
-      Stat = STA_NOINIT;
+      SD_InvalidateSession();
       return RES_ERROR;
     }
   }
@@ -93,7 +114,7 @@ DSTATUS disk_initialize(BYTE pdrv)
 {
   if (pdrv != 0) return STA_NOINIT;
 
-  if (SD_CheckStatus() == 0U) return 0U;
+  if (ReinitializeRequired == 0U && SD_CheckStatus() == 0U) return 0U;
   return SD_Reinitialize();
 }
 
@@ -120,14 +141,14 @@ DRESULT disk_read(BYTE pdrv, BYTE *buff, DWORD sector, UINT count)
     /* Unaligned buffer: use scratch buffer sector-by-sector */
     for (UINT i = 0; i < count; i++) {
       hret = HAL_SD_ReadBlocks(&hsd1, scratch, sector + i, 1, SD_TIMEOUT_MS);
-      if (hret != HAL_OK) { Stat = STA_NOINIT; return RES_ERROR; }
+      if (hret != HAL_OK) { SD_InvalidateSession(); return RES_ERROR; }
       memcpy(buff, scratch, SD_BLOCK_SIZE);
       buff += SD_BLOCK_SIZE;
     }
   } else {
     /* Aligned buffer: direct multi-block read */
     hret = HAL_SD_ReadBlocks(&hsd1, buff, sector, count, SD_TIMEOUT_MS);
-    if (hret != HAL_OK) { Stat = STA_NOINIT; return RES_ERROR; }
+    if (hret != HAL_OK) { SD_InvalidateSession(); return RES_ERROR; }
   }
 
   return RES_OK;
@@ -148,14 +169,14 @@ DRESULT disk_write(BYTE pdrv, const BYTE *buff, DWORD sector, UINT count)
     for (UINT i = 0; i < count; i++) {
       memcpy(scratch, buff, SD_BLOCK_SIZE);
       hret = HAL_SD_WriteBlocks(&hsd1, scratch, sector + i, 1, SD_TIMEOUT_MS);
-      if (hret != HAL_OK) { Stat = STA_NOINIT; return RES_ERROR; }
+      if (hret != HAL_OK) { SD_InvalidateSession(); return RES_ERROR; }
       if (SD_WaitReady() != RES_OK) return RES_ERROR;
       buff += SD_BLOCK_SIZE;
     }
   } else {
     /* Aligned buffer: direct multi-block write */
     hret = HAL_SD_WriteBlocks(&hsd1, (uint8_t *)buff, sector, count, SD_TIMEOUT_MS);
-    if (hret != HAL_OK) { Stat = STA_NOINIT; return RES_ERROR; }
+    if (hret != HAL_OK) { SD_InvalidateSession(); return RES_ERROR; }
     if (SD_WaitReady() != RES_OK) return RES_ERROR;
   }
 

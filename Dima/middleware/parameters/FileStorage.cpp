@@ -89,11 +89,22 @@ void reset_save(FileStorageContext &context) noexcept
     context.primary_moved = false;
 }
 
+bool media_failure(int error) noexcept
+{
+    return error == -ENODEV || error == -EIO || error == -ENXIO ||
+           error == -EBADF || error == -ETIMEDOUT;
+}
+
 int fail_save(FileStorageContext &context, int error,
               bool cleanup_temporary) noexcept
 {
     context.store->cancel_operation();
     context.save_error = error;
+    // 保存链任一介质级错误都立即撤销 available；上层只可在重新 initialize 后
+    // 开始下一次事务，不能把旧挂载对象继续当作可写介质。
+    if (media_failure(error)) {
+        context.available = false;
+    }
     if (cleanup_temporary) {
         context.save_phase = SavePhase::CleanupTemporary;
         return -EAGAIN;
@@ -280,23 +291,38 @@ int file_storage_continue_save() noexcept
          * 不可把不存在的 backup 当成可恢复来源。 */
         if (ctx.primary_moved) {
             ctx.save_error = result;
+            if (media_failure(result)) {
+                ctx.available = false;
+            }
             ctx.save_phase = SavePhase::RollbackPrimary;
             return -EAGAIN;
         }
         return fail_save(ctx, result, false);
 
-    case SavePhase::RollbackPrimary:
-        (void)ctx.store->rename(platform::ParameterFile::Backup,
-                                platform::ParameterFile::Primary);
+    case SavePhase::RollbackPrimary: {
+        const int rollback = ctx.store->rename(
+            platform::ParameterFile::Backup,
+            platform::ParameterFile::Primary);
+        // 保留原始提交错误作为返回值；但回滚也遭遇介质错误时，
+        // 必须同时撤销 available，防止旧挂载被继续使用。
+        if (media_failure(rollback)) {
+            ctx.available = false;
+        }
         result = ctx.save_error;
         reset_save(ctx);
         return result;
+    }
 
-    case SavePhase::CleanupTemporary:
-        (void)ctx.store->erase(platform::ParameterFile::Temporary);
+    case SavePhase::CleanupTemporary: {
+        const int cleanup =
+            ctx.store->erase(platform::ParameterFile::Temporary);
+        if (media_failure(cleanup)) {
+            ctx.available = false;
+        }
         result = ctx.save_error;
         reset_save(ctx);
         return result;
+    }
 
     case SavePhase::Idle:
     default:

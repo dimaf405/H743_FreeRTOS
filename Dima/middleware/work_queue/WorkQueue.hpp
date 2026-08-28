@@ -33,6 +33,7 @@ extern const wq_config_t io;
 extern const wq_config_t nav;
 extern const wq_config_t hp_default;
 extern const wq_config_t lp_default;
+extern const wq_config_t storage;
 } // namespace wq_configurations
 
 class WorkItem {

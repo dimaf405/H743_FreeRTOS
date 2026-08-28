@@ -31,7 +31,7 @@ void reportStorageFull() noexcept
 ParamAutosave::ParamAutosave(
     dima::platform::ArmedFlashCoordinator &armed_flash,
     CancelSaveFn cancel_save, void *cancel_context) noexcept
-    : ScheduledWorkItem("param-autosave", px4::wq_configurations::lp_default),
+    : ScheduledWorkItem("param-autosave", px4::wq_configurations::storage),
       _armed_flash(armed_flash), _cancel_save(cancel_save),
       _cancel_context(cancel_context)
 {

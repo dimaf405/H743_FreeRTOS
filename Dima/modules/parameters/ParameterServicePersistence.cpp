@@ -9,6 +9,17 @@
 #include <cstring>
 
 namespace dima::modules::parameters {
+namespace {
+
+bool sd_media_failure(int result) noexcept
+{
+    // 这些错误表示当前 FatFs/块设备会话已经不可信：统一转为 unavailable，必须
+    // 经过下一轮 initialize/unmount/mount，不能在旧 FATFS 对象上继续镜像。
+    return result == -ENODEV || result == -EIO || result == -ENXIO ||
+           result == -EBADF || result == -ETIMEDOUT;
+}
+
+} // namespace
 
 const param_storage_backend_s ParameterService::storage_backend_{
     &ParameterService::storage_load,
@@ -158,14 +169,18 @@ int ParameterService::advance_persistence() noexcept
             sd_result_ = -ENODEV;
             return finish_persistence();
         }
+        // 热插拔无 card-detect GPIO，只在挂载稳定窗口结束后进入首个 FAT 写事务；
+        // 普通 Save 已完成的 Flash 主副本保持有效，等待期间不会丢失参数。
+        if (hrt_absolute_time() < sd_mirror_ready_after_us_) {
+            return -EAGAIN;
+        }
         result = dima::file_storage_begin_save(payload_, persistence_size_);
         if (result == 0) {
             persistence_phase_ = PersistencePhase::ContinueSdWrite;
             return record_maintenance_progress() ? -EAGAIN : -EPERM;
         }
         sd_result_ = result;
-        if (result == -ENODEV || result == -EIO || result == -ENXIO ||
-            result == -EBADF) {
+        if (sd_media_failure(result)) {
             sd_available_ = false;
         }
         return finish_persistence();
@@ -179,8 +194,7 @@ int ParameterService::advance_persistence() noexcept
         if (result == 0 &&
             persistence_kind_ != PersistenceKind::SdMirror) {
             mark_generation_committed();
-        } else if (result == -ENODEV || result == -EIO ||
-                   result == -ENXIO || result == -EBADF) {
+        } else if (sd_media_failure(result)) {
             sd_available_ = false;
         }
         // 只有 SD 已完整提交同代快照后，才允许擦除已满或损坏的 Flash；
@@ -423,8 +437,7 @@ int ParameterService::storage_load(param_storage_visitor_t visitor,
               sd_size,
               &snapshot_codec::validate, &sd_info)
         : -ENODEV;
-    if (sd_result == -ENODEV || sd_result == -EIO ||
-        sd_result == -ENXIO || sd_result == -EBADF) {
+    if (sd_media_failure(sd_result)) {
         self.sd_available_ = false;
     }
 

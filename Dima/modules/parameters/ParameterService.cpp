@@ -18,7 +18,7 @@ ParameterService::ParameterService(
     dima::platform::CriticalSection &critical,
     dima::middleware::maintenance::
         RuntimeMaintenanceCoordinator &maintenance) noexcept
-    : ScheduledWorkItem("param", px4::wq_configurations::lp_default),
+    : ScheduledWorkItem("param", px4::wq_configurations::storage),
       flashfs_(flashfs), parameter_files_(parameter_files),
       armed_flash_(armed_flash),
       synchronization_(synchronization), critical_(critical),
@@ -254,6 +254,7 @@ void ParameterService::reset_runtime_state() noexcept
     persistence_phase_ = PersistencePhase::Idle;
     last_sd_poll_us_ = 0U;
     last_sd_mirror_attempt_us_ = 0U;
+    sd_mirror_ready_after_us_ = 0U;
 }
 
 void ParameterService::Run()

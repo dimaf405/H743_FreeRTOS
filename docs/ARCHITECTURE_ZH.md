@@ -108,14 +108,15 @@ wq:estimator     EKF2
 wq:sensors       传感器采样与处理
 wq:nav           Position、Waypoint、PivotTurn
 wq:io            六路 MotorOutput、SBUS、GNSS 和串口协议
-wq:lp_default    Parameter、Log 和 MAVLink 非实时服务（4 KiB 静态栈）
-service:param    参数和 Flash
+wq:lp_default    Log、MAVLink 和校准非实时服务（4 KiB 静态栈）
+wq:storage       Parameter、Autosave、FlashFS 和 SD/FatFs（4 KiB 静态栈）
+service:param    参数、Flash 主副本和 SD 镜像
 service:console  USB MAVLink
 service:logger   非实时日志
 ```
 
 USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
-`wq:lp_default` 的 Parameter/结构化日志/MAVLink 共用调用链在 QGC 连接时曾以 2 KiB 栈越界至少 56 bytes；当前固定为 4 KiB，并由 R228 禁止回退。七个 WorkQueue 加 `appMainTask` 合计 32 KiB，仍位于固定 48 KiB `.dima_task_pool` 内。
+`wq:lp_default` 的 Parameter/结构化日志/MAVLink 共用调用链在 QGC 连接时曾以 2 KiB 栈越界至少 56 bytes；栈已固定为 4 KiB，并由 R228 禁止回退。运行期 SD 重初始化可能进入同步 HAL/FatFs，因此 ParameterService 与 Autosave 进一步隔离到优先级更低的 `wq:storage`；该队列阻塞不得影响 HEARTBEAT、传感器遥测或结构化日志。八个 WorkQueue 加 `appMainTask` 合计 36 KiB，仍位于固定 48 KiB `.dima_task_pool` 内。
 
 ### 4.2 Application Runtime 生命周期
 
@@ -186,7 +187,7 @@ manual_control_setpoint
 - 参数系统采用 Parameter Core 与显式 bind/update 的 `px4::Param<T>`，参数数量由生成器从权威定义计算，不设置固定运行期上限或需要手工同步的总数门禁。生成器只扫描 Make 显式输入并按参数名排序；GPS、UAVCAN、Magnetometer、Sensors、Sensor Calibration 与 Serial 使用 PX4/QGC group 分类，全部 `CAL_*` 依 PX4 标记为 `System` category，offset/scale 同时带 `volatile`、三位小数和有效范围；不保留旧固件 handle、stable-tail、旧键或迁移版本参数，固件目录与公开 Metadata 使用同一顺序。
 - 传感器发布分层固定采用 PX4 单实例子集：ICM42688P 驱动发布原始 `sensor_accel/sensor_gyro`，`VehicleImu` 应用 correction、旋转和积分后发布 `vehicle_imu/vehicle_imu_status`；DroneCAN Mag2 驱动只发布原始 `sensor_mag`，独立 `VehicleMagnetometer` 按 device ID 选择匹配校准或 identity correction 后发布 `vehicle_magnetometer`。校准事务持有 arming interlock 时，两个前端直接在 Disarmed 状态应用 correction，不得二次获取同一不可重入互锁；提交与回滚均以同一 `parameter_update.instance` 和 active correction 逐项匹配作为完成握手，在前端确认前不得释放互锁。gyro/accel/mag 校准命令与 QGC `[cal]` 状态机运行于非实时 `wq:lp_default`，与 PX4 Commander worker 的非实时职责一致；项目日志层连 RAW 记录也拒绝实时上下文格式化，因此禁止把校准事务放入 `wq:sensors`。Accel 固定六面稳定采样；Mag 固定六面、每面 0.5 rad 净旋转、7 s 内 40 个空间去重点，共 240 点，scale 范围与 PX4 Metadata/前端统一为 0.1..3.0。
 - 单路 USB CDC 的 Application data plane 由 MavlinkService 独占；在线参数使用 MAVLink Classic/Ext 协议。General Metadata 声明 Parameter type 1 和 Actuator type 5，MavlinkService 提供 General/Parameter/Actuator 三个只读 FTP 虚拟文件，不提供目录、写操作或 Event/Peripheral Metadata。Actuator Metadata 只开放六路 PWM 分配与参数编辑，MotorRight/MotorLeft 排除执行器测试；固件不实现 `MAV_CMD_ACTUATOR_TEST` 或 `SERVO_OUTPUT_RAW`。原始 RC 样本新鲜且通道数有效时把校准前 `input_rc` 以 5 Hz 发布为 `RC_CHANNELS`；完全无帧或样本超时才停流，恢复立即发送。PX4 USB/QGC 配置流的单实例子集以 50 Hz `HIGHRES_IMU` 发布校准/旋转后的 `vehicle_imu` 与 `vehicle_magnetometer`（SI/Gauss），并以 25 Hz `SCALED_IMU` 发布第 1 套 `vehicle_imu` 与原始 `sensor_mag`（mG/mrad/s/milliGauss）；GPS 以 5 Hz `GPS_RAW_INT` 发布，1 Hz `SYS_STATUS` 分别表达 gyro/accel/mag/GPS 的 present、enabled 与 health。周期流相互独立，不以 health 位作为发送门禁；均支持不受周期 last-send 限制的 one-shot `MAV_CMD_REQUEST_MESSAGE` 以及 PX4 `SET/GET_MESSAGE_INTERVAL` 语义。固定 PX4 v1.17 没有注册 `RAW_IMU`，因此不把 SI 数据伪装成比例未定义的 raw 消息。MAVLink 手柄、`PARAM_MAP_RC` 和 Offboard 仍不声明。
-- 参数核心只依赖公共 execution/memory/synchronization/ParameterFileStore 接口。SD/FatFs 强制编译，FlashFS 为主存储，SD 为 generation 排序的镜像和恢复源；同 generation 以 payload CRC 识别分裂。运行期 Flash 按 32-byte、FatFs 按 512-byte 分步写入/回读，最终 commit/rename 前保持旧快照有效；维护票据的安全状态、硬截止时间或单调进度失效时停止健康 generation，存储层没有 IWDG capability。无卡检测 GPIO 时每 3 秒软件探测，插卡可恢复 ENOSPC Autosave 并独立重试 SD 镜像。当前快照只接受现有参数名和类型，未知旧键整份拒绝；固件不暴露无人驱动的恢复出厂 erase API，部署清除由显式维护流程负责。传感器校准与 PX4 v1.17 一样在参数通知和运行时前端应用成功后报告 done，不把 QGC 完成状态阻塞到 `param_save_default(true)`；Flash/SD 物理提交继续由 autosave 完成，断电重启保持性属于板端验收。
+- 参数核心只依赖公共 execution/memory/synchronization/ParameterFileStore 接口。SD/FatFs 强制编译，FlashFS 为主存储，SD 为 generation 排序的镜像和恢复源；同 generation 以 payload CRC 识别分裂。运行期 Flash 按 32-byte、FatFs 按 512-byte 分步写入/回读，最终 commit/rename 前保持旧快照有效；维护票据的安全状态、硬截止时间或单调进度失效时停止健康 generation，存储层没有 IWDG capability。无卡检测 GPIO 时由独立 `wq:storage` 每 3 秒执行有限探测；重新挂载后等待 500 ms 稳定窗口再写镜像，`EIO/ENODEV/ENXIO/EBADF/ETIMEDOUT` 会使旧 FatFs 会话立即失效并进入有限重试。STM32 HAL 的软件轮询使用 500 ms 产品截止时间，`SDMMC_DATATIMEOUT=0xffffffff` 只作为外设数据计数器，不得再解释为约 49.7 天的毫秒等待。任何 SD 故障只降低镜像能力，FlashFS 与 MAVLink 必须继续。当前快照只接受现有参数名和类型，未知旧键整份拒绝；固件不暴露无人驱动的恢复出厂 erase API，部署清除由显式维护流程负责。传感器校准与 PX4 v1.17 一样在参数通知和运行时前端应用成功后报告 done，不把 QGC 完成状态阻塞到 `param_save_default(true)`；Flash/SD 物理提交继续由 autosave 完成，断电重启和热插拔恢复属于板端验收。
 - 参数扫描不执行整段 cache invalidate；raw Flash 仅在 program/erase 成功后处理实际修改范围，D-cache 关闭时中央 helper no-op。
 - 每次 load 都重新验证有效 payload 长度、条目 CRC 和最终 commit；最新记录损坏时回退到更早有效记录。FlashFS 物理格式不兼容 ParameterJournal v1，首次部署必须执行参数导出/迁移，初始化失败不得自动擦除旧扇区。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。
 - Estimator 采用 EKF2，首版即保留多实例与 Estimator Selector，至少支持两个 EKF 实例；实际激活数量由可用 IMU/Mag 组合和参数决定。控制器只消费 `vehicle_attitude`、`vehicle_local_position`、`vehicle_global_position` 和健康状态，不直接访问 EKF 内部对象。

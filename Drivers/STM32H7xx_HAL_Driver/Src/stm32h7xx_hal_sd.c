@@ -272,6 +272,12 @@
 #define SD_INIT_FREQ                   400000U   /* Initialization phase : 400 kHz max */
 #define SD_NORMAL_SPEED_FREQ           25000000U /* Normal speed phase : 25 MHz max */
 #define SD_HIGH_SPEED_FREQ             50000000U /* High speed phase : 50 MHz max */
+#ifndef DIMA_SD_BLOCKING_TIMEOUT_MS
+#define DIMA_SD_BLOCKING_TIMEOUT_MS    SDMMC_CMDTIMEOUT
+#endif
+/* Dima 热插拔安全边界：SDMMC_DATATIMEOUT=0xffffffff 是外设数据计数器，
+ * 不能同时作为 HAL_GetTick() 的毫秒截止时间，否则坏卡可把服务任务阻塞约
+ * 49.7 天。所有软件轮询统一使用产品定义的有限墙钟超时。 */
 /* Private macro -------------------------------------------------------------*/
 #if defined (DLYB_SDMMC1) && defined (DLYB_SDMMC2)
 #define SD_GET_DLYB_INSTANCE(SDMMC_INSTANCE) (((SDMMC_INSTANCE) == SDMMC1)?  \
@@ -439,7 +445,7 @@ HAL_StatusTypeDef HAL_SD_Init(SD_HandleTypeDef *hsd)
   tickstart = HAL_GetTick();
   while ((HAL_SD_GetCardState(hsd) != HAL_SD_CARD_TRANSFER))
   {
-    if ((HAL_GetTick() - tickstart) >=  SDMMC_DATATIMEOUT)
+    if ((HAL_GetTick() - tickstart) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
     {
       hsd->ErrorCode = HAL_SD_ERROR_TIMEOUT;
       hsd->State = HAL_SD_STATE_READY;
@@ -2783,7 +2789,7 @@ HAL_StatusTypeDef HAL_SD_ConfigSpeedBusOperation(SD_HandleTypeDef *hsd, uint32_t
   tickstart = HAL_GetTick();
   while ((HAL_SD_GetCardState(hsd) != HAL_SD_CARD_TRANSFER))
   {
-    if ((HAL_GetTick() - tickstart) >=  SDMMC_DATATIMEOUT)
+    if ((HAL_GetTick() - tickstart) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
     {
       hsd->ErrorCode = HAL_SD_ERROR_TIMEOUT;
       hsd->State = HAL_SD_STATE_READY;
@@ -3128,7 +3134,7 @@ static uint32_t SD_PowerON(SD_HandleTypeDef *hsd)
         /* Check to CKSTOP */
         while ((hsd->Instance->STA & SDMMC_FLAG_CKSTOP) != SDMMC_FLAG_CKSTOP)
         {
-          if ((HAL_GetTick() - tickstart) >=  SDMMC_DATATIMEOUT)
+          if ((HAL_GetTick() - tickstart) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
           {
             return HAL_SD_ERROR_TIMEOUT;
           }
@@ -3158,7 +3164,7 @@ static uint32_t SD_PowerON(SD_HandleTypeDef *hsd)
           /* Check VSWEND Flag */
           while ((hsd->Instance->STA & SDMMC_FLAG_VSWEND) != SDMMC_FLAG_VSWEND)
           {
-            if ((HAL_GetTick() - tickstart) >=  SDMMC_DATATIMEOUT)
+            if ((HAL_GetTick() - tickstart) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
             {
               return HAL_SD_ERROR_TIMEOUT;
             }
@@ -3266,7 +3272,7 @@ static uint32_t SD_SendSDStatus(SD_HandleTypeDef *hsd, uint32_t *pSDstatus)
       }
     }
 
-    if ((HAL_GetTick() - tickstart) >=  SDMMC_DATATIMEOUT)
+    if ((HAL_GetTick() - tickstart) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
     {
       return HAL_SD_ERROR_TIMEOUT;
     }
@@ -3294,7 +3300,7 @@ static uint32_t SD_SendSDStatus(SD_HandleTypeDef *hsd, uint32_t *pSDstatus)
     *pData = SDMMC_ReadFIFO(hsd->Instance);
     pData++;
 
-    if ((HAL_GetTick() - tickstart) >=  SDMMC_DATATIMEOUT)
+    if ((HAL_GetTick() - tickstart) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
     {
       return HAL_SD_ERROR_TIMEOUT;
     }
@@ -3485,7 +3491,7 @@ static uint32_t SD_FindSCR(SD_HandleTypeDef *hsd, uint32_t *pSCR)
     }
 
 
-    if ((HAL_GetTick() - tickstart) >=  SDMMC_DATATIMEOUT)
+    if ((HAL_GetTick() - tickstart) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
     {
       return HAL_SD_ERROR_TIMEOUT;
     }
@@ -3659,7 +3665,7 @@ uint32_t SD_HighSpeed(SD_HandleTypeDef *hsd)
         loop ++;
       }
 
-      if ((HAL_GetTick() - Timeout) >=  SDMMC_DATATIMEOUT)
+      if ((HAL_GetTick() - Timeout) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
       {
         hsd->ErrorCode = HAL_SD_ERROR_TIMEOUT;
         hsd->State = HAL_SD_STATE_READY;
@@ -3774,7 +3780,7 @@ static uint32_t SD_UltraHighSpeed(SD_HandleTypeDef *hsd)
         loop ++;
       }
 
-      if ((HAL_GetTick() - Timeout) >=  SDMMC_DATATIMEOUT)
+      if ((HAL_GetTick() - Timeout) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
       {
         hsd->ErrorCode = HAL_SD_ERROR_TIMEOUT;
         hsd->State = HAL_SD_STATE_READY;
@@ -3904,7 +3910,7 @@ static uint32_t SD_DDR_Mode(SD_HandleTypeDef *hsd)
         loop ++;
       }
 
-      if ((HAL_GetTick() - Timeout) >=  SDMMC_DATATIMEOUT)
+      if ((HAL_GetTick() - Timeout) >= DIMA_SD_BLOCKING_TIMEOUT_MS)
       {
         hsd->ErrorCode = HAL_SD_ERROR_TIMEOUT;
         hsd->State = HAL_SD_STATE_READY;

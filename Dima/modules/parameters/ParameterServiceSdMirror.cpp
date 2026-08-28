@@ -20,7 +20,10 @@ void ParameterService::service_sd_mirror() noexcept
 
     if (persistence_kind_ == PersistenceKind::SdMirror) {
         const int result = advance_persistence();
-        if (result != 0 && result != -EAGAIN && result != -EPERM) {
+        if (result == 0) {
+            PX4_INFO("param: SD mirror synchronized generation=%lu",
+                     static_cast<unsigned long>(storage_generation_));
+        } else if (result != -EAGAIN && result != -EPERM) {
             PX4_WARN("param: SD mirror retry failed: %d", result);
         }
         return;
@@ -34,6 +37,9 @@ void ParameterService::service_sd_mirror() noexcept
     }
 
     const std::uint64_t now = hrt_absolute_time();
+    if (now < sd_mirror_ready_after_us_) {
+        return;
+    }
     // 失败镜像最多每 3 s 重试一次，避免卡拔出/介质故障形成低优先级忙循环。
     if (last_sd_mirror_attempt_us_ != 0U &&
         now >= last_sd_mirror_attempt_us_ &&
@@ -73,9 +79,15 @@ void ParameterService::poll_sd_card() noexcept
     sd_available_ = available;
     if (available) {
         PX4_INFO("param: SD card mounted; synchronizing parameters");
+        sd_mirror_ready_after_us_ =
+            now > UINT64_MAX - kSdMountSettleUs
+                ? UINT64_MAX
+                : now + kSdMountSettleUs;
+        last_sd_mirror_attempt_us_ = 0U;
         sd_mirror_required_ = flashfs_ready_ && storage_generation_ != 0U;
         (void)autosave_.resume_after_storage_available();
     } else {
+        sd_mirror_ready_after_us_ = 0U;
         sd_mirror_required_ = flashfs_ready_ && storage_generation_ != 0U;
         PX4_WARN("param: SD card removed; FlashFS remains active");
     }

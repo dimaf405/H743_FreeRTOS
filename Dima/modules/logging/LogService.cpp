@@ -11,8 +11,9 @@ namespace {
 
 constexpr std::size_t kMaxEventsPerRun = 4U;
 
-/* 每轮最多搬运四个结构化事件，给同一低优先级 work queue 上的参数/存储任务
- * 留出执行机会。Level -> MAV_SEVERITY 使用线协议固定数值，数值越小越严重。 */
+/* 每轮最多搬运四个结构化事件，给同一低优先级 work queue 上的
+ * MAVLink 和校准任务留出执行机会。Level -> MAV_SEVERITY 使用线协议固定数值，
+ * 数值越小越严重；SD/FatFs 已隔离到 storage 队列。 */
 std::uint8_t mav_severity(dima::logging::Level level) noexcept
 {
     using dima::logging::Level;

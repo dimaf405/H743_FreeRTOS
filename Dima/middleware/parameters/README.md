@@ -33,8 +33,9 @@ PX4 Parameter YAML
 - 固件通过官方 `px4::parameters`、`parameters_type` 与 `px4::Param<T>` 访问参数；`Param<T>` 构造不访问 Core，模块每次 start 显式 `bind()`。
 - Parameter Core 的运行期状态、事务及 get/set/reset 位于 `param.cpp`；持久化后端注册、save/load/status 位于 `param_storage.cpp`，公开兼容接口统一由 `param.h` 提供。
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
-- Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，并按 10 ms 小步推进。ENOSPC 进入可恢复暂停态，SD 从 unavailable 转为 available 后恢复受控保存。
+- ParameterService 与 Autosave 固定运行于独立低优先级 `wq:storage`；Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，并按 10 ms 小步推进。ENOSPC 进入可恢复暂停态，SD 从 unavailable 转为 available 后恢复受控保存。
 - FlashFS 是持续可用的主存储，SD 是带 generation 的镜像和恢复源；同 generation 还比较 payload CRC，差异时按既有 Flash 优先规则重建 SD。
+- 无 card-detect GPIO 时每 3 s 低频探测一次；重新挂载后等待 500 ms 再开始首个镜像写事务。介质级错误立即撤销 FileStorage/FatFs 的可用状态，下一次写入必须先完成重新初始化和挂载；失败不改变已经提交的 Flash 主副本。
 - FlashFS 位于 `0x081E0000～0x08200000` 的单个 128 KiB 扇区，使用追加记录、最终 commit 字、32-byte program、回读与 cache 一致性。空间不足返回 ENOSPC，不自动擦除仍含有效快照的扇区。
 - CRC/格式有效的旧快照若含当前目录已不存在的退役名称，只跳过对应条目；已知参数类型不符或快照格式无效时仍整份拒绝。当前固件不提供旧键别名或参数目录迁移表。
 
@@ -48,4 +49,4 @@ PX4 Parameter YAML
 
 正式 Make 入口会验证上游来源清单、PX4 YAML schema、官方 XML/JSON/Header 一致性、派生 Metadata、五个删除参数的全闭包缺失和架构边界。未新增或修改测试文件、测试框架、runner、fixture、mock 或 test-only API。
 
-Windows 生成、编译和 ELF 检查不能代替实板证明。同上电 `shutdown → init → start`、掉电恢复、损坏回退、ENOSPC、在线 MAVLink 调参，以及 QGC 5.1.3 陀螺仪/加速度计/磁力计校准回归仍按最终报告标记 `BOARD/QGC PENDING`。
+Windows 生成、编译和 ELF 检查不能代替实板证明。同上电 `shutdown → init → start`、掉电恢复、损坏回退、ENOSPC、在线 MAVLink 调参、SD 空闲/写入中反复拔插时 HEARTBEAT 与遥测速率保持非零，以及 QGC 5.1.3 陀螺仪/加速度计/磁力计校准回归仍按最终报告标记 `BOARD/QGC PENDING`。

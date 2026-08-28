@@ -243,7 +243,7 @@ public:
             return handle(result);
         }
         if (read_size != static_cast<UINT>(file_size)) {
-            return -EIO;
+            return invalidate_with_io_error();
         }
         output_size = read_size;
         return 0;
@@ -271,7 +271,7 @@ public:
         /* 先锁定精确长度，再分块逐字节比对；仅 CRC 相同不足以代替落盘回读。 */
         if (f_size(&state_.file) != static_cast<FSIZE_t>(size)) {
             (void)f_close(&state_.file);
-            return -EIO;
+            return invalidate_with_io_error();
         }
 
         state_.operation_data = expected;
@@ -303,7 +303,8 @@ public:
                             chunk) != 0) {
                 (void)f_close(&state_.file);
                 reset_operation();
-                return result == FR_OK ? -EIO : handle(result);
+                return result == FR_OK ? invalidate_with_io_error()
+                                       : handle(result);
             }
             state_.operation_offset += read_size;
             if (state_.operation_offset == state_.operation_size) {
@@ -372,6 +373,14 @@ private:
         }
         (void)f_mount(nullptr, kVolumePath, 0);
         state_.mounted = false;
+    }
+
+    int invalidate_with_io_error() noexcept
+    {
+        // 长度、短读或逐字节校验失败说明当前文件/介质视图不可继续信任；与 FatFs
+        // FR_DISK_ERR 一样先撤销挂载，使下一轮热插拔探测完成全量重初始化。
+        invalidate_mount();
+        return -EIO;
     }
 
     int handle(FRESULT result) noexcept
