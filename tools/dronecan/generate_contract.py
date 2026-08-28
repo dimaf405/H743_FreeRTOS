@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""从单一 manifest 生成完整 H743 DroneCAN v0 合同。
+"""从受版本控制的 DSDL 源码树生成 H743 DroneCAN v0 协议合同。
 
-manifest 独占 DSDL 根、参数目录、订阅 role、PX4 device-ID 布局和动态分配策略；C codec
-始终由固定版本上游 dronecan_dsdlc 生成。本脚本不得嵌入消息 ID、签名或线布局。
+DSDL 文件是消息类型的唯一权威输入；C codec 始终由固定版本的上游
+dronecan_dsdlc 生成。本脚本只补充 Dima 节点所需的运行策略，不处理产品参数，
+也不维护消息 ID、签名或线布局清单。
 """
 
 from __future__ import annotations
@@ -33,14 +34,88 @@ class GenerationError(RuntimeError):
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-PARAMETER_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,15}$")
-SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 DSDL_TYPE_RE = re.compile(
     r"^[a-z][a-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$"
 )
-TRANSFER_KINDS = ("broadcast", "request", "response")
-OWNERS = ("node", "magnetometer")
+ROOT_DSDL_RE = re.compile(r"^(?P<id>[0-9]+)\.(?P<name>[A-Za-z][A-Za-z0-9_]*)\.uavcan$")
+
+# DSDL 编译器和 Python 依赖属于工具链身份，而不是产品参数或消息清单。
+# 固定散列保留可复现下载；DSDL 类型集合则始终从源码树自动发现。
+PINNED_TOOLCHAIN: dict[str, Any] = {
+    "generator": {
+        "repository": "https://github.com/DroneCAN/dronecan_dsdlc",
+        "commit": "431170fa4bfe2212b516b8f33bdc796267907f1c",
+        "archive": {
+            "url": "https://codeload.github.com/DroneCAN/dronecan_dsdlc/tar.gz/431170fa4bfe2212b516b8f33bdc796267907f1c",
+            "size": 15289,
+            "sha256": "fc427b3630d18c7149a3161739914b1095c10d5d4e3d65a4684e2325e8e55d71",
+        },
+    },
+    "python_packages": [
+        {
+            "name": "dronecan",
+            "version": "1.0.27",
+            "source_commit": "08cda37aaf2958657399606653b99ceb5a6beae0",
+            "url": "https://files.pythonhosted.org/packages/48/9f/fc77f73e9adb04ed1178083fc7d78dffa8f2fb98490a335fa3dcfdeb4402/dronecan-1.0.27-py3-none-any.whl",
+            "size": 161959,
+            "sha256": "206f70e44b74b85653acf53851df0f373dd4fe7f63db96df8cbb1e564112afeb",
+        },
+        {
+            "name": "empy",
+            "version": "3.3.4",
+            "url": "https://files.pythonhosted.org/packages/3b/95/88ed47cb7da88569a78b7d6fb9420298df7e99997810c844a924d96d3c08/empy-3.3.4.tar.gz",
+            "size": 62857,
+            "sha256": "73ac49785b601479df4ea18a7c79bc1304a8a7c34c02b9472cf1206ae88f01b3",
+        },
+        {
+            "name": "pexpect",
+            "version": "4.9.0",
+            "url": "https://files.pythonhosted.org/packages/9e/c3/059298687310d527a58bb01f3b1965787ee3b40dce76752eda8b44e9a2c5/pexpect-4.9.0-py2.py3-none-any.whl",
+            "size": 63772,
+            "sha256": "7236d1e080e4936be2dc3e326cec0af72acf9212a7e1d060210e70a47e253523",
+        },
+        {
+            "name": "ptyprocess",
+            "version": "0.7.0",
+            "url": "https://files.pythonhosted.org/packages/22/a6/858897256d0deac81a172289110f31629fc4cee19b6f01283303e18c8db3/ptyprocess-0.7.0-py2.py3-none-any.whl",
+            "size": 13993,
+            "sha256": "4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35",
+        },
+    ],
+}
+
+# 以下值是 Dima DroneCAN 节点的运行策略，不参与参数定义。能从 DSDL
+# 生成头取得的 ID、签名、分片长度和超时仍由编译器产物决定。
+DIMA_ALLOCATION_POLICY: dict[str, Any] = {
+    "max_node_id": 125,
+    "unique_id_bytes": 16,
+    "transfer_priority": 30,
+    "storage": {
+        "token": "dna0",
+        "magic": "DNAV",
+        "footer": "DEND",
+        "format_version": 1,
+        "states": {
+            "empty": 0,
+            "occupied_without_uid": 1,
+            "known_uid": 2,
+        },
+    },
+    "discovery": {
+        "poll_interval_ms": 170,
+        "response_timeout_ms": 500,
+        "max_get_node_info_attempts": 5,
+    },
+    "persistence_retry_ms": 1000,
+    "error_log_interval_ms": 10000,
+}
+
+DIMA_DEVICE_ID_POLICY: dict[str, Any] = {
+    "bus_type": {"value": 3, "shift": 0},
+    "bus": {"value": 0, "shift": 3},
+    "address": {"shift": 8},
+    "devtype": {"value": 136, "shift": 16},
+}
 
 
 def file_sha256(path: pathlib.Path) -> str:
@@ -62,7 +137,10 @@ def canonical_sha256(value: Any) -> str:
 def directory_sha256(root: pathlib.Path) -> str:
     """把相对路径和每个文件散列共同纳入目录闭包，避免同内容换路径被误复用。"""
     digest = hashlib.sha256()
-    for path in sorted(entry for entry in root.rglob("*") if entry.is_file()):
+    paths = (entry for entry in root.rglob("*") if entry.is_file())
+    for path in sorted(
+        paths, key=lambda entry: entry.relative_to(root).as_posix()
+    ):
         relative = path.relative_to(root).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
@@ -78,32 +156,16 @@ def repository_root(path: pathlib.Path) -> pathlib.Path:
     raise GenerationError(f"cannot find repository root above {path}")
 
 
-def discover_manifest(search_root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
-    """按唯一文件身份发现权威 manifest，不把其目录写死在构建脚本中。"""
-    root = repository_root(search_root)
-    resolved_search_root = search_root.resolve()
-    matches = sorted(
-        path for path in resolved_search_root.rglob("dronecan_contract.json")
-        if path.is_file()
-    )
-    if len(matches) != 1:
-        relative_matches = [
-            path.relative_to(root).as_posix()
-            for path in matches if path.is_relative_to(root)
-        ]
-        raise GenerationError(
-            "expected exactly one dronecan_contract.json below "
-            f"{resolved_search_root}, found {relative_matches}"
-        )
-    return matches[0], root
-
-
 def discover_runtime_sources(search_root: pathlib.Path) -> tuple[pathlib.Path, ...]:
     """由源码命名约定发现第一方 DroneCAN 翻译单元，避免维护路径清单。"""
     root = repository_root(search_root)
+    resolved_search_root = search_root.resolve()
     matches = tuple(sorted(
-        path for path in search_root.resolve().rglob("DroneCan*.cpp")
-        if path.is_file()
+        (
+            path for path in resolved_search_root.rglob("DroneCan*.cpp")
+            if path.is_file()
+        ),
+        key=lambda path: path.relative_to(resolved_search_root).as_posix(),
     ))
     if not matches:
         raise GenerationError(
@@ -115,46 +177,14 @@ def discover_runtime_sources(search_root: pathlib.Path) -> tuple[pathlib.Path, .
     return matches
 
 
-def require_dict(value: Any, field: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise GenerationError(f"{field} must be an object")
-    return value
-
-
-def require_list(value: Any, field: str) -> list[Any]:
-    if not isinstance(value, list):
-        raise GenerationError(f"{field} must be a list")
-    return value
-
-
-def require_int(value: Any, field: str, minimum: int = 0) -> int:
-    if type(value) is not int or value < minimum:
-        raise GenerationError(f"{field} must be an integer >= {minimum}")
-    return value
-
-
-def require_string(value: Any, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise GenerationError(f"{field} must be a non-empty string")
-    return value
-
-
-def require_sha256(value: Any, field: str) -> str:
-    text = require_string(value, field)
-    if SHA256_RE.fullmatch(text) is None:
-        raise GenerationError(f"{field} must be a lowercase SHA-256")
-    return text
-
-
-def require_commit(value: Any, field: str) -> str:
-    text = require_string(value, field)
-    if COMMIT_RE.fullmatch(text) is None:
-        raise GenerationError(f"{field} must be a lowercase Git commit")
-    return text
-
-
 def snake_to_pascal(value: str) -> str:
     return "".join(part[:1].upper() + part[1:] for part in value.split("_"))
+
+
+def camel_to_snake(value: str) -> str:
+    """把 DSDL 类型尾名稳定转换为生成枚举名，不维护消息角色清单。"""
+    words = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return words.lower()
 
 
 def dsdl_macro_prefix(type_name: str) -> str:
@@ -165,219 +195,83 @@ def dsdl_header_name(type_name: str) -> str:
     return f"{type_name}.h"
 
 
-def parse_manifest(path: pathlib.Path) -> tuple[dict[str, Any], pathlib.Path]:
-    """完整校验权威 manifest、固定上游、依赖散列、DSDL role 和参数 schema。"""
-    try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise GenerationError(f"unable to read DroneCAN manifest: {error}") from error
-
-    if manifest.get("format_version") != 1:
-        raise GenerationError("unsupported DroneCAN manifest format")
-    if manifest.get("contract") != "px4_v1_17_dronecan_v0_rm3100":
-        raise GenerationError("unsupported DroneCAN contract identity")
-    root = repository_root(path.parent)
-
-    upstream = require_dict(manifest.get("upstream"), "upstream")
-    for name in ("px4", "dsdl", "generator"):
-        package = require_dict(upstream.get(name), f"upstream.{name}")
-        require_string(package.get("repository"), f"upstream.{name}.repository")
-        require_commit(package.get("commit"), f"upstream.{name}.commit")
-    generator = upstream["generator"]
-    archive = require_dict(generator.get("archive"), "upstream.generator.archive")
-    require_string(archive.get("url"), "upstream.generator.archive.url")
-    require_int(archive.get("size"), "upstream.generator.archive.size", 1)
-    require_sha256(archive.get("sha256"), "upstream.generator.archive.sha256")
-
-    packages = require_list(upstream.get("python_packages"), "python_packages")
-    if [package.get("name") for package in packages] != [
-        "dronecan", "empy", "pexpect", "ptyprocess"
-    ]:
+def discover_contract(
+    namespace_root: pathlib.Path,
+) -> tuple[dict[str, Any], pathlib.Path]:
+    """从 DSDL 源码树发现完整类型闭包和根消息，不保留额外 JSON 合同。"""
+    namespace_root = namespace_root.resolve()
+    root = repository_root(namespace_root)
+    if not namespace_root.is_dir() or not namespace_root.is_relative_to(root):
         raise GenerationError(
-            "python_packages must pin dronecan, empy, pexpect, and ptyprocess in order"
+            f"DroneCAN DSDL root is unavailable or outside repository: {namespace_root}"
         )
-    for index, raw_package in enumerate(packages):
-        package = require_dict(raw_package, f"python_packages[{index}]")
-        name = require_string(package.get("name"), f"python_packages[{index}].name")
-        if IDENTIFIER_RE.fullmatch(name) is None:
-            raise GenerationError(f"invalid Python package name {name!r}")
-        require_string(package.get("version"), f"python_packages[{index}].version")
-        require_string(package.get("url"), f"python_packages[{index}].url")
-        require_int(package.get("size"), f"python_packages[{index}].size", 1)
-        require_sha256(package.get("sha256"), f"python_packages[{index}].sha256")
-        if "source_commit" in package:
-            require_commit(
-                package["source_commit"],
-                f"python_packages[{index}].source_commit",
-            )
 
-    dsdl = require_dict(manifest.get("dsdl"), "dsdl")
-    namespace_relative = pathlib.PurePosixPath(
-        require_string(dsdl.get("namespace_root"), "dsdl.namespace_root")
+    namespace_name = namespace_root.name
+    if IDENTIFIER_RE.fullmatch(namespace_name) is None:
+        raise GenerationError(f"invalid DSDL namespace name: {namespace_name!r}")
+
+    files: list[dict[str, Any]] = []
+    root_roles: set[str] = set()
+    type_names: set[str] = set()
+    # WindowsPath 默认按大小写折叠比较，POSIX Path 则逐字节比较；显式使用
+    # 相对 POSIX 路径排序，确保两端发现的 DSDL 有序闭包完全相同。
+    dsdl_paths = sorted(
+        namespace_root.rglob("*.uavcan"),
+        key=lambda path: path.relative_to(namespace_root).as_posix(),
     )
-    if namespace_relative.is_absolute() or ".." in namespace_relative.parts:
-        raise GenerationError("dsdl.namespace_root must remain inside the repository")
-    namespace_root = root.joinpath(*namespace_relative.parts)
-    files = require_list(dsdl.get("files"), "dsdl.files")
-    if not files:
-        raise GenerationError("dsdl.files must not be empty")
-    paths: set[str] = set()
-    types: set[str] = set()
-    roles: set[str] = set()
-    for index, raw_file in enumerate(files):
-        item = require_dict(raw_file, f"dsdl.files[{index}]")
-        type_name = require_string(item.get("type"), f"dsdl.files[{index}].type")
-        if DSDL_TYPE_RE.fullmatch(type_name) is None or type_name in types:
-            raise GenerationError(f"invalid or duplicate DSDL type {type_name!r}")
-        types.add(type_name)
-        relative_text = require_string(item.get("path"), f"dsdl.files[{index}].path")
-        relative = pathlib.PurePosixPath(relative_text)
-        if relative.is_absolute() or ".." in relative.parts or relative.suffix != ".uavcan":
-            raise GenerationError(f"invalid DSDL path {relative_text!r}")
-        if relative_text in paths:
-            raise GenerationError(f"duplicate DSDL path {relative_text!r}")
-        paths.add(relative_text)
-        require_sha256(item.get("sha256"), f"dsdl.files[{index}].sha256")
-        role = item.get("role")
-        if role is None:
-            if any(key in item for key in ("owner", "transfers", "allow_anonymous")):
-                raise GenerationError(f"dependency DSDL {type_name} has subscription fields")
-            continue
-        role = require_string(role, f"dsdl.files[{index}].role")
-        if IDENTIFIER_RE.fullmatch(role) is None or role in roles:
-            raise GenerationError(f"invalid or duplicate DSDL role {role!r}")
-        roles.add(role)
-        if item.get("owner") not in OWNERS:
-            raise GenerationError(f"invalid subscription owner for {type_name}")
-        transfers = require_list(item.get("transfers"), f"{type_name}.transfers")
-        if not transfers or any(kind not in TRANSFER_KINDS for kind in transfers):
-            raise GenerationError(f"invalid transfer list for {type_name}")
-        if len(transfers) != len(set(transfers)):
-            raise GenerationError(f"duplicate transfer kind for {type_name}")
-        if type(item.get("allow_anonymous")) is not bool:
-            raise GenerationError(f"allow_anonymous must be boolean for {type_name}")
-    # 角色集合完全由 manifest 声明；生成器只要求动态分配的语义锚点存在，
-    # 其余 MessageRole/订阅表均从当前集合生成，不能在脚本中复制消息清单。
-    if "allocation" not in roles:
-        raise GenerationError("DSDL roles must contain the allocation contract")
-    actual_dsdl = {
-        path.relative_to(namespace_root).as_posix()
-        for path in namespace_root.rglob("*.uavcan")
-        if path.is_file()
-    }
-    if actual_dsdl != paths:
-        raise GenerationError(
-            "vendored DSDL tree differs from manifest: "
-            f"missing={sorted(paths - actual_dsdl)}, "
-            f"unexpected={sorted(actual_dsdl - paths)}"
-        )
-    for item in files:
-        source = namespace_root.joinpath(*pathlib.PurePosixPath(item["path"]).parts)
-        actual_hash = file_sha256(source)
-        if actual_hash != item["sha256"]:
-            raise GenerationError(
-                f"DSDL hash mismatch for {item['path']}: "
-                f"expected {item['sha256']}, got {actual_hash}"
+    for path in dsdl_paths:
+        relative = path.relative_to(namespace_root)
+        root_match = ROOT_DSDL_RE.fullmatch(path.name)
+        type_leaf = root_match.group("name") if root_match else path.stem
+        type_name = ".".join((namespace_name, *relative.parts[:-1], type_leaf))
+        if DSDL_TYPE_RE.fullmatch(type_name) is None or type_name in type_names:
+            raise GenerationError(f"invalid or duplicate DSDL type: {type_name}")
+        type_names.add(type_name)
+        item: dict[str, Any] = {
+            "path": relative.as_posix(),
+            "sha256": file_sha256(path),
+            "type": type_name,
+        }
+        if root_match:
+            role = camel_to_snake(type_leaf)
+            if role in root_roles:
+                raise GenerationError(f"duplicate generated DSDL role: {role}")
+            root_roles.add(role)
+            is_service = any(
+                line.strip() == "---"
+                for line in path.read_text(encoding="utf-8").splitlines()
             )
+            item.update({
+                "role": role,
+                "owner": camel_to_snake(relative.parts[0]),
+                "transfers": ["request", "response"]
+                    if is_service else ["broadcast"],
+            })
+        files.append(item)
 
-    parameters = require_list(manifest.get("parameters"), "parameters")
-    parameter_names: set[str] = set()
-    parameter_roles: set[str] = set()
-    for index, raw_parameter in enumerate(parameters):
-        parameter = require_dict(raw_parameter, f"parameters[{index}]")
-        name = require_string(parameter.get("name"), f"parameters[{index}].name")
-        if PARAMETER_RE.fullmatch(name) is None or name in parameter_names:
-            raise GenerationError(f"invalid or duplicate parameter {name!r}")
-        parameter_names.add(name)
-        role = require_string(parameter.get("role"), f"{name}.role")
-        if IDENTIFIER_RE.fullmatch(role) is None or role in parameter_roles:
-            raise GenerationError(f"invalid or duplicate parameter role {role!r}")
-        parameter_roles.add(role)
-        if parameter.get("type") not in ("INT32", "FLOAT"):
-            raise GenerationError(f"unsupported type for {name}")
-        default = parameter.get("default")
-        if parameter["type"] == "INT32" and type(default) is not int:
-            raise GenerationError(f"{name} default must be an integer")
-        if parameter["type"] == "FLOAT" and not isinstance(default, (int, float)):
-            raise GenerationError(f"{name} default must be numeric")
-        require_string(parameter.get("group"), f"{name}.group")
-        description = require_list(parameter.get("description"), f"{name}.description")
-        if not description or any(not isinstance(line, str) or not line for line in description):
-            raise GenerationError(f"{name} description must contain text lines")
-        values = parameter.get("values", [])
-        if not isinstance(values, list):
-            raise GenerationError(f"{name}.values must be a list")
-        seen_values: set[int] = set()
-        for value in values:
-            if not isinstance(value, dict) or type(value.get("value")) is not int:
-                raise GenerationError(f"{name} has an invalid value entry")
-            if value["value"] in seen_values or not isinstance(value.get("name"), str):
-                raise GenerationError(f"{name} has a duplicate or unnamed value")
-            seen_values.add(value["value"])
-            if "symbol" in value and IDENTIFIER_RE.fullmatch(str(value["symbol"])) is None:
-                raise GenerationError(f"{name} has an invalid mode symbol")
-    if not parameter_names:
-        raise GenerationError("parameters must not be empty")
-
-    device_id = require_dict(manifest.get("px4_device_id"), "px4_device_id")
-    expected_device_id = {
-        "layout": "DeviceStructure",
-        "bus_type": {"name": "UAVCAN", "value": 3, "shift": 0},
-        "bus": {"value": 0, "shift": 3},
-        "address": {"source": "source_node_id", "shift": 8},
-        "devtype": {
-            "name": "DRV_MAG_DEVTYPE_UAVCAN",
-            "value": 0x88,
-            "shift": 16,
+    if not files or "allocation" not in root_roles:
+        raise GenerationError(
+            "DSDL tree must contain root types including dynamic Node ID Allocation"
+        )
+    namespace_relative = namespace_root.relative_to(root).as_posix()
+    contract = {
+        "contract": "dima_dronecan_v0",
+        "toolchain": PINNED_TOOLCHAIN,
+        "dsdl": {
+            "namespace_root": namespace_relative,
+            "files": files,
         },
-        "sensor_id_policy": "ignored",
+        "device_id": DIMA_DEVICE_ID_POLICY,
+        "allocation": DIMA_ALLOCATION_POLICY,
     }
-    if device_id != expected_device_id:
-        raise GenerationError(
-            "magnetometer device ID must match the fixed PX4 UAVCAN "
-            "DeviceStructure layout"
-        )
-    for field in ("bus_type", "bus", "address", "devtype"):
-        entry = require_dict(device_id.get(field), f"px4_device_id.{field}")
-        require_int(entry.get("shift"), f"px4_device_id.{field}.shift")
-        if field != "address":
-            require_int(entry.get("value"), f"px4_device_id.{field}.value")
-    if device_id["address"].get("source") != "source_node_id":
-        raise GenerationError("PX4 device address must come from source_node_id")
-
-    allocation = require_dict(manifest.get("allocation"), "allocation")
-    max_node_id = require_int(allocation.get("max_node_id"), "allocation.max_node_id", 1)
-    if max_node_id != 125 or allocation.get("reserved_node_ids") != [126, 127]:
-        raise GenerationError("automatic allocation must reserve Node IDs 126 and 127")
-    if require_int(allocation.get("unique_id_bytes"), "allocation.unique_id_bytes", 1) != 16:
-        raise GenerationError("DroneCAN v0 unique IDs must contain 16 bytes")
-    transfer_priority = require_int(
-        allocation.get("transfer_priority"), "allocation.transfer_priority"
-    )
-    if transfer_priority > 31:
-        raise GenerationError("DroneCAN transfer priority must fit five bits")
-    storage = require_dict(allocation.get("storage"), "allocation.storage")
-    for field, length in (("token", 4), ("magic", 4), ("footer", 4)):
-        value = require_string(storage.get(field), f"allocation.storage.{field}")
-        if len(value) != length or not value.isascii():
-            raise GenerationError(f"allocation.storage.{field} must be four ASCII bytes")
-    require_int(storage.get("format_version"), "allocation.storage.format_version", 1)
-    states = require_dict(storage.get("states"), "allocation.storage.states")
-    if states != {"empty": 0, "occupied_without_uid": 1, "known_uid": 2}:
-        raise GenerationError("unsupported allocation storage states")
-    discovery = require_dict(allocation.get("discovery"), "allocation.discovery")
-    for field in ("poll_interval_ms", "response_timeout_ms", "max_get_node_info_attempts"):
-        require_int(discovery.get(field), f"allocation.discovery.{field}", 1)
-    require_int(allocation.get("persistence_retry_ms"), "allocation.persistence_retry_ms", 1)
-    require_int(allocation.get("error_log_interval_ms"), "allocation.error_log_interval_ms", 1)
-    return manifest, root
+    return contract, root
 
 
-def dsdl_input_paths(manifest: dict[str, Any]) -> list[str]:
-    namespace = pathlib.PurePosixPath(manifest["dsdl"]["namespace_root"])
+def dsdl_input_paths(contract: dict[str, Any]) -> list[str]:
+    namespace = pathlib.PurePosixPath(contract["dsdl"]["namespace_root"])
     return [
         namespace.joinpath(*pathlib.PurePosixPath(item["path"]).parts).as_posix()
-        for item in manifest["dsdl"]["files"]
+        for item in contract["dsdl"]["files"]
     ]
 
 
@@ -466,9 +360,9 @@ def install_directory(candidate: pathlib.Path, destination: pathlib.Path) -> Non
             time.sleep(0.05 * (attempt + 1))
 
 
-def provision_compiler(manifest: dict[str, Any], cache_root: pathlib.Path) -> pathlib.Path:
+def provision_compiler(contract: dict[str, Any], cache_root: pathlib.Path) -> pathlib.Path:
     """按 commit/归档散列/源码树散列复用 DSDL 编译器，否则在临时目录重建。"""
-    generator = manifest["upstream"]["generator"]
+    generator = contract["toolchain"]["generator"]
     commit = generator["commit"]
     destination = cache_root / "dronecan_dsdlc" / commit / "source"
     script = destination / "dronecan_dsdlc.py"
@@ -557,10 +451,10 @@ def python_probe(site_packages: pathlib.Path, packages: list[dict[str, Any]]) ->
 
 
 def provision_python_packages(
-    manifest: dict[str, Any], cache_root: pathlib.Path
+    contract: dict[str, Any], cache_root: pathlib.Path
 ) -> pathlib.Path:
     """按完整依赖清单内容寻址安装 Python 包，并用 import probe 验证缓存可用。"""
-    packages = manifest["upstream"]["python_packages"]
+    packages = contract["toolchain"]["python_packages"]
     identity = canonical_sha256(packages)
     destination = (
         cache_root / "dronecan-python" / identity[:16] / "site-packages"
@@ -654,16 +548,16 @@ def normalize_generated_files(root: pathlib.Path) -> None:
 
 
 def run_dsdl_compiler(
-    manifest: dict[str, Any],
+    contract: dict[str, Any],
     root: pathlib.Path,
     output: pathlib.Path,
     compiler_root: pathlib.Path,
     site_packages: pathlib.Path,
 ) -> None:
-    """只把 manifest 标记 role 的 DSDL 类型传给固定上游工具，单 job 保证确定性。"""
-    roots = [item for item in manifest["dsdl"]["files"] if "role" in item]
+    """只把自动发现的根 DSDL 类型传给固定上游工具，单 job 保证确定性。"""
+    roots = [item for item in contract["dsdl"]["files"] if "role" in item]
     namespace = root.joinpath(
-        *pathlib.PurePosixPath(manifest["dsdl"]["namespace_root"]).parts
+        *pathlib.PurePosixPath(contract["dsdl"]["namespace_root"]).parts
     )
     command = [
         sys.executable,
@@ -717,11 +611,11 @@ def macro_integer(header: pathlib.Path, macro: str) -> int:
 
 
 def role_descriptors(
-    manifest: dict[str, Any], output: pathlib.Path
+    contract: dict[str, Any], output: pathlib.Path
 ) -> list[dict[str, Any]]:
-    """从生成头读取上游计算的 ID/签名，再与 manifest role/owner/transfer 绑定。"""
+    """从生成头读取上游计算的 ID/签名，并绑定自动发现的类型语义。"""
     descriptors: list[dict[str, Any]] = []
-    for item in manifest["dsdl"]["files"]:
+    for item in contract["dsdl"]["files"]:
         if "role" not in item:
             continue
         prefix = dsdl_macro_prefix(item["type"])
@@ -732,7 +626,6 @@ def role_descriptors(
             "role": item["role"],
             "owner": item["owner"],
             "transfers": item["transfers"],
-            "allow_anonymous": item["allow_anonymous"],
             "type": item["type"],
             "macro": prefix,
             "id": macro_integer(header, f"{prefix}_ID"),
@@ -750,22 +643,24 @@ def ascii_u32(value: str) -> int:
 
 
 def render_protocol_contract(
-    manifest: dict[str, Any], descriptors: list[dict[str, Any]], output: pathlib.Path
+    contract: dict[str, Any], descriptors: list[dict[str, Any]], output: pathlib.Path
 ) -> str:
     """从 descriptors 生成运行期订阅表，源码不得另写 DroneCAN 消息 ID 或签名。"""
     role_entries = [snake_to_pascal(item["role"]) for item in descriptors]
+    owner_entries = sorted({
+        snake_to_pascal(item["owner"]) for item in descriptors
+    })
     subscription_rows: list[str] = []
     for item in descriptors:
         for transfer in item["transfers"]:
             subscription_rows.append(
                 "    {SubscriptionOwner::%s, TransferKind::%s, "
-                "MessageRole::%s, %dU, %sULL, %s}," % (
+                "MessageRole::%s, %dU, %sULL}," % (
                     snake_to_pascal(item["owner"]),
                     snake_to_pascal(transfer),
                     snake_to_pascal(item["role"]),
                     item["id"],
                     cpp_hex(item["signature"], 16),
-                    "true" if item["allow_anonymous"] else "false",
                 )
             )
 
@@ -783,7 +678,7 @@ def render_protocol_contract(
         allocation_header, f"{prefix}_MAX_LENGTH_OF_UNIQUE_ID_IN_REQUEST"
     )
     any_node_id = macro_integer(allocation_header, f"{prefix}_ANY_NODE_ID")
-    allocation = manifest["allocation"]
+    allocation = contract["allocation"]
     storage = allocation["storage"]
     states = storage["states"]
     unique_id_bytes = allocation["unique_id_bytes"]
@@ -796,7 +691,7 @@ def render_protocol_contract(
     if image_bytes > 0xFFFF:
         raise GenerationError("allocation storage image does not fit uint16 size")
 
-    device = manifest["px4_device_id"]
+    device = contract["device_id"]
     bus_type = device["bus_type"]
     bus = device["bus"]
     address = device["address"]
@@ -813,7 +708,7 @@ def render_protocol_contract(
     return "\n".join([
         "#pragma once",
         "",
-        "// Generated from dronecan_contract.json and pinned DSDL. DO NOT EDIT.",
+        "// Generated from the pinned DSDL source closure. DO NOT EDIT.",
         "// This header exposes no libcanard or generated DSDL structure ABI.",
         "#include <cstddef>",
         "#include <cstdint>",
@@ -821,8 +716,7 @@ def render_protocol_contract(
         "namespace dima::protocols::dronecan::generated {",
         "",
         "enum class SubscriptionOwner : std::uint8_t {",
-        "    Node,",
-        "    Magnetometer,",
+        *[f"    {entry}," for entry in owner_entries],
         "};",
         "",
         "enum class TransferKind : std::uint8_t {",
@@ -841,7 +735,6 @@ def render_protocol_contract(
         "    MessageRole role;",
         "    std::uint16_t data_type_id;",
         "    std::uint64_t signature;",
-        "    bool allow_anonymous;",
         "};",
         "",
         "inline constexpr SubscriptionDescriptor kSubscriptions[]{",
@@ -919,133 +812,6 @@ def render_protocol_contract(
     ])
 
 
-def parameter_by_role(manifest: dict[str, Any], role: str) -> dict[str, Any]:
-    """按 manifest 语义角色取参数，避免生成器再复制参数名称。"""
-    matches = [
-        parameter for parameter in manifest["parameters"]
-        if parameter["role"] == role
-    ]
-    if len(matches) != 1:
-        raise GenerationError(f"parameter role {role!r} must resolve exactly once")
-    return matches[0]
-
-
-def render_parameter_contract(manifest: dict[str, Any]) -> str:
-    """从 manifest 生成参数 handle、模式与支持波特率合同，不复制参数定义。"""
-    parameters = manifest["parameters"]
-    enable = parameter_by_role(manifest, "mode")
-    modes = {
-        value["symbol"]: value["value"]
-        for value in enable["values"]
-        if "symbol" in value
-    }
-    if set(modes) != {"disabled", "manual", "automatic"}:
-        raise GenerationError("mode parameter must define disabled/manual/automatic")
-    bitrate = parameter_by_role(manifest, "bitrate")
-    bitrates = ", ".join(f"{value['value']}U" for value in bitrate["values"])
-    local_node = parameter_by_role(manifest, "local_node_id")
-    magnetic_node = parameter_by_role(manifest, "magnetometer_node_id")
-    handles = [f"    px4::params::{parameter['name']}," for parameter in parameters]
-    role_handles = [
-        "inline constexpr px4::params kParameter%s = px4::params::%s;" % (
-            snake_to_pascal(parameter["role"]), parameter["name"]
-        )
-        for parameter in parameters
-    ]
-    return "\n".join([
-        "#pragma once",
-        "",
-        "// Generated DroneCAN parameter binding. DO NOT EDIT.",
-        "#include <parameters/param.h>",
-        "",
-        "#include <cstddef>",
-        "#include <cstdint>",
-        "",
-        "namespace dima::protocols::dronecan::generated {",
-        "",
-        "inline constexpr px4::params kParameterHandles[]{",
-        *handles,
-        "};",
-        "inline constexpr std::size_t kParameterHandleCount =",
-        "    sizeof(kParameterHandles) / sizeof(kParameterHandles[0]);",
-        "",
-        *role_handles,
-        "",
-        f"inline constexpr std::int32_t kModeDisabled = {modes['disabled']};",
-        f"inline constexpr std::int32_t kModeManual = {modes['manual']};",
-        f"inline constexpr std::int32_t kModeAutomatic = {modes['automatic']};",
-        f"inline constexpr std::uint32_t kSupportedBitrates[]{{{bitrates}}};",
-        f"inline constexpr std::int32_t kMinimumLocalNodeId = {local_node['min']};",
-        f"inline constexpr std::int32_t kMaximumLocalNodeId = {local_node['max']};",
-        f"inline constexpr std::int32_t kMinimumMagnetometerNodeId = {magnetic_node['min']};",
-        f"inline constexpr std::int32_t kMaximumMagnetometerNodeId = {magnetic_node['max']};",
-        "",
-        "constexpr bool mode_supported(std::int32_t mode) noexcept",
-        "{",
-        "    return mode == kModeDisabled || mode == kModeManual ||",
-        "           mode == kModeAutomatic;",
-        "}",
-        "",
-        "constexpr bool automatic_allocation_enabled(std::int32_t mode) noexcept",
-        "{",
-        "    return mode == kModeAutomatic;",
-        "}",
-        "",
-        "constexpr bool bitrate_supported(std::uint32_t bitrate) noexcept",
-        "{",
-        "    for (const std::uint32_t candidate : kSupportedBitrates) {",
-        "        if (candidate == bitrate) return true;",
-        "    }",
-        "    return false;",
-        "}",
-        "",
-        "} // namespace dima::protocols::dronecan::generated",
-        "",
-    ])
-
-
-def render_parameters(manifest: dict[str, Any]) -> str:
-    """把 manifest 参数投影为 PX4 module YAML，供官方参数链统一处理。"""
-    # YAML 仅在正式生成阶段加载；Make 的 manifest/source 发现路径保持纯标准库，
-    # 这样首次 bootstrap host-tools 前也能构造依赖图。
-    import yaml
-
-    groups: dict[str, dict[str, Any]] = {}
-    for parameter in manifest["parameters"]:
-        description = {"short": parameter["description"][0]}
-        if len(parameter["description"]) > 1:
-            description["long"] = "\n\n".join(parameter["description"][1:])
-        definition: dict[str, Any] = {
-            "description": description,
-            "type": (
-                "enum" if parameter.get("values")
-                else "int32" if parameter["type"] == "INT32"
-                else "float"
-            ),
-            "default": parameter["default"],
-        }
-        for field in ("min", "max", "unit"):
-            if field in parameter:
-                definition[field] = parameter[field]
-        if parameter.get("values"):
-            definition["values"] = {
-                value["value"]: value["name"]
-                for value in parameter["values"]
-            }
-        groups.setdefault(parameter["group"], {})[parameter["name"]] = definition
-
-    document = {
-        "module_name": "dronecan",
-        "parameters": [
-            {"group": group, "definitions": definitions}
-            for group, definitions in groups.items()
-        ],
-    }
-    return yaml.safe_dump(
-        document, sort_keys=False, allow_unicode=True, default_flow_style=False
-    )
-
-
 def make_list(name: str, values: Iterable[str]) -> list[str]:
     items = list(values)
     if not items:
@@ -1061,7 +827,10 @@ def tree_hashes(root: pathlib.Path, exclude: Iterable[str] = ()) -> dict[str, st
     excluded = set(exclude)
     return {
         path.relative_to(root).as_posix(): file_sha256(path)
-        for path in sorted(entry for entry in root.rglob("*") if entry.is_file())
+        for path in sorted(
+            (entry for entry in root.rglob("*") if entry.is_file()),
+            key=lambda entry: entry.relative_to(root).as_posix(),
+        )
         if path.relative_to(root).as_posix() not in excluded
     }
 
@@ -1069,20 +838,22 @@ def tree_hashes(root: pathlib.Path, exclude: Iterable[str] = ()) -> dict[str, st
 def render_make_fragment(output_relative: str, generated: pathlib.Path) -> str:
     sources = [
         f"{output_relative}/{path.relative_to(generated).as_posix()}"
-        for path in sorted((generated / "src").glob("*.c"))
+        for path in sorted(
+            (generated / "src").glob("*.c"),
+            key=lambda entry: entry.relative_to(generated).as_posix(),
+        )
     ]
     outputs = [
         f"{output_relative}/{path.relative_to(generated).as_posix()}"
-        for path in sorted(entry for entry in generated.rglob("*") if entry.is_file())
+        for path in sorted(
+            (entry for entry in generated.rglob("*") if entry.is_file()),
+            key=lambda entry: entry.relative_to(generated).as_posix(),
+        )
     ]
-    outputs.append(f"{output_relative}/.generated.json")
     lines = [
-        "# Generated from dronecan_contract.json. DO NOT EDIT.",
+        "# Generated from the DSDL source closure. DO NOT EDIT.",
         *make_list("DIMA_DRONECAN_GENERATED_C_SOURCES", sources),
-        f"DIMA_DRONECAN_PARAMETER_YAML := {output_relative}/module_dronecan.yaml",
         f"DIMA_DRONECAN_PROTOCOL_HEADER := {output_relative}/DroneCanContract.hpp",
-        f"DIMA_DRONECAN_PARAMETER_HEADER := {output_relative}/DroneCanParameterContract.hpp",
-        f"DIMA_DRONECAN_GENERATED_STAMP := {output_relative}/.generated.json",
         *make_list("DIMA_DRONECAN_GENERATED_OUTPUTS", sorted(set(outputs))),
         "",
     ]
@@ -1096,29 +867,23 @@ def write_text(path: pathlib.Path, content: str) -> None:
 
 
 def build_generated_tree(
-    manifest: dict[str, Any],
-    manifest_path: pathlib.Path,
+    contract: dict[str, Any],
     root: pathlib.Path,
     generated: pathlib.Path,
     logical_output: pathlib.Path,
     cache_root: pathlib.Path,
 ) -> None:
-    """在候选目录构建 codec、协议/参数合同、Make 片段和完整输出散列目录。"""
-    compiler_root = provision_compiler(manifest, cache_root)
-    site_packages = provision_python_packages(manifest, cache_root)
+    """在候选目录构建 codec、协议合同和 Make 片段。"""
+    compiler_root = provision_compiler(contract, cache_root)
+    site_packages = provision_python_packages(contract, cache_root)
     run_dsdl_compiler(
-        manifest, root, generated, compiler_root, site_packages
+        contract, root, generated, compiler_root, site_packages
     )
-    descriptors = role_descriptors(manifest, generated)
+    descriptors = role_descriptors(contract, generated)
     write_text(
         generated / "DroneCanContract.hpp",
-        render_protocol_contract(manifest, descriptors, generated),
+        render_protocol_contract(contract, descriptors, generated),
     )
-    write_text(
-        generated / "DroneCanParameterContract.hpp",
-        render_parameter_contract(manifest),
-    )
-    write_text(generated / "module_dronecan.yaml", render_parameters(manifest))
     try:
         output_relative = logical_output.resolve().relative_to(root.resolve()).as_posix()
     except ValueError as error:
@@ -1126,47 +891,13 @@ def build_generated_tree(
     make_path = generated / "dronecan_sources.mk"
     write_text(make_path, render_make_fragment(output_relative, generated))
 
-    catalog = {
-        "contract": manifest["contract"],
-        "format_version": manifest["format_version"],
-        "manifest_sha256": file_sha256(manifest_path),
-        "upstream": manifest["upstream"],
-        "dsdl": [
-            {
-                "path": item["path"],
-                "sha256": item["sha256"],
-                "type": item["type"],
-            }
-            for item in manifest["dsdl"]["files"]
-        ],
-        "messages": [
-            {
-                "allow_anonymous": item["allow_anonymous"],
-                "id": item["id"],
-                "owner": item["owner"],
-                "role": item["role"],
-                "signature": f"0x{item['signature']:016X}",
-                "transfers": item["transfers"],
-                "type": item["type"],
-            }
-            for item in descriptors
-        ],
-        "parameters": [parameter["name"] for parameter in manifest["parameters"]],
-        "output_sha256": tree_hashes(generated),
-    }
-    write_text(
-        generated / ".generated.json",
-        json.dumps(catalog, indent=2, sort_keys=True) + "\n",
-    )
-
 
 def generated_tree_current(candidate: pathlib.Path, destination: pathlib.Path) -> bool:
     return destination.is_dir() and tree_hashes(candidate) == tree_hashes(destination)
 
 
 def generate(
-    manifest: dict[str, Any],
-    manifest_path: pathlib.Path,
+    contract: dict[str, Any],
     root: pathlib.Path,
     output: pathlib.Path,
     cache_root: pathlib.Path,
@@ -1179,37 +910,39 @@ def generate(
         candidate = temporary / "dronecan"
         candidate.mkdir()
         build_generated_tree(
-            manifest, manifest_path, root, candidate, output, cache_root
+            contract, root, candidate, output, cache_root
         )
         if generated_tree_current(candidate, output):
             print(f"DroneCAN contract already current: {output}")
             return
         install_directory(candidate, output)
     print(
-        f"Generated {len([item for item in manifest['dsdl']['files'] if 'role' in item])} "
-        f"DroneCAN root types and {len(manifest['parameters'])} parameters into {output}"
+        f"Generated {len([item for item in contract['dsdl']['files'] if 'role' in item])} "
+        f"DroneCAN root types into {output}"
     )
 
 
 def verify_generated(
-    manifest: dict[str, Any], manifest_path: pathlib.Path, output: pathlib.Path
+    contract: dict[str, Any],
+    root: pathlib.Path,
+    output: pathlib.Path,
+    cache_root: pathlib.Path,
 ) -> None:
-    """验证 manifest pin、上游身份与每个派生文件散列，verify 模式不写文件。"""
-    catalog_path = output / ".generated.json"
-    try:
-        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise GenerationError(f"unable to read generated DroneCAN catalog: {error}") from error
-    if (
-        catalog.get("contract") != manifest["contract"]
-        or catalog.get("manifest_sha256") != file_sha256(manifest_path)
-        or catalog.get("upstream") != manifest["upstream"]
-    ):
-        raise GenerationError("generated DroneCAN catalog does not match the manifest")
-    expected_hashes = catalog.get("output_sha256")
-    if not isinstance(expected_hashes, dict):
-        raise GenerationError("generated DroneCAN catalog lacks output hashes")
-    actual_hashes = tree_hashes(output, exclude=(".generated.json",))
+    """临时重跑锁定生成链并逐文件比较，不保存第二份 JSON 清单。"""
+    if not output.is_dir():
+        raise GenerationError(f"generated DroneCAN output is unavailable: {output}")
+    # 校验候选树只存在于临时目录；DSDL、固定工具链和生成逻辑共同决定
+    # 期望结果，避免把派生文件散列再固化成一份独立状态。
+    with tempfile.TemporaryDirectory(
+        prefix=".dronecan-verify-", dir=output.parent
+    ) as name:
+        candidate = pathlib.Path(name) / "dronecan"
+        candidate.mkdir()
+        build_generated_tree(
+            contract, root, candidate, output, cache_root
+        )
+        expected_hashes = tree_hashes(candidate)
+        actual_hashes = tree_hashes(output)
     if actual_hashes != expected_hashes:
         missing = sorted(set(expected_hashes) - set(actual_hashes))
         unexpected = sorted(set(actual_hashes) - set(expected_hashes))
@@ -1218,7 +951,7 @@ def verify_generated(
             if expected_hashes[path] != actual_hashes[path]
         )
         raise GenerationError(
-            "generated DroneCAN output differs from its catalog: "
+            "generated DroneCAN output differs from regenerated DSDL output: "
             f"missing={missing}, unexpected={unexpected}, changed={changed}"
         )
     print(f"DroneCAN generated contract verified: {output}")
@@ -1240,8 +973,7 @@ def parse_arguments() -> argparse.Namespace:
         )
     parser = argparse.ArgumentParser()
     input_mode = parser.add_mutually_exclusive_group(required=True)
-    input_mode.add_argument("--manifest", type=pathlib.Path)
-    input_mode.add_argument("--find-manifest", type=pathlib.Path)
+    input_mode.add_argument("--dsdl-root", type=pathlib.Path)
     input_mode.add_argument("--print-runtime-sources", type=pathlib.Path)
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument(
@@ -1256,15 +988,6 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     arguments = parse_arguments()
-    if arguments.find_manifest is not None:
-        if (arguments.output is not None or arguments.print_inputs or
-                arguments.verify):
-            raise GenerationError(
-                "--find-manifest cannot be combined with generation modes"
-            )
-        manifest_path, root = discover_manifest(arguments.find_manifest)
-        print(manifest_path.relative_to(root).as_posix())
-        return 0
     if arguments.print_runtime_sources is not None:
         if (arguments.output is not None or arguments.print_inputs or
                 arguments.verify):
@@ -1275,14 +998,13 @@ def main() -> int:
         sources = discover_runtime_sources(arguments.print_runtime_sources)
         print(" ".join(path.relative_to(root).as_posix() for path in sources))
         return 0
-    if arguments.manifest is None:
-        raise GenerationError("--manifest is required for generation")
-    manifest_path = arguments.manifest.resolve()
-    manifest, root = parse_manifest(manifest_path)
+    if arguments.dsdl_root is None:
+        raise GenerationError("--dsdl-root is required for generation")
+    contract, root = discover_contract(arguments.dsdl_root)
     if arguments.print_inputs:
         if arguments.output is not None or arguments.verify:
             raise GenerationError("--print-inputs cannot be combined with output modes")
-        print(" ".join(dsdl_input_paths(manifest)))
+        print(" ".join(dsdl_input_paths(contract)))
         return 0
     if arguments.output is None:
         raise GenerationError("--output is required unless --print-inputs is used")
@@ -1290,11 +1012,15 @@ def main() -> int:
     if not output.is_absolute():
         output = root / output
     if arguments.verify:
-        verify_generated(manifest, manifest_path, output.resolve())
+        verify_generated(
+            contract,
+            root,
+            output.resolve(),
+            arguments.cache_root.expanduser().resolve(),
+        )
     else:
         generate(
-            manifest,
-            manifest_path,
+            contract,
             root,
             output,
             arguments.cache_root.expanduser().resolve(),

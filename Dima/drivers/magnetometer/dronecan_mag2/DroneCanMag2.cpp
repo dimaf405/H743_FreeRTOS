@@ -50,12 +50,11 @@ bool DroneCanMag2::start()
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
-    // 参数句柄来自生成合同；先读取完整配置并 advertise，再让 WorkQueue 应用，
-    // 避免模块进入 Running 后才发现参数或 uORB 资源不可用。
-    bind_parameters();
-
-    if (!load_configuration(pending_configuration_) ||
+    // 参数句柄来自统一 YAML 生成目录；先绑定完整快照并 advertise，再让
+    // WorkQueue 应用，避免模块进入 Running 后才发现参数或 uORB 资源不可用。
+    if (!bind_parameters() || !load_configuration(pending_configuration_) ||
         !sensor_mag_publication_.advertise()) {
+        invalidate_parameters();
         ++stats_.parameter_failures;
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
@@ -68,6 +67,7 @@ bool DroneCanMag2::start()
     state_ = dima::middleware::lifecycle::ModuleState::Running;
     if (!ScheduleNow()) {
         startup_configuration_pending_ = false;
+        invalidate_parameters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
@@ -82,6 +82,7 @@ void DroneCanMag2::stop()
     ScheduleCancelAndDrain();
     cancel_maintenance();
     stop_protocol();
+    invalidate_parameters();
     stats_ = Stats{};
     next_allocation_error_log_us_ = 0U;
     manual_mode_warning_reported_ = false;
@@ -123,7 +124,7 @@ void DroneCanMag2::Run()
     parameter_update_s update{};
     if (parameter_update_subscription_.copy(&update)) {
         Configuration next{};
-        if (!load_configuration(next)) {
+        if (!update_parameters() || !load_configuration(next)) {
             ++stats_.parameter_failures;
             PX4_ERR("DroneCAN parameter update rejected");
         } else if (startup_configuration_pending_) {
@@ -221,7 +222,7 @@ bool DroneCanMag2::should_accept_broadcast(
     const auto *const descriptor =
         dima::protocols::dronecan::generated::find_subscription(
             dima::protocols::dronecan::generated::
-                SubscriptionOwner::Magnetometer,
+                SubscriptionOwner::Equipment,
             dima::protocols::dronecan::generated::TransferKind::Broadcast,
             data_type_id);
     if (descriptor != nullptr &&
@@ -344,7 +345,7 @@ void DroneCanMag2::handle_magnetic_field(
     const auto *const descriptor =
         dima::protocols::dronecan::generated::find_subscription(
             dima::protocols::dronecan::generated::
-                SubscriptionOwner::Magnetometer,
+                SubscriptionOwner::Equipment,
             dima::protocols::dronecan::generated::TransferKind::Broadcast,
             data_type_id);
     if (descriptor == nullptr) {
@@ -377,7 +378,7 @@ void DroneCanMag2::handle_magnetic_field(
     float magnetic_field_ga[3]{};
     bool decode_failed = false;
     if (descriptor->role == dima::protocols::dronecan::generated::
-                                MessageRole::MagneticField2) {
+                                MessageRole::MagneticFieldStrength2) {
         uavcan_equipment_ahrs_MagneticFieldStrength2 message{};
         decode_failed = uavcan_equipment_ahrs_MagneticFieldStrength2_decode(
             transfer, &message);
@@ -385,7 +386,7 @@ void DroneCanMag2::handle_magnetic_field(
         std::copy_n(message.magnetic_field_ga, 3U, magnetic_field_ga);
     } else if (descriptor->role ==
                dima::protocols::dronecan::generated::
-                   MessageRole::MagneticField) {
+                   MessageRole::MagneticFieldStrength) {
         uavcan_equipment_ahrs_MagneticFieldStrength message{};
         decode_failed = uavcan_equipment_ahrs_MagneticFieldStrength_decode(
             transfer, &message);

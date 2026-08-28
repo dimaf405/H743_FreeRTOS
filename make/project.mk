@@ -164,24 +164,20 @@ SENSOR_DEVICE_GENERATED_OUTPUTS := \
 	$(SENSOR_DEVICE_CONTRACT_HEADER) \
 	$(SENSOR_DEVICE_CATALOG)
 DRONECAN_CONTRACT_GENERATOR := tools/dronecan/generate_contract.py
-# manifest 与第一方翻译单元由生成工具在当前 Dima 树中唯一发现；目录移动不再要求
-# 同步修改 Make 和架构门禁，重名或缺失则由工具明确拒绝。
-DRONECAN_CONTRACT_MANIFEST := $(strip $(shell \
-	$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) --find-manifest Dima))
+# 第一方翻译单元和 DSDL 类型闭包均由生成工具发现；Make 不维护消息清单、
+# data type ID、签名或 codec 文件名。
+DRONECAN_DSDL_ROOT := Middlewares/Third_Party/dronecan_dsdl/dsdl/uavcan
 DIMA_DRONECAN_RUNTIME_SOURCES := $(strip $(shell \
 	$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) --print-runtime-sources Dima))
-ifeq ($(DRONECAN_CONTRACT_MANIFEST),)
-$(error unable to discover the unique DroneCAN manifest)
-endif
 ifeq ($(DIMA_DRONECAN_RUNTIME_SOURCES),)
 $(error unable to discover DroneCAN runtime sources)
 endif
 DRONECAN_GENERATED_MAKEFILE := \
 	$(DRONECAN_GENERATED_DIR)/dronecan_sources.mk
 DRONECAN_DSDL_INPUTS := $(shell $(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) \
-	--manifest $(DRONECAN_CONTRACT_MANIFEST) --print-inputs)
+	--dsdl-root $(DRONECAN_DSDL_ROOT) --print-inputs)
 DRONECAN_GENERATOR_DEPS := $(DRONECAN_CONTRACT_GENERATOR) \
-	$(DRONECAN_CONTRACT_MANIFEST) $(DRONECAN_DSDL_INPUTS)
+	$(DRONECAN_DSDL_INPUTS)
 ARCHITECTURE_CHECK_TOOL := tools/check_architecture.py
 APPLICATION_ELF_CHECK_TOOL := tools/verify_application_elf.py
 COMPILE_COMMANDS_TOOL := tools/generate_compile_commands.py
@@ -242,7 +238,7 @@ $(DRONECAN_GENERATED_MAKEFILE): make/project.mk $(DRONECAN_GENERATOR_DEPS) | \
 		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
 			PYTHONPATH="$(HOST_PYTHON_DIR)" \
 			$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) \
-			--manifest $(DRONECAN_CONTRACT_MANIFEST) \
+			--dsdl-root $(DRONECAN_DSDL_ROOT) \
 			--output $(DRONECAN_GENERATED_DIR)
 	@touch "$@"
 
@@ -260,13 +256,12 @@ dronecan-generated-verify: $(DIMA_DRONECAN_GENERATED_OUTPUTS)
 		env PYTHONDONTWRITEBYTECODE=1 PYTHONUTF8=1 \
 			PYTHONPATH="$(HOST_PYTHON_DIR)" \
 			$(PYTHON) $(DRONECAN_CONTRACT_GENERATOR) \
-			--manifest $(DRONECAN_CONTRACT_MANIFEST) \
+			--dsdl-root $(DRONECAN_DSDL_ROOT) \
 			--output $(DRONECAN_GENERATED_DIR) --verify
 
 PARAMETER_DEFINITION_DIR := Dima/middleware/parameters/definitions
 PARAMETER_YAML_DEFINITIONS := \
-	$(sort $(wildcard $(PARAMETER_DEFINITION_DIR)/module_*.yaml)) \
-	$(DIMA_DRONECAN_PARAMETER_YAML)
+	$(sort $(wildcard $(PARAMETER_DEFINITION_DIR)/module_*.yaml))
 PARAMETER_GENERATED_DIR := $(BUILD_DIR)/generated/parameters
 PARAMETER_INCLUDE_DIR := $(BUILD_DIR)/generated_include
 PARAMETER_GENERATED_STAMP := $(PARAMETER_GENERATED_DIR)/.generated
@@ -401,8 +396,8 @@ $(PARAMETER_GENERATED_STAMP): make/project.mk $(PARAMETER_GENERATOR_DEPS) \
 		--output $(PARAMETER_GENERATED_DIR) \
 		--include-output $(PARAMETER_INCLUDE_DIR)
 	@touch "$@"
-# 源码 YAML 与 DroneCAN YAML 只进入 PX4 官方链；Dima 参数合同随后仅从
-# 官方 XML/JSON/Header 派生，因此类型、默认值、索引和 volatile 语义没有第二解释器。
+# 所有受版本控制的 module_*.yaml 进入同一上游工具链；Dima 参数合同随后
+# 仅从 XML/JSON/Header 派生，类型、默认值、索引和 volatile 语义没有第二解释器。
 
 $(PARAMETER_GENERATED_OUTPUTS): | $(PARAMETER_GENERATED_STAMP)
 	@test -f $@
@@ -753,7 +748,7 @@ DIMA_CUBEMX_APPLICATION_BRIDGE_OBJECT := $(BUILD_DIR)/main.o
 DIMA_CUBEMX_USB_CONSOLE_BRIDGE_OBJECT := $(BUILD_DIR)/usbd_cdc_if.o
 $(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) $(PARAMETER_METADATA_STAMP) \
 	$(MESSAGE_GENERATED_STAMP) $(MAVLINK_GENERATED_STAMP) \
-	$(DIMA_DRONECAN_GENERATED_STAMP) \
+	$(DIMA_DRONECAN_PROTOCOL_HEADER) \
 	$(FIRMWARE_IDENTITY_GENERATED_STAMP) $(SENSOR_DEVICE_GENERATED_STAMP) \
 	$(UM982_GENERATED_STAMP)
 # 项目对象只等待实际编译所需的生成合同；这些 order-only 依赖避免 stamp 的

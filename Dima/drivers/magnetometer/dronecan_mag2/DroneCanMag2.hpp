@@ -71,7 +71,8 @@ public:
 
 private:
     struct Configuration {
-        // 参数层只保存业务值；允许值域和模式语义由生成的参数合同验证。
+        // 参数层只保存业务值；允许值域来自统一 YAML 元数据，驱动只实现真正
+        // 影响 CAN 生命周期的 Disabled/Manual/Automatic 运行语义。
         bool enabled{false};
         bool automatic_allocation{false};
         std::uint32_t bitrate{500000U};
@@ -95,7 +96,9 @@ private:
     static constexpr std::uint64_t kSourceTimeoutUs = 500000ULL;
 
     void Run() override;
-    void bind_parameters() noexcept;
+    bool bind_parameters() noexcept;
+    bool update_parameters() noexcept;
+    void invalidate_parameters() noexcept;
     bool load_configuration(Configuration &configuration) noexcept;
     bool apply_configuration(const Configuration &configuration,
                              std::uint64_t now) noexcept;
@@ -128,6 +131,12 @@ private:
     dima::parameters::FlashFS &allocation_storage_;
     uORB::Subscription parameter_update_subscription_{
         ORB_ID(parameter_update)};
+    // 四个句柄均来自统一生成的 dima::params；这里不保留参数名字符串、句柄
+    // 数组或 DroneCAN 专用参数合同。
+    dima::ParamInt<dima::params::UAVCAN1_ENABLE> enable_parameter_{};
+    dima::ParamInt<dima::params::UAVCAN1_BITRATE> bitrate_parameter_{};
+    dima::ParamInt<dima::params::UAVCAN1_NODE_ID> local_node_parameter_{};
+    dima::ParamInt<dima::params::MAG1_CAN_NODE> magnetic_node_parameter_{};
     uORB::Publication<sensor_mag_s> sensor_mag_publication_{
         ORB_ID(sensor_mag)};
     // configuration_ 是已应用值，pending_configuration_ 是等待维护许可的候选；

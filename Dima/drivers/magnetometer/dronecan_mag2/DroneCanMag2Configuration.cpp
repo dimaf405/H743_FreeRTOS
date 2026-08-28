@@ -5,8 +5,6 @@
 #include "api/BoardIdentity.hpp"
 #include "parameters/flashfs.h"
 
-#include <DroneCanParameterContract.hpp>
-
 #include <algorithm>
 #include <cerrno>
 
@@ -17,6 +15,21 @@ using dima::protocols::dronecan::DroneCanNode;
 namespace contract = dima::protocols::dronecan::generated;
 
 constexpr char kNodeName[] = "com.dima.h743.rover";
+
+enum class OperatingMode : std::int32_t {
+    Disabled = 0,
+    Manual = 1,
+    Automatic = 2,
+};
+
+constexpr bool operating_mode_supported(std::int32_t raw) noexcept
+{
+    // 数值与 module_dronecan.yaml 的枚举一致，但这里表达的是实际运行分支，
+    // 不是第二份参数定义：Manual 使用静态节点，Automatic 额外启动 DNA 服务。
+    return raw == static_cast<std::int32_t>(OperatingMode::Disabled) ||
+           raw == static_cast<std::int32_t>(OperatingMode::Manual) ||
+           raw == static_cast<std::int32_t>(OperatingMode::Automatic);
+}
 
 dima::parameters::flash_file_token_t allocation_storage_token() noexcept
 {
@@ -29,45 +42,66 @@ dima::parameters::flash_file_token_t allocation_storage_token() noexcept
 
 } // namespace
 
-void DroneCanMag2::bind_parameters() noexcept
+bool DroneCanMag2::bind_parameters() noexcept
 {
-    // 参数列表由 DroneCanParameterContract.hpp 生成；这里只遍历句柄，不维护
-    // UAVCAN/MAG 参数的第二份手写 registry。
-    for (const px4::params parameter : contract::kParameterHandles) {
-        param_set_used(param_handle(parameter));
+    const bool bound = enable_parameter_.bind() &&
+                       bitrate_parameter_.bind() &&
+                       local_node_parameter_.bind() &&
+                       magnetic_node_parameter_.bind();
+    if (!bound) {
+        invalidate_parameters();
     }
+    return bound;
+}
+
+bool DroneCanMag2::update_parameters() noexcept
+{
+    // 任一缓存曾失效时重新执行完整 bind，避免把新旧参数值拼成一个总线配置。
+    if (!enable_parameter_.bound() || !bitrate_parameter_.bound() ||
+        !local_node_parameter_.bound() || !magnetic_node_parameter_.bound()) {
+        return bind_parameters();
+    }
+
+    bool updated = enable_parameter_.update();
+    updated = bitrate_parameter_.update() && updated;
+    updated = local_node_parameter_.update() && updated;
+    updated = magnetic_node_parameter_.update() && updated;
+    if (!updated) {
+        invalidate_parameters();
+    }
+    return updated;
+}
+
+void DroneCanMag2::invalidate_parameters() noexcept
+{
+    enable_parameter_.invalidate();
+    bitrate_parameter_.invalidate();
+    local_node_parameter_.invalidate();
+    magnetic_node_parameter_.invalidate();
 }
 
 bool DroneCanMag2::load_configuration(
     Configuration &configuration) noexcept
 {
-    std::int32_t enable{};
-    std::int32_t bitrate{};
-    std::int32_t local_node{};
-    std::int32_t magnetic_node{};
-    if (param_get(param_handle(contract::kParameterMode), &enable) != 0 ||
-        param_get(param_handle(contract::kParameterBitrate), &bitrate) != 0 ||
-        param_get(param_handle(contract::kParameterLocalNodeId), &local_node) != 0 ||
-        param_get(param_handle(contract::kParameterMagnetometerNodeId),
-                  &magnetic_node) != 0) {
+    const std::int32_t enable = enable_parameter_.get();
+    const std::int32_t bitrate = bitrate_parameter_.get();
+    const std::int32_t local_node = local_node_parameter_.get();
+    const std::int32_t magnetic_node = magnetic_node_parameter_.get();
+
+    // 节点上限来自 DSDL 协议生成合同；bitrate 的具体可实现集合由 STM32 FDCAN
+    // 后端统一校验，本层只阻止负值在转成 uint32_t 后伪装成巨大合法速率。
+    if (!operating_mode_supported(enable) || bitrate <= 0 ||
+        local_node <= 0 ||
+        local_node > static_cast<std::int32_t>(contract::kMaximumNodeId) ||
+        magnetic_node < 0 ||
+        magnetic_node > static_cast<std::int32_t>(contract::kMaximumNodeId)) {
         return false;
     }
 
-    // 所有枚举、波特率和节点 ID 范围由生成合同判断；读取成功但越界同样拒绝，
-    // 防止无效参数启动错误 CAN 位时序或广播/保留节点 ID。
-    if (!contract::mode_supported(enable) || bitrate <= 0 ||
-        !contract::bitrate_supported(
-            static_cast<std::uint32_t>(bitrate)) ||
-        local_node < contract::kMinimumLocalNodeId ||
-        local_node > contract::kMaximumLocalNodeId ||
-        magnetic_node < contract::kMinimumMagnetometerNodeId ||
-        magnetic_node > contract::kMaximumMagnetometerNodeId) {
-        return false;
-    }
-
-    configuration.enabled = enable != contract::kModeDisabled;
+    const auto mode = static_cast<OperatingMode>(enable);
+    configuration.enabled = mode != OperatingMode::Disabled;
     configuration.automatic_allocation =
-        contract::automatic_allocation_enabled(enable);
+        mode == OperatingMode::Automatic;
     configuration.bitrate = static_cast<std::uint32_t>(bitrate);
     configuration.local_node_id = static_cast<std::uint8_t>(local_node);
     configuration.magnetic_node_id =

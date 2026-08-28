@@ -1,0 +1,50 @@
+module_name: DroneCAN Configuration
+
+parameters:
+  - group: UAVCAN
+    definitions:
+      UAVCAN1_ENABLE:
+        description:
+          short: DroneCAN mode on FDCAN1
+          long: |-
+            Automatic mode enables the Dima centralized dynamic Node ID
+            allocator. Firmware update serving is not implemented.
+        type: enum
+        default: 2
+        min: 0
+        max: 2
+        values:
+          0: Disabled
+          1: Sensors Manual Config
+          2: Sensors Automatic Node Allocation
+      UAVCAN1_BITRATE:
+        description:
+          short: FDCAN1 nominal DroneCAN bitrate
+        type: enum
+        default: 500000
+        unit: bit/s
+        values:
+          125000: 125 kbit/s
+          250000: 250 kbit/s
+          500000: 500 kbit/s
+          1000000: 1 Mbit/s
+      UAVCAN1_NODE_ID:
+        description:
+          short: Static DroneCAN Node ID used by the flight controller
+        type: int32
+        default: 1
+        min: 1
+        max: 125
+
+  - group: Magnetometer
+    definitions:
+      MAG1_CAN_NODE:
+        description:
+          short: DroneCAN Node ID of the magnetometer
+          long: |-
+            Zero binds the first valid standard DroneCAN magnetic-field
+            publisher; a non-zero value accepts only that Node ID.
+        type: int32
+        default: 0
+        min: 0
+        max: 125

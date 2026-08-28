@@ -606,9 +606,9 @@ bool DroneCanNode::send_get_node_info_request(
     std::uint8_t node_id) noexcept
 {
     const auto *const descriptor = generated::find_subscription(
-        generated::SubscriptionOwner::Node,
+        generated::SubscriptionOwner::Protocol,
         generated::TransferKind::Request,
-        generated::MessageRole::NodeInfo);
+        generated::MessageRole::GetNodeInfo);
     if (descriptor == nullptr || node_id == 0U ||
         node_id > generated::kMaximumNodeId) {
         ++stats_.protocol_errors;
@@ -778,7 +778,7 @@ void DroneCanNode::service_allocation_response(
 {
     if (!pending_allocation_response_.valid) return;
     const auto *const descriptor = generated::find_subscription(
-        generated::SubscriptionOwner::Node,
+        generated::SubscriptionOwner::Protocol,
         generated::TransferKind::Broadcast,
         generated::MessageRole::Allocation);
     if (descriptor == nullptr) {

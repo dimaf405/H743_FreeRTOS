@@ -6,18 +6,15 @@
 - Generator commit: `431170fa4bfe2212b516b8f33bdc796267907f1c`
 - License: MIT; see `LICENSE`.
 
-Only the pinned canonical DSDL inputs required by the H743 product are
-vendored:
+Only the pinned canonical DSDL source closure required by the H743 product is
+vendored under `dsdl/uavcan`. The build discovers every `.uavcan` file in that
+tree, so this provenance document does not maintain a second message list.
 
-- `uavcan.protocol.NodeStatus`
-- `uavcan.protocol.GetNodeInfo` and its version dependencies
-- `uavcan.protocol.dynamic_node_id.Allocation`
-- `uavcan.equipment.ahrs.MagneticFieldStrength`
-- `uavcan.equipment.ahrs.MagneticFieldStrength2`
-
-`Dima/lib/protocols/dronecan/dronecan_contract.json` is the single selected
-type/parameter/subscription contract. `tools/dronecan/generate_contract.py`
-validates every DSDL input hash, provisions the pinned compiler and Python
-dependencies, then generates all C/H codecs and build catalogues into
-`build/generated/dronecan`. Generated C/H output is intentionally not stored
-in this source directory.
+`tools/dronecan/generate_contract.py` provisions the pinned compiler and Python
+dependencies, then generates the C/H codecs, typed runtime contract and Make
+source fragment into `build/generated/dronecan`. It does not generate or retain
+a DroneCAN JSON contract or catalogue in either the source tree or build tree.
+Product parameters are independently defined in
+`Dima/middleware/parameters/definitions/module_dronecan.yaml` and use the same
+parameter generation chain as every other `module_*.yaml`. Generated C/H output
+is intentionally not stored in this source directory.

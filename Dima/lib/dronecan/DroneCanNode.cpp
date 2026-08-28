@@ -235,7 +235,7 @@ void DroneCanNode::send_node_status(std::uint64_t now_us) noexcept
     const std::uint32_t length =
         uavcan_protocol_NodeStatus_encode(&status, payload);
     const auto *const descriptor = generated::find_subscription(
-        generated::SubscriptionOwner::Node,
+        generated::SubscriptionOwner::Protocol,
         generated::TransferKind::Broadcast,
         generated::MessageRole::NodeStatus);
     if (descriptor == nullptr) {
@@ -262,14 +262,14 @@ bool DroneCanNode::accept(std::uint64_t *signature,
     // 先查询生成的节点内部订阅（NodeInfo/NodeStatus/Allocation），再把未知业务
     // 广播交给设备回调。首方代码不手写 DSDL ID 或 signature。
     const auto *const internal = generated::find_subscription(
-        generated::SubscriptionOwner::Node, kind, data_type_id);
+        generated::SubscriptionOwner::Protocol, kind, data_type_id);
     if (internal != nullptr) {
         const bool unicast_source =
             source_node_id != CANARD_BROADCAST_NODE_ID &&
             source_node_id <= generated::kMaximumNodeId;
         bool accepted = false;
         switch (internal->role) {
-        case generated::MessageRole::NodeInfo:
+        case generated::MessageRole::GetNodeInfo:
             accepted = kind == generated::TransferKind::Request
                            ? unicast_source
                            : automatic_allocation_ && unicast_source;
@@ -302,11 +302,11 @@ void DroneCanNode::receive(void *native_transfer) noexcept
     bool internal_handled = false;
     if (transfer_kind(static_cast<std::int32_t>(transfer.transfer_type), kind)) {
         const auto *const internal = generated::find_subscription(
-            generated::SubscriptionOwner::Node, kind,
+            generated::SubscriptionOwner::Protocol, kind,
             transfer.data_type_id);
         if (internal != nullptr) {
             internal_handled = true;
-            if (internal->role == generated::MessageRole::NodeInfo &&
+            if (internal->role == generated::MessageRole::GetNodeInfo &&
                 kind == generated::TransferKind::Request) {
                 respond_node_info(&transfer);
                 return;
@@ -316,7 +316,7 @@ void DroneCanNode::receive(void *native_transfer) noexcept
             } else if (internal->role ==
                            generated::MessageRole::NodeStatus) {
                 handle_node_status(&transfer);
-            } else if (internal->role == generated::MessageRole::NodeInfo &&
+            } else if (internal->role == generated::MessageRole::GetNodeInfo &&
                        kind == generated::TransferKind::Response) {
                 handle_node_info_response(&transfer);
             }
@@ -382,9 +382,9 @@ void DroneCanNode::respond_node_info(void *native_transfer) noexcept
     // 3 KiB pool 的瞬时峰值；响应沿用请求 transfer-ID 和 priority。
     canardReleaseRxTransferPayload(instance(instance_storage_), &transfer);
     const auto *const descriptor = generated::find_subscription(
-        generated::SubscriptionOwner::Node,
+        generated::SubscriptionOwner::Protocol,
         generated::TransferKind::Request,
-        generated::MessageRole::NodeInfo);
+        generated::MessageRole::GetNodeInfo);
     if (descriptor == nullptr) {
         ++stats_.protocol_errors;
         return;
