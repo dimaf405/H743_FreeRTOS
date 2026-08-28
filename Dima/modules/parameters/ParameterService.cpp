@@ -123,6 +123,14 @@ bool ParameterService::init() noexcept
     }
     last_sd_poll_us_ = hrt_absolute_time();
     if (sd_available_) {
+        // 开机时已经插入的卡同样是一次新建立的 SDMMC/FatFs 介质会话；它不会经过
+        // poll_sd_card() 的 unavailable -> available 分支，因此必须在这里建立与
+        // 热插拔重挂载相同的 500 ms 写稳定窗口。窗口内允许读取旧快照，但禁止参数
+        // 镜像立即修改 FAT 元数据，避免初始化刚完成就出现首轮写入/回读 -EIO。
+        sd_mirror_ready_after_us_ =
+            last_sd_poll_us_ > UINT64_MAX - kSdMountSettleUs
+                ? UINT64_MAX
+                : last_sd_poll_us_ + kSdMountSettleUs;
         PX4_INFO("param: SD mirror mounted");
     } else {
         PX4_WARN("param: SD absent; FlashFS remains active");
