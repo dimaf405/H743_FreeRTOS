@@ -469,36 +469,13 @@ void DroneCanNode::handle_allocation(void *native_transfer) noexcept
             -ETIMEDOUT);
     }
 
-    // Classic CAN 的 128-bit UID 严格按生成合同分成 6+6+4 B。首段必须携带
-    // first 标志和完整 6 B；中段仍为 6 B；末段才允许 4 B。不能把末段长度
-    // 误当首段接受，否则服务器会留下一个永远无法进入第二阶段的 4 B 前缀。
+    // Classic CAN 的匿名请求每帧最多携带 6 B UID，但后续片实际长度由节点根据
+    // 分配器已确认的累计前缀决定，并不要求固定为 6+6+4。更重要的是，节点看到
+    // 其他 Allocation 消息后会按协议放弃当前 follow-up 并重发首片；所以 first
+    // 是合法的重新同步边界，即使服务器正等待后续片也必须清空旧前缀后接收。
     const std::uint8_t length = message.unique_id.len;
-    const std::size_t final_fragment_bytes =
-        generated::kUniqueIdBytes -
-        generated::kAllocationRequestFragmentBytes * 2U;
-    std::uint8_t request_stage = 0U;
-    if (message.first_part_of_unique_id &&
-        length == generated::kAllocationRequestFragmentBytes) {
-        request_stage = 1U;
-    } else if (!message.first_part_of_unique_id &&
-               length == generated::kAllocationRequestFragmentBytes) {
-        request_stage = 2U;
-    } else if (!message.first_part_of_unique_id &&
-               length == final_fragment_bytes) {
-        request_stage = 3U;
-    }
-    std::uint8_t expected_stage = 0U;
-    if (allocation_prefix_length_ == 0U) {
-        expected_stage = 1U;
-    } else if (allocation_prefix_length_ >=
-               generated::kAllocationRequestFragmentBytes * 2U) {
-        expected_stage = 3U;
-    } else if (allocation_prefix_length_ >=
-               generated::kAllocationRequestFragmentBytes) {
-        expected_stage = 2U;
-    }
-    if (request_stage == 0U || request_stage != expected_stage ||
-        length > generated::kUniqueIdBytes - allocation_prefix_length_) {
+    if (length == 0U ||
+        length > generated::kAllocationRequestFragmentBytes) {
         ++stats_.allocation_malformed;
         emit_bounded_allocation_error(
             AllocationEventKind::MalformedRequest, timestamp_us, 0U,
@@ -506,8 +483,26 @@ void DroneCanNode::handle_allocation(void *native_transfer) noexcept
         return;
     }
 
-    if (request_stage == 1U) {
+    if (message.first_part_of_unique_id) {
+        // 未发送的 node_id=0 前缀确认属于旧分片链；首片重启时必须一起撤销，
+        // 否则节点可能先收到旧 ACK，再按错误偏移继续发送 UID。
         std::memset(allocation_prefix_, 0, sizeof(allocation_prefix_));
+        allocation_prefix_length_ = 0U;
+        pending_allocation_response_ = {};
+    } else if (allocation_prefix_length_ == 0U) {
+        // 丢包或另一匿名节点的后续片在本分配器没有对应前缀时无法归属；这是协议
+        // 竞争下的可恢复事件，静默丢弃并等待下一次 first，不能误报 CAN 故障。
+        return;
+    }
+
+    if (length > generated::kUniqueIdBytes - allocation_prefix_length_) {
+        allocation_prefix_length_ = 0U;
+        pending_allocation_response_ = {};
+        ++stats_.allocation_malformed;
+        emit_bounded_allocation_error(
+            AllocationEventKind::MalformedRequest, timestamp_us, 0U,
+            -EINVAL);
+        return;
     }
     std::copy_n(message.unique_id.data, length,
                 &allocation_prefix_[allocation_prefix_length_]);
