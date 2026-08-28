@@ -40,7 +40,6 @@ from architecture.runtime_safety import (
     scan_fault_ownership,
     scan_linker_contract,
 )
-from architecture.serial import scan_board_serial_manifest
 from architecture.timer import scan_timer_contract
 from architecture.uorb import scan_uorb_generation_contract
 
@@ -204,7 +203,6 @@ def main() -> int:
     scan_repository_layout(violations)
     scan_rover_root_contract(violations)
     scan_phase5_message_contracts(violations)
-    scan_board_serial_manifest(violations)
     scan_fault_ownership(violations)
     scan_clock_contract(violations)
     scan_active_actuator_contract(violations)

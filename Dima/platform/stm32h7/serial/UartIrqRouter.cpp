@@ -40,7 +40,6 @@ extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 }
 
 extern "C" void UART4_IRQHandler(void) { HAL_UART_IRQHandler(&huart4); }
-extern "C" void UART5_IRQHandler(void) { HAL_UART_IRQHandler(&huart5); }
 extern "C" void UART7_IRQHandler(void) { HAL_UART_IRQHandler(&huart7); }
 extern "C" void UART8_IRQHandler(void) { HAL_UART_IRQHandler(&huart8); }
 extern "C" void USART1_IRQHandler(void) { HAL_UART_IRQHandler(&huart1); }

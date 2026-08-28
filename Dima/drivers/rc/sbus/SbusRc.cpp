@@ -4,7 +4,6 @@
 #define MODULE_NAME "sbus"
 #include "SbusRc.hpp"
 
-#include "SerialContract.hpp"
 #include "events/events.hpp"
 #include "logging/logging.hpp"
 #include "api/Time.hpp"
@@ -167,8 +166,8 @@ bool SbusRc::start()
         PX4_ERR("SBUS parameters unavailable");
         return false;
     }
-    // RC_INPUT_PROTO=0 是明确禁用，不占用串口；=2 才启用 SBUS。端口映射来自
-    // 生成的 SerialPortAssignments/SerialContract，不能在驱动中手写 UART 表。
+    // RC_INPUT_PROTO=0 是明确禁用，不占用串口；=2 才启用 SBUS。端口所有权
+    // 由 SerialConfig 从 PX4 参数注册表解析后提供，驱动不维护串口参数清单。
     const std::int32_t protocol = rc_protocol_.get();
     const std::int32_t port = serial_assignments_.rc_input_port();
     const float loss_timeout_s = rc_loss_timeout_.get();
@@ -180,9 +179,7 @@ bool SbusRc::start()
                         static_cast<long>(protocol));
         return true;
     }
-    const dima::board::SerialPortDescriptor *const descriptor =
-        dima::board::serial_port(port);
-    if (protocol != 2 || descriptor == nullptr ||
+    if (protocol != 2 || port <= 0 ||
         !std::isfinite(loss_timeout_s) || loss_timeout_s < 0.1F ||
         loss_timeout_s > 35.0F ||
         !backend_.configure(port, sbus_line_configuration())) {
@@ -201,9 +198,8 @@ bool SbusRc::start()
     state_ = dima::middleware::lifecycle::ModuleState::Running;
     DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
                     dima::logging::Level::Info,
-                    "SERIAL%ld %s %s/RX%s protocol=SBUS 100000 8E2 rxinv=auto",
-                    static_cast<long>(port), descriptor->role,
-                    descriptor->peripheral, descriptor->rx_pin);
+                    "SERIAL%ld protocol=SBUS 100000 8E2 rxinv=auto",
+                    static_cast<long>(port));
     if (!ScheduleNow()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();

@@ -31,7 +31,7 @@ Parameter、uORB 和 MAVLink 三条标准生成链由锁定版本的 PX4/MAVLink
 
 - `Dima/middleware/parameters/definitions/module_*.yaml` 是产品参数唯一受版本控制的定义格式。
 - 现有参数由 PX4 原始 `migrate_c_params.py` 机械迁移，并核对名称、类型、默认值、范围、枚举、单位、volatile 与 reboot 语义；源码树不再保留 `PARAM_DEFINE_*` 入口。
-- `Boards/H743/serial_ports.json` 与 DroneCAN schema 仍分别拥有硬件/协议事实，但只能在 `build/generated` 生成 PX4 YAML 片段，再进入相同正式链。
+- 串口参数直接写入标准 PX4 `module_serial.yaml`，参数描述保持 `SERIALn`、物理 UART/USART n 与 TX/RX 引脚一一对应；官方参数生成器和包装器均不包含串口特化，也不派生串口专用头。STM32 句柄、DMA、IRQ 与 GPIO token 留在板级实现。DroneCAN schema 仍只能在 `build/generated` 生成 PX4 YAML 片段，再进入相同正式链。
 - 采用新 YAML 工具不代表引入 PX4 主线的新参数或默认值；当前产品参数集合和策略不变。
 
 ### 3.2 正式链

@@ -1,0 +1,156 @@
+module_name: Serial Configuration
+
+parameters:
+  - group: Serial
+    definitions:
+      SERIAL1_BAUD:
+        description:
+          short: Baudrate for SERIAL1 (USART1 PA9/PA10)
+          long: |-
+            SERIAL1 maps directly to physical USART1 on PA9/PA10. This is the
+            normal 8N1 baudrate used when no protocol driver owns the port.
+        type: enum
+        default: 921600
+        values: &serial_baud_values
+          0: Auto
+          2400: 2400 8N1
+          4800: 4800 8N1
+          9600: 9600 8N1
+          19200: 19200 8N1
+          38400: 38400 8N1
+          57600: 57600 8N1
+          115200: 115200 8N1
+          230400: 230400 8N1
+          460800: 460800 8N1
+          500000: 500000 8N1
+          921600: 921600 8N1
+          1000000: 1000000 8N1
+          1500000: 1500000 8N1
+          2000000: 2000000 8N1
+          3000000: 3000000 8N1
+      SERIAL1_FUNCTION:
+        description:
+          short: Function for SERIAL1 (USART1 PA9/PA10)
+          long: |-
+            Select the sole runtime owner of physical USART1. Active functions
+            are limited to SBUS and GPS, and each may own at most one port.
+        type: enum
+        default: 0
+        values: &serial_function_values
+          0: Disabled
+          1: SBUS
+          2: GPS
+
+      SERIAL2_BAUD:
+        description:
+          short: Baudrate for SERIAL2 (USART2 PD5/PD6)
+          long: |-
+            SERIAL2 maps directly to physical USART2 on PD5/PD6. This is the
+            normal 8N1 baudrate used when no protocol driver owns the port.
+        type: enum
+        default: 0
+        values: *serial_baud_values
+      SERIAL2_FUNCTION:
+        description:
+          short: Function for SERIAL2 (USART2 PD5/PD6)
+          long: |-
+            Select the sole runtime owner of physical USART2. Active functions
+            are limited to SBUS and GPS, and each may own at most one port.
+        type: enum
+        default: 0
+        values: *serial_function_values
+
+      SERIAL3_BAUD:
+        description:
+          short: Baudrate for SERIAL3 (USART3 PD8/PD9)
+          long: |-
+            SERIAL3 maps directly to physical USART3 on PD8/PD9. This is the
+            normal 8N1 baudrate used when no protocol driver owns the port.
+        type: enum
+        default: 0
+        values: *serial_baud_values
+      SERIAL3_FUNCTION:
+        description:
+          short: Function for SERIAL3 (USART3 PD8/PD9)
+          long: |-
+            Select the sole runtime owner of physical USART3. Active functions
+            are limited to SBUS and GPS, and each may own at most one port.
+        type: enum
+        default: 0
+        values: *serial_function_values
+
+      SERIAL4_BAUD:
+        description:
+          short: Baudrate for SERIAL4 (UART4 PB9/PB8)
+          long: |-
+            SERIAL4 maps directly to physical UART4 on PB9/PB8. This is the
+            normal 8N1 baudrate used when no protocol driver owns the port.
+        type: enum
+        default: 115200
+        values: *serial_baud_values
+      SERIAL4_FUNCTION:
+        description:
+          short: Function for SERIAL4 (UART4 PB9/PB8)
+          long: |-
+            Select the sole runtime owner of physical UART4. Active functions
+            are limited to SBUS and GPS, and each may own at most one port.
+        type: enum
+        default: 0
+        values: *serial_function_values
+
+      SERIAL6_BAUD:
+        description:
+          short: Baudrate for SERIAL6 (USART6 PC6/PC7)
+          long: |-
+            SERIAL6 maps directly to physical USART6 on PC6/PC7. This is the
+            normal 8N1 baudrate restored after the SBUS driver releases it.
+        type: enum
+        default: 0
+        values: *serial_baud_values
+      SERIAL6_FUNCTION:
+        description:
+          short: Function for SERIAL6 (USART6 PC6/PC7)
+          long: |-
+            Select the sole runtime owner of physical USART6. Active functions
+            are limited to SBUS and GPS; this product defaults USART6 to SBUS.
+        type: enum
+        default: 1
+        values: *serial_function_values
+
+      SERIAL7_BAUD:
+        description:
+          short: Baudrate for SERIAL7 (UART7 PE8/PE7)
+          long: |-
+            SERIAL7 maps directly to physical UART7 on PE8/PE7. This is the
+            normal 8N1 baudrate used when no protocol driver owns the port.
+        type: enum
+        default: 57600
+        values: *serial_baud_values
+      SERIAL7_FUNCTION:
+        description:
+          short: Function for SERIAL7 (UART7 PE8/PE7)
+          long: |-
+            Select the sole runtime owner of physical UART7. Active functions
+            are limited to SBUS and GPS, and each may own at most one port.
+        type: enum
+        default: 0
+        values: *serial_function_values
+
+      SERIAL8_BAUD:
+        description:
+          short: Baudrate for SERIAL8 (UART8 PE1/PE0)
+          long: |-
+            SERIAL8 maps directly to physical UART8 on PE1/PE0. This is the
+            normal 8N1 baudrate used when no protocol driver owns the port.
+        type: enum
+        default: 115200
+        values: *serial_baud_values
+      SERIAL8_FUNCTION:
+        description:
+          short: Function for SERIAL8 (UART8 PE1/PE0)
+          long: |-
+            Select the sole runtime owner of physical UART8. Active functions
+            are limited to SBUS and GPS, and each may own at most one port.
+        type: enum
+        default: 0
+        values: *serial_function_values

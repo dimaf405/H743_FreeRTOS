@@ -98,14 +98,15 @@ def _scan_parameter_generation_contract(violations: list[Violation]) -> None:
             "all tracked module_*.yaml files must enter PARAMETER_YAML_DEFINITIONS",
         ))
 
+    # 受版本控制的 module_*.yaml 已由上方通用闭包检查覆盖；这里只保留
+    # 仍需从协议 schema 生成后再送入 PX4 参数链的 DroneCAN YAML。
     required_generated_yaml = {
-        ROOT / "build/generated/serial/module_serial.yaml",
         ROOT / "build/generated/dronecan/module_dronecan.yaml",
     }
     if not required_generated_yaml.issubset(set(input_paths)):
         violations.append(Violation(
             ROOT / "make/project.mk", 1, "R331",
-            "serial and DroneCAN YAML must enter the official parameter chain",
+            "generated DroneCAN YAML must enter the official parameter chain",
         ))
 
     # 受版本控制的 C/C++ 树不得再保留 PARAM_DEFINE 入口；官方 module_params.c

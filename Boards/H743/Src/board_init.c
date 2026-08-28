@@ -33,8 +33,6 @@ void board_init(void)
   MX_SPI4_Init();
   dima_boot_stage_set(DIMA_BOOT_STAGE_UART4);
   MX_UART4_Init();
-  dima_boot_stage_set(DIMA_BOOT_STAGE_UART5);
-  MX_UART5_Init();
   dima_boot_stage_set(DIMA_BOOT_STAGE_UART7);
   MX_UART7_Init();
   dima_boot_stage_set(DIMA_BOOT_STAGE_UART8);

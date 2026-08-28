@@ -1,6 +1,6 @@
 # UM982 GPS 驱动
 
-本模块实现 GPS 所有串口上的异步 UM982 NMEA/移动基线链路。飞控的 `SERIAL1..8` 是物理 STM32 UART 编号，与接收机内部 COM1/2/3 编号相互独立。
+本模块实现 GPS 所有串口上的异步 UM982 NMEA/移动基线链路。飞控的 `SERIAL1/2/3/4/6/7/8` 是物理 STM32 UART 编号；板上无 UART5，因此编号 5 留空，且这些编号与接收机内部 COM1/2/3 相互独立。
 
 ## 固定上游与手册
 
@@ -10,7 +10,7 @@
 
 ## 参数合同
 
-- `GPS_1_CONFIG`：由板级 `serial_ports.json` 生成；0 禁用，1..8 选择 Dima `SERIAL1..8`。为兼容已写入的配置，当其为 0 时仍接受唯一的 `SERIALx_FUNCTION=GPS`。
+- GPS 端口：唯一由 PX4 `module_serial.yaml` 定义并生成的 `SERIALx_FUNCTION` 指定；某一路设为 `GPS` 即启用该端口，全部为非 GPS 时禁用，禁止同时配置多个 GPS owner。
 - `GPS_1_PROTOCOL`：与 PX4 一致使用 `0=Auto detect`、`6=NMEA`；NMEA frontend 同时解析 UM982 的 CRC32 `AGRICA/UNIAGRICA/UNIHEADINGA` 扩展。
 - GPS 占用端口时固定使用由 `um982_messages.json` 生成的 `460800 bit/s` 产品合同；`SERIALx_BAUD` 仍是该物理端口脱离 GPS 所有权后的通用配置。驱动保留 UM982 官方八档扫描能力只用于找回已有配置，检测成功后通过受控配置链把接收机和飞控 UART 统一回 460800。
 - `GPS_YAW_OFFSET`：采用 PX4 双天线定义，0..360 deg、顺时针增加；UM982 heading 按 `raw + 180° - offset` 转成车体 yaw。

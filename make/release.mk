@@ -81,13 +81,12 @@ endif
 # its dry-run snapshot.  A generator may run because an input timestamp changed
 # yet preserve every output timestamp when the content is unchanged; planning
 # before that decision overestimates the downstream compile/link actions.
-# 先收敛 DroneCAN、串口、UM982、uORB、参数、Metadata 与 MAVLink 生成闭包，
+# 先收敛 DroneCAN、UM982、uORB、参数、Metadata 与 MAVLink 生成闭包，
 # 再截取 dry-run；生成内容未变时保留 mtime，避免虚假的全量重编译计划。
 __dima_prepare_make_includes: $(DRONECAN_GENERATED_MAKEFILE)
 	@:
 
 __dima_prepare_generated: $(DIMA_DRONECAN_GENERATED_OUTPUTS) \
-		$(SERIAL_GENERATED_OUTPUTS) \
 		$(UM982_CONTRACT_HEADER) \
 		$(MESSAGE_GENERATED_OUTPUTS) $(PARAMETER_GENERATED_OUTPUTS) \
 		$(PARAMETER_METADATA_OUTPUTS) \

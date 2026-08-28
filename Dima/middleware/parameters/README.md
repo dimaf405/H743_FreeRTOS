@@ -3,7 +3,7 @@
 ## 唯一参数定义与生成链
 
 - Parameter YAML 工具固定为 PX4 commit `1f6b6f61f8f42eaab0269c16a442cb580f954d7c`；`tools/upstream/parameter_yaml_20260827/SOURCE_MANIFEST.json` 对原始脚本、schema、模板和 helper 做逐文件 SHA-256 闭包校验。
-- `definitions/module_*.yaml` 是产品参数的唯一受版本控制定义。板级串口与 DroneCAN 分别以自身 schema/manifest 为权威输入，但只能在 `build/generated` 生成 PX4 YAML 片段，再并入同一条正式链。
+- `definitions/module_*.yaml` 是产品参数的唯一受版本控制定义。串口参数直接定义在 `definitions/module_serial.yaml`；DroneCAN 参数仍由其 schema/manifest 在 `build/generated` 生成 PX4 YAML 片段，两者统一并入同一条正式链。
 - 源码树禁止 `PARAM_DEFINE_*`、本地 C 注释 parser/renderer、`qgc_required` 扩展、手写参数目录和运行时参数名名单。
 
 ```text

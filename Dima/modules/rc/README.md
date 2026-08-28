@@ -7,7 +7,7 @@
 
 ## 板级串口编号与 SBUS 配置
 
-`Boards/H743/serial_ports.json` 是唯一串口清单。编号直接对应最新版 VCU-H7 原理图与 `H743_FreeRTOS.ioc` 的 STM32 外设尾号；`SERIAL7` 必须表示 UART7，禁止再按旧 ArduPilot `SERIAL_ORDER` 重新排列：
+PX4 `Dima/middleware/parameters/definitions/module_serial.yaml` 是串口参数与物理映射的唯一源。编号直接对应 `H743_FreeRTOS.ioc` 的 STM32 外设尾号；板上没有 UART5，所以 `SERIAL5` 留空，`SERIAL6` 仍表示 USART6，禁止压缩编号或按旧 ArduPilot `SERIAL_ORDER` 重新排列：
 
 | 固定序号 | STM32 外设 | TX / RX | 板级连接器角色 | 参数默认值 |
 |---:|---|---|---|---|
@@ -16,18 +16,17 @@
 | SERIAL2 | USART2 | PD5 / PD6 | 串口 2 | `SERIAL2_BAUD=Auto`、Function Disabled |
 | SERIAL3 | USART3 | PD8 / PD9 | 串口 3 | `SERIAL3_BAUD=Auto`、Function Disabled |
 | SERIAL4 | UART4 | PB9 / PB8 | 串口 4 | `SERIAL4_BAUD=115200`、Function Disabled |
-| SERIAL5 | UART5 | PB13 / PB12 | 串口 5 | `SERIAL5_BAUD=115200`、Function Disabled |
-| SERIAL6 | USART6 | PC6 / PC7 | SBUS / 串口 6 | `SERIAL6_BAUD=Auto`、Function RC Input |
+| SERIAL6 | USART6 | PC6 / PC7 | SBUS / 串口 6 | `SERIAL6_BAUD=Auto`、Function SBUS |
 | SERIAL7 | UART7 | PE8 / PE7 | 串口 7 | `SERIAL7_BAUD=57600`、Function Disabled |
 | SERIAL8 | UART8 | PE1 / PE0 | 串口 8 | `SERIAL8_BAUD=115200`、Function Disabled |
 
-UART5 同时引到独立串口 5 插座和串口 5/I2C2 复合插座，两处共享同一个 PB13/PB12 外设，不能由两个设备同时驱动 RX。各路普通 baud 是当前板级清单的产品默认值；GPS 已由 UM982 driver 使用，串口 MAVLink 和 RS485 数据服务仍未实现。
+七路物理 UART 的普通 baud 都由同一 PX4 YAML 定义；GPS 已由 UM982 driver 使用，串口 MAVLink 和 RS485 数据服务仍未实现。PB10/PB11 的 I2C2 配置保持不变，PB12/PB13 不再声明为 UART5。
 
-每个外部端口固定生成 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前 Function 为 `0=Disabled`、`1=RC Input`、`2=GPS`。RC 和 GPS 各自只能有一个 owner，同一个 UART 也不能同时被二者占用；异常存储或冲突写入必须 fail-closed。通过 QGC 把目标端口设为 RC Input 时，固件会在同一参数事务中把旧 RC owner 设为 Disabled。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
+每个实际外部端口固定定义 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前 Function 为 `0=Disabled`、`1=SBUS`、`2=GPS`。SBUS 和 GPS 各自只能有一个 owner，同一个 UART 也不能同时被二者占用；异常存储或冲突写入必须 fail-closed。通过 QGC 把目标端口设为 SBUS 时，固件会在同一参数事务中把旧 SBUS owner 设为 Disabled。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
 
-SerialConfig 先应用普通 8N1 配置。被唯一 `SERIALx_FUNCTION=RC Input` 选中的端口随后由 SBUS driver 临时接管为 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`，释放时恢复普通 UART、FIFO 和 GPIO。GPS owner 由 UM982 driver 保持 8N1，按所选 `SERIALx_BAUD` 确定目标 baud，并在需要时异步扫描接收机当前 baud。Auto/0 只表示最终 baud 交给对应 Function driver；串口 MAVLink 和 RS485 数据服务不会因连接器名称而被虚构。
+SerialConfig 先应用普通 8N1 配置。被唯一 `SERIALx_FUNCTION=SBUS` 选中的端口随后由 SBUS driver 临时接管为 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`，释放时恢复普通 UART、FIFO 和 GPIO。GPS owner 由 UM982 driver 保持 8N1，使用 UM982 消息合同生成的固定目标 baud，并在需要时异步扫描接收机当前 baud；`SERIALx_BAUD` 只用于该端口脱离 GPS 所有权后的普通配置。Auto/0 表示最终 baud 交给对应 Function driver；串口 MAVLink 和 RS485 数据服务不会因连接器名称而被虚构。
 
-当前板级固件不定义 `RC_PORT_CONFIG`、迁移版本参数或旧串口键，也不扫描、补全或迁移旧存储目录。持久化快照中出现未知键或类型不符时整份拒绝，重新按当前 `SERIAL1..8` 直接编号配置。
+当前板级固件不定义 `RC_PORT_CONFIG`、迁移版本参数或旧串口键，也不扫描、补全或迁移旧存储目录。持久化快照中出现未知键或类型不符时整份拒绝，重新按当前 `SERIAL1/2/3/4/6/7/8` 物理编号配置。
 
 接管前会保存 UART Init、AdvancedInit、FIFO 模式与阈值以及 RX GPIO 状态。协议禁用、模块停止、Runtime shutdown 或启动失败回滚时，DMA 和 IRQ 先关闭，再恢复保存的普通 UART 配置。恢复失败会保留接管上下文供下一次 stop 重试，并让 Application Runtime 保持 Error、禁止释放相关资源。主动禁用属于正常 Running 生命周期，不产生后端故障事件；Commander 仍会因为没有新鲜 RC 而保持不可解锁。
 

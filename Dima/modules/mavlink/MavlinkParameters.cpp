@@ -1,8 +1,8 @@
 #define MODULE_NAME "mavlink"
 #include "MavlinkParameters.hpp"
 
-#include "SerialContract.hpp"
 #include "logging/logging.hpp"
+#include "serial/SerialPortAssignments.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -215,27 +215,28 @@ MavlinkParameters::fixed_parameter_constraint(param_t param) noexcept
 bool MavlinkParameters::is_serial_baud_parameter(
     const char *name) noexcept
 {
-    return dima::board::serial_baud_parameter(name);
+    return dima::lib::serial::serial_baud_parameter(name);
 }
 
 bool MavlinkParameters::supported_serial_baud(std::int32_t value) noexcept
 {
-    return value >= 0 && dima::board::serial_baud_supported(
-        static_cast<std::uint32_t>(value));
+    // 可选波特率由 module_serial.yaml 枚举并进入 QGC Metadata；运行时不再
+    // 手写同一张数值表，只拒绝 PX4 “Auto=0” 之外无意义的负值。
+    return value >= 0;
 }
 
 bool MavlinkParameters::serial_function_write_allowed(
     const char *name, std::int32_t value) noexcept
 {
-    return dima::board::serial_function_parameter(name) &&
-           dima::board::serial_function_supported(value);
+    return dima::lib::serial::serial_function_parameter(name) &&
+           dima::lib::serial::serial_function_supported(value);
 }
 
 bool MavlinkParameters::write_and_acknowledge_parameter(
     param_t param, float wire_value) noexcept
 {
     const char *const name = param_name(param);
-    if (dima::board::serial_function_parameter(name)) {
+    if (dima::lib::serial::serial_function_parameter(name)) {
         std::int32_t function = 0;
         std::memcpy(&function, &wire_value, sizeof(function));
         return set_serial_function(param, name, function);
@@ -261,17 +262,16 @@ bool MavlinkParameters::write_and_acknowledge_parameter(
 bool MavlinkParameters::set_serial_function(
     param_t param, const char *name, std::int32_t value) noexcept
 {
-    param_t owners[sizeof(dima::board::kSerialPorts) /
-                   sizeof(dima::board::kSerialPorts[0])]{};
+    param_t owners[dima::generated::parameters::kParameterCount]{};
     unsigned owner_count = 0U;
     {
         // QGC 常先在新端口启用独占功能，再关闭旧端口。整个交接放进参数原子事务：
-        // 读者只能看到旧状态或完成后的新状态，不能看到两个 RC/GPS owner。
+        // 读者只能看到旧状态或完成后的新状态，不能看到两个 SBUS/GPS owner。
         px4::AtomicTransaction transaction;
         if (!serial_function_write_allowed(name, value)) {
             return false;
         }
-        if (value == dima::board::kSerialFunctionDisabled) {
+        if (value == dima::lib::serial::kSerialFunctionDisabled) {
             if (param_set(param, &value) != 0) {
                 return false;
             }
@@ -281,21 +281,22 @@ bool MavlinkParameters::set_serial_function(
                 return false;
             }
 
-            for (const dima::board::SerialPortDescriptor &descriptor :
-                 dima::board::kSerialPorts) {
-                if (std::strcmp(
-                        name, descriptor.function_parameter_name) == 0) {
+            // 从 PX4 生成注册表发现其他 SERIALx_FUNCTION，避免在 MAVLink
+            // 写路径维护端口参数名数组；稀疏编号会自然被跳过。
+            for (unsigned index = 0U; index < param_count(); ++index) {
+                const param_t other = param_for_index(index);
+                if (other == PARAM_INVALID || other == param ||
+                    !dima::lib::serial::serial_function_parameter(
+                        param_name(other))) {
                     continue;
                 }
-                const param_t other = param_find_no_notification(
-                    descriptor.function_parameter_name);
                 std::int32_t other_value = 0;
-                if (other == PARAM_INVALID ||
-                    param_get(other, &other_value) != 0 ||
-                    !dima::board::serial_function_supported(other_value)) {
+                if (param_get(other, &other_value) != 0 ||
+                    !dima::lib::serial::serial_function_supported(
+                        other_value)) {
                     return false;
                 }
-                if (value != dima::board::kSerialFunctionDisabled &&
+                if (value != dima::lib::serial::kSerialFunctionDisabled &&
                     other_value == value) {
                     owners[owner_count++] = other;
                 }
@@ -308,7 +309,7 @@ bool MavlinkParameters::set_serial_function(
             }
 
             const std::int32_t disabled =
-                dima::board::kSerialFunctionDisabled;
+                dima::lib::serial::kSerialFunctionDisabled;
             unsigned cleared_count = 0U;
             for (; cleared_count < owner_count; ++cleared_count) {
                 if (param_set_no_notification(
@@ -328,7 +329,7 @@ bool MavlinkParameters::set_serial_function(
                     if (!rollback_ok) {
                         // 即使回滚不完整也必须通知消费者重新校验，禁止继续使用陈旧缓存。
                         param_notify_changes();
-                        PX4_ERR("serial RC owner rollback failed");
+                        PX4_ERR("serial function owner rollback failed");
                     }
                     return false;
                 }
@@ -428,7 +429,7 @@ bool MavlinkParameters::write_value_allowed(param_t param,
         std::memcpy(&baudrate, &wire_value, sizeof(baudrate));
         return supported_serial_baud(baudrate);
     }
-    if (dima::board::serial_function_parameter(name)) {
+    if (dima::lib::serial::serial_function_parameter(name)) {
         std::int32_t function = 0;
         std::memcpy(&function, &wire_value, sizeof(function));
         return serial_function_write_allowed(name, function);

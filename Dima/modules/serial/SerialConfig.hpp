@@ -1,6 +1,5 @@
 #pragma once
 
-#include "SerialContract.hpp"
 #include "serial/SerialPortAssignments.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
@@ -12,8 +11,8 @@
 namespace dima::modules::serial {
 
 /**
- * 将生成的板级串口参数合同解析为唯一的 RC/GPS 端口所有权，并原子切换后端波特率。
- * 参数成员由 DIMA_BOARD_SERIAL_PARAMETER_LIST 展开，禁止在此类中手写端口清单。
+ * 从 PX4 生成的参数注册表发现 SERIALx 参数，并解析为唯一的 SBUS/GPS 端口所有权。
+ * 参数条目只由 module_serial.yaml 定义，本类不维护参数名或端口参数清单。
  */
 class SerialConfig final : public dima::middleware::lifecycle::ModuleBase,
                            public dima::lib::serial::SerialPortAssignments {
@@ -32,9 +31,14 @@ public:
     std::uint64_t configuration_signature() const noexcept;
 
 private:
-    static constexpr std::size_t kPortCount =
-        sizeof(dima::board::kSerialPorts) /
-        sizeof(dima::board::kSerialPorts[0]);
+    // 本板最大物理编号为 UART8；SERIAL5 不存在但编号槽不能压缩，否则 USART6
+    // 会被错误映射为 SERIAL5。槽位只承载运行时状态，不代表存在 UART5 参数或硬件。
+    static constexpr std::size_t kPortCount = 8U;
+
+    struct ParameterBinding {
+        param_t baud{PARAM_INVALID};
+        param_t function{PARAM_INVALID};
+    };
 
     struct Configuration {
         std::uint32_t baudrate[kPortCount]{};
@@ -52,16 +56,8 @@ private:
 
     dima::platform::SerialPorts &backend_;
 
-    px4::ParamInt<px4::params::DIMA_PRIMARY_GPS_PORT_PARAMETER>
-        gps1_config_{};
     px4::ParamInt<px4::params::GPS_1_PROTOCOL> gps1_protocol_{};
-
-#define DIMA_DECLARE_SERIAL_PARAMETERS(index, baud, function) \
-    px4::ParamInt<px4::params::baud> serial##index##_baud_{}; \
-    px4::ParamInt<px4::params::function> serial##index##_function_{};
-    // 参数声明与板级 serial_ports.json 的生成结果保持同源。
-    DIMA_BOARD_SERIAL_PARAMETER_LIST(DIMA_DECLARE_SERIAL_PARAMETERS)
-#undef DIMA_DECLARE_SERIAL_PARAMETERS
+    ParameterBinding serial_parameters_[kPortCount]{};
 
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};

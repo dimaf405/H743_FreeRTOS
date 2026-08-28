@@ -168,7 +168,7 @@ Storage       128 KiB
 → manual_control_setpoint + action_request
 ```
 
-- `RC_INPUT_PROTO` 使用 `0=Disabled`、`2=SBUS`，默认 SBUS；端口按最新版 VCU-H7 硬件直接编号为 `SERIAL1..8=USART1/USART2/USART3/UART4/UART5/USART6/UART7/UART8`，每路由 `SERIALx_FUNCTION` 分配 Disabled/RC Input，默认 SERIAL6=USART6。当前板级固件不保留旧 `RC_PORT_CONFIG`、旧串口键或迁移版本参数；旧快照不迁移，开发阶段直接按当前目录重新配置。
+- `RC_INPUT_PROTO` 使用 `0=Disabled`、`2=SBUS`，默认 SBUS；端口按物理外设直接编号为 `SERIAL1/2/3/4/6/7/8=USART1/USART2/USART3/UART4/USART6/UART7/UART8`，板上无 UART5，SERIAL5 留空且 USART6 不重编号。每路由 `SERIALx_FUNCTION` 分配 Disabled/SBUS/GPS，默认 SERIAL6=USART6/SBUS。当前板级固件不保留旧 `RC_PORT_CONFIG`、旧串口键或迁移版本参数；旧快照不迁移，开发阶段直接按当前目录重新配置。
 - 原始反相 SBUS 自动使用 100000 bit/s、8E2、UART RXINV 和 RX pulldown，不再提供手动极性参数；接管前保存 UART/FIFO/RX GPIO，停用、失败回滚和 Runtime shutdown 均恢复普通 UART。
 - SRAM3 non-cacheable 64-byte 循环 DMA Buffer 只由 DMA 写入；ISR 记录真实到达时间并复制到 256 项 CPU-only Ring，再经 ISR-safe callback 唤醒 `wq:io`，业务层不执行 cache maintenance。
 - RC 参数由生成器扩展到 135 项总量，其中阶段 3 新增 111 项 RC 配置、18 通道校准、映射和失联参数。

@@ -219,7 +219,6 @@ def verify_generated_metadata(parameters_path: Path,
             stamp.get("public_parameter_count") != len(parameters)):
         raise RuntimeError("component Metadata parameter count mismatch")
     by_name = validate_parameter_catalogue(parameters)
-    validate_serial_metadata(by_name)
     validate_sensor_metadata(by_name)
 
     expected_parameter_json = json_bytes({
@@ -369,21 +368,6 @@ def validate_parameter_catalogue(parameters: list[object]) -> dict[str, dict]:
     if len(names) != len(set(names)):
         raise RuntimeError("parameter catalogue contains duplicate names")
     return {parameter["name"]: parameter for parameter in parameters}
-
-
-def validate_serial_metadata(by_name: dict[str, dict]) -> None:
-    for serial in range(1, 9):
-        for suffix, expected_values in (("BAUD", 16), ("FUNCTION", 3)):
-            name = f"SERIAL{serial}_{suffix}"
-            parameter = by_name.get(name)
-            if (parameter is None or parameter.get("type") != "Int32" or
-                    parameter.get("group") != "Serial" or
-                    not parameter.get("shortDesc") or
-                    parameter.get("rebootRequired", False) is not False or
-                    len(parameter.get("values", [])) != expected_values):
-                raise RuntimeError(
-                    f"QGC serial Metadata contract invalid for {name}"
-                )
 
 
 def validate_sensor_metadata(by_name: dict[str, dict]) -> None:
@@ -654,7 +638,6 @@ def main() -> int:
         raise RuntimeError("parameter catalogue has no parameters array")
 
     by_name = validate_parameter_catalogue(parameters)
-    validate_serial_metadata(by_name)
     validate_sensor_metadata(by_name)
 
     parameter_json = json_bytes({

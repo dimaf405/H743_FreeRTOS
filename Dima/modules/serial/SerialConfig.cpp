@@ -36,25 +36,60 @@ SerialConfig::SerialConfig(dima::platform::SerialPorts &backend) noexcept
 
 bool SerialConfig::bind_parameters() noexcept
 {
-    // 绑定顺序及成员集合来自生成宏，避免参数注册表与板级端口数量发生漂移。
-    bool bound = gps1_config_.bind() && gps1_protocol_.bind();
-#define DIMA_BIND_SERIAL_PARAMETERS(index, baud, function) \
-    bound = serial##index##_baud_.bind() && \
-            serial##index##_function_.bind() && bound;
-    DIMA_BOARD_SERIAL_PARAMETER_LIST(DIMA_BIND_SERIAL_PARAMETERS)
-#undef DIMA_BIND_SERIAL_PARAMETERS
-    return bound;
+    for (ParameterBinding &binding : serial_parameters_) {
+        binding = {};
+    }
+    if (!gps1_protocol_.bind()) {
+        return false;
+    }
+
+    // 官方 PX4 参数注册表是运行时唯一目录；按 SERIALx 命名规则发现参数，
+    // 从而新增或删除 YAML 条目时无需同步修改 C++ 参数成员或名称数组。
+    for (unsigned index = 0U; index < param_count(); ++index) {
+        const param_t handle = param_for_index(index);
+        const dima::lib::serial::SerialParameterIdentity identity =
+            dima::lib::serial::identify_serial_parameter(param_name(handle));
+        if (identity.kind ==
+                dima::lib::serial::SerialParameterKind::None) {
+            continue;
+        }
+        if (identity.port == 0U || identity.port > kPortCount ||
+            handle == PARAM_INVALID || param_type(handle) != PARAM_TYPE_INT32) {
+            return false;
+        }
+
+        ParameterBinding &binding = serial_parameters_[identity.port - 1U];
+        param_t &destination = identity.kind ==
+                dima::lib::serial::SerialParameterKind::Baud
+            ? binding.baud : binding.function;
+        if (destination != PARAM_INVALID) {
+            return false;
+        }
+        destination = handle;
+    }
+
+    bool found_serial_port = false;
+    for (const ParameterBinding &binding : serial_parameters_) {
+        const bool has_baud = binding.baud != PARAM_INVALID;
+        const bool has_function = binding.function != PARAM_INVALID;
+        if (has_baud != has_function) {
+            return false;
+        }
+        if (has_baud) {
+            param_set_used(binding.baud);
+            param_set_used(binding.function);
+            found_serial_port = true;
+        }
+    }
+    return found_serial_port;
 }
 
 void SerialConfig::invalidate_parameters() noexcept
 {
-    gps1_config_.invalidate();
     gps1_protocol_.invalidate();
-#define DIMA_INVALIDATE_SERIAL_PARAMETERS(index, baud, function) \
-    serial##index##_baud_.invalidate(); \
-    serial##index##_function_.invalidate();
-    DIMA_BOARD_SERIAL_PARAMETER_LIST(DIMA_INVALIDATE_SERIAL_PARAMETERS)
-#undef DIMA_INVALIDATE_SERIAL_PARAMETERS
+    for (ParameterBinding &binding : serial_parameters_) {
+        binding = {};
+    }
 }
 
 bool SerialConfig::read_configuration(
@@ -63,49 +98,47 @@ bool SerialConfig::read_configuration(
     // 先构造候选快照并验证唯一所有权，校验完成以前不修改当前生效配置。
     configuration = {};
     bool configuration_valid = true;
-    unsigned rc_owner_count = 0U;
-    unsigned legacy_gps_owner_count = 0U;
-    std::int32_t legacy_gps_port = 0;
-#define DIMA_READ_SERIAL_PARAMETERS(index, baud, function) \
-    do { \
-        const std::int32_t baud_value = serial##index##_baud_.get(); \
-        const std::int32_t function_value = serial##index##_function_.get(); \
-        if (baud_value < 0 || \
-            !dima::board::serial_baud_supported( \
-                static_cast<std::uint32_t>(baud_value)) || \
-            !dima::board::serial_function_supported(function_value)) { \
-            configuration_valid = false; \
-        } else { \
-            configuration.baudrate[index - 1U] = \
-                static_cast<std::uint32_t>(baud_value); \
-        } \
-        if (function_value == dima::board::kSerialFunctionRcInput) { \
-            ++rc_owner_count; \
-            configuration.rc_input_port = index; \
-        } else if (function_value == dima::board::kSerialFunctionGps) { \
-            ++legacy_gps_owner_count; \
-            legacy_gps_port = index; \
-        } \
-    } while (false);
-    DIMA_BOARD_SERIAL_PARAMETER_LIST(DIMA_READ_SERIAL_PARAMETERS)
-#undef DIMA_READ_SERIAL_PARAMETERS
+    unsigned sbus_owner_count = 0U;
+    unsigned gps_owner_count = 0U;
+    for (std::size_t index = 0U; index < kPortCount; ++index) {
+        const ParameterBinding &binding = serial_parameters_[index];
+        if (binding.baud == PARAM_INVALID &&
+            binding.function == PARAM_INVALID) {
+            continue;
+        }
 
-    // GPS_1_CONFIG 是当前主合同；仅当其为 0 时接受唯一旧式
-    // SERIALx_FUNCTION=GPS。两者同时存在但指向不同端口时必须拒绝。
-    const std::int32_t configured_gps_port = gps1_config_.get();
-    const std::int32_t configured_protocol = gps1_protocol_.get();
-    if (configured_gps_port < 0 ||
-        configured_gps_port > static_cast<std::int32_t>(kPortCount) ||
-        !gps_protocol_supported(configured_protocol) ||
-        legacy_gps_owner_count > 1U ||
-        (configured_gps_port != 0 && legacy_gps_port != 0 &&
-         configured_gps_port != legacy_gps_port)) {
+        std::int32_t baud_value = 0;
+        std::int32_t function_value = 0;
+        if (binding.baud == PARAM_INVALID ||
+            binding.function == PARAM_INVALID ||
+            param_get(binding.baud, &baud_value) != 0 ||
+            param_get(binding.function, &function_value) != 0 ||
+            baud_value < 0 ||
+            !dima::lib::serial::serial_function_supported(function_value)) {
+            configuration_valid = false;
+            continue;
+        }
+
+        const std::int32_t port = static_cast<std::int32_t>(index + 1U);
+        configuration.baudrate[index] =
+            static_cast<std::uint32_t>(baud_value);
+        if (function_value == dima::lib::serial::kSerialFunctionSbus) {
+            ++sbus_owner_count;
+            configuration.rc_input_port = port;
+        } else if (function_value ==
+                   dima::lib::serial::kSerialFunctionGps) {
+            ++gps_owner_count;
+            configuration.gps_port = port;
+        }
+    }
+
+    // GPS 端口只由 SERIALx_FUNCTION=GPS 决定；唯一性校验避免两个驱动争用 UART。
+    std::int32_t configured_protocol = 0;
+    if (param_get(gps1_protocol_.handle(), &configured_protocol) != 0 ||
+        !gps_protocol_supported(configured_protocol) || gps_owner_count > 1U) {
         configuration_valid = false;
     }
-    configuration.gps_port = configured_gps_port != 0
-        ? configured_gps_port : legacy_gps_port;
-    if (configuration.gps_port > 0 &&
-        configuration.gps_port <= static_cast<std::int32_t>(kPortCount)) {
+    if (configuration.gps_port > 0) {
         // UM982 运行波特率属于生成消息合同，不能由本模块另写常量或沿用旧参数值。
         configuration.baudrate[
             static_cast<std::size_t>(configuration.gps_port - 1)] =
@@ -115,7 +148,7 @@ bool SerialConfig::read_configuration(
         ? 0U : dima::protocols::um982::generated::kTargetBaudrate;
     configuration.gps_protocol = configured_protocol;
 
-    if (!configuration_valid || rc_owner_count > 1U) {
+    if (!configuration_valid || sbus_owner_count > 1U) {
         return false;
     }
     return configuration.rc_input_port == 0 ||
@@ -125,16 +158,18 @@ bool SerialConfig::read_configuration(
 bool SerialConfig::apply_baudrates(const std::uint32_t *baudrates) noexcept
 {
     if (baudrates == nullptr) return false;
-    // 遍历集合仍由板级生成清单提供；返回值汇总所有端口，防止半套配置被误判成功。
+    // 只遍历 PX4 参数注册表实际发现的成对参数；稀疏的 SERIAL5 槽不会触发
+    // UART 配置。返回值汇总全部物理端口，防止半套配置被误判成功。
     bool configured = true;
-#define DIMA_APPLY_SERIAL_BAUD(index, baud, function) \
-    if (baudrates[index - 1U] != 0U) { \
-        configured = backend_.configure_line( \
-            index, normal_line_configuration(baudrates[index - 1U])) && \
-            configured; \
+    for (std::size_t index = 0U; index < kPortCount; ++index) {
+        if (serial_parameters_[index].baud == PARAM_INVALID ||
+            baudrates[index] == 0U) {
+            continue;
+        }
+        configured = backend_.configure_line(
+            static_cast<std::int32_t>(index + 1U),
+            normal_line_configuration(baudrates[index])) && configured;
     }
-    DIMA_BOARD_SERIAL_PARAMETER_LIST(DIMA_APPLY_SERIAL_BAUD)
-#undef DIMA_APPLY_SERIAL_BAUD
     return configured;
 }
 
@@ -189,7 +224,7 @@ bool SerialConfig::start() noexcept
 
     commit_configuration(configuration);
     state_ = dima::middleware::lifecycle::ModuleState::Running;
-    PX4_INFO("configured SERIAL1..SERIAL8 rc_port=%ld gps_port=%ld gps_baud=%lu protocol=%ld",
+    PX4_INFO("configured physical serial ports rc_port=%ld gps_port=%ld gps_baud=%lu protocol=%ld",
              static_cast<long>(rc_input_port_),
              static_cast<long>(gps_port_),
              static_cast<unsigned long>(gps_target_baudrate_),
@@ -216,7 +251,7 @@ bool SerialConfig::reconfigure() noexcept
         return false;
     }
     commit_configuration(configuration);
-    PX4_INFO("reconfigured SERIAL1..SERIAL8 rc_port=%ld gps_port=%ld gps_baud=%lu protocol=%ld",
+    PX4_INFO("reconfigured physical serial ports rc_port=%ld gps_port=%ld gps_baud=%lu protocol=%ld",
              static_cast<long>(rc_input_port_),
              static_cast<long>(gps_port_),
              static_cast<unsigned long>(gps_target_baudrate_),
@@ -288,15 +323,27 @@ std::uint64_t SerialConfig::configuration_signature() const noexcept
             hash *= 1099511628211ULL;
         }
     };
-#define DIMA_HASH_SERIAL(index, baud, function) \
-    do { \
-        append(serial##index##_baud_.get()); \
-        append(serial##index##_function_.get()); \
-    } while (false);
-    DIMA_BOARD_SERIAL_PARAMETER_LIST(DIMA_HASH_SERIAL)
-#undef DIMA_HASH_SERIAL
-    append(gps1_config_.get());
-    append(gps1_protocol_.get());
+    for (const ParameterBinding &binding : serial_parameters_) {
+        if (binding.baud == PARAM_INVALID &&
+            binding.function == PARAM_INVALID) {
+            continue;
+        }
+        std::int32_t baud = 0;
+        std::int32_t function = 0;
+        if (binding.baud == PARAM_INVALID ||
+            binding.function == PARAM_INVALID ||
+            param_get(binding.baud, &baud) != 0 ||
+            param_get(binding.function, &function) != 0) {
+            return 0U;
+        }
+        append(baud);
+        append(function);
+    }
+    std::int32_t gps_protocol = 0;
+    if (param_get(gps1_protocol_.handle(), &gps_protocol) != 0) {
+        return 0U;
+    }
+    append(gps_protocol);
     return hash;
 }
 
