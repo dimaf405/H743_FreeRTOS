@@ -15,7 +15,7 @@ from architecture.common import (
 def scan_rover_root_contract(violations: list[Violation]) -> None:
     """纯 Rover 算法库不得拥有运行时、uORB 或参数中间件状态。"""
     runtime_tokens = (
-        "ModuleBase", "ScheduledWorkItem", "uORB::", "px4::Param",
+        "ModuleBase", "ScheduledWorkItem", "uORB::", "dima::Param",
         "param_find", "param_get", "param_set",
     )
     for path in sources_under(("Dima/lib/rover",)):

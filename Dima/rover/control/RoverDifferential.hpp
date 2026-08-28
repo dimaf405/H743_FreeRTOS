@@ -84,16 +84,16 @@ private:
     uORB::Publication<actuator_motors_s> actuator_motors_publication_{
         ORB_ID(actuator_motors)};
 
-    px4::ParamFloat<px4::params::RO_CMD_TIMEOUT> command_timeout_{};
-    px4::ParamInt<px4::params::RD_REV_STEER> reverse_steering_{};
-    px4::ParamFloat<px4::params::RD_STR_THR_MIX> steering_throttle_mix_{};
-    px4::ParamFloat<px4::params::MOT_THR_MIN> throttle_min_{};
-    px4::ParamFloat<px4::params::MOT_THR_MAX> throttle_max_{};
-    px4::ParamFloat<px4::params::MOT_SLEW_RATE> throttle_slew_rate_{};
-    px4::ParamFloat<px4::params::MOT_REV_DELAY> reversal_delay_{};
-    px4::ParamFloat<px4::params::MOT_THR_EXPO> throttle_expo_{};
-    px4::ParamFloat<px4::params::MOT_THR_ASYM> thrust_asymmetry_{};
-    px4::ParamFloat<px4::params::MOT_ARM_RAMP> arm_ramp_{};
+    dima::ParamFloat<dima::params::RO_CMD_TIMEOUT> command_timeout_{};
+    dima::ParamInt<dima::params::RD_REV_STEER> reverse_steering_{};
+    dima::ParamFloat<dima::params::RD_STR_THR_MIX> steering_throttle_mix_{};
+    dima::ParamFloat<dima::params::MOT_THR_MIN> throttle_min_{};
+    dima::ParamFloat<dima::params::MOT_THR_MAX> throttle_max_{};
+    dima::ParamFloat<dima::params::MOT_SLEW_RATE> throttle_slew_rate_{};
+    dima::ParamFloat<dima::params::MOT_REV_DELAY> reversal_delay_{};
+    dima::ParamFloat<dima::params::MOT_THR_EXPO> throttle_expo_{};
+    dima::ParamFloat<dima::params::MOT_THR_ASYM> thrust_asymmetry_{};
+    dima::ParamFloat<dima::params::MOT_ARM_RAMP> arm_ramp_{};
 
     dima::lib::rover::DifferentialDrive drive_{};
     ParameterSnapshot parameters_{};

@@ -43,7 +43,7 @@ bool SerialConfig::bind_parameters() noexcept
         return false;
     }
 
-    // 官方 PX4 参数注册表是运行时唯一目录；按 SERIALx 命名规则发现参数，
+    // Dima 生成参数目录是运行时唯一目录；按 SERIALx 命名规则发现参数，
     // 从而新增或删除 YAML 条目时无需同步修改 C++ 参数成员或名称数组。
     for (unsigned index = 0U; index < param_count(); ++index) {
         const param_t handle = param_for_index(index);
@@ -158,7 +158,7 @@ bool SerialConfig::read_configuration(
 bool SerialConfig::apply_baudrates(const std::uint32_t *baudrates) noexcept
 {
     if (baudrates == nullptr) return false;
-    // 只遍历 PX4 参数注册表实际发现的成对参数；稀疏的 SERIAL5 槽不会触发
+    // 只遍历 Dima 生成参数目录实际发现的成对参数；稀疏的 SERIAL5 槽不会触发
     // UART 配置。返回值汇总全部物理端口，防止半套配置被误判成功。
     bool configured = true;
     for (std::size_t index = 0U; index < kPortCount; ++index) {

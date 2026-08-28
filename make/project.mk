@@ -276,8 +276,7 @@ PARAMETER_GENERATED_OUTPUTS := \
 	$(PARAMETER_GENERATED_DIR)/parameters.json \
 	$(PARAMETER_GENERATED_DIR)/px4_parameters.hpp \
 	$(PARAMETER_GENERATED_DIR)/parameter_contract.hpp \
-	$(PARAMETER_INCLUDE_DIR)/px4_platform_common/param.h \
-	$(PARAMETER_INCLUDE_DIR)/parameters/px4_parameters.hpp \
+	$(PARAMETER_INCLUDE_DIR)/parameters/dima_parameters.hpp \
 	$(PARAMETER_INCLUDE_DIR)/parameters/parameter_contract.hpp
 PARAMETER_METADATA_GENERATOR := tools/mavlink/generate_parameter_metadata.py
 PARAMETER_METADATA_DIR := $(BUILD_DIR)/generated/component_metadata

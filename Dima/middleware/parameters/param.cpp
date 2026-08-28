@@ -71,7 +71,7 @@ bool service_write_allowed() noexcept
 param_value_u read_value(param_t param, const void *value) noexcept
 {
     param_value_u result{};
-    if (px4::parameters_type[param] == PARAM_TYPE_FLOAT) {
+    if (dima::parameter_catalog::parameters_type[param] == PARAM_TYPE_FLOAT) {
         result.f = *static_cast<const float *>(value);
     } else {
         result.i = *static_cast<const int32_t *>(value);
@@ -81,7 +81,7 @@ param_value_u read_value(param_t param, const void *value) noexcept
 
 static void write_value(param_t param, param_value_u value, void *destination) noexcept
 {
-    if (px4::parameters_type[param] == PARAM_TYPE_FLOAT) {
+    if (dima::parameter_catalog::parameters_type[param] == PARAM_TYPE_FLOAT) {
         *static_cast<float *>(destination) = value.f;
     } else {
         *static_cast<int32_t *>(destination) = value.i;
@@ -90,7 +90,9 @@ static void write_value(param_t param, param_value_u value, void *destination) n
 
 bool equal_value(param_t param, param_value_u lhs, param_value_u rhs) noexcept
 {
-    return px4::parameters_type[param] == PARAM_TYPE_FLOAT ? lhs.f == rhs.f : lhs.i == rhs.i;
+    return dima::parameter_catalog::parameters_type[param] == PARAM_TYPE_FLOAT
+               ? lhs.f == rhs.f
+               : lhs.i == rhs.i;
 }
 
 static parameter_update_s update_snapshot() noexcept
@@ -308,7 +310,7 @@ param_t param_find_no_notification(const char *name)
     px4::AtomicTransaction transaction;
     ++g_find_count;
     for (param_t param = 0U; param < kCount; ++param) {
-        if (std::strcmp(name, px4::parameters[param].name) == 0) {
+        if (std::strcmp(name, dima::parameter_catalog::parameters[param].name) == 0) {
             return param;
         }
     }
@@ -380,12 +382,12 @@ int param_get_used_index(param_t param)
 
 const char *param_name(param_t param)
 {
-    return valid(param) ? px4::parameters[param].name : nullptr;
+    return valid(param) ? dima::parameter_catalog::parameters[param].name : nullptr;
 }
 
 param_type_t param_type(param_t param)
 {
-    return valid(param) ? px4::parameters_type[param] : PARAM_TYPE_UNKNOWN;
+    return valid(param) ? dima::parameter_catalog::parameters_type[param] : PARAM_TYPE_UNKNOWN;
 }
 size_t param_size(param_t param)
 {
@@ -399,8 +401,8 @@ bool param_is_volatile(param_t param)
         return false;
     }
 
-    // volatile 集合由 PX4 官方头从 YAML 语义生成，持久化层不得复制名称名单。
-    for (const px4::params candidate : px4::parameters_volatile) {
+    // volatile 集合由上游原始头从 YAML 语义生成，持久化层不得复制名称名单。
+    for (const dima::params candidate : dima::parameter_catalog::parameters_volatile) {
         if (param_handle(candidate) == param) {
             return true;
         }

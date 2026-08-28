@@ -33,10 +33,10 @@ bool normalized_axis(float value) noexcept
 bool Commander::initialize_parameter_handles() noexcept
 {
     // 安全策略句柄来自生成枚举；参数定义、索引与名称只由权威定义源生成。
-    rc_loss_timeout_handle_ = param_handle(px4::params::COM_RC_LOSS_T);
-    arm_stick_deadzone_handle_ = param_handle(px4::params::COM_ARM_STICK_DZ);
-    rc_loss_action_handle_ = param_handle(px4::params::NAV_RCL_ACT);
-    data_link_loss_action_handle_ = param_handle(px4::params::NAV_DLL_ACT);
+    rc_loss_timeout_handle_ = param_handle(dima::params::COM_RC_LOSS_T);
+    arm_stick_deadzone_handle_ = param_handle(dima::params::COM_ARM_STICK_DZ);
+    rc_loss_action_handle_ = param_handle(dima::params::NAV_RCL_ACT);
+    data_link_loss_action_handle_ = param_handle(dima::params::NAV_DLL_ACT);
     return rc_loss_timeout_handle_ != PARAM_INVALID &&
            arm_stick_deadzone_handle_ != PARAM_INVALID &&
            rc_loss_action_handle_ != PARAM_INVALID &&

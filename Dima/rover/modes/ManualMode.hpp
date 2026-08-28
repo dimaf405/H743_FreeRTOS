@@ -63,10 +63,10 @@ private:
     uORB::Publication<rover_motion_request_s> motion_request_publication_{
         ORB_ID(rover_motion_request)};
 
-    px4::ParamFloat<px4::params::RO_YAW_STICK_DZ> yaw_stick_deadzone_{};
-    px4::ParamFloat<px4::params::RO_YAW_EXPO> yaw_expo_{};
-    px4::ParamFloat<px4::params::RO_YAW_SUPEXPO> yaw_superexpo_{};
-    px4::ParamFloat<px4::params::RD_YAW_STK_GAIN> yaw_stick_gain_{};
+    dima::ParamFloat<dima::params::RO_YAW_STICK_DZ> yaw_stick_deadzone_{};
+    dima::ParamFloat<dima::params::RO_YAW_EXPO> yaw_expo_{};
+    dima::ParamFloat<dima::params::RO_YAW_SUPEXPO> yaw_superexpo_{};
+    dima::ParamFloat<dima::params::RD_YAW_STK_GAIN> yaw_stick_gain_{};
 
     Config config_{};
     manual_control_setpoint_s manual_control_{};

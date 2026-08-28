@@ -56,7 +56,7 @@ private:
 
     dima::platform::SerialPorts &backend_;
 
-    px4::ParamInt<px4::params::GPS_1_PROTOCOL> gps1_protocol_{};
+    dima::ParamInt<dima::params::GPS_1_PROTOCOL> gps1_protocol_{};
     ParameterBinding serial_parameters_[kPortCount]{};
 
     dima::middleware::lifecycle::ModuleState state_{

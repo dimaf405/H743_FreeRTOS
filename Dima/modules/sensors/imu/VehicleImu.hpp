@@ -136,21 +136,21 @@ private:
     uORB::Publication<vehicle_imu_status_s> vehicle_imu_status_pub_{
         ORB_ID(vehicle_imu_status)};
 
-    px4::ParamInt<px4::params::SENS_BOARD_ROT> board_rotation_{};
-    px4::ParamInt<px4::params::IMU_INTEG_RATE> integration_rate_{};
-    px4::ParamInt<px4::params::SENS_IMU_CLPNOTI>
+    dima::ParamInt<dima::params::SENS_BOARD_ROT> board_rotation_{};
+    dima::ParamInt<dima::params::IMU_INTEG_RATE> integration_rate_{};
+    dima::ParamInt<dima::params::SENS_IMU_CLPNOTI>
         clipping_notifications_{};
-    px4::ParamInt<px4::params::CAL_ACC0_ID> accel_id_{};
-    px4::ParamFloat<px4::params::CAL_ACC0_XOFF> accel_x_offset_{};
-    px4::ParamFloat<px4::params::CAL_ACC0_YOFF> accel_y_offset_{};
-    px4::ParamFloat<px4::params::CAL_ACC0_ZOFF> accel_z_offset_{};
-    px4::ParamFloat<px4::params::CAL_ACC0_XSCALE> accel_x_scale_{};
-    px4::ParamFloat<px4::params::CAL_ACC0_YSCALE> accel_y_scale_{};
-    px4::ParamFloat<px4::params::CAL_ACC0_ZSCALE> accel_z_scale_{};
-    px4::ParamInt<px4::params::CAL_GYRO0_ID> gyro_id_{};
-    px4::ParamFloat<px4::params::CAL_GYRO0_XOFF> gyro_x_offset_{};
-    px4::ParamFloat<px4::params::CAL_GYRO0_YOFF> gyro_y_offset_{};
-    px4::ParamFloat<px4::params::CAL_GYRO0_ZOFF> gyro_z_offset_{};
+    dima::ParamInt<dima::params::CAL_ACC0_ID> accel_id_{};
+    dima::ParamFloat<dima::params::CAL_ACC0_XOFF> accel_x_offset_{};
+    dima::ParamFloat<dima::params::CAL_ACC0_YOFF> accel_y_offset_{};
+    dima::ParamFloat<dima::params::CAL_ACC0_ZOFF> accel_z_offset_{};
+    dima::ParamFloat<dima::params::CAL_ACC0_XSCALE> accel_x_scale_{};
+    dima::ParamFloat<dima::params::CAL_ACC0_YSCALE> accel_y_scale_{};
+    dima::ParamFloat<dima::params::CAL_ACC0_ZSCALE> accel_z_scale_{};
+    dima::ParamInt<dima::params::CAL_GYRO0_ID> gyro_id_{};
+    dima::ParamFloat<dima::params::CAL_GYRO0_XOFF> gyro_x_offset_{};
+    dima::ParamFloat<dima::params::CAL_GYRO0_YOFF> gyro_y_offset_{};
+    dima::ParamFloat<dima::params::CAL_GYRO0_ZOFF> gyro_z_offset_{};
 
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};

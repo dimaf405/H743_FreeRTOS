@@ -108,15 +108,15 @@ private:
     uORB::Publication<vehicle_magnetometer_s>
         vehicle_magnetometer_publication_{ORB_ID(vehicle_magnetometer)};
 
-    px4::ParamFloat<px4::params::SENS_MAG_RATE> publication_rate_{};
-    px4::ParamInt<px4::params::CAL_MAG0_ID> calibration_id_{};
-    px4::ParamInt<px4::params::CAL_MAG0_ROT> calibration_rotation_{};
-    px4::ParamFloat<px4::params::CAL_MAG0_XOFF> x_offset_{};
-    px4::ParamFloat<px4::params::CAL_MAG0_YOFF> y_offset_{};
-    px4::ParamFloat<px4::params::CAL_MAG0_ZOFF> z_offset_{};
-    px4::ParamFloat<px4::params::CAL_MAG0_XSCALE> x_scale_{};
-    px4::ParamFloat<px4::params::CAL_MAG0_YSCALE> y_scale_{};
-    px4::ParamFloat<px4::params::CAL_MAG0_ZSCALE> z_scale_{};
+    dima::ParamFloat<dima::params::SENS_MAG_RATE> publication_rate_{};
+    dima::ParamInt<dima::params::CAL_MAG0_ID> calibration_id_{};
+    dima::ParamInt<dima::params::CAL_MAG0_ROT> calibration_rotation_{};
+    dima::ParamFloat<dima::params::CAL_MAG0_XOFF> x_offset_{};
+    dima::ParamFloat<dima::params::CAL_MAG0_YOFF> y_offset_{};
+    dima::ParamFloat<dima::params::CAL_MAG0_ZOFF> z_offset_{};
+    dima::ParamFloat<dima::params::CAL_MAG0_XSCALE> x_scale_{};
+    dima::ParamFloat<dima::params::CAL_MAG0_YSCALE> y_scale_{};
+    dima::ParamFloat<dima::params::CAL_MAG0_ZSCALE> z_scale_{};
 
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};

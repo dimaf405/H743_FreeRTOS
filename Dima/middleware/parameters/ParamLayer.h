@@ -43,7 +43,8 @@ class ParamLayer
 public:
 	// 层容量由官方生成的 parameters[] 唯一推导。
 	static constexpr param_t PARAM_COUNT = static_cast<param_t>(
-		sizeof(px4::parameters) / sizeof(px4::parameters[0]));
+		sizeof(dima::parameter_catalog::parameters) /
+		sizeof(dima::parameter_catalog::parameters[0]));
 
 	ParamLayer(ParamLayer *parent = nullptr) : _parent(parent) {}
 

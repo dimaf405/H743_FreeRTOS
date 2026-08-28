@@ -255,7 +255,7 @@ bool SensorCalibration::begin(Type type, std::uint64_t now,
     }
     if (type == Type::Accel || type == Type::Mag) {
         std::int32_t rotation = 0;
-        if (param_get(param_handle(px4::params::SENS_BOARD_ROT),
+        if (param_get(param_handle(dima::params::SENS_BOARD_ROT),
                       &rotation) != 0 ||
             !dima::lib::sensors::make_rotation_matrix(
                 rotation, board_rotation_matrix_)) {

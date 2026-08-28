@@ -89,26 +89,26 @@ bool SensorCalibration::restore_parameters() noexcept
         PARAM_INVALID, PARAM_INVALID, PARAM_INVALID,
         PARAM_INVALID, PARAM_INVALID, PARAM_INVALID};
     if (parameter_snapshot_.type == Type::Gyro) {
-        id = param_handle(px4::params::CAL_GYRO0_ID);
-        values[0] = param_handle(px4::params::CAL_GYRO0_XOFF);
-        values[1] = param_handle(px4::params::CAL_GYRO0_YOFF);
-        values[2] = param_handle(px4::params::CAL_GYRO0_ZOFF);
+        id = param_handle(dima::params::CAL_GYRO0_ID);
+        values[0] = param_handle(dima::params::CAL_GYRO0_XOFF);
+        values[1] = param_handle(dima::params::CAL_GYRO0_YOFF);
+        values[2] = param_handle(dima::params::CAL_GYRO0_ZOFF);
     } else if (parameter_snapshot_.type == Type::Accel) {
-        id = param_handle(px4::params::CAL_ACC0_ID);
-        values[0] = param_handle(px4::params::CAL_ACC0_XOFF);
-        values[1] = param_handle(px4::params::CAL_ACC0_YOFF);
-        values[2] = param_handle(px4::params::CAL_ACC0_ZOFF);
-        values[3] = param_handle(px4::params::CAL_ACC0_XSCALE);
-        values[4] = param_handle(px4::params::CAL_ACC0_YSCALE);
-        values[5] = param_handle(px4::params::CAL_ACC0_ZSCALE);
+        id = param_handle(dima::params::CAL_ACC0_ID);
+        values[0] = param_handle(dima::params::CAL_ACC0_XOFF);
+        values[1] = param_handle(dima::params::CAL_ACC0_YOFF);
+        values[2] = param_handle(dima::params::CAL_ACC0_ZOFF);
+        values[3] = param_handle(dima::params::CAL_ACC0_XSCALE);
+        values[4] = param_handle(dima::params::CAL_ACC0_YSCALE);
+        values[5] = param_handle(dima::params::CAL_ACC0_ZSCALE);
     } else if (parameter_snapshot_.type == Type::Mag) {
-        id = param_handle(px4::params::CAL_MAG0_ID);
-        values[0] = param_handle(px4::params::CAL_MAG0_XOFF);
-        values[1] = param_handle(px4::params::CAL_MAG0_YOFF);
-        values[2] = param_handle(px4::params::CAL_MAG0_ZOFF);
-        values[3] = param_handle(px4::params::CAL_MAG0_XSCALE);
-        values[4] = param_handle(px4::params::CAL_MAG0_YSCALE);
-        values[5] = param_handle(px4::params::CAL_MAG0_ZSCALE);
+        id = param_handle(dima::params::CAL_MAG0_ID);
+        values[0] = param_handle(dima::params::CAL_MAG0_XOFF);
+        values[1] = param_handle(dima::params::CAL_MAG0_YOFF);
+        values[2] = param_handle(dima::params::CAL_MAG0_ZOFF);
+        values[3] = param_handle(dima::params::CAL_MAG0_XSCALE);
+        values[4] = param_handle(dima::params::CAL_MAG0_YSCALE);
+        values[5] = param_handle(dima::params::CAL_MAG0_ZSCALE);
     } else {
         return false;
     }
@@ -342,11 +342,11 @@ bool SensorCalibration::commit_gyro(
     // 立即就地恢复旧值且不发送通知，避免前端看到半套校准。
     clear_parameter_snapshot();
     clear_parameter_expectation();
-    const param_t id = param_handle(px4::params::CAL_GYRO0_ID);
+    const param_t id = param_handle(dima::params::CAL_GYRO0_ID);
     const param_t values[3]{
-        param_handle(px4::params::CAL_GYRO0_XOFF),
-        param_handle(px4::params::CAL_GYRO0_YOFF),
-        param_handle(px4::params::CAL_GYRO0_ZOFF)};
+        param_handle(dima::params::CAL_GYRO0_XOFF),
+        param_handle(dima::params::CAL_GYRO0_YOFF),
+        param_handle(dima::params::CAL_GYRO0_ZOFF)};
     std::int32_t old_id{};
     float old[3]{};
     px4::AtomicTransaction transaction;
@@ -389,14 +389,14 @@ bool SensorCalibration::commit_accel(
     // 加速度事务固定为 ID + 三轴 offset + 三轴 diagonal scale，共七个参数。
     clear_parameter_snapshot();
     clear_parameter_expectation();
-    const param_t id = param_handle(px4::params::CAL_ACC0_ID);
+    const param_t id = param_handle(dima::params::CAL_ACC0_ID);
     const param_t values[6]{
-        param_handle(px4::params::CAL_ACC0_XOFF),
-        param_handle(px4::params::CAL_ACC0_YOFF),
-        param_handle(px4::params::CAL_ACC0_ZOFF),
-        param_handle(px4::params::CAL_ACC0_XSCALE),
-        param_handle(px4::params::CAL_ACC0_YSCALE),
-        param_handle(px4::params::CAL_ACC0_ZSCALE)};
+        param_handle(dima::params::CAL_ACC0_XOFF),
+        param_handle(dima::params::CAL_ACC0_YOFF),
+        param_handle(dima::params::CAL_ACC0_ZOFF),
+        param_handle(dima::params::CAL_ACC0_XSCALE),
+        param_handle(dima::params::CAL_ACC0_YSCALE),
+        param_handle(dima::params::CAL_ACC0_ZSCALE)};
     const double next[6]{offset.x, offset.y, offset.z,
                          scale.x, scale.y, scale.z};
     std::int32_t old_id{};
@@ -450,14 +450,14 @@ bool SensorCalibration::commit_mag(
         vehicle_magnetometer_.calibration_count;
     clear_parameter_snapshot();
     clear_parameter_expectation();
-    const param_t id = param_handle(px4::params::CAL_MAG0_ID);
+    const param_t id = param_handle(dima::params::CAL_MAG0_ID);
     const param_t values[6]{
-        param_handle(px4::params::CAL_MAG0_XOFF),
-        param_handle(px4::params::CAL_MAG0_YOFF),
-        param_handle(px4::params::CAL_MAG0_ZOFF),
-        param_handle(px4::params::CAL_MAG0_XSCALE),
-        param_handle(px4::params::CAL_MAG0_YSCALE),
-        param_handle(px4::params::CAL_MAG0_ZSCALE)};
+        param_handle(dima::params::CAL_MAG0_XOFF),
+        param_handle(dima::params::CAL_MAG0_YOFF),
+        param_handle(dima::params::CAL_MAG0_ZOFF),
+        param_handle(dima::params::CAL_MAG0_XSCALE),
+        param_handle(dima::params::CAL_MAG0_YSCALE),
+        param_handle(dima::params::CAL_MAG0_ZSCALE)};
     const double next[6]{offset.x, offset.y, offset.z,
                          scale.x, scale.y, scale.z};
     std::int32_t old_id{};

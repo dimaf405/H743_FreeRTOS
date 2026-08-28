@@ -309,10 +309,10 @@ void RcManualInput::reset_switch_parameter_state() noexcept
 bool RcManualInput::initialize_switch_parameter_handles() noexcept
 {
     // 直接消费生成参数枚举；开关业务只声明所需角色，不复制字符串名称表。
-    arm_mapping_handle_ = param_handle(px4::params::RC_MAP_ARM_SW);
-    kill_mapping_handle_ = param_handle(px4::params::RC_MAP_KILL_SW);
-    arm_threshold_handle_ = param_handle(px4::params::RC_ARMSWITCH_TH);
-    kill_threshold_handle_ = param_handle(px4::params::RC_KILLSWITCH_TH);
+    arm_mapping_handle_ = param_handle(dima::params::RC_MAP_ARM_SW);
+    kill_mapping_handle_ = param_handle(dima::params::RC_MAP_KILL_SW);
+    arm_threshold_handle_ = param_handle(dima::params::RC_ARMSWITCH_TH);
+    kill_threshold_handle_ = param_handle(dima::params::RC_KILLSWITCH_TH);
     return arm_mapping_handle_ != PARAM_INVALID &&
            kill_mapping_handle_ != PARAM_INVALID &&
            arm_threshold_handle_ != PARAM_INVALID &&

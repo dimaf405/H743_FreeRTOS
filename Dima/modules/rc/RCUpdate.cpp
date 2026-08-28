@@ -250,11 +250,11 @@ bool RCUpdate::initialize_parameter_handles() noexcept
         valid = valid && mapping_handles_[mapping] != PARAM_INVALID;
     }
 
-    channel_count_handle_ = param_handle(px4::params::RC_CHAN_CNT);
-    arm_threshold_handle_ = param_handle(px4::params::RC_ARMSWITCH_TH);
-    kill_threshold_handle_ = param_handle(px4::params::RC_KILLSWITCH_TH);
-    loss_timeout_handle_ = param_handle(px4::params::COM_RC_LOSS_T);
-    rc_input_mode_handle_ = param_handle(px4::params::COM_RC_IN_MODE);
+    channel_count_handle_ = param_handle(dima::params::RC_CHAN_CNT);
+    arm_threshold_handle_ = param_handle(dima::params::RC_ARMSWITCH_TH);
+    kill_threshold_handle_ = param_handle(dima::params::RC_KILLSWITCH_TH);
+    loss_timeout_handle_ = param_handle(dima::params::COM_RC_LOSS_T);
+    rc_input_mode_handle_ = param_handle(dima::params::COM_RC_IN_MODE);
     return valid && channel_count_handle_ != PARAM_INVALID &&
            arm_threshold_handle_ != PARAM_INVALID && kill_threshold_handle_ != PARAM_INVALID &&
            loss_timeout_handle_ != PARAM_INVALID &&

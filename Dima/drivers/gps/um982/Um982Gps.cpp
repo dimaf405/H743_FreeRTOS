@@ -91,7 +91,7 @@ bool Um982Gps::start() noexcept
         return true;
     }
     // 参数句柄只在启动时解析；运行期 parameter_update 仅刷新已生成参数的值。
-    yaw_offset_handle_ = param_handle(px4::params::GPS_YAW_OFFSET);
+    yaw_offset_handle_ = param_handle(dima::params::GPS_YAW_OFFSET);
     param_set_used(yaw_offset_handle_);
     if (!refresh_yaw_offset() || !ScheduleEnable()) {
         module_state_ = dima::middleware::lifecycle::ModuleState::Error;

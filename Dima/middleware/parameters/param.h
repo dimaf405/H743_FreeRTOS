@@ -44,8 +44,8 @@ typedef union param_value_u {
 
 typedef struct param_info_s {
     const char *name;
-    /* 字段布局严格匹配 PX4 官方 px4_parameters.hpp 模板；类型位于并行的
-     * parameters_type 表，不能在本地重新渲染一份合并目录。 */
+    /* 字段布局严格匹配锁定上游模板；类型位于并行的 parameters_type 表，
+     * 不能在本地重新渲染一份合并目录。 */
     param_value_u val;
 } param_info_s;
 
@@ -126,13 +126,17 @@ int param_storage_get_status(param_storage_status_s *status) PARAM_NOEXCEPT;
 #ifdef __cplusplus
 }
 
-namespace px4 {
+namespace dima::parameter_catalog {
 enum class params : uint16_t;
 }
 
-#include <parameters/px4_parameters.hpp>
+#include <parameters/dima_parameters.hpp>
 
-inline param_t param_handle(px4::params parameter) noexcept
+namespace dima {
+using params = parameter_catalog::params;
+}
+
+inline param_t param_handle(dima::params parameter) noexcept
 {
     return static_cast<param_t>(parameter);
 }
@@ -141,24 +145,24 @@ inline param_t param_handle(px4::params parameter) noexcept
 
 namespace do_not_explicitly_use_this_namespace
 {
-template<typename T, px4::params p> struct ParamTraits;
-template<px4::params p> struct ParamTraits<float, p> {
+template<typename T, dima::params p> struct ParamTraits;
+template<dima::params p> struct ParamTraits<float, p> {
     static constexpr param_type_t type = PARAM_TYPE_FLOAT;
     static int get(param_t h, float &v) { return param_get(h, &v); }
     static int set(param_t h, const float &v, bool notify) { return notify ? param_set(h, &v) : param_set_no_notification(h, &v); }
 };
-template<px4::params p> struct ParamTraits<int32_t, p> {
+template<dima::params p> struct ParamTraits<int32_t, p> {
     static constexpr param_type_t type = PARAM_TYPE_INT32;
     static int get(param_t h, int32_t &v) { return param_get(h, &v); }
     static int set(param_t h, const int32_t &v, bool notify) { return notify ? param_set(h, &v) : param_set_no_notification(h, &v); }
 };
-template<px4::params p> struct ParamTraits<bool, p> {
+template<dima::params p> struct ParamTraits<bool, p> {
     static constexpr param_type_t type = PARAM_TYPE_INT32;
     static int get(param_t h, bool &v) { int32_t raw{}; const int ret = param_get(h, &raw); v = raw != 0; return ret; }
     static int set(param_t h, const bool &v, bool notify) { const int32_t raw = v ? 1 : 0; return notify ? param_set(h, &raw) : param_set_no_notification(h, &raw); }
 };
 
-template<typename T, px4::params p>
+template<typename T, dima::params p>
 class Param
 {
 public:
@@ -166,7 +170,8 @@ public:
      * 标记 used；set 只改缓存，commit 才写全局参数层。 */
     constexpr Param() noexcept
     {
-        static_assert(px4::parameters_type[static_cast<unsigned>(p)] == ParamTraits<T, p>::type,
+        static_assert(dima::parameter_catalog::parameters_type[
+                          static_cast<unsigned>(p)] == ParamTraits<T, p>::type,
                       "parameter type mismatch");
     }
     bool bind()
@@ -210,12 +215,12 @@ private:
     bool _bound{false};
 };
 
-template<px4::params p> using ParamFloat = Param<float, p>;
-template<px4::params p> using ParamInt = Param<int32_t, p>;
-template<px4::params p> using ParamBool = Param<bool, p>;
+template<dima::params p> using ParamFloat = Param<float, p>;
+template<dima::params p> using ParamInt = Param<int32_t, p>;
+template<dima::params p> using ParamBool = Param<bool, p>;
 }
 
-namespace px4
+namespace dima
 {
 template<typename T, params p> using Param = do_not_explicitly_use_this_namespace::Param<T, p>;
 template<params p> using ParamFloat = do_not_explicitly_use_this_namespace::ParamFloat<p>;

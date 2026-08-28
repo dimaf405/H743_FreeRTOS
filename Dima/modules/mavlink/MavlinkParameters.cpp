@@ -26,10 +26,11 @@ void MavlinkParameters::reset() noexcept
 bool MavlinkParameters::prepare_parameter_catalogue() noexcept
 {
     namespace contract = dima::generated::parameters;
-    // MAVLink 直接遍历 PX4 官方目录的连续 handle；只校验生成总数，不再生成或
+    // MAVLink 直接遍历 Dima 生成目录的连续 handle；只校验生成总数，不再生成或
     // 维护第二份公开参数数组。
     static_assert(contract::kParameterCount ==
-                      sizeof(px4::parameters) / sizeof(px4::parameters[0]),
+                      sizeof(dima::parameter_catalog::parameters) /
+                          sizeof(dima::parameter_catalog::parameters[0]),
                   "official parameter catalogues must have the same size");
 
     if (!param_is_ready() || param_count() !=

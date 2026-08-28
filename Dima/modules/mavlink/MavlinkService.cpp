@@ -70,8 +70,8 @@ bool MavlinkService::start() noexcept
         dima::platform::board_hardware_uid());
     identity_.set_state(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, MAV_STATE_BOOT);
     // 协议参数使用生成枚举句柄；MAVLink 层不维护参数名或目录副本。
-    rc_loss_timeout_handle_ = param_handle(px4::params::COM_RC_LOSS_T);
-    mav_system_id_handle_ = param_handle(px4::params::MAV_SYS_ID);
+    rc_loss_timeout_handle_ = param_handle(dima::params::COM_RC_LOSS_T);
+    mav_system_id_handle_ = param_handle(dima::params::MAV_SYS_ID);
     if (rc_loss_timeout_handle_ == PARAM_INVALID ||
         mav_system_id_handle_ == PARAM_INVALID ||
         !refresh_protocol_parameters() ||

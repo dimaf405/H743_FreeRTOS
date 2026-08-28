@@ -167,7 +167,7 @@ bool SbusRc::start()
         return false;
     }
     // RC_INPUT_PROTO=0 是明确禁用，不占用串口；=2 才启用 SBUS。端口所有权
-    // 由 SerialConfig 从 PX4 参数注册表解析后提供，驱动不维护串口参数清单。
+    // 由 SerialConfig 从 Dima 生成参数目录解析后提供，驱动不维护串口参数清单。
     const std::int32_t protocol = rc_protocol_.get();
     const std::int32_t port = serial_assignments_.rc_input_port();
     const float loss_timeout_s = rc_loss_timeout_.get();

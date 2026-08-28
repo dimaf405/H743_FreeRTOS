@@ -30,16 +30,17 @@ int enumerate_changed(param_storage_visitor_t visitor, void *visitor_context,
     }
 
     for (param_t param = 0U; param < kCount; ++param) {
-        // PX4 YAML 标记为 volatile 的参数只存在于 RAM，不进入任何持久化后端。
+        // YAML 标记为 volatile 的参数只存在于 RAM，不进入任何持久化后端。
         if (!g_user_config->contains(param) || param_is_volatile(param)) {
             continue;
         }
         const param_value_u value = g_user_config->get(param);
-        const void *source = px4::parameters_type[param] == PARAM_TYPE_FLOAT
-                                 ? static_cast<const void *>(&value.f)
-                                 : static_cast<const void *>(&value.i);
-        const int result = visitor(px4::parameters[param].name,
-                                   px4::parameters_type[param],
+        const void *source =
+            dima::parameter_catalog::parameters_type[param] == PARAM_TYPE_FLOAT
+                ? static_cast<const void *>(&value.f)
+                : static_cast<const void *>(&value.i);
+        const int result = visitor(dima::parameter_catalog::parameters[param].name,
+                                   dima::parameter_catalog::parameters_type[param],
                                    source, visitor_context);
         if (result != 0) {
             return result;
@@ -59,7 +60,7 @@ int load_value_to_layer(const char *name, param_type_t type, const void *value,
     if (!valid(param)) {
         return -ENOENT;
     }
-    if (px4::parameters_type[param] != type) {
+    if (dima::parameter_catalog::parameters_type[param] != type) {
         return -EINVAL;
     }
     if (param_is_volatile(param)) {

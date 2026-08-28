@@ -70,7 +70,7 @@ public:
 			return {0};
 		}
 
-		return px4::parameters[param].val;
+		return dima::parameter_catalog::parameters[param].val;
 	}
 
 	void reset(param_t param) override

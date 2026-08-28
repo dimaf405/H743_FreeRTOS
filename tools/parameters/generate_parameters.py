@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""调用锁定的 PX4 Parameter YAML 工具，并生成 Dima 的薄运行时合同。"""
+"""调用锁定的上游 Parameter YAML 工具，并生成 Dima 薄运行时合同。"""
 
 from __future__ import annotations
 
@@ -35,14 +35,14 @@ RC_CALIBRATION_NAME = re.compile(
 PARAMETER_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 GENERATED_HEADER = """/****************************************************************************
- * Generated from PX4 Parameter YAML outputs. DO NOT EDIT.
+ * Generated from locked upstream Parameter YAML outputs. DO NOT EDIT.
  ****************************************************************************/
 """
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate the Dima parameter catalogue with upstream PX4 tools"
+        description="Generate the Dima parameter catalogue with locked upstream tools"
     )
     parser.add_argument("--yaml", action="append", required=True, type=Path)
     parser.add_argument(
@@ -92,21 +92,21 @@ def verify_upstream_source(root: Path) -> None:
 def upstream_tools(root: Path) -> dict[str, Path]:
     root = root.resolve()
     return {
-        "validate": require_file(root / "Tools/validate_yaml.py", "PX4 YAML validator"),
+        "validate": require_file(root / "Tools/validate_yaml.py", "upstream YAML validator"),
         "schema": require_file(
-            root / "validation/module_schema.yaml", "PX4 module schema"
+            root / "validation/module_schema.yaml", "upstream module schema"
         ),
         "module": require_file(
             root / "Tools/module_config/generate_params.py",
-            "PX4 module parameter generator",
+            "upstream module parameter generator",
         ),
         "process": require_file(
             root / "src/lib/parameters/px_process_params.py",
-            "PX4 parameter metadata generator",
+            "upstream parameter metadata generator",
         ),
         "header": require_file(
             root / "src/lib/parameters/px_generate_params.py",
-            "PX4 parameter header generator",
+            "upstream parameter header generator",
         ),
     }
 
@@ -133,12 +133,12 @@ def load_catalogue(path: Path) -> list[dict[str, Any]]:
     document = json.loads(path.read_text(encoding="utf-8"))
     parameters = document.get("parameters")
     if not isinstance(parameters, list) or not parameters:
-        raise RuntimeError("official PX4 JSON has no parameter catalogue")
+        raise RuntimeError("official upstream JSON has no parameter catalogue")
 
     names: list[str] = []
     for parameter in parameters:
         if not isinstance(parameter, dict):
-            raise RuntimeError("official PX4 JSON contains a non-object parameter")
+            raise RuntimeError("official upstream JSON contains a non-object parameter")
         name = parameter.get("name")
         parameter_type = parameter.get("type")
         if not isinstance(name, str) or not PARAMETER_NAME.fullmatch(name):
@@ -150,7 +150,7 @@ def load_catalogue(path: Path) -> list[dict[str, Any]]:
         names.append(name)
 
     if len(names) != len(set(names)):
-        raise RuntimeError("official PX4 JSON contains duplicate parameter names")
+        raise RuntimeError("official upstream JSON contains duplicate parameter names")
     return parameters
 
 
@@ -161,7 +161,7 @@ def xml_parameter_names(path: Path) -> list[str]:
         if "name" in element.attrib
     ]
     if not names or len(names) != len(set(names)):
-        raise RuntimeError("official PX4 XML parameter catalogue is empty or duplicated")
+        raise RuntimeError("official upstream XML parameter catalogue is empty or duplicated")
     return names
 
 
@@ -296,27 +296,27 @@ def render_parameter_contract(
     calibration, mapping = rc_contract(catalogue)
 
     calibration_fields = [field for field, _ in calibration[0][1]]
-    calibration_members = [f"    px4::params {field};" for field in calibration_fields]
+    calibration_members = [f"    dima::params {field};" for field in calibration_fields]
     calibration_rows = [
         "    {"
-        + ", ".join(f"px4::params::{name}" for _, name in fields)
+        + ", ".join(f"dima::params::{name}" for _, name in fields)
         + "}"
         for _, fields in calibration
     ]
 
     mapping_roles = [f"    {role}," for role, _ in mapping]
-    mapping_rows = [f"    px4::params::{name}," for _, name in mapping]
+    mapping_rows = [f"    dima::params::{name}," for _, name in mapping]
 
     fixed_rows: list[str] = []
     for parameter in fixed:
         if parameter["type"] == "Int32":
             fixed_rows.append(
-                "    {px4::params::%s, FixedParameterType::Int32, %d, 0.0F},"
+                "    {dima::params::%s, FixedParameterType::Int32, %d, 0.0F},"
                 % (parameter["name"], int(parameter["default"]))
             )
         else:
             fixed_rows.append(
-                "    {px4::params::%s, FixedParameterType::Float, 0, %s},"
+                "    {dima::params::%s, FixedParameterType::Float, 0, %s},"
                 % (parameter["name"], float_literal(parameter["default"]))
             )
 
@@ -331,10 +331,11 @@ def render_parameter_contract(
         "",
         "namespace dima::generated::parameters {",
         "",
-        "// 参数总数由官方 XML/JSON 闭包生成，并在编译期与 PX4 头中的表长度互证。",
+        "// 参数总数由官方 XML/JSON 闭包生成，并与 Dima 公开目录长度互证。",
         f"inline constexpr std::size_t kParameterCount = {len(catalogue)}U;",
         "static_assert(kParameterCount ==",
-        "              sizeof(px4::parameters) / sizeof(px4::parameters[0]));",
+        "              sizeof(dima::parameter_catalog::parameters) /",
+        "                  sizeof(dima::parameter_catalog::parameters[0]));",
         "// BSON 公式为 5 + Σ(type byte + UTF-8 name + NUL + wire value)。",
         "inline constexpr std::size_t kParameterStorageMaxBytes = "
         f"{parameter_storage_capacity(catalogue)}U;",
@@ -342,7 +343,7 @@ def render_parameter_contract(
         "enum class FixedParameterType : std::uint8_t { Int32, Float };",
         "",
         "struct FixedParameterConstraint {",
-        "    px4::params parameter;",
+        "    dima::params parameter;",
         "    FixedParameterType type;",
         "    std::int32_t int32_value;",
         "    float float_value;",
@@ -373,7 +374,7 @@ def render_parameter_contract(
         "};",
         "",
         "// 枚举与数组由同一组 RC_MAP_* 官方 JSON 条目同时生成，索引不会人工漂移。",
-        "inline constexpr px4::params kRcMappingParameters[]{",
+        "inline constexpr dima::params kRcMappingParameters[]{",
         *mapping_rows,
         "};",
         "inline constexpr std::size_t kRcMappingParameterCount =",
@@ -391,26 +392,26 @@ def write_include_tree(
     destination: Path, official_header: Path, parameter_contract: Path
 ) -> None:
     parameters = destination / "parameters"
-    common = destination / "px4_platform_common"
     parameters.mkdir(parents=True, exist_ok=True)
-    common.mkdir(parents=True, exist_ok=True)
 
-    # PX4 当前模板没有 include guard；安装头只增加一次包含保护，
-    # 正文仍与 build/generated 中的官方原始产物完全一致。目录数量
-    # 在派生合同中由 parameters[] 长度验证，不往官方头追加本地 API。
+    # 上游原始头仍完整保留在 build/generated；公开安装头只机械替换产品命名
+    # 空间并增加一次包含保护。参数枚举、数组、类型和顺序不在适配层重渲染。
     header_text = official_header.read_text(encoding="utf-8")
-    (parameters / "px4_parameters.hpp").write_text(
-        "#pragma once\n" + header_text,
+    namespace_token = "namespace px4"
+    if header_text.count(namespace_token) != 2:
+        raise RuntimeError(
+            "official parameter header has an unexpected namespace layout"
+        )
+    dima_header = header_text.replace(
+        namespace_token, "namespace dima::parameter_catalog"
+    )
+    (parameters / "dima_parameters.hpp").write_text(
+        "#pragma once\n" + dima_header,
         encoding="utf-8",
         newline="\n",
     )
     (parameters / "parameter_contract.hpp").write_bytes(
         parameter_contract.read_bytes()
-    )
-    (common / "param.h").write_text(
-        '#pragma once\n#include "parameters/param.h"\n',
-        encoding="utf-8",
-        newline="\n",
     )
 
 
@@ -489,7 +490,7 @@ def main() -> int:
         parameters_xml = output_stage / "parameters.xml"
         parameters_json = output_stage / "parameters.json"
 
-        # 正式链逐段调用锁定的 PX4 原脚本；本地代码只负责输入、输出和失败边界。
+        # 正式链逐段调用锁定的上游原脚本；本地代码只负责输入、输出和失败边界。
         run_tool(
             [
                 sys.executable,
@@ -537,7 +538,7 @@ def main() -> int:
         )
 
         official_header = output_stage / "px4_parameters.hpp"
-        require_file(official_header, "PX4 generated parameter header")
+        require_file(official_header, "upstream generated parameter header")
         catalogue = load_catalogue(parameters_json)
         xml_names = xml_parameter_names(parameters_xml)
         contract = output_stage / "parameter_contract.hpp"
@@ -560,7 +561,7 @@ def main() -> int:
             if stage.exists():
                 shutil.rmtree(stage)
 
-    print(f"generated {len(catalogue)} PX4 YAML parameters in {output}")
+    print(f"generated {len(catalogue)} Dima YAML parameters in {output}")
     return 0
 
 
