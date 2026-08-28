@@ -7,7 +7,7 @@
 
 ## 板级串口编号与 SBUS 配置
 
-PX4 `Dima/middleware/parameters/definitions/module_serial.yaml` 是串口参数与物理映射的唯一源。编号直接对应 `H743_FreeRTOS.ioc` 的 STM32 外设尾号；板上没有 UART5，所以 `SERIAL5` 留空，`SERIAL6` 仍表示 USART6，禁止压缩编号或按旧 ArduPilot `SERIAL_ORDER` 重新排列：
+`Dima/middleware/parameters/definitions/module_serial.yaml` 是串口参数与物理映射的唯一源。编号直接对应 `H743_FreeRTOS.ioc` 的 STM32 外设尾号；板上没有 UART5，所以 `SERIAL5` 留空，`SERIAL6` 仍表示 USART6，禁止压缩编号或按旧 ArduPilot `SERIAL_ORDER` 重新排列：
 
 | 固定序号 | STM32 外设 | TX / RX | 板级连接器角色 | 参数默认值 |
 |---:|---|---|---|---|
@@ -20,7 +20,7 @@ PX4 `Dima/middleware/parameters/definitions/module_serial.yaml` 是串口参数�
 | SERIAL7 | UART7 | PE8 / PE7 | 串口 7 | `SERIAL7_BAUD=57600`、Function Disabled |
 | SERIAL8 | UART8 | PE1 / PE0 | 串口 8 | `SERIAL8_BAUD=115200`、Function Disabled |
 
-七路物理 UART 的普通 baud 都由同一 PX4 YAML 定义；GPS 已由 UM982 driver 使用，串口 MAVLink 和 RS485 数据服务仍未实现。PB10/PB11 的 I2C2 配置保持不变，PB12/PB13 不再声明为 UART5。
+七路物理 UART 的普通 baud 都由同一 Dima YAML 定义；GPS 已由 UM982 driver 使用，串口 MAVLink 和 RS485 数据服务仍未实现。PB10/PB11 的 I2C2 配置保持不变，PB12/PB13 不再声明为 UART5。
 
 每个实际外部端口固定定义 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前 Function 为 `0=Disabled`、`1=SBUS`、`2=GPS`。SBUS 和 GPS 各自只能有一个 owner，同一个 UART 也不能同时被二者占用；异常存储或冲突写入必须 fail-closed。通过 QGC 把目标端口设为 SBUS 时，固件会在同一参数事务中把旧 SBUS owner 设为 Disabled。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
 

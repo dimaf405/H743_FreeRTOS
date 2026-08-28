@@ -1,6 +1,6 @@
 # SerialConfig 模块
 
-本目录从 PX4 `Dima/middleware/parameters/definitions/module_serial.yaml` 生成的官方参数注册表发现串口参数，并在模块启动时校验七路物理串口的波特率、功能、唯一 SBUS owner 和唯一 GPS owner。`SERIAL5` 因板上没有 UART5 而保留为空号，USART6 仍固定对应 `SERIAL6`。
+本目录从 `Dima/middleware/parameters/definitions/module_serial.yaml` 生成的 Dima 参数目录发现串口参数，并在模块启动时校验七路物理串口的波特率、功能、唯一 SBUS owner 和唯一 GPS owner。`SERIAL5` 因板上没有 UART5 而保留为空号，USART6 仍固定对应 `SERIAL6`。
 
 - 当前 Function 固定为 `0=Disabled`、`1=SBUS`、`2=GPS`；SBUS 和 GPS 各自只能有一个 owner，同一个 UART 不能由二者同时占用。
 - `SERIAL1/2/3/4/6/7/8_BAUD/FUNCTION` 只在标准 PX4 YAML 参数段定义；每对参数的描述明确记录同编号 UART/USART 与 TX/RX 引脚，不使用自定义 YAML 扩展。GPS 端口唯一由某一路 `SERIALx_FUNCTION=GPS` 指定，`GPS_1_PROTOCOL` 仍属于 GPS 驱动参数 schema。

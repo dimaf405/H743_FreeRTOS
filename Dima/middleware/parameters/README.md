@@ -2,23 +2,24 @@
 
 ## 唯一参数定义与生成链
 
-- Parameter YAML 工具固定为 PX4 commit `1f6b6f61f8f42eaab0269c16a442cb580f954d7c`；`tools/upstream/parameter_yaml_20260827/SOURCE_MANIFEST.json` 对原始脚本、schema、模板和 helper 做逐文件 SHA-256 闭包校验。
-- `definitions/module_*.yaml` 是产品参数的唯一受版本控制定义。串口参数直接定义在 `definitions/module_serial.yaml`；DroneCAN 参数仍由其 schema/manifest 在 `build/generated` 生成 PX4 YAML 片段，两者统一并入同一条正式链。
+- Parameter YAML 工具固定为上游 commit `1f6b6f61f8f42eaab0269c16a442cb580f954d7c`；`tools/upstream/parameter_yaml_20260827/SOURCE_MANIFEST.json` 对原始脚本、schema、模板和 helper 做逐文件 SHA-256 闭包校验。
+- `definitions/module_*.yaml` 是产品参数的唯一受版本控制定义。串口参数直接位于 `definitions/module_serial.yaml`，DroneCAN 参数直接位于 `definitions/module_dronecan.yaml`；二者与其他模块地位相同，不从 JSON/schema 或构建目录片段生成。
 - 源码树禁止 `PARAM_DEFINE_*`、本地 C 注释 parser/renderer、`qgc_required` 扩展、手写参数目录和运行时参数名名单。
 
 ```text
-PX4 Parameter YAML
+Dima module_*.yaml
 → Tools/validate_yaml.py + validation/module_schema.yaml
 → Tools/module_config/generate_params.py
 → build/generated/parameters/module_params.c
 → src/lib/parameters/px_process_params.py
 → parameters.xml + parameters.json
 → src/lib/parameters/px_generate_params.py
-→ px4_parameters.hpp
-→ Dima 薄运行时合同与 Component Metadata
+→ 上游原始暂存头
+→ dima_parameters.hpp / dima::params
+→ Dima 运行时合同与 Component Metadata
 ```
 
-`module_params.c` 只是在构建目录中串接两段 PX4 官方工具的中间产物，不进入源码树，也不得人工修改。采用较新的 YAML 工具只替换生成方式，不导入 PX4 主线的新参数、新默认值或新产品策略。
+`module_params.c` 和上游原始头只是在构建目录中串接工具的中间产物，不进入源码树，也不得人工修改。原始脚本固定输出的文件名和 `px4` 命名空间仅保留在该暂存头；公开安装头机械适配为 `dima_parameters.hpp`、`dima::parameter_catalog` 和 `dima::params`，不改变枚举、数组、类型或顺序。采用较新的 YAML 工具只替换生成方式，不导入上游主线的新参数、新默认值或新产品策略。
 
 ## 生成物与下游边界
 
@@ -30,7 +31,7 @@ PX4 Parameter YAML
 
 ## Parameter Core 与持久化
 
-- 固件通过官方 `px4::parameters`、`parameters_type` 与 `px4::Param<T>` 访问参数；`Param<T>` 构造不访问 Core，模块每次 start 显式 `bind()`。
+- 固件通过生成的 `dima::parameter_catalog::parameters`、`parameters_type` 与 `dima::Param<T>` 访问参数；`Param<T>` 构造不访问 Core，模块每次 start 显式 `bind()`。
 - Parameter Core 的运行期状态、事务及 get/set/reset 位于 `param.cpp`；持久化后端注册、save/load/status 位于 `param_storage.cpp`，公开兼容接口统一由 `param.h` 提供。
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
 - ParameterService 与 Autosave 固定运行于独立低优先级 `wq:storage`；Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，并按 10 ms 小步推进。ENOSPC 进入可恢复暂停态，SD 从 unavailable 转为 available 后恢复受控保存。
@@ -47,6 +48,6 @@ PX4 Parameter YAML
 
 ## 验证边界
 
-正式 Make 入口会验证上游来源清单、PX4 YAML schema、官方 XML/JSON/Header 一致性、派生 Metadata、五个删除参数的全闭包缺失和架构边界。未新增或修改测试文件、测试框架、runner、fixture、mock 或 test-only API。
+正式 Make 入口会验证上游来源清单、YAML schema、XML/JSON/Header 一致性、派生 Metadata、五个删除参数的全闭包缺失和架构边界。未新增或修改测试文件、测试框架、runner、fixture、mock 或 test-only API。
 
 Windows 生成、编译和 ELF 检查不能代替实板证明。同上电 `shutdown → init → start`、掉电恢复、损坏回退、ENOSPC、在线 MAVLink 调参、SD 空闲/写入中反复拔插时 HEARTBEAT 与遥测速率保持非零，以及 QGC 5.1.3 陀螺仪/加速度计/磁力计校准回归仍按最终报告标记 `BOARD/QGC PENDING`。

@@ -1,7 +1,7 @@
 # DroneCAN RM3100 磁力计链路与校准
 
 本目录只拥有 RM3100/Mag2 transport 参数、source binding、Mag/Mag2 解码、500 ms timeout 处理与原始 `sensor_mag` 发布。
-最小通用 DroneCAN node/session、NodeStatus 和 GetNodeInfo 由 `lib/protocols/dronecan/DroneCanNode.*` 负责，本驱动只消费该能力，不复制通用节点实现。
+最小通用 DroneCAN node/session、NodeStatus 和 GetNodeInfo 由 `Dima/lib/dronecan/DroneCanNode.*` 负责，本驱动只消费该能力，不复制通用节点实现。
 
 ## 固定来源
 
@@ -12,7 +12,7 @@
 
 ## 运行合同
 
-- `UAVCAN1_ENABLE/BITRATE/NODE_ID` 位于 `UAVCAN` 参数组；`MAG1_CAN_NODE` 位于 `Magnetometer` 组。`SENS_MAG_RATE` 和 `CAL_MAG0_*` 只由独立 `VehicleMagnetometer` 前端拥有。
+- `module_dronecan.yaml` 与其他 `module_*.yaml` 一样直接进入统一参数工具链；`UAVCAN1_ENABLE/BITRATE/NODE_ID` 位于 `UAVCAN` 参数组，`MAG1_CAN_NODE` 位于 `Magnetometer` 组。驱动通过生成的 `dima::ParamInt` 绑定这些参数，不保留 JSON、构建目录 YAML 或 DroneCAN 专用参数头。`SENS_MAG_RATE` 和 `CAL_MAG0_*` 只由独立 `VehicleMagnetometer` 前端拥有。
 - 共享节点能力提供静态节点 ID、1 Hz NodeStatus 和 GetNodeInfo；本驱动订阅 Mag/Mag2，并由 transfer-ID tracker 拒绝重复/过期传输。
 - DroneCAN 驱动只发布未套用 `CAL_MAG0_*` 的 `sensor_mag`，设备 ID 为 0、旧 ID 失配或校准无效都不能阻断原始数据。
 - `Dima/modules/sensors/magnetometer/VehicleMagnetometer.*` 独立订阅 `sensor_mag`，按检测到的 device ID 选择匹配校准或 PX4 identity correction，再按 `SENS_MAG_RATE` 的 1..200 Hz 上限平均并发布 `vehicle_magnetometer`。该参数不改变远端 RM3100 的硬件采样率。
