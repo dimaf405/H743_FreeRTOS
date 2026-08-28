@@ -19,7 +19,7 @@
 - 单调微秒时间。
 - WorkQueue 和 ScheduledWorkItem 兼容接口。
 - uORB Publication/Subscription 兼容接口。
-- Parameter Core、`px4::Param<T>`、Event、Perf 和 Logging 后端。
+- Parameter Core、公开的 `dima::Param<T>` 适配、Event、Perf 和 Logging 后端。
 - STM32 HAL 的 UART、DMA、PWM、Flash、USB 和传感器适配。
 
 不再要求全系统完全静态确定：启动期和非实时服务允许受控动态分配；ISR、控制循环、EKF2 更新、Arming/Failsafe、Mixer 和 PWM 输出路径禁止动态分配。

@@ -225,7 +225,7 @@ uORB 初始化使用带 `allocate/deallocate` 的受控 D1 Heap backend；初始
 
 ## 7. 后续阶段
 
-阶段 2 开始移植 Parameter Core 与 `px4::Param<T>`。参数系统必须复用成熟 PX4 Parameter API 和生成逻辑，不设置固定 64 项容量，并提供 USB 在线 `param get/set/show/save/reset/status`。
+阶段 2 开始移植 Parameter Core，并将成熟上游显式 bind/update 语义公开为 `dima::Param<T>`。参数系统继续复用锁定的 Parameter YAML 生成逻辑，不设置固定 64 项容量，并提供 USB 在线 `param get/set/show/save/reset/status`。
 
 ## 8. 阶段 2 目录迁移前后构建资源
 

@@ -19,7 +19,7 @@
 
 | 字段 | 内容 |
 |---|---|
-| 用途 | Parameter Core、`px4::Param<T>`、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl RC 子集、Commander Rover 子集、RoverDifferential、执行器链、MAVLink v2.0 协议处理和后续 EKF2 |
+| 用途 | Parameter Core、`dima::Param<T>` 公开适配、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl RC 子集、Commander Rover 子集、RoverDifferential、执行器链、MAVLink v2.0 协议处理和后续 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
 | 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
 | 当前状态 | 阶段 1～4 基础链已按 v1.17.0 接口和行为适配；阶段 5 已接通 Manual 两轴请求、RoverDifferential、MotorOutput 和六路 PWM，源码/目标构建通过，板级波形验证待完成 |
@@ -79,7 +79,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | 子系统 | 上游来源 | 计划本地位置 | 阶段 | 当前状态 |
 |---|---|---|---:|---|
 | 时间、WorkQueue、uORB、Logging 兼容接口 | PX4 v1.17.0 | `Dima/platform/api/`、`Dima/platform/stm32h7/system/Clock.cpp`、`Dima/middleware/` | 1 | ADAPTED / PLATFORM ISOLATED |
-| Parameter Core、`px4::Param<T>` | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / TARGET VERIFY PASS |
+| Parameter Core、`dima::Param<T>` | PX4 v1.17.0 | `Dima/middleware/parameters/` | 2 | ADAPTED / TARGET VERIFY PASS |
 | SBUS、SbusRc、RCUpdate、ManualControl RC 子集 | PX4 v1.17.0 | `Dima/lib/protocols/sbus/`、`Dima/drivers/rc/sbus/`、`Dima/modules/rc/`、`Dima/platform/stm32h7/serial/` | 3 | ADAPTED / PLATFORM ISOLATED / BOARD PENDING |
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/rover/control/`、`Dima/lib/rover/`、`Dima/modules/motor/` | 5 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
@@ -98,14 +98,15 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | Parameter YAML | PX4 commit `1f6b6f61f8f42eaab0269c16a442cb580f954d7c` | `tools/upstream/parameter_yaml_20260827/`、`SOURCE_MANIFEST.json` | 原始 validate/module generator/process/header 脚本与 schema/template 逐文件 SHA-256；产品只保留 YAML 权威输入 |
 | uORB | PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` | `tools/upstream/uorb_v1_17/`、`SOURCE_MANIFEST.json` | 原始脚本/helper/EmPy 模板与 PX4 同名参考 schema 逐文件 SHA-256；Topic ID/hash/JSON/registry 全部派生 |
 | MAVLink wire | definitions commit `33af200d25ec6f0925b49b1ba82bbf1294ea5f72`；pymavlink 2.4.47 commit `fcaa2c7d25e3169dc66155929c338487941555e9` | `tools/mavlink/message_definitions/`、`mavlink.lock.json` | 固定 XML SHA-256、pymavlink archive/tree SHA-256；`dima.xml` 直接进入原始 mavgen，运行 YAML 不参与 wire |
+| DroneCAN DSDL | PX4/DSDL commit `993be80a62ec957c01fb41115b83663959a49f46`；dronecan_dsdlc commit `431170fa4bfe2212b516b8f33bdc796267907f1c` | `Middlewares/Third_Party/dronecan_dsdl/`、`SOURCE.md`；薄编排位于 `tools/dronecan/generate_contract.py` | 受版本控制的 DSDL 目录是 wire 唯一输入，工具自动发现完整文件闭包并生成 codec/描述符；不保留 DroneCAN JSON、消息清单或参数特例，产品参数独立来自 `module_dronecan.yaml` |
 
 `tools/generation/source_manifest.py` 与架构门禁动态扫描文件集合，不在 Make/Python/文档中复制上游文件或消息名称列表。来源目录增删或任一文件 hash 漂移都会在正式生成前失败。
 
 | 上游原始路径/功能 | 本地映射 | 适配方式 | 状态 |
 |---|---|---|---|
 | `src/lib/parameters/parameters.cpp`、Parameter Layer/Core、AtomicTransaction | `Dima/middleware/parameters/` | 保留 `param_*`、稀疏 Layer、事务及参数更新语义；锁、执行上下文和内存只通过公共 capability | ADAPTED / PLATFORM ISOLATED |
-| `platforms/common/include/px4_platform_common/param.h` | `Dima/middleware/parameters/` | 保留 `px4::Param<T>` 的显式 bind/update 与参数访问接口 | ADAPTED |
-| `Tools/validate_yaml.py`、`Tools/module_config/generate_params.py`、`src/lib/parameters/{px_process_params.py,px_generate_params.py,px4params/,templates/}` | `tools/upstream/parameter_yaml_20260827/`；薄编排位于 `tools/parameters/generate_parameters.py` | 原始工具依次生成中间 `module_params.c`、XML/JSON 和 `px4_parameters.hpp`；Dima 只从官方产物派生运行时合同，不保留本地 parser/renderer | UNMODIFIED UPSTREAM / THIN ORCHESTRATION |
+| `platforms/common/include/px4_platform_common/param.h` | `Dima/middleware/parameters/` | 保留显式 bind/update 语义，对产品公开为 `dima::Param<T>` 与 `dima::params` | ADAPTED / DIMA PUBLIC API |
+| `Tools/validate_yaml.py`、`Tools/module_config/generate_params.py`、`src/lib/parameters/{px_process_params.py,px_generate_params.py,px4params/,templates/}` | `tools/upstream/parameter_yaml_20260827/`；薄编排位于 `tools/parameters/generate_parameters.py` | 原始工具依次生成中间 `module_params.c`、XML/JSON 和原始暂存头；Dima 只机械安装 `dima_parameters.hpp` 并从官方产物派生运行时合同，不保留本地 parser/renderer | UNMODIFIED UPSTREAM / THIN ORCHESTRATION |
 | `Tools/msg/px_generate_uorb_topic_files.py`、helper 与 `templates/uorb/*.em` | `tools/upstream/uorb_v1_17/`；薄编排位于 `tools/uorb/generate_messages.py` | 原始工具从 PascalCase PX4 `.msg` 生成 Topic 头/源、ID、hash、JSON 和 `uORBTopics`；旧 `.hpp` 路径只由 `ORB_DECLARE` 动态派生 include-only 转发头 | UNMODIFIED UPSTREAM / THIN ORCHESTRATION |
 | `src/lib/tinybson/tinybson.h/.cpp` | `Dima/lib/tinybson/` | 保留上游 BSD 头；删除 fd、POSIX 和动态扩容路径，仅保留固定 Buffer 编解码 | ADAPTED |
 | `src/lib/parameters/flashparams/` | `Dima/middleware/parameters/flashparams/` | 改为 Parameter enumerator/visitor 与 TinyBSON Buffer 之间的适配，不直接访问文件系统 | ADAPTED |
@@ -116,7 +117,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp` | `Dima/middleware/logging/`、`Dima/modules/logging/` | 保留 PX4 日志宏和 SourcePolicy；uORB 初始化后注册 non-blocking structured sink，普通/RAW 日志写入深度 8 的 `mavlink_log`，MavlinkService 有界转为 STATUSTEXT；RAW 只绕过普通等级过滤，不绕过实时格式化禁令，因此 QGC 校准事务固定运行于非实时 `wq:lp_default`；Event Ring 继续独立保存安全事件 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | `src/lib/rc/sbus.h`、`src/lib/rc/sbus.cpp` | `Dima/lib/protocols/sbus/SbusProtocol.*` | 保留 25-byte 帧、16 路 11-bit 通道、数字 17/18、4 ms 重同步、Failsafe/Frame-Lost 与 PX4 数值映射；移除 POSIX 串口和 SBUS 输出 | ADAPTED |
 | `src/drivers/rc/sbus_rc/SbusRc.hpp`、`SbusRc.cpp`；ArduPilot `AP_RCProtocol::requires_3_frames()` 行为 | `Dima/drivers/rc/sbus/SbusRc.*` | 保留 WorkItem 接收、锁定、重试和 `input_rc` 发布流程；无强 CRC 的 SBUS 冷启动/Failsafe/UART 恢复后要求连续 3 个健康帧，锁定前仍发布原始通道但标记 lost；驱动显式申请 100000 8E2/RXINV/RX-only 通用串口 capability，任务上下文输出锁定/失联/恢复/Failsafe 和单次后端故障日志；ArduPilot 仅作行为参考，未复制 GPL 实现 | ADAPTED / PLATFORM ISOLATED |
-| PX4 串口参数与板级 SBUS/GPS 输入行为 | `Dima/middleware/parameters/definitions/module_serial.yaml`、`Dima/modules/serial/SerialConfig.*`、`Dima/platform/stm32h7/serial/` | 标准 PX4 参数段是 SERIAL 参数唯一源，既有包装器只调用锁定 PX4 validator/generator，不含串口特化，也不生成串口专用合同。SerialConfig 从官方参数注册表按命名规则发现参数；STM32 句柄、DMA、IRQ 与 GPIO token 留在板级实现。SERIAL5 因无 UART5 留空，Disabled/SBUS/GPS 均按单 owner fail-closed | DIMA BACKEND / TARGET VERIFY PASS / BOARD PENDING |
+| PX4 串口参数与板级 SBUS/GPS 输入行为 | `Dima/middleware/parameters/definitions/module_serial.yaml`、`Dima/modules/serial/SerialConfig.*`、`Dima/platform/stm32h7/serial/` | 标准 `module_serial.yaml` 是 SERIAL 参数唯一源，既有包装器只调用锁定上游 validator/generator，不含串口特化，也不生成串口专用合同。SerialConfig 从 `dima::parameter_catalog` 按命名规则发现生成参数；STM32 句柄、DMA、IRQ 与 GPIO token 留在板级实现。SERIAL5 因无 UART5 留空，Disabled/SBUS/GPS 均按单 owner fail-closed | DIMA BACKEND / TARGET VERIFY PASS / BOARD PENDING |
 | `src/modules/rc_update/rc_update.h`、`rc_update.cpp` | `Dima/modules/rc/RCUpdate.*` | 保留 18 通道校准、主控制与 Arm/Kill 功能映射、开关离散化、失联与 `parameter_update` 语义；退役无消费者的 Flaps/Aux 参数及后端 uORB 字段；协议锁定后再要求连续健康 100 ms 才解除控制 lost，frame-lost 只计数；差速 Rover 默认 Throttle/Yaw=通道 1/2，Roll/Pitch 默认未映射且不进入车辆输出；`COM_RC_IN_MODE` 非 0 时 fail-closed；裁剪 `PARAM_MAP_RC` 任意参数调节及非 Rover 功能 | ADAPTED |
 | `src/modules/manual_control/ManualControl.hpp`、`ManualControl.cpp`；ArduPilot RC switch debounce 行为 | `Dima/modules/rc/RcManualInput.*` | 保留 RC setpoint 和二段开关边沿 Action Request；Arm/Kill 必须至少两份严格前进的一致样本并稳定 200 ms，启动、RC 恢复及映射/阈值变化后首个稳定状态只建立无动作基线；本地名称明确其只拥有 RC 来源转换，ArduPilot 仅作行为参考 | ADAPTED |
 | `src/modules/commander/Commander.hpp`、`Commander.cpp`、`ModeUtil/control_mode.*`；ArduPilot Rover 左右电机 pre-arm 行为 | `Dima/modules/safety/Commander.*` | 保留 Action Request、Arming/Kill/Termination、QGC RC calibration、状态发布顺序和 Manual/Termination 语义；通过 `actuator_output_status` 要求新鲜/严格前进、后端 ready、至少一右一左映射及 `DISARMED_NEUTRAL`，Armed 输出 Fault/Stale 强制 Disarm；允许新鲜完整 hard-off 先清执行器 cause，避免恢复自锁；Kill 固定为 Disarm，Unkill 不自动 Arm；ArduPilot 仅作行为参考 | ADAPTED |
@@ -131,7 +132,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | 旧 Dima `speed_to_pwm` 固定六路转换 | 已移除 | 自建仓以来没有生产调用，历史唯一消费者为已删除的 Host Test；当前六路参数化转换与 safe-off 所有权统一由 `Dima/modules/motor/MotorOutput.*` 承担 | RETIRED / SUPERSEDED |
 | Stage 5 Rover 控制与油门保护参数 | `Dima/middleware/parameters/definitions/module_rover_actuator_params.yaml` | 请求超时、倒车转向、混控优先级、最小/最大输出、slew、换向延时、expo、反向不对称及解锁 ramp 只由 PX4 YAML 定义；运行期仅在新鲜 DISARMED 快照后整体应用 | DIMA PARAMETER YAML / TARGET VERIFY PASS |
 | 六路 PWM 映射参数 | `Dima/middleware/parameters/definitions/module_rover_actuator_params.yaml` | S1～S6 的 `FUNC/MIN/CENT/MAX/REV` 名称、范围和默认值由同一 YAML→官方 XML/JSON/Header 链产生；完整 DISARMED 快照中逐通道校验，只有至少一右一左时允许 ACTIVE | DIMA PARAMETER YAML / TARGET VERIFY PASS / BOARD PENDING |
-| PX4 RC/Commander/QGC、传感器与 GPS 参数及 Metadata | `Dima/middleware/parameters/definitions/module_*.yaml`、DroneCAN schema | 产品、串口和 DroneCAN 输入统一汇入 PX4 YAML 正式链；固件目录、Metadata 与协议索引只读官方生成物。五个已删除的可选校准参数不通过别名/虚拟参数恢复，当前缺失状态保持用户确认的可校准基线 | ADAPTED / SINGLE YAML SOURCE / BOARD PENDING |
+| PX4 RC/Commander/QGC、传感器、GPS、串口与 DroneCAN 参数及 Metadata | `Dima/middleware/parameters/definitions/module_*.yaml` | 所有产品参数直接由受版本控制的 YAML 统一汇入锁定上游正式链；固件目录、Metadata 与协议索引只读生成物，不存在串口/DroneCAN JSON 或专用参数生成器。五个已删除的可选校准参数不通过别名/虚拟参数恢复，当前缺失状态保持用户确认的可校准基线 | ADAPTED / SINGLE YAML SOURCE / BOARD PENDING |
 | Dima Rover 生命周期、BootHealth 与 Parameter Autosave 写门控 | `Dima/rover/ApplicationContext.*`、`Dima/modules/boot_health/BootHealthService.*`、`Dima/modules/parameters/ParameterService.*`、`Dima/middleware/maintenance/`、`Dima/middleware/uORB/`、`Dima/middleware/work_queue/`、`Dima/platform/api/{Services,Execution,Flash,Memory,Synchronization,TaskRuntime}.*` | ApplicationContext 只注入 capability；BootHealth 依据安全/输出 Topic 进展推进 generation，不跨队列读取普通模块状态。维护票据还要求 Disarmed、neutral/hard-safe、`appMain` reload 确认、单调存储进度和长期 Arm interlock；shutdown 在释放资源前确认六路物理 hard-off | DIMA INTEGRATION / SOURCE AND TARGET GATE PASS / BOARD PENDING |
 | STM32H7 IWDG 与 MCUboot 跨复位衔接 | `Dima/platform/api/Boot.hpp`、`Dima/platform/stm32h7/system/Watchdog.cpp`、`Dima/application/app_main.cpp`、`Bootloader/Inc/boot_watchdog.h`、`Bootloader/Src/boot_watchdog.c`、MCUboot feed hook | 应用约 2048 ms、100 ms 检查，appMain 为唯一应用 feed owner；冷启动按 STM32 HAL 顺序先 start IWDG/LSI、再写配置并等待 SR 同步，跨复位已运行时允许重复 start key；MCUboot 对已运行 watchdog 临时扩展到约 32 s但不主动启动 inactive IWDG，Recovery/校验/swap/Flash/USB 长循环统一 feed；DBG halt 冻结，复位原始原因跨应用桥接保留 | DIMA SAFETY / TARGET VERIFY PASS / BOARD PENDING |
 | MCUboot image confirmation 与 Recovery | `Dima/platform/stm32h7/system/BootControl.cpp`、`flash/flash_bank1.c` | 非阻塞 transaction 保留 DEFERRED；Bank 1 program 在 DTCM 执行并统一调用 cache helper | DIMA BACKEND |

@@ -39,7 +39,7 @@ Dima Product Rover
   FunctionMotors / MixingOutput
                     ↓
 Dima 公共系统层
-  Parameter / px4::Param<T> / uORB / WorkQueue
+  Parameter / dima::Param<T> / uORB / WorkQueue
   capability / events / perf / logging / allocator
                     ↓
 独立平台后端
@@ -139,8 +139,8 @@ Storage       128 KiB
 
 阶段 2 以 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 为唯一参数来源，已建立：
 
-- Parameter Layer/Core、AtomicTransaction、稀疏参数层、`param_*` 和 `px4::Param<T>` 显式 bind/update 接口。
-- 官方 source parser、XML/JSON 输出和 `px4_parameters.hpp` 模板语义；标准库 renderer 消除系统 Python 缺少 Jinja2 的阻塞，不回退到正则参数解析。
+- Parameter Layer/Core、AtomicTransaction、稀疏参数层、`param_*` 和 `dima::Param<T>` 显式 bind/update 接口。
+- 锁定上游 source parser、XML/JSON 输出和原始模板语义；原始暂存头只机械适配为 `dima_parameters.hpp`/`dima::params`，不回退到正则参数解析或本地目录 renderer。
 - TinyBSON 纯 Buffer 子集与 flashparams enumerator/visitor 适配，编码和解码热路径不动态分配。
 - 300 ms debounce、至少 2 s 保存限频、最多 3 次失败重试的 Autosave 策略。
 - USB CDC 固定 1024-byte SPSC RX Ring；ISR 只复制字节并立即恢复接收，命令处理位于任务/LP service 路径。

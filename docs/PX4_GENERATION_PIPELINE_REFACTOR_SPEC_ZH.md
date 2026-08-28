@@ -25,30 +25,31 @@ Parameter、uORB 和 MAVLink 三条标准生成链由锁定版本的 PX4/MAVLink
 
 上游脚本、helper、schema、模板和参考消息保留原版权头与相对路径。`tools/generation/source_manifest.py` 动态扫描 vendored 目录并验证逐文件 SHA-256；文件增删、内容漂移或 commit 标识变化都会使正式生成或架构门禁失败。Windows/入口适配只存在于 Dima 薄编排层，不修改上游原件。
 
-## 3. Parameter：唯一 PX4 YAML 链
+## 3. Parameter：唯一 Dima YAML 链
 
 ### 3.1 权威输入
 
 - `Dima/middleware/parameters/definitions/module_*.yaml` 是产品参数唯一受版本控制的定义格式。
 - 现有参数由 PX4 原始 `migrate_c_params.py` 机械迁移，并核对名称、类型、默认值、范围、枚举、单位、volatile 与 reboot 语义；源码树不再保留 `PARAM_DEFINE_*` 入口。
-- 串口参数直接写入标准 PX4 `module_serial.yaml`，参数描述保持 `SERIALn`、物理 UART/USART n 与 TX/RX 引脚一一对应；官方参数生成器和包装器均不包含串口特化，也不派生串口专用头。STM32 句柄、DMA、IRQ 与 GPIO token 留在板级实现。DroneCAN schema 仍只能在 `build/generated` 生成 PX4 YAML 片段，再进入相同正式链。
+- 串口参数直接写入标准 `module_serial.yaml`，参数描述保持 `SERIALn`、物理 UART/USART n 与 TX/RX 引脚一一对应；DroneCAN 参数直接写入同目录的 `module_dronecan.yaml`。两者与其他 `module_*.yaml` 地位相同，参数生成器和包装器不包含串口/DroneCAN 特化，也不派生专用参数头。STM32 句柄、DMA、IRQ 与 GPIO token 留在板级实现；DSDL codec 生成与参数定义彼此独立。
 - 采用新 YAML 工具不代表引入 PX4 主线的新参数或默认值；当前产品参数集合和策略不变。
 
 ### 3.2 正式链
 
 ```text
-PX4 YAML
+Dima module_*.yaml
 → Tools/validate_yaml.py + validation/module_schema.yaml
 → Tools/module_config/generate_params.py
 → build/generated/parameters/module_params.c
 → src/lib/parameters/px_process_params.py
 → parameters.xml + parameters.json
 → src/lib/parameters/px_generate_params.py
-→ px4_parameters.hpp
-→ Dima 薄合同与 Component Metadata
+→ 上游原始暂存头
+→ dima_parameters.hpp / dima::params
+→ Dima 运行时合同与 Component Metadata
 ```
 
-`module_params.c` 只是在构建目录中串接两段官方工具的中间产物，不入库且不得修改。`parameter_contract.hpp`、公开转发头、只读策略、Flash 表和 Component Metadata 只能读取官方 XML、JSON 或生成头，不重新解释 YAML 或中间 C。
+`module_params.c` 和上游原始头只是在构建目录中串接工具的中间产物，不入库且不得修改。原始脚本固定产生的 `px4_parameters.hpp` 仅作为来源可追溯的暂存产物；Dima 公开安装头只机械替换命名空间和文件名，不重排或重渲染参数。`parameter_contract.hpp`、只读策略、Flash 表和 Component Metadata 只能读取 XML、JSON 或生成头，不重新解释 YAML 或中间 C。
 
 ### 3.3 目录与协议
 
@@ -114,7 +115,7 @@ Runtime 直接消费官方 `orb_get_topics()` 与 `orb_topics_count()`。本地 
 
 ## 7. 构建集成与门禁
 
-- Make 只声明 `.msg`、Parameter YAML/板级 schema、MAVLink XML 和运行策略 YAML 为权威输入，派生产物统一写入 `build/generated*`。
+- Make 只声明 `.msg`、`module_*.yaml`、MAVLink XML 和运行策略 YAML 为权威输入，派生产物统一写入 `build/generated*`。
 - host-tools 固定 EmPy、pyros-genmsg、PyYAML、Cerberus、Jinja2 和 pymavlink 来源；正式构建不依赖个人 site-packages 或联网分支。
 - 关键 wrapper、输入选择、原子安装、兼容接口、公式和控制流使用中文说明；上游原文件保留原注释与版权头。
 - 架构门禁拒绝源码参数 C 定义、本地参数/uORB parser/renderer、MAVLink codec/ID/CRC 表、手写 registry、五个删除参数和来源/派生 hash 漂移。
