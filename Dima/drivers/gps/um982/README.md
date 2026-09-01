@@ -23,10 +23,10 @@
 - 配置不合法时才申请 Disarmed、BootHealth 和 appMain-IWDG 共同批准的维护票据。实际 baud 与目标不同时发送 `CONFIG COMn 460800 8 N 1` 并等待 TX-complete 后切换飞控 UART；只对缺失、重复或周期错误的输出执行 `UNLOG COMn <message>`，再按照 `um982_messages.json` 经工具生成的本产品 10 Hz 合同，以 `<message> COMn 0.1` 明确恢复到已识别端口。R1.15 规定 AGRIC 的主动命令为 `AGRICA`，旧 `UNIAGRICA` 仅作为生成的接收兼容别名。修改完成后重新查询 `CONFIG`/`UNILOGLIST`，运行配置完全收敛才发送一次 `SAVECONFIG`；该命令只写 NVM，不会重启接收机，保存 TX 完成后直接沿用当前 UART 会话。
 - `CONFIG`、定向 COM 探测或 `UNILOGLIST` 失败只把配置降级并在 30 秒后重试，不会把已检测到的接收机重新判为 offline。完全收不到 `UNILOGLIST` 时属于“配置未知”，只允许重试只读查询，不能把未知误判成六项全部缺失后执行 `UNLOG/LOG/SAVECONFIG`。若 UM982 COM2/COM3 被持久化为 `RXTYPE=NONE/RTCM` 而不响应命令，固件保留 data-only 工作；必须从接收机 COM1 人工恢复命令输入。
 - 每次 WorkItem 最多处理 2048 字节；达到预算后屏蔽 UART 的即时重复唤醒并强制延迟 1 ms。错误 baud 造成的 UART framing/noise 恢复唤醒被限制为最高 10 Hz，避免 `wq:io` 压住 BootHealth、MAVLink/QGC 和其他低优先级任务。
-- 发布 `sensor_gps`、`vehicle_gps_position` 和 PX4 `estimator_gps_status`。GGA 是位置的最低输入，AGRICA 提供完整 NED 速度，缺少 AGRICA 时使用新鲜 RMC 提供水平速度；只有 GGA 时仍发布位置并明确 `vel_ned_valid=false`。标准 GGA `quality=0` 与 RMC `status=V` 即使坐标留空也作为“接收机在线但无定位”接受。没有新鲜 GGA、但仍收到有效 RMC/AGRICA/UNIHEADINGA 时，以最高 2 Hz 发布位置未知的 `NO_FIX` 在线状态，不伪造经纬度；声称有效 fix 却缺失坐标的帧仍被拒绝。
+- 只发布原始 `sensor_gps` 和 alias `vehicle_gps_position`。GGA 是位置的最低输入，AGRICA 提供完整 NED 速度，缺少 AGRICA 时使用新鲜 RMC 提供水平速度；只有 GGA 时仍发布位置并明确 `vel_ned_valid=false`。标准 GGA `quality=0` 与 RMC `status=V` 即使坐标留空也作为“接收机在线但无定位”接受。没有新鲜 GGA、但仍收到有效 RMC/AGRICA/UNIHEADINGA 时，以最高 2 Hz 发布位置未知的 `NO_FIX` 在线状态，不伪造经纬度；声称有效 fix 却缺失坐标的帧仍被拒绝。
 - 协议边界校验 N/S 与 E/W、经纬度范围、DOP/标准差、RMC 速度/航向/UTC、GPS 周内毫秒、移动基线长度/航向精度。严格跟随固定 PX4-GPSDrivers：NMEA/Unicore checksum、结构、未知消息和 overflow 静默丢弃，不逐帧打印、不更新测量缓存，也不进入 DataValidator 错误密度；持续收不到有效数据时由 1.3 s timeout 转为 offline。GPGST 空字段按 PX4 保留零初始化值。
-- `estimator_gps_status` 按 PX4 子集发布 fix、卫星数、PDOP、EPH、EPV、速度精度和 spoof/auth failure；首次连续通过 10 s 后才设置 `checks_passed`，故障后按 simplified checks 连续通过 1 s 恢复。没有 EKF 静止/飞行状态时，drift/speed-offset 位保持 false、数值保持 NaN，不伪造检查结果。
-- MAVLink 以 5 Hz 发布 `GPS_RAW_INT`，`SYS_STATUS` 报告 GPS present/stream health；`checks_passed=false` 不遮掉接收机真实 fix，合法 `NO_FIX` 仍保持 QGC GPS 图标，数据真正超时后才发送 `NO_GPS`。
+- `estimator_gps_status` 的唯一发布者是 EKF2。fix、卫星数、PDOP、EPH/EPV、速度精度、spoof、静止漂移和速度偏差统一进入 PX4 GnssChecks；UM982 不再维护第二套 simplified health/hysteresis。
+- MAVLink 以 5 Hz 发布原始 `GPS_RAW_INT`，`checks_passed=false` 不遮掉接收机真实 fix，合法 `NO_FIX` 仍保持可见，数据真正超时后才发送 `NO_GPS`。`SYS_STATUS` 的 GPS present/enabled 表示原始接收机曾可见，health 则同时要求原始流新鲜和 EKF checks 通过。
 - GPS 可观测性由边沿日志和 10 秒汇总组成：检测到有效 UM982 测量时输出一次 `GPS online`；配置控制面只输出 `cfg apply/ready/saved` 或一次性失败；离线和最终样本/流健康故障仍保持边沿锁存。正常汇总格式为 `GPS S<port> b=<baud> cfg=<0|1> fix=<type> sat=<n> dt=<s>s gga=<n> agr=<n> hdg=<n> gst=<n> gsa=<n> rmc=<n> oth=<n> e=<crc>/<structure>/<overflow>`，在 10 Hz 合同下六类窗口计数应各约为 100，某项为 0 即表示该业务消息缺流；`oth` 是 GSV/命令 ACK 等校验合法但不属于六类产品合同的帧，不是错误数，`e` 是本 UART 会话累计的协议错误。所有计数显示值钳位为 999。`fix=0` 表示尚无通过发布校验的样本，`1` 是在线未定位，`2/3/4/5/6` 分别对应 2D/3D/差分/RTK Float/RTK Fixed。用于现场取证的逐帧 `GPS RX RAW` 已移除，避免填满深度 8 的 `mavlink_log`/QGC `STATUSTEXT` 队列。
 - 上述 UM982 文本日志统一由 `DIMA_UM982_QGC_LOG_ENABLED` 控制，当前默认值为 `0`，因此不向 QGC 打印；现场需要诊断时改为 `1` 并重新构建固件。该编译期开关只控制日志格式化和 `STATUSTEXT` 投递，不影响串口接收、协议计数、自动配置、uORB 发布、`GPS_RAW_INT` 或 QGC GPS 状态。
 - 配置失败日志保留 `cfg=0xNN` 的 CONFIG 端口回读位和 `list=0/1/2` 的 UNILOGLIST 状态：0 是没有合法清单行，1 是收到增量行但尚未封存，2 是已有可判定快照；结合 `p/i/tx/logs` 可判断失败发生在发送、CONFIG、清单还是收敛比较阶段。
@@ -34,4 +34,4 @@
 
 ## 板端验证边界
 
-UART 电平与接线、接收机实际输出端口、八档 baud 探测、生成合同声明的消息实际频率、RTK fix/双天线 yaw、10 s/1 s 资格滞回和失联恢复仍是 `BOARD PENDING`。配置控制面还必须确认首轮读取/必要修改完成后持续停留在 Run，不再每 30 秒出现 `p=2..5` 或重复 `UNLOG/LOG/SAVECONFIG`。在 QGC MAVLink Inspector 中同时检查 `GPS_RAW_INT` 与 `SYS_STATUS`，并在固件内部检查 `estimator_gps_status`；不能用一次性日志或 Windows 构建替代实时数据。
+UART 电平与接线、接收机实际输出端口、八档 baud 探测、生成合同声明的消息实际频率、RTK fix/双天线 yaw、EKF GNSS 资格时间和失联恢复仍是 `BOARD PENDING`。配置控制面还必须确认首轮读取/必要修改完成后持续停留在 Run，不再每 30 秒出现 `p=2..5` 或重复 `UNLOG/LOG/SAVECONFIG`。在 QGC MAVLink Inspector 中同时检查 `GPS_RAW_INT` 与 `SYS_STATUS`，并在固件内部检查 EKF2 发布的 `estimator_gps_status`；不能用一次性日志或 Windows 构建替代实时数据。

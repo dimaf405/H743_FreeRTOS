@@ -296,7 +296,6 @@ void Um982Gps::clear_measurement_cache() noexcept
     gps_error_counter_.begin_session(uart_stats.receive_errors,
                                      uart_stats.dropped_bytes);
     stream_validator_.reset();
-    solution_checker_.reset();
     validation_fault_active_ = false;
     protocol_checksum_errors_ = 0U;
     protocol_structure_errors_ = 0U;
@@ -675,8 +674,8 @@ bool Um982Gps::publish_validated(sensor_gps_s &output,
                                  std::uint64_t now_us) noexcept
 {
     // 校验分三层：结构层检查单个消息字段/单位；流层检查时间戳、超时和错误
-    // 密度；解算层检查 fix/卫星数/PDOP/精度。前两层失败禁止发布，解算层结果
-    // 则通过 estimator_gps_status 公开，不把“无定位”误判为协议或 UART 故障。
+    // 密度。两层失败才禁止原始 Topic；fix/卫星数/PDOP/精度以及静止漂移检查
+    // 统一交给 EKF2 GnssChecks，避免驱动与估计器维护冲突的双健康状态机。
     namespace validation = dima::lib::sensors::validation;
     validation::GpsSample sample{};
     sample.timestamp = output.timestamp;
@@ -745,39 +744,9 @@ bool Um982Gps::publish_validated(sensor_gps_s &output,
     diagnostic_fix_type_ = output.fix_type;
     diagnostic_satellites_ = output.satellites_used;
 
-    const validation::GpsSolutionStatus solution =
-        solution_checker_.update(sample, now_us);
-    publish_solution_status(output, solution);
     (void)sensor_gps_publication_.publish(output);
     (void)vehicle_gps_publication_.publish(output);
     return true;
-}
-
-void Um982Gps::publish_solution_status(
-    const sensor_gps_s &output,
-    const dima::lib::sensors::validation::GpsSolutionStatus
-        &solution) noexcept
-{
-    estimator_gps_status_s status{};
-    status.timestamp = output.timestamp;
-    status.timestamp_sample = output.timestamp_sample;
-    status.checks_passed = solution.checks_passed;
-    status.check_fail_gps_fix = solution.check_fail_fix;
-    status.check_fail_min_sat_count = solution.check_fail_min_sat_count;
-    status.check_fail_max_pdop = solution.check_fail_max_pdop;
-    status.check_fail_max_horz_err = solution.check_fail_max_horz_err;
-    status.check_fail_max_vert_err = solution.check_fail_max_vert_err;
-    status.check_fail_max_spd_err = solution.check_fail_max_spd_err;
-    status.check_fail_max_horz_drift = false;
-    status.check_fail_max_vert_drift = false;
-    status.check_fail_max_horz_spd_err = false;
-    status.check_fail_max_vert_spd_err = false;
-    status.check_fail_spoofed_gps = solution.check_fail_spoofed;
-    const float unavailable = std::numeric_limits<float>::quiet_NaN();
-    status.position_drift_rate_horizontal_m_s = unavailable;
-    status.position_drift_rate_vertical_m_s = unavailable;
-    status.filtered_horizontal_speed_m_s = unavailable;
-    (void)gps_status_publication_.publish(status);
 }
 
 void Um982Gps::record_protocol_failure(

@@ -11,7 +11,6 @@
 #include "api/Flash.hpp"
 #include "api/Serial.hpp"
 #include "maintenance/RuntimeMaintenanceCoordinator.hpp"
-#include "estimator_gps_status.hpp"
 #include "sensor_gps.hpp"
 #include "serial/SerialPortAssignments.hpp"
 #include "uORB/Publication.hpp"
@@ -116,10 +115,6 @@ private:
     void publish_if_ready(std::uint64_t now_us) noexcept;
     bool publish_validated(sensor_gps_s &output,
                            std::uint64_t now_us) noexcept;
-    void publish_solution_status(
-        const sensor_gps_s &output,
-        const dima::lib::sensors::validation::GpsSolutionStatus
-            &solution) noexcept;
     void record_protocol_failure(
         const dima::protocols::um982::Um982Protocol::Frame &frame) noexcept;
     void update_uart_error_count() noexcept;
@@ -172,15 +167,12 @@ private:
      * 仍然是 sensor_gps_s，不为 alias 复制第二个消息结构。 */
     uORB::Publication<sensor_gps_s> vehicle_gps_publication_{
         ORB_ID(vehicle_gps_position)};
-    uORB::Publication<estimator_gps_status_s> gps_status_publication_{
-        ORB_ID(estimator_gps_status)};
 
     dima::protocols::um982::Um982Protocol protocol_{};
-    // stream_validator_ 判断时间戳、超时和错误密度；solution_checker_ 判断当前
-    // 解算质量。前者不健康时禁止发布，后者不通过时仍发布 NO_FIX/状态供上层观测。
+    // stream_validator_ 只判断原始流时间戳、超时和错误密度；GNSS 解算/漂移/
+    // 融合资格由 EKF2 的 GnssChecks 统一拥有，驱动不再发布 estimator 状态。
     dima::lib::sensors::validation::DataValidator stream_validator_{
         kReceiveTimeoutUs, UINT32_MAX};
-    dima::lib::sensors::validation::GpsSolutionChecker solution_checker_{};
     // 各协议日志以独立到达时间缓存。GGA 是 10 Hz 发布节拍，GST/GSA/RMC/
     // AGRICA/HEADING 仅在 freshness 窗口内参与同一输出样本。
     dima::protocols::um982::Um982Protocol::Gga gga_{};
