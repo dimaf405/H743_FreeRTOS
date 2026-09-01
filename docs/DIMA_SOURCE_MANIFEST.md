@@ -1,7 +1,7 @@
 # Dima 上游源码与许可证清单
 
-- 日期：2026-08-27
-- 文档状态：阶段 1～6 已接通；Parameter/uORB/MAVLink 已切换到锁定上游原生生成链，来源、确定性生成、Windows clean build、ELF 与架构门禁通过；实板/QGC 校准仍待验收
+- 日期：2026-08-31
+- 文档状态：阶段 1～6 已接通；N1 单实例 PX4 v1.17.0 EKF2 源码、权威参数/uORB/MAVLink 合同和运行适配已导入，Wind/Terrain 状态与无效 GSF TAS 参数已从唯一权威入口移除，并通过 Windows fresh build、verify、Parameter Metadata、ELF 与架构验收；未新增 SHA-256 行为或验收基线
 - 许可证决策：`PENDING`
 
 ## 1. 管理规则
@@ -19,10 +19,10 @@
 
 | 字段 | 内容 |
 |---|---|
-| 用途 | Parameter Core、`dima::Param<T>` 公开适配、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl RC 子集、Commander Rover 子集、RoverDifferential、执行器链、MAVLink v2.0 协议处理和后续 EKF2 |
+| 用途 | Parameter Core、`dima::Param<T>` 公开适配、uORB API/消息契约、WorkQueue 接口、SBUS、RCUpdate、ManualControl RC 子集、Commander Rover 子集、RoverDifferential、执行器链、MAVLink v2.0 协议处理和 N1 EKF2 |
 | 正式目标版本 | PX4 v1.17.0 |
 | 正式 commit | `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` |
-| 当前状态 | 阶段 1～4 基础链已按 v1.17.0 接口和行为适配；阶段 5 已接通 Manual 两轴请求、RoverDifferential、MotorOutput 和六路 PWM，源码/目标构建通过，板级波形验证待完成 |
+| 当前状态 | 阶段 1～6 已按 v1.17.0 接口和行为适配；N1 单实例 EKF2、GNSS/Mag/Gravity fusion、bias/GSF/output 与四条导航 MAVLink 流已接入并通过 Windows fresh acceptance |
 | 许可证状态 | `PENDING`；逐文件保留原始许可证 |
 | 本地目录规则 | 产品目录使用 Dima；上游符号和许可证文字保持原样 |
 
@@ -65,7 +65,8 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | 公共 capability 与时间契约 | `Dima/platform/api/` | DIMA CONTRACT |
 | FreeRTOS Task/同步/Heap 后端与 C/C++ Runtime | `Dima/platform/freertos/` | DIMA BACKEND / PLATFORM ISOLATED |
 | STM32H7 时钟、MPU/cache、DMA、Flash、USB、SBUS、中断与六路 PWM 后端 | `Dima/platform/stm32h7/` | DIMA BACKEND / PLATFORM ISOLATED / TARGET VERIFY PASS / BOARD PENDING |
-| MAVLink v2.0 协议处理 | `Dima/modules/mavlink/` | ADAPTED / TARGET VERIFY PASS |
+| MAVLink v2.0 协议处理 | `Dima/modules/mavlink/` | ADAPTED / N1 NAV STREAMS / WINDOWS BUILD VERIFIED |
+| PX4 EKF2 单实例模块与支撑库 | `Dima/modules/ekf2/`、`Dima/lib/{ekf2,matrix,mathlib,geo,lat_lon_alt,world_magnetic_model}/` | ADAPTED / N1 PHYSICAL CLOSURE / WINDOWS BUILD VERIFIED |
 | H743 capability 组合根 | `Boards/H743/Src/platform_composition.cpp` | DIMA COMPOSITION |
 | Rover 产品装配、模式、专属控制与导航 | `Dima/rover/`、`Dima/rover/modes/`、`Dima/rover/control/` | UNIQUE PRODUCT ROOT / MANUAL OUTPUT CHAIN ADAPTED / NAV INTERFACE RESERVED |
 | Rover 纯控制算法 | `Dima/lib/rover/` | 当前只保留已由生产链调用的 `DifferentialDrive`；阶段 8 闭环控制器尚未导入 |
@@ -84,7 +85,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | Commander Rover 子集 | PX4 v1.17.0；APM 行为参考 | `Dima/modules/safety/` | 4 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | RoverDifferential 与执行器链 | PX4 v1.17.0；APM 行为参考 | `Dima/rover/control/`、`Dima/lib/rover/`、`Dima/modules/motor/` | 5 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | MAVLink v2.0 协议处理（RX/TX、心跳、命令、Classic + Ext 参数、5 Hz 原始 RC、空任务、时间同步） | PX4 v1.17.0；mavlink/mavlink commit `33af200d` | `Dima/modules/mavlink/`、`build/generated/mavlink/` | 6 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
-| EKF2 与 Estimator 支撑库 | PX4 v1.17.0 | 尚未创建；正式导入后分别落入运行模块与纯算法所有者目录 | 7 | PLANNED / NO SOURCE PLACEHOLDER |
+| EKF2 与 Estimator 支撑库 | PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` | `Dima/modules/ekf2/`、`Dima/lib/{ekf2,matrix,mathlib,geo,lat_lon_alt,world_magnetic_model}/` | 7 | ADAPTED / SINGLE INSTANCE / WINDOWS BUILD VERIFIED |
 | Position、Waypoint、Reverse、PivotTurn | PX4 v1.17.0；APM 行为参考 | `Dima/rover/navigation/` | 9 | PLANNED |
 
 ## 7. 文件级映射
@@ -124,6 +125,10 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `msg/InputRc.msg`、`RcChannels.msg`、`ManualControlSetpoint.msg`、`ManualControlSwitches.msg`、`ActionRequest.msg` | `Dima/messages/schemas/` | 保留 PX4 字段、枚举和 Topic 契约；头、metadata、Topic 定义与 catalog 由工具直接生成，队列深度来自 schema 的原生 `ORB_QUEUE_LENGTH` | ADAPTED |
 | `msg/versioned/VehicleStatus.msg`、`VehicleControlMode.msg`、`ActuatorArmed.msg` | `Dima/messages/schemas/` | 完整保留三个公开消息的字段、枚举和版本号；本地三个 Topic 均为单深度，派生 C++ 合同不进入源码树 | ADAPTED |
 | `msg/versioned/ActuatorMotors.msg` | `Dima/messages/schemas/ActuatorMotors.msg` | 完整保留 version 0、12 路 control、reversible flags 和采样时间；Topic 单深度，阶段 5 仅使用前两路 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
+| `src/modules/ekf2/EKF2.*`、`src/modules/ekf2/EKF/` 与所需 `src/lib/{matrix,mathlib,geo,lat_lon_alt,world_magnetic_model}` | `Dima/modules/ekf2/`、`Dima/lib/{ekf2,matrix,mathlib,geo,lat_lon_alt,world_magnetic_model}/` | 固定 PX4 v1.17.0 commit 的 N1 单实例物理闭包；Wrapper 只适配 Dima 生命周期、参数和 uORB，Core 保留上游版权头。排除 Selector、多实例、Wind/Airspeed/Baro/Flow/Range/Terrain fusion/EV/Sideslip/Drag/Aux/Wheel | ADAPTED / SINGLE INSTANCE / WINDOWS BUILD VERIFIED |
+| `src/modules/ekf2/EKF/python/ekf_derivation/` | `Dima/lib/ekf2/EKF/python/ekf_derivation/` | 只保留一份 `derivation.py` 和一份 generated 目录；脚本直接不定义 Wind/Terrain 状态且不注册 Wind 公式函数，13 个公式头只由该脚本生成，不手改、不维护其他状态闭包产物 | ADAPTED SYMFORCE GENERATION / WIND AND TERRAIN REMOVED |
+| EKF2 `module.yaml`/`params_*.yaml` 与 Estimator/vehicle `.msg` | `Dima/middleware/parameters/definitions/module_ekf2*.yaml`、`module_sensor_params.yaml`、`Dima/messages/schemas/` | 参数名称、类型、默认值、reboot_required、Topic alias/ID/hash/registry 均由既有正式 Parameter/uORB 工具派生；没有手写派生目录、消息列表或 `EKF2_EN` | AUTHORITATIVE YAML/MSG / GENERATED CONTRACT |
+| PX4 VehicleIMU in-flight calibration 与 EKF2 sensor bias | `Dima/modules/sensors/imu/VehicleImu.*`、`Dima/modules/ekf2/Ekf2Bias.cpp` | 单实例稳定 bias 按 PX4 方差/连续时间条件发布；VehicleImu 以 `R^T*bias` 合并传感器 offset。realtime sensors/estimator 只发布固定请求快照，`wq:lp_default` 分别提交完整 IMU 参数组和 `EKF2_MAG_DECL`，失败限速且物理持久化沿用 autosave | ADAPTED / NON-REALTIME PARAM COMMIT / NO DIRECT FLASH |
 | Dima Rover 两轴请求与输出状态 | `Dima/messages/schemas/RoverMotionRequest.msg`、`ActuatorOutputStatus.msg` | 两个 Topic 深度均为 8；前者隔离 Manual/未来 Navigation 与混控，后者显式暴露 configured/right/left mask 以及 `HARD_SAFE_OFF / DISARMED_NEUTRAL / ACTIVE / RETRY / FAULT` 六路后端状态 | DIMA CONTRACT / TARGET VERIFY PASS / BOARD PENDING |
 | `src/modules/rover_differential/RoverDifferential.cpp`、`DifferentialDriveModes/DifferentialManualMode/`、`DifferentialActControl/` | `Dima/rover/modes/ManualMode.*`、`Dima/rover/control/RoverDifferential.*`、`Dima/lib/rover/DifferentialDrive.*` | 保留 Manual 两轴、100 Hz rate-control WorkQueue 和 `actuator_motors` 边界；反向不对称在混控前将两侧可行域限制为 `[-1/MOT_THR_ASYM, 1]`，先保留转向/油门优先级再作反向补偿，避免倒车两侧同时饱和丢失转向；其余适配保持固定存储、Commander 三 Topic 门控及 ARMED 参数延后 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | PX4 actuator function/output 行为边界；ArduPilot `MOT_SAFE_DISARM=0` 中立行为参考 | `Dima/modules/motor/MotorOutput.*`、`Dima/platform/api/ActuatorPwmLimits.h`、`ActuatorPwm.hpp`、`Dima/platform/stm32h7/pwm/ActuatorPwm.cpp`、`Boards/H743/Src/motor_pwm.c` | C/C++ 共用普通 PWM 产品包络固定为 500～2500 us，板级后端同时执行防御性校验；本地收敛为独立生命周期的 MotorRight/MotorLeft 到 S1～S6 固定存储映射。健康普通 Disarmed 仅向已配置通道输出 `CENT`，Kill/Termination/Failsafe/故障进入物理 hard-off；分离 ACTIVE inhibit 与 hard-safe inhibit，任一负向安全 Topic 先到即可 fail-closed；不导入通用 Mixer/FunctionMotors/MixingOutput，APM GPL 代码未复制 | DIMA ADAPTATION / TARGET VERIFY PASS / BOARD PENDING |
@@ -136,13 +141,13 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | Dima Rover 生命周期、BootHealth 与 Parameter Autosave 写门控 | `Dima/rover/ApplicationContext.*`、`Dima/modules/boot_health/BootHealthService.*`、`Dima/modules/parameters/ParameterService.*`、`Dima/middleware/maintenance/`、`Dima/middleware/uORB/`、`Dima/middleware/work_queue/`、`Dima/platform/api/{Services,Execution,Flash,Memory,Synchronization,TaskRuntime}.*` | ApplicationContext 只注入 capability；BootHealth 依据安全/输出 Topic 进展推进 generation，不跨队列读取普通模块状态。维护票据还要求 Disarmed、neutral/hard-safe、`appMain` reload 确认、单调存储进度和长期 Arm interlock；shutdown 在释放资源前确认六路物理 hard-off | DIMA INTEGRATION / SOURCE AND TARGET GATE PASS / BOARD PENDING |
 | STM32H7 IWDG 与 MCUboot 跨复位衔接 | `Dima/platform/api/Boot.hpp`、`Dima/platform/stm32h7/system/Watchdog.cpp`、`Dima/application/app_main.cpp`、`Bootloader/Inc/boot_watchdog.h`、`Bootloader/Src/boot_watchdog.c`、MCUboot feed hook | 应用约 2048 ms、100 ms 检查，appMain 为唯一应用 feed owner；冷启动按 STM32 HAL 顺序先 start IWDG/LSI、再写配置并等待 SR 同步，跨复位已运行时允许重复 start key；MCUboot 对已运行 watchdog 临时扩展到约 32 s但不主动启动 inactive IWDG，Recovery/校验/swap/Flash/USB 长循环统一 feed；DBG halt 冻结，复位原始原因跨应用桥接保留 | DIMA SAFETY / TARGET VERIFY PASS / BOARD PENDING |
 | MCUboot image confirmation 与 Recovery | `Dima/platform/stm32h7/system/BootControl.cpp`、`flash/flash_bank1.c` | 非阻塞 transaction 保留 DEFERRED；Bank 1 program 在 DTCM 执行并统一调用 cache helper | DIMA BACKEND |
-| `src/modules/mavlink/mavlink_main.cpp`、`streams/RC_CHANNELS.hpp` 与传感器流 | `Dima/modules/mavlink/MavlinkService.hpp/cpp`、`MavlinkChannelState.cpp`、`MavlinkSystemMessages.cpp`、`MavlinkRcStream.cpp`、`MavlinkSensorStreams.cpp` | Service 主文件持有 RX/TX 主循环、USB 传输独占、ACK/日志和延迟 reboot；ChannelState 使全部分源编码器共享单一 parser buffer 与 RX/TX sequence；System 文件持有版本与 Component Metadata 发现回复；RC 文件直接订阅原始 `input_rc` 并以 5 Hz 发送有效通道；Sensor 文件按 PX4 USB/QGC 单实例合同发送 50 Hz `HIGHRES_IMU`、25 Hz 原始传感器流 `SCALED_IMU`、5 Hz `GPS_RAW_INT` 和 1 Hz `SYS_STATUS`。`HIGHRES_IMU` 保留最近合法 `vehicle_magnetometer`，`SCALED_IMU` 保留最近合法 raw `sensor_mag`；磁场 freshness 只改变 `SYS_STATUS` health，不清零或阻断消息。周期流按新 Topic 独立调度；支持单次请求、`SET/GET_MESSAGE_INTERVAL` 及 `MESSAGE_INTERVAL` 回复，并在 USB 新会话重报检测摘要。TX 优先级在 RC 后每轮最多处理一帧三文件只读 Metadata FTP，pending 未解决时不发送更低优先级参数/日志；Runtime 复位全部协议状态，USB 物理下降沿丢弃旧 RX 并复位 parser/channel 与 FTP session | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
+| `src/modules/mavlink/mavlink_main.cpp`、`streams/RC_CHANNELS.hpp`、传感器与 Estimator streams | `Dima/modules/mavlink/MavlinkService.hpp/cpp`、`MavlinkChannelState.cpp`、`MavlinkSystemMessages.cpp`、`MavlinkRcStream.cpp`、`MavlinkSensorStreams.cpp` | Service 主文件持有 RX/TX 主循环、USB 传输独占、ACK/日志和延迟 reboot；Sensor 文件发送 50 Hz `HIGHRES_IMU`、25 Hz `SCALED_IMU`、5 Hz 原始 `GPS_RAW_INT`、1 Hz `SYS_STATUS`，并按 PX4 字段映射发送 50 Hz `ATTITUDE`、30 Hz `LOCAL_POSITION_NED`、10 Hz `GLOBAL_POSITION_INT`、5 Hz `ESTIMATOR_STATUS`。原始 GPS 可见性与 EKF checks health 分离；周期流支持单次请求和 `SET/GET_MESSAGE_INTERVAL`。TX/Metadata/USB session 边界保持原实现 | ADAPTED / N1 NAV STREAMS / WINDOWS BUILD VERIFIED / BOARD PENDING |
 | `src/modules/mavlink/mavlink_receiver.cpp`（命令处理子集） | `Dima/modules/mavlink/MavlinkCommands.hpp/.cpp` | COMMAND_LONG/COMMAND_INT 接收、target 过滤、source system/component 保留、`vehicle_command` 发布及 `MAV_CMD_REQUEST_MESSAGE`；Commander ACK 定向回命令 source；保留 PX4 `MAV_CMD_SET_MESSAGE_INTERVAL`、`MAV_CMD_GET_MESSAGE_INTERVAL` 和 `MESSAGE_INTERVAL` 回复，裁剪 Autotune | ADAPTED |
 | `src/modules/mavlink/mavlink_mission.cpp`（空任务语义） | `Dima/modules/mavlink/MavlinkMission.hpp/.cpp` | `MISSION_REQUEST_LIST` 返回 count 0，`MISSION_CLEAR_ALL` 返回 ACCEPTED；不建立任务存储或上传链路 | ADAPTED / EMPTY MISSION |
 | `src/modules/mavlink/mavlink_parameters.cpp` | `Dima/modules/mavlink/MavlinkParameters.hpp/.cpp`、`MavlinkParameterExt.cpp` | Classic/Ext 直接遍历官方完整 handle 目录并发送统一 count/index；SERIAL Function 写入只允许 Disabled/SBUS/GPS，选择新 owner 时在单个参数事务内禁用旧 owner并回传受影响参数。公开分组来自同一官方生成源，不维护第二份参数名单 | ADAPTED |
 | `src/modules/mavlink/mavlink_timesync.cpp` | `Dima/modules/mavlink/MavlinkTimesync.hpp/.cpp`、`Dima/lib/timesync/Timesync.hpp/.cpp` | TIMESYNC 处理——远端回传、本地喂入收敛滤波器；省略 SYSTEM_TIME 时钟设置 | ADAPTED |
 | PX4 `src/modules/mavlink/mavlink_ftp.*` 与 Component Metadata | `Dima/modules/mavlink/MavlinkMetadataFtp.hpp/.cpp`、`tools/mavlink/generate_parameter_metadata.py`、`build/generated/component_metadata/` | 397 现代发现与 395 deprecated 回退共用 URI/CRC；General 声明 type 1 Parameter 与 type 5 Actuator Metadata。FTP 只允许 General/Parameter/Actuator 三个 Flash 虚拟文件和 Open/Burst/Read/Reset/Terminate，不含目录、写入或 Event Metadata；Actuator Metadata 开放六路 PWM 分配和参数编辑，但 MotorRight/MotorLeft 排除执行器测试，固件不实现 `MAV_CMD_ACTUATOR_TEST` | ADAPTED / READ-ONLY / TARGET VERIFY PASS / BOARD PENDING |
-| `src/lib/mavlink/`（mavlink commit `33af200d`，pymavlink submodule `fcaa2c7d`） | `tools/mavlink/message_definitions/dima.xml`、`mavlink_runtime.yaml`、`build/generated/mavlink/` | `dima.xml` 只 include 固定 common，Make 直接执行原始 mavgen 生成当前 230-message wire 闭包；独立 YAML 只生成实际 10/11 路由合同并引用 `MAVLINK_MSG_ID_*`，不参与 ID/CRC/payload/codec | UNMODIFIED MAVGEN / NATIVE DIALECT / REPRODUCIBLE PIPELINE |
+| `src/lib/mavlink/`（mavlink commit `33af200d`，pymavlink submodule `fcaa2c7d`） | `tools/mavlink/message_definitions/dima.xml`、`mavlink_runtime.yaml`、`build/generated/mavlink/` | `dima.xml` 只 include 固定 common，Make 直接执行原始 mavgen 生成当前 230-message wire 闭包；独立 YAML 生成实际 14 outbound/11 inbound 路由合同并引用 `MAVLINK_MSG_ID_*`，不参与 ID/CRC/payload/codec | UNMODIFIED MAVGEN / NATIVE DIALECT / REPRODUCIBLE PIPELINE |
 | PX4 `src/modules/mavlink/` 心跳与身份语义 | `Dima/modules/mavlink/MavlinkIdentity.hpp/.cpp`、`HeartbeatPacer.hpp/.cpp` | USB ready 边沿立即发送 HEARTBEAT/AUTOPILOT_VERSION，之后 1 Hz；Manual `custom_mode=0x00010000`，Disarmed/Armed base mode=65/193，内部 Termination 保持真实编码；capability 声明 PARAM_FLOAT、BYTEWISE、FTP、COMMAND_INT、MAVLINK2 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
 | Fault/Reset 跨复位诊断持久化 | `Boards/H743/Src/boot_diagnostics.c`、`boot_diagnostics_store.c`、`Bootloader/Src/main.c` | Application Fault/Panic 只写 non-cacheable D3 record、执行 barrier 并复位；原始 RCC reset flags（含 IWDG）在 MCUboot 应用桥接软件复位与同次 hot handoff 中保留；冷上电/全片擦除/ROM DFU 后无有效 D3 头时由 MCUboot 先建立最小 v2 bridge 记录，避免首启永久停在 Recovery；MCUboot 冷启动独占诊断 Flash store 和 Recovery，Application ELF 禁止链接 store 符号 | DIMA SAFETY / ELF GATED |
 
@@ -232,3 +237,29 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 从 `make NO_COLOR=1 clean` 开始，
 完整构建通过 `[290/290]` 和 294 文件架构门禁。Application `text/data/bss=291920/12316/402688`，总计 `706924` bytes；Flash `291720/785408`（37.1%）、DTCM `1248/131072`（1.0%）、SRAM `413956/884736`（46.8%）。未签名 BIN `304276` bytes；本次签名样本 image digest `d01789f7d1ef543f6c4f8c3eb92bdae93d09eb63f49de461b4b785c5ffc0603e`，Signed BIN `305450` bytes；Factory HEX `851194` bytes；MCUboot BIN `48236` bytes。应用向量为 `0x08040400`，ELF layout 通过，Application/MCUboot 显式 `nm -u` 均为 0，watchdog prepare/feed 链已链接，`git diff --check` 无错误。
 
 本轮没有新增或修改测试，没有 commit、push、upload、烧录或 QGC 修改。结论边界为 `SOURCE/STATIC/WINDOWS BUILD VERIFIED`；QGC 5.1.3 参数下载、Sensors 页面、陀螺仪/加速度计/磁力计校准的启动/进度/六面/取消/完成、实际 `CAL_*0` 写入和重连持久化仍为 `BOARD/QGC PENDING`。五个已删除参数在未来板测中也必须始终不可见。
+
+## 12. 2026-08-28 N1 单实例 PX4 EKF2 验收
+
+N1 固定构造一个 EKF2，绑定 `vehicle_imu[0]`、`vehicle_magnetometer[0]` 与 `vehicle_gps_position[0]`，并只在 `wq:estimator` 运行。源码闭包启用 GNSS position/height/velocity/yaw、Mag Automatic、Gravity、bias、predictor 与 GSF yaw；没有 Selector、多实例、`EKF2_EN`、运行时装卸、Wheel source 或禁用观测源的发布者。UM982 的 `heading/heading_offset` 原样进入 PX4 Core，不重复扣除 `GPS_YAW_OFFSET`；`GLOBAL_POSITION_INT.relative_alt` 在当前没有 Home Topic 时采用 PX4 官方的 global altitude 回退。
+
+参数、uORB 与 MAVLink 均从权威输入重新生成：280 个 YAML 参数、40 个 PX4 uORB 消息类型、230-message MAVLink dialect 与 14/11 条运行路由；Parameter Metadata 的 General/Parameter/Actuator 大小为 `196/10180/420` bytes。`EKF2_PREDICT_US` 与 `EKF2_DELAY_MAX` 共同决定启动期 RingBuffer 容量，均由权威 YAML 标记 `reboot_required` 并在运行期保持启动快照。realtime sensors/estimator 只发布固定参数请求快照；完整 IMU 校准组和 `EKF2_MAG_DECL` 分别由非实时 `wq:lp_default` 提交，失败限速且不直接访问 Flash。
+
+唯一 `derivation.py` 直接不定义 Wind 状态，也不注册 Wind 公式函数；在独立临时目录用 PX4 对应 SymForce 0.9.0 重新生成的 13 个头与仓库唯一 `generated/` 目录逐文件一致。活动构建宏只有 GNSS、GNSS yaw、Magnetometer 和 Gravity fusion；IMU/GNSS/Mag/system flag 的 RingBuffer 全部在启动期建立，`wq:estimator` 首样本路径不会分配。EKF 源继续使用 `-fno-associative-math`，并继承项目统一的 `-fno-exceptions/-fno-rtti`。
+
+Windows 原生 `E:\freertos\H743_FreeRTOS` 依次执行 `make NO_COLOR=1 clean`、`make -j4 NO_COLOR=1 dima_rover`、`make -j4 NO_COLOR=1 verify`、`make NO_COLOR=1 parameter-metadata-verify` 和 `make NO_COLOR=1 check-architecture`。fresh build 完整通过 `[337/337]`，独立 verify 通过 `[5/5]`，架构门禁为 `PASS - 396 first-party source files`。Application `text/data/bss=428112/12680/416256`，总计 `857048` bytes；Flash `427912/785408`（54.5%）、DTCM `1248/131072`（1.0%）、SRAM `427888/884736`（48.4%）。应用向量为 `0x08040400`，Application/MCUboot 未解析符号均为 0，MCUboot watchdog prepare/feed 链已链接。
+
+本节不新增 SHA-256、文件 hash 或 image digest 依赖与文档基线；构建系统已有的来源核验、firmware identity 和 MCUboot 签名行为保持原样。本轮没有新增或修改测试文件、测试框架、runner、harness、fixture、mock、Host Test、SITL、仿真入口或测试专用 API，也没有执行 commit、push、upload 或烧录。
+
+## 13. 2026-08-31 EKF2 状态与断言闭包收敛验收
+
+唯一 `Dima/lib/ekf2/EKF/python/ekf_derivation/derivation.py` 直接移除未启用的 Wind 和 Terrain 状态，并由 PX4 对应 SymForce 0.9.0 正式再生成同一 `generated/` 目录的全部 13 个头；没有手改公式，也没有建立第二套公式路径。生成结果的 `StateSample` 为 22 个 float，`State::size=21`，协方差为 `21x21`，生成目录中不存在 Terrain/Wind 状态。EKF 源继续保留 `-fno-associative-math`，并继承统一的 `-fno-exceptions/-fno-rtti`。
+
+Rover 永远向 GSF 声明 `is_fixed_wing=false`，不会使用固定翼向心加速度补偿，因此 `EKF2_GSF_TAS` 已从唯一权威 YAML、PX4 Core 参数结构和 Dima 参数加载器中删除。正式参数目标重新生成 279 个参数，源码与 `build/generated/parameters` 中该名称均为 0 命中；Parameter Metadata 的 General/Parameter/Actuator 大小为 `192/9940/420` bytes。参数名称、枚举、目录和 Metadata 仍全部由正式工具生成，没有手写派生列表。
+
+Application 在 `Boards/H743/Src/boot_diagnostics.c` 提供强 `__assert_func`，保留断言并把文件地址、行号直接交给无格式化、无分配的启动诊断后端。该文件同时提供裸机 `abort()`，把 libgcc 不可恢复的展开失败记录为通用致命错误后复位，避免 newlib `abort -> raise -> signal` 引入不存在的 POSIX 进程系统调用。最终 ELF 保留自有 `__assert_func/abort`，且不存在 newlib `__assert_func`、`fiprintf/_vfiprintf_r`、`abort/raise/signal` 活动符号；map 中仅因宽字符 stdio 的归档解析列出 `lib_a-vfiprintf.o`，其全部段均位于 `Discarded input sections`，对可加载镜像贡献为 0 bytes。
+
+在同一未提交 N1 源码上，修改前 Windows clean 基线为 Application `text/data/bss=427976/12680/416256`、总计 `856912` bytes、未签名 BIN `440696` bytes；本轮之后为 `419432/12316/416000`、总计 `847748` bytes、未签名 BIN `431788` bytes。对应 `text/Flash` 减少 `8544` bytes，`data` 减少 `364` bytes，`bss` 减少 `256` bytes，未签名 BIN 减少 `8908` bytes，总计减少 `9164` bytes。
+
+Windows 原生 `E:\freertos\H743_FreeRTOS` 依次通过 `make NO_COLOR=1 clean`、`make -j4 NO_COLOR=1 dima_rover`、独立 `make -j4 NO_COLOR=1 verify`、`make NO_COLOR=1 parameter-metadata-verify` 和 `make NO_COLOR=1 check-architecture`。fresh build 完整通过 `[337/337]`，独立 verify 通过 `[5/5]`，架构门禁为 `PASS - 396 first-party source files`；Flash 为 `419232/785408`（53.4%），SRAM 为 `427268/884736`（48.3%），应用向量仍为 `0x08040400`，Application/MCUboot 未解析符号均为 0。
+
+本节不新增 SHA-256、文件 hash 或 image digest 行为、依赖或文档基线；构建系统已有原生行为保持原样。本轮没有新增或修改测试文件、测试框架、runner、harness、fixture、mock、Host Test、SITL、仿真入口或测试专用 API，也没有执行 commit、push、upload 或烧录。
