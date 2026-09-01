@@ -70,6 +70,38 @@ outbound:
     default_interval_us: 1000000
     interval_configurable: true
 
+  - message: ATTITUDE
+    handler: Attitude
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 20000
+    interval_configurable: true
+
+  - message: LOCAL_POSITION_NED
+    handler: LocalPositionNed
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 33333
+    interval_configurable: true
+
+  - message: GLOBAL_POSITION_INT
+    handler: GlobalPositionInt
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 100000
+    interval_configurable: true
+
+  - message: ESTIMATOR_STATUS
+    handler: EstimatorStatus
+    requestable: true
+    scheduler: service
+    tx_stage: post_metadata
+    default_interval_us: 200000
+    interval_configurable: true
+
 inbound:
   - message: PARAM_REQUEST_LIST
     handler: ParameterList

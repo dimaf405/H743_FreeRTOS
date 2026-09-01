@@ -10,6 +10,7 @@
 
 #include "input_rc.hpp"
 #include "estimator_gps_status.hpp"
+#include "estimator_status.hpp"
 #include "mavlink_log.hpp"
 #include "parameter_update.hpp"
 #include "sensor_accel.hpp"
@@ -20,7 +21,11 @@
 #include "sensor_gps.hpp"
 #include "vehicle_imu.hpp"
 #include "vehicle_imu_status.hpp"
+#include "vehicle_attitude.hpp"
+#include "vehicle_global_position.hpp"
+#include "vehicle_local_position.hpp"
 #include "vehicle_magnetometer.hpp"
+#include "vehicle_odometry.hpp"
 #include "mavlink/MavlinkBridge.h"
 #include "mavlink_stream_contract.hpp"
 #include "lifecycle/module_base.hpp"
@@ -66,6 +71,7 @@ private:
     static constexpr std::uint64_t kMagFreshnessUs = 500000ULL;
     static constexpr std::uint64_t kGpsFreshnessUs = 1000000ULL;
     static constexpr std::uint64_t kGpsStatusFreshnessUs = 1000000ULL;
+    static constexpr std::uint64_t kEstimatorOutputFreshnessUs = 1000000ULL;
     /* COMMAND_ACK 重试槽上限（首次发送失败后最多再试 4 次）。 */
     static constexpr std::uint8_t kMaxAckRetries = 4U;
 
@@ -113,6 +119,10 @@ private:
     bool send_scaled_imu(std::uint64_t now) noexcept;
     bool send_gps_raw_int(std::uint64_t now) noexcept;
     bool send_system_status(std::uint64_t now) noexcept;
+    bool send_attitude(std::uint64_t now) noexcept;
+    bool send_local_position_ned(std::uint64_t now) noexcept;
+    bool send_global_position_int(std::uint64_t now) noexcept;
+    bool send_estimator_status(std::uint64_t now) noexcept;
     void stream_statustext() noexcept;
     bool send_message(mavlink_message_t &msg,
                       std::uint32_t timeout_ms = kTxTimeoutMs) noexcept;
@@ -163,6 +173,16 @@ private:
         vehicle_gps_subscription_{ORB_ID(vehicle_gps_position)};
     uORB::SubscriptionData<estimator_gps_status_s>
         estimator_gps_status_subscription_{ORB_ID(estimator_gps_status)};
+    uORB::SubscriptionData<vehicle_attitude_s>
+        vehicle_attitude_subscription_{ORB_ID(vehicle_attitude)};
+    uORB::SubscriptionData<vehicle_local_position_s>
+        vehicle_local_position_subscription_{ORB_ID(vehicle_local_position)};
+    uORB::SubscriptionData<vehicle_global_position_s>
+        vehicle_global_position_subscription_{ORB_ID(vehicle_global_position)};
+    uORB::SubscriptionData<vehicle_odometry_s>
+        vehicle_odometry_subscription_{ORB_ID(vehicle_odometry)};
+    uORB::SubscriptionData<estimator_status_s>
+        estimator_status_subscription_{ORB_ID(estimator_status)};
 
     std::uint8_t rx_buffer_[kRxBatchBytes]{};
     std::uint8_t tx_buffer_[MAVLINK_MAX_PACKET_LEN]{};
@@ -190,6 +210,11 @@ private:
     vehicle_magnetometer_s latest_vehicle_magnetometer_{};
     sensor_gps_s latest_vehicle_gps_{};
     estimator_gps_status_s latest_estimator_gps_status_{};
+    vehicle_attitude_s latest_vehicle_attitude_{};
+    vehicle_local_position_s latest_vehicle_local_position_{};
+    vehicle_global_position_s latest_vehicle_global_position_{};
+    vehicle_odometry_s latest_vehicle_odometry_{};
+    estimator_status_s latest_estimator_status_{};
     param_t rc_loss_timeout_handle_{PARAM_INVALID};
     param_t mav_system_id_handle_{PARAM_INVALID};
     float rc_loss_timeout_s_{0.0F};
@@ -207,6 +232,7 @@ private:
     bool gps_seen_{false};
     bool mag_health_known_{false};
     bool imu_streamable_{false};
+    bool gps_streamable_{false};
     bool imu_healthy_{false};
     bool mag_healthy_{false};
     bool gps_healthy_{false};

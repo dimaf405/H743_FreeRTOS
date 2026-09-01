@@ -13,6 +13,8 @@
 #include "logging/logging.hpp"
 #include "api/Time.hpp"
 
+#include <matrix/math.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -32,6 +34,12 @@ bool finite3(const float values[3]) noexcept
 {
     return std::isfinite(values[0]) && std::isfinite(values[1]) &&
            std::isfinite(values[2]);
+}
+
+bool finite4(const float values[4]) noexcept
+{
+    return std::isfinite(values[0]) && std::isfinite(values[1]) &&
+           std::isfinite(values[2]) && std::isfinite(values[3]);
 }
 
 std::uint16_t saturating_u16(double value,
@@ -137,6 +145,11 @@ void MavlinkService::reset_sensor_streams() noexcept
     latest_vehicle_magnetometer_ = vehicle_magnetometer_s{};
     latest_vehicle_gps_ = sensor_gps_s{};
     latest_estimator_gps_status_ = estimator_gps_status_s{};
+    latest_vehicle_attitude_ = vehicle_attitude_s{};
+    latest_vehicle_local_position_ = vehicle_local_position_s{};
+    latest_vehicle_global_position_ = vehicle_global_position_s{};
+    latest_vehicle_odometry_ = vehicle_odometry_s{};
+    latest_estimator_status_ = estimator_status_s{};
     reset_sensor_link_state();
     accel_seen_ = false;
     gyro_seen_ = false;
@@ -144,6 +157,7 @@ void MavlinkService::reset_sensor_streams() noexcept
     gps_seen_ = false;
     mag_health_known_ = false;
     imu_streamable_ = false;
+    gps_streamable_ = false;
     imu_healthy_ = false;
     mag_healthy_ = false;
     gps_healthy_ = false;
@@ -187,6 +201,23 @@ void MavlinkService::update_sensor_topics() noexcept
         latest_estimator_gps_status_ =
             estimator_gps_status_subscription_.get();
     }
+    if (vehicle_attitude_subscription_.update()) {
+        latest_vehicle_attitude_ = vehicle_attitude_subscription_.get();
+    }
+    if (vehicle_local_position_subscription_.update()) {
+        latest_vehicle_local_position_ =
+            vehicle_local_position_subscription_.get();
+    }
+    if (vehicle_global_position_subscription_.update()) {
+        latest_vehicle_global_position_ =
+            vehicle_global_position_subscription_.get();
+    }
+    if (vehicle_odometry_subscription_.update()) {
+        latest_vehicle_odometry_ = vehicle_odometry_subscription_.get();
+    }
+    if (estimator_status_subscription_.update()) {
+        latest_estimator_status_ = estimator_status_subscription_.get();
+    }
 
     const bool accel_sample_present = latest_sensor_accel_.device_id != 0U &&
         latest_sensor_accel_.timestamp != 0U;
@@ -225,10 +256,11 @@ void MavlinkService::update_sensor_topics() noexcept
     const bool gps_status_valid =
         latest_estimator_gps_status_.timestamp != 0U &&
         latest_estimator_gps_status_.timestamp_sample != 0U &&
-        latest_estimator_gps_status_.timestamp ==
-            latest_vehicle_gps_.timestamp &&
-        latest_estimator_gps_status_.timestamp_sample ==
-            latest_vehicle_gps_.timestamp_sample;
+        latest_vehicle_gps_.timestamp >=
+            latest_estimator_gps_status_.timestamp_sample &&
+        latest_vehicle_gps_.timestamp -
+                latest_estimator_gps_status_.timestamp_sample <=
+            kGpsStatusFreshnessUs;
 
     // seen 是“本次启动曾检测到”的存在性锁存；healthy 是结合设备 ID、状态 Topic
     // 同源关系和新鲜度计算的当前健康值，两者不得混为一谈。
@@ -249,8 +281,12 @@ void MavlinkService::update_sensor_topics() noexcept
               kImuStatusFreshnessUs);
     const bool mag_now = mag_sample_valid && fresh(
         health_now, latest_vehicle_magnetometer_.timestamp, kMagFreshnessUs);
-    const bool gps_now = gps_sample_valid && gps_status_valid &&
-        fresh(health_now, latest_vehicle_gps_.timestamp, kGpsFreshnessUs) &&
+    gps_streamable_ = gps_sample_valid &&
+        fresh(health_now, latest_vehicle_gps_.timestamp, kGpsFreshnessUs);
+    // EKF2 在延迟融合时域发布 GnssChecks，timestamp_sample 对应被处理的 GPS
+    // publish timestamp，天然落后于最新原始样本，不能再要求两 Topic 时间戳相等。
+    const bool gps_now = gps_streamable_ && gps_status_valid &&
+        latest_estimator_gps_status_.checks_passed &&
         fresh(health_now, latest_estimator_gps_status_.timestamp,
               kGpsStatusFreshnessUs);
     if (mag_seen_ && (!mag_health_known_ || mag_now != mag_healthy_)) {
@@ -436,42 +472,161 @@ bool MavlinkService::send_gps_raw_int(std::uint64_t now) noexcept
     if (!gps_seen_) return false;
     const auto &gps = latest_vehicle_gps_;
     mavlink_gps_raw_int_t raw{};
-    raw.time_usec = gps_healthy_
+    raw.time_usec = gps_streamable_
         ? (gps.time_utc_usec != 0U ? gps.time_utc_usec
                                    : gps.timestamp_sample)
         : now;
-    raw.fix_type = gps_healthy_ ? gps.fix_type : GPS_FIX_TYPE_NO_GPS;
+    raw.fix_type = gps_streamable_ ? gps.fix_type : GPS_FIX_TYPE_NO_GPS;
     // 线协议单位：经纬度 1e-7 deg，高度 mm，DOP/速度 1e-2，精度 mm，
     // heading accuracy 为 1e-5 deg。链路不健康时使用各字段规定的未知哨兵。
-    raw.lat = gps_healthy_ ? saturating_i32(gps.latitude_deg * 1.0e7) : 0;
-    raw.lon = gps_healthy_ ? saturating_i32(gps.longitude_deg * 1.0e7) : 0;
-    raw.alt = gps_healthy_ ? saturating_i32(gps.altitude_msl_m * 1000.0) : 0;
-    raw.eph = gps_healthy_ ? saturating_u16(
+    raw.lat = gps_streamable_ ? saturating_i32(gps.latitude_deg * 1.0e7) : 0;
+    raw.lon = gps_streamable_ ? saturating_i32(gps.longitude_deg * 1.0e7) : 0;
+    raw.alt = gps_streamable_ ? saturating_i32(gps.altitude_msl_m * 1000.0) : 0;
+    raw.eph = gps_streamable_ ? saturating_u16(
         static_cast<double>(gps.hdop) * 100.0, UINT16_MAX) : UINT16_MAX;
-    raw.epv = gps_healthy_ ? saturating_u16(
+    raw.epv = gps_streamable_ ? saturating_u16(
         static_cast<double>(gps.vdop) * 100.0, UINT16_MAX) : UINT16_MAX;
-    raw.vel = gps_healthy_ ? saturating_u16(
+    raw.vel = gps_streamable_ ? saturating_u16(
         static_cast<double>(gps.vel_m_s) * 100.0, UINT16_MAX) : UINT16_MAX;
-    raw.cog = gps_healthy_ ? course_cdeg(gps.cog_rad) : UINT16_MAX;
-    raw.satellites_visible = gps_healthy_ ? gps.satellites_used : UINT8_MAX;
-    raw.alt_ellipsoid = gps_healthy_ ? saturating_i32(
+    raw.cog = gps_streamable_ ? course_cdeg(gps.cog_rad) : UINT16_MAX;
+    raw.satellites_visible = gps_streamable_ ? gps.satellites_used : UINT8_MAX;
+    raw.alt_ellipsoid = gps_streamable_ ? saturating_i32(
         gps.altitude_ellipsoid_m * 1000.0) : 0;
-    raw.h_acc = gps_healthy_ ? saturating_u32(
+    raw.h_acc = gps_streamable_ ? saturating_u32(
         static_cast<double>(gps.eph) * 1000.0) : 0U;
-    raw.v_acc = gps_healthy_ ? saturating_u32(
+    raw.v_acc = gps_streamable_ ? saturating_u32(
         static_cast<double>(gps.epv) * 1000.0) : 0U;
-    raw.vel_acc = gps_healthy_ ? saturating_u32(
+    raw.vel_acc = gps_streamable_ ? saturating_u32(
         static_cast<double>(gps.s_variance_m_s) * 1000.0) : 0U;
-    raw.hdg_acc = gps_healthy_ && std::isfinite(gps.heading_accuracy)
+    raw.hdg_acc = gps_streamable_ && std::isfinite(gps.heading_accuracy)
         ? saturating_u32(static_cast<double>(gps.heading_accuracy) *
                          (180.0 / 3.1415926535897932384626433832795) *
                          100000.0)
         : 0U;
-    raw.yaw = gps_healthy_ ? heading_cdeg(gps.heading) : 0U;
+    raw.yaw = gps_streamable_ ? heading_cdeg(gps.heading) : 0U;
 
     mavlink_message_t message{};
     mavlink_msg_gps_raw_int_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
                                    &message, &raw);
+    return send_message(message);
+}
+
+bool MavlinkService::send_attitude(std::uint64_t now) noexcept
+{
+    const auto &attitude = latest_vehicle_attitude_;
+    if (!fresh(now, attitude.timestamp, kEstimatorOutputFreshnessUs) ||
+        !finite4(attitude.q)) {
+        return false;
+    }
+
+    mavlink_attitude_t output{};
+    const matrix::Eulerf euler{matrix::Quatf{attitude.q}};
+    output.time_boot_ms =
+        static_cast<std::uint32_t>(attitude.timestamp / 1000ULL);
+    output.roll = euler.phi();
+    output.pitch = euler.theta();
+    output.yaw = euler.psi();
+
+    // PX4 ATTITUDE 使用机体系角速度。N1 没有单独的 vehicle_angular_velocity，
+    // 因而复用同一 EKF2 发布的 odometry.angular_velocity；若其过期则只将速率
+    // 置零，仍保留有效姿态，不伪造另一来源。
+    if (fresh(now, latest_vehicle_odometry_.timestamp,
+              kEstimatorOutputFreshnessUs) &&
+        finite3(latest_vehicle_odometry_.angular_velocity)) {
+        output.rollspeed = latest_vehicle_odometry_.angular_velocity[0];
+        output.pitchspeed = latest_vehicle_odometry_.angular_velocity[1];
+        output.yawspeed = latest_vehicle_odometry_.angular_velocity[2];
+    }
+
+    mavlink_message_t message{};
+    mavlink_msg_attitude_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+                                &message, &output);
+    return send_message(message);
+}
+
+bool MavlinkService::send_local_position_ned(std::uint64_t now) noexcept
+{
+    const auto &position = latest_vehicle_local_position_;
+    if (!fresh(now, position.timestamp, kEstimatorOutputFreshnessUs) ||
+        !std::isfinite(position.x) || !std::isfinite(position.y) ||
+        !std::isfinite(position.z) || !std::isfinite(position.vx) ||
+        !std::isfinite(position.vy) || !std::isfinite(position.vz)) {
+        return false;
+    }
+
+    mavlink_local_position_ned_t output{};
+    output.time_boot_ms =
+        static_cast<std::uint32_t>(position.timestamp / 1000ULL);
+    output.x = position.x;
+    output.y = position.y;
+    output.z = position.z;
+    output.vx = position.vx;
+    output.vy = position.vy;
+    output.vz = position.vz;
+    mavlink_message_t message{};
+    mavlink_msg_local_position_ned_encode(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &output);
+    return send_message(message);
+}
+
+bool MavlinkService::send_global_position_int(std::uint64_t now) noexcept
+{
+    const auto &global = latest_vehicle_global_position_;
+    const auto &local = latest_vehicle_local_position_;
+    if (!fresh(now, global.timestamp, kEstimatorOutputFreshnessUs) ||
+        !fresh(now, local.timestamp, kEstimatorOutputFreshnessUs) ||
+        !std::isfinite(global.lat) || !std::isfinite(global.lon) ||
+        !std::isfinite(global.alt) ||
+        !std::isfinite(local.vx) || !std::isfinite(local.vy) ||
+        !std::isfinite(local.vz)) {
+        return false;
+    }
+
+    mavlink_global_position_int_t output{};
+    output.time_boot_ms =
+        static_cast<std::uint32_t>(global.timestamp / 1000ULL);
+    output.lat = saturating_i32(global.lat * 1.0e7);
+    output.lon = saturating_i32(global.lon * 1.0e7);
+    output.alt = saturating_i32(static_cast<double>(global.alt) * 1000.0);
+    // 严格沿用 PX4 v1.17 GLOBAL_POSITION_INT：有 home 时为 gpos.alt-home.alt，
+    // 没有 home 时回退为 gpos.alt。N1 尚无 home_position，故只实现官方回退，
+    // 不用本地 NED 原点另造一套 relative_alt 语义。
+    output.relative_alt =
+        saturating_i32(static_cast<double>(global.alt) * 1000.0);
+    output.vx = scaled_i16(local.vx, 100.0);
+    output.vy = scaled_i16(local.vy, 100.0);
+    output.vz = scaled_i16(local.vz, 100.0);
+    output.hdg = course_cdeg(local.heading);
+
+    mavlink_message_t message{};
+    mavlink_msg_global_position_int_encode(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &output);
+    return send_message(message);
+}
+
+bool MavlinkService::send_estimator_status(std::uint64_t now) noexcept
+{
+    const auto &status = latest_estimator_status_;
+    if (!fresh(now, status.timestamp, kEstimatorOutputFreshnessUs)) {
+        return false;
+    }
+
+    // 字段映射逐项保持 PX4 v1.17 ESTIMATOR_STATUS stream；flags 直接使用
+    // Core solution_status_flags，不在 MAVLink 层重新解释或派生一套健康模型。
+    mavlink_estimator_status_t output{};
+    output.time_usec = status.timestamp;
+    output.vel_ratio = status.vel_test_ratio;
+    output.pos_horiz_ratio = status.pos_test_ratio;
+    output.pos_vert_ratio = status.hgt_test_ratio;
+    output.mag_ratio = status.hdg_test_ratio;
+    output.hagl_ratio = status.hagl_test_ratio;
+    output.tas_ratio = status.tas_test_ratio;
+    output.pos_horiz_accuracy = status.pos_horiz_accuracy;
+    output.pos_vert_accuracy = status.pos_vert_accuracy;
+    output.flags = status.solution_status_flags;
+    mavlink_message_t message{};
+    mavlink_msg_estimator_status_encode(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &output);
     return send_message(message);
 }
 

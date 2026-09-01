@@ -405,6 +405,18 @@ bool MavlinkService::send_contract_message(
     case stream_contract::MessageHandler::SystemStatus:
         if (refresh_topics) update_sensor_topics();
         return send_system_status(now);
+    case stream_contract::MessageHandler::Attitude:
+        if (refresh_topics) update_sensor_topics();
+        return send_attitude(now);
+    case stream_contract::MessageHandler::LocalPositionNed:
+        if (refresh_topics) update_sensor_topics();
+        return send_local_position_ned(now);
+    case stream_contract::MessageHandler::GlobalPositionInt:
+        if (refresh_topics) update_sensor_topics();
+        return send_global_position_int(now);
+    case stream_contract::MessageHandler::EstimatorStatus:
+        if (refresh_topics) update_sensor_topics();
+        return send_estimator_status(now);
     }
     return false;
 }
