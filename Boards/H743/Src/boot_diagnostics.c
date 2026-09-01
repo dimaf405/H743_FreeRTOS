@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -211,6 +212,31 @@ __attribute__((noreturn)) void dima_freertos_assert_failed(
     dima_boot_diagnostics_panic(
         DIMA_BOOT_FAILURE_FREERTOS_ASSERT, line,
         (uint32_t)(uintptr_t)file);
+}
+
+__attribute__((noreturn)) void abort(void)
+{
+    /*
+     * libgcc 的异常展开兜底会引用 abort。若交给 newlib，它还会经 raise 拉入
+     * signal 与 POSIX 进程系统调用；裸机没有该进程语义，因此直接记录通用
+     * 致命错误并复位，保证失败路径不依赖 stdio、堆或 syscall 桩。
+     */
+    dima_boot_diagnostics_panic(
+        DIMA_BOOT_FAILURE_ERROR_HANDLER, 0U, 0U);
+}
+
+__attribute__((noreturn)) void __assert_func(
+    const char *file, int line, const char *function,
+    const char *expression)
+{
+    /*
+     * newlib 默认断言后端会经 fiprintf 拉入完整的整数格式化闭包。产品断言
+     * 不能关闭，因此这里复用无格式化、无分配的启动诊断后端，只保存文件地址
+     * 与行号后复位；函数名和表达式仅服务于文本输出，故在故障路径中明确丢弃。
+     */
+    (void)function;
+    (void)expression;
+    dima_freertos_assert_failed(file, (uint32_t)line);
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
