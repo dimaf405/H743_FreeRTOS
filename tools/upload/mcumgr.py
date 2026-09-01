@@ -158,11 +158,15 @@ def _stop_owned_mcumgr(
 def try_image_list(
     executable: str, port: str, baud: int, mtu: int
 ) -> tuple[bool, str]:
+    # Windows 在 Application -> Recovery 重枚举后首次打开 CDC 时，实板的
+    # image list 端到端约需 0.63 s；0.5 s 会在响应抵达前超时，并在下一轮
+    # 重新开串口时丢弃迟到帧。NMP 留 1 s，宿主进程再多留 1 s 完成启动、
+    # COM 打开与正常退出，避免把可用的 MCUboot 误判为“不响应”。
     command = mcumgr_command(
         executable,
         port,
         "--timeout",
-        "0.5",
+        "1.0",
         "--tries",
         "1",
         "image",
@@ -175,7 +179,7 @@ def try_image_list(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=1.5,
+            timeout=2.0,
             check=False,
         )
     except subprocess.TimeoutExpired:
