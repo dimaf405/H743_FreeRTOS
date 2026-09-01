@@ -88,8 +88,8 @@ bool ApplicationContext::register_modules() noexcept
     if (!register_all_modules(
             module_manager_, parameter_service_, log_service_, serial_config_,
             um982_gps_, icm42688p_, vehicle_imu_, vehicle_magnetometer_,
-            sensor_calibration_, dronecan_mag2_, motor_output_, commander_,
-            mavlink_service_,
+            sensor_calibration_, dronecan_mag2_, ekf2_, motor_output_,
+            commander_, mavlink_service_,
             sbus_rc_, rc_update_, rc_manual_input_, manual_mode_,
             rover_differential_, boot_health_)) {
         module_manager_.reset();
@@ -338,6 +338,14 @@ bool ApplicationContext::start() noexcept
         PX4_ERR("UM982 GPS unavailable; Manual control remains enabled");
     }
 
+    // N1 EKF2 没有运行期开关或动态装卸路径。只在 IMU、Mag、GNSS 生产者完成
+    // 唯一一次启动尝试后启动；失败仅降级自动导航观测，绝不反向关闭 Manual、
+    // Commander、BootHealth、IWDG 或 PWM 安全链。
+    ekf2_started_ = module_manager_.start(ekf2_);
+    if (!ekf2_started_) {
+        PX4_ERR("EKF2 unavailable; Manual control remains enabled");
+    }
+
     sensor_calibration_started_ =
         module_manager_.start(sensor_calibration_);
     if (!sensor_calibration_started_) {
@@ -562,6 +570,13 @@ bool ApplicationContext::stop_started_modules() noexcept
     if (sensor_calibration_started_) {
         const bool result = module_manager_.stop(sensor_calibration_);
         sensor_calibration_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (ekf2_started_) {
+        // 先 drain estimator callback，再停止 GPS/Mag/IMU 生产者，防止停机窗口内
+        // EKF 继续读取已开始释放生命周期的前端。
+        const bool result = module_manager_.stop(ekf2_);
+        ekf2_started_ = !result;
         stopped = result && stopped;
     }
     if (um982_gps_started_) {

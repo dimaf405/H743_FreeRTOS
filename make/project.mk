@@ -60,6 +60,13 @@ DIMA_PARAMETER_MIDDLEWARE_INCLUDES := -IDima/middleware/parameters
 DIMA_MODULE_INCLUDES := -IDima/modules
 DIMA_SENSOR_MODULE_INCLUDES := -IDima/modules/sensors
 DIMA_LIB_INCLUDES := -IDima/lib
+DIMA_MATRIX_INCLUDES := -IDima/lib/matrix
+DIMA_MATHLIB_FILTER_INCLUDES := -IDima/lib/mathlib/math/filter
+DIMA_EKF2_INCLUDES := \
+	-IDima/lib/ekf2/EKF \
+	-IDima/lib/ekf2/EKF/python \
+	$(DIMA_MATRIX_INCLUDES) \
+	$(DIMA_MATHLIB_FILTER_INCLUDES)
 DIMA_PROTOCOL_INCLUDES := -IDima/lib/protocols
 DIMA_LIB_SENSOR_INCLUDES := -IDima/lib/sensors
 DIMA_ADAPTER_INCLUDES := -IDima/adapters
@@ -542,6 +549,20 @@ PROJECT_C_SOURCES := \
 	$(DIMA_STM32_C_SOURCES) \
 	$(DIMA_BOARD_C_SOURCES)
 
+# N1 通过物理裁剪后的目录闭包发现 EKF 源文件；这里仅维护允许参与产品构建
+# 的目录层级，不复制 PX4 的逐文件 CMake 清单，也不会把 test/ 带入固件。
+DIMA_EKF2_CORE_CXX_SOURCES := $(sort \
+	$(wildcard Dima/lib/ekf2/EKF/*.cpp) \
+	$(wildcard Dima/lib/ekf2/EKF/*/*.cpp) \
+	$(wildcard Dima/lib/ekf2/EKF/*/*/*.cpp) \
+	$(wildcard Dima/lib/geo/*.cpp) \
+	$(wildcard Dima/lib/lat_lon_alt/*.cpp) \
+	$(wildcard Dima/lib/world_magnetic_model/*.cpp))
+DIMA_EKF2_MODULE_CXX_SOURCES := \
+	$(sort $(wildcard Dima/modules/ekf2/*.cpp))
+DIMA_EKF2_CXX_SOURCES := \
+	$(DIMA_EKF2_CORE_CXX_SOURCES) $(DIMA_EKF2_MODULE_CXX_SOURCES)
+
 DIMA_COMMON_CXX_SOURCES := \
 	Dima/platform/common/Execution.cpp \
 	Dima/platform/common/Flash.cpp \
@@ -557,6 +578,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/lib/sensors/SensorRotation.cpp \
 	Dima/lib/sensors/validation/DataValidator.cpp \
 	Dima/lib/sensors/validation/SensorValidityAlgorithms.cpp \
+	$(DIMA_EKF2_CXX_SOURCES) \
 	Dima/drivers/gps/um982/Um982Protocol.cpp \
 	Dima/drivers/gps/um982/Um982Gps.cpp \
 	Dima/drivers/gps/um982/Um982GpsBaud.cpp \
@@ -700,6 +722,15 @@ DIMA_ROVER_OBJECTS := \
 		$(filter $(BUILD_DIR)/Dima/rover/%,$(PROJECT_OBJECTS)))
 DIMA_LIB_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/lib/%,$(PROJECT_OBJECTS))
+DIMA_EKF2_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_EKF2_CXX_SOURCES:.cpp=.o))
+DIMA_EKF2_CORE_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_EKF2_CORE_CXX_SOURCES:.cpp=.o))
+# ApplicationContext 以值成员拥有唯一 Ekf2，app_main 又包含该组合根头；因此
+# 两个 composition 翻译单元都必须看到与 Core 相同的 feature 宏和公开类型
+# 闭包。MODULE_NAME/浮点公式选项仍只属于 EKF 源。
+DIMA_EKF2_ABI_OBJECTS := \
+	$(DIMA_EKF2_OBJECTS) $(DIMA_COMPOSITION_OBJECTS)
 DIMA_DRONECAN_LIB_OBJECTS := \
 	$(filter $(DIMA_LIB_OBJECTS),$(DIMA_DRONECAN_COMMON_CXX_OBJECTS))
 DIMA_TIMESYNC_OBJECTS := \
@@ -720,6 +751,8 @@ DIMA_PARAMETER_MODULE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/modules/parameters/%,$(PROJECT_OBJECTS))
 DIMA_MAVLINK_MODULE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/modules/mavlink/%,$(PROJECT_OBJECTS))
+DIMA_MAVLINK_SENSOR_STREAMS_OBJECT := \
+	$(BUILD_DIR)/Dima/modules/mavlink/MavlinkSensorStreams.o
 DIMA_MAVLINK_COMPONENT_METADATA_OBJECTS := \
 	$(BUILD_DIR)/Dima/modules/mavlink/MavlinkService.o \
 	$(BUILD_DIR)/Dima/modules/mavlink/MavlinkSystemMessages.o
@@ -808,6 +841,17 @@ $(DIMA_APPLICATION_CONTEXT_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_PLATFORM_INCLUDES)
 
 $(DIMA_LIB_OBJECTS): DIMA_PRIVATE_INCLUDES += $(DIMA_LIB_INCLUDES)
+$(DIMA_EKF2_ABI_OBJECTS): DIMA_PRIVATE_DEFS += \
+	-DCONFIG_EKF2_GNSS -DCONFIG_EKF2_GNSS_YAW \
+	-DCONFIG_EKF2_GRAVITY_FUSION -DCONFIG_EKF2_MAGNETOMETER
+$(DIMA_EKF2_OBJECTS): DIMA_PRIVATE_DEFS += -DMODULE_NAME=\"ekf2\"
+$(DIMA_EKF2_ABI_OBJECTS): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_EKF2_INCLUDES)
+# Core 不属于 modules 对象集合，单独补齐其真实兼容头与 uORB 生成合同；
+# ApplicationContext/Wrapper 已从各自对象分类获得这些根，不能在 ABI 集合重复追加。
+$(DIMA_EKF2_CORE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_MIDDLEWARE_INCLUDES) $(DIMA_PLATFORM_INCLUDES) \
+	$(DIMA_MESSAGE_GENERATED_INCLUDES)
 $(DIMA_TIMESYNC_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_PLATFORM_INCLUDES)
 $(DIMA_DRONECAN_LIB_OBJECTS): DIMA_PRIVATE_INCLUDES += \
@@ -843,6 +887,8 @@ $(DIMA_PARAMETER_MODULE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_PARAMETER_MIDDLEWARE_INCLUDES)
 $(DIMA_MAVLINK_MODULE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_ADAPTER_INCLUDES) $(DIMA_MAVLINK_GENERATED_INCLUDES)
+$(DIMA_MAVLINK_SENSOR_STREAMS_OBJECT): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_MATRIX_INCLUDES)
 $(DIMA_MAVLINK_COMPONENT_METADATA_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_COMPONENT_GENERATED_INCLUDES)
 $(DIMA_SERIAL_CONFIG_OBJECT): DIMA_PRIVATE_INCLUDES += \
@@ -920,6 +966,11 @@ DIMA_PROJECT_CFLAGS = $(MCU) $(DIMA_PRIVATE_DEFS) $(DIMA_PRIVATE_INCLUDES) \
 DIMA_PROJECT_CXXFLAGS = $(DIMA_PROJECT_CFLAGS) \
 	-std=gnu++17 -fno-exceptions -fno-rtti \
 	-fno-threadsafe-statics -fno-use-cxa-atexit
+# PX4 EKF2 的协方差与观测公式依赖既定浮点求值顺序；生成的 StateSample::vector
+# 也沿用 PX4 全局 -fno-strict-aliasing 合同。两项只施加给 EKF 闭包一次，项目
+# 原有 -fno-exceptions/-fno-rtti 仍由上方统一继承。
+$(DIMA_EKF2_ABI_OBJECTS): DIMA_PROJECT_CXXFLAGS += -fno-strict-aliasing
+$(DIMA_EKF2_OBJECTS): DIMA_PROJECT_CXXFLAGS += -fno-associative-math
 ifeq ($(DEBUG), 1)
 DIMA_PROJECT_CFLAGS += -g -gdwarf-2
 endif

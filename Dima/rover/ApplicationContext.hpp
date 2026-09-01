@@ -20,6 +20,7 @@
 #include "serial/SerialConfig.hpp"
 #include "icm42688p/ICM42688P.hpp"
 #include "imu/VehicleImu.hpp"
+#include "ekf2/Ekf2.hpp"
 #include "calibration/SensorCalibration.hpp"
 #include "lifecycle/module_manager.hpp"
 #include "maintenance/RuntimeMaintenanceCoordinator.hpp"
@@ -86,6 +87,7 @@ private:
     dima::modules::sensors::VehicleMagnetometer vehicle_magnetometer_;
     dima::modules::sensors::SensorCalibration sensor_calibration_;
     dima::drivers::magnetometer::DroneCanMag2 dronecan_mag2_;
+    dima::modules::ekf2::Ekf2 ekf2_{};
     dima::modules::motor::MotorOutput motor_output_;
     dima::modules::safety::Commander commander_;
     dima::drivers::rc::SbusRc sbus_rc_;
@@ -112,6 +114,7 @@ private:
     bool vehicle_magnetometer_started_{false};
     bool sensor_calibration_started_{false};
     bool dronecan_mag2_started_{false};
+    bool ekf2_started_{false};
     bool motor_output_started_{false};
     bool commander_started_{false};
     bool sbus_started_{false};
