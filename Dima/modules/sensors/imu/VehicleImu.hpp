@@ -11,6 +11,7 @@
 #include "validation/DataValidator.hpp"
 #include "validation/SensorValidityAlgorithms.hpp"
 #include "lifecycle/module_base.hpp"
+#include "estimator_sensor_bias.hpp"
 #include "parameter_update.hpp"
 #include "parameters/param.h"
 #include "api/Flash.hpp"
@@ -75,6 +76,9 @@ private:
     static constexpr std::uint32_t kStreamTimeoutUs = 200000U;
     static constexpr std::uint64_t kStatusPublishIntervalUs = 1000000ULL;
     static constexpr std::uint64_t kStatusMinimumIntervalUs = 100000ULL;
+    static constexpr std::uint64_t kBiasFreshnessUs = 1000000ULL;
+    static constexpr std::uint64_t kAutocalUpdateIntervalUs = 1000000ULL;
+    static constexpr std::uint64_t kAutocalQuietPeriodUs = 30000000ULL;
     static constexpr std::size_t kMaximumUpdatesPerRun = 8U;
 
     using Vector3 = vehicle_imu_algorithms::Vector3;
@@ -93,6 +97,44 @@ private:
         std::uint32_t count{0U};
     };
 
+    struct LearnedCalibration {
+        // estimator_sensor_bias 在机体系，写入 CAL_*_OFF 前已转换回传感器轴。
+        Vector3 offset{};
+        std::uint32_t device_id{0U};
+        bool valid{false};
+    };
+
+    enum class CalibrationCommitKind : std::uint8_t {
+        None = 0U,
+        Accel,
+        Gyro,
+    };
+
+    enum class ParameterCommitState : std::uint8_t {
+        Idle = 0U,
+        Pending,
+        Running,
+        Succeeded,
+        Failed,
+    };
+
+    struct CalibrationCommitRequest {
+        CalibrationCommitKind kind{CalibrationCommitKind::None};
+        std::uint32_t device_id{0U};
+        // accel 使用前 6 项 offset/scale，gyro 使用前 3 项 offset；固定数组保证
+        // realtime producer 与 lp_default consumer 之间不发生动态分配。
+        float values[6]{};
+    };
+
+    class ParameterCommitWorkItem final : public px4::ScheduledWorkItem {
+    public:
+        explicit ParameterCommitWorkItem(VehicleImu &owner) noexcept;
+
+    private:
+        void Run() override;
+        VehicleImu &owner_;
+    };
+
     void Run() override;
     bool bind_parameters() noexcept;
     void invalidate_parameters() noexcept;
@@ -104,6 +146,21 @@ private:
     void apply_configuration(const Configuration &configuration) noexcept;
     void mark_parameter_update_applied(std::uint32_t instance) noexcept;
     void clear_pending_configuration() noexcept;
+    void service_estimator_bias(std::uint64_t now_us,
+                                bool parameters_updated) noexcept;
+    void capture_estimator_bias(std::uint64_t now_us) noexcept;
+    bool save_accel_bias() noexcept;
+    bool save_gyro_bias() noexcept;
+    bool queue_calibration_commit(CalibrationCommitKind kind,
+                                  std::uint32_t device_id,
+                                  const float *values,
+                                  std::size_t value_count) noexcept;
+    bool parameter_commit_idle() const noexcept;
+    void consume_parameter_commit_result(std::uint64_t now_us) noexcept;
+    void run_parameter_commit() noexcept;
+    void reset_parameter_commit() noexcept;
+    Vector3 bias_to_sensor_frame(const float (&bias)[3]) const noexcept;
+    void clear_learned_calibrations() noexcept;
     Vector3 correct_accel(const sensor_accel_s &sample) const noexcept;
     Vector3 correct_gyro(const sensor_gyro_s &sample) const noexcept;
     bool select_accel_device(std::uint32_t device_id) noexcept;
@@ -124,6 +181,7 @@ private:
     // 参数更新先 stage，只有 disarmed 才由前端应用；SensorCalibration 已持有
     // 全局 interlock 时本模块不能再次获取该锁。
     dima::platform::ArmedFlashCoordinator &armed_;
+    ParameterCommitWorkItem parameter_commit_worker_;
     // 与 PX4 SensorCalibration::set_device_id() 一致，设备身份来自首次有效 raw
     // topic 样本，而不是由组合根预先注入。单设备产品锁定后拒绝静默切换。
     std::uint32_t accel_device_id_{0U};
@@ -132,12 +190,15 @@ private:
     uORB::SubscriptionCallbackWorkItem gyro_sub_{ORB_ID(sensor_gyro), *this};
     uORB::SubscriptionCallbackWorkItem parameter_update_sub_{
         ORB_ID(parameter_update), *this};
+    uORB::Subscription estimator_sensor_bias_sub_{
+        ORB_ID(estimator_sensor_bias)};
     uORB::Publication<vehicle_imu_s> vehicle_imu_pub_{ORB_ID(vehicle_imu)};
     uORB::Publication<vehicle_imu_status_s> vehicle_imu_status_pub_{
         ORB_ID(vehicle_imu_status)};
 
     dima::ParamInt<dima::params::SENS_BOARD_ROT> board_rotation_{};
     dima::ParamInt<dima::params::IMU_INTEG_RATE> integration_rate_{};
+    dima::ParamInt<dima::params::SENS_IMU_AUTOCAL> imu_autocal_{};
     dima::ParamInt<dima::params::SENS_IMU_CLPNOTI>
         clipping_notifications_{};
     dima::ParamInt<dima::params::CAL_ACC0_ID> accel_id_{};
@@ -166,6 +227,15 @@ private:
     bool validation_fault_active_{false};
     bool clipping_fault_active_{false};
     bool status_dirty_{false};
+
+    LearnedCalibration learned_accel_calibration_{};
+    LearnedCalibration learned_gyro_calibration_{};
+    CalibrationCommitRequest parameter_commit_request_{};
+    std::uint8_t parameter_commit_state_{
+        static_cast<std::uint8_t>(ParameterCommitState::Idle)};
+    std::uint64_t autocal_last_bias_check_us_{0U};
+    std::uint64_t autocal_quiet_until_us_{0U};
+    std::uint64_t autocal_retry_after_us_{0U};
 
     // accel/gyro 分别维护结构错误+驱动 error_count 的流健康，任一不健康都停止
     // vehicle_imu 发布并重置积分，但仍继续消费样本以允许恢复。

@@ -304,6 +304,15 @@ parameters:
       min: 100
       max: 400
       unit: Hz
+    SENS_IMU_AUTOCAL:
+      description:
+        short: IMU auto calibration
+        long: |-
+          Automatically initialize IMU accelerometer and gyroscope calibration
+          from stable EKF2 in-run bias estimates when available.
+      category: System
+      type: boolean
+      default: 1
     SENS_IMU_CLPNOTI:
       description:
         short: IMU clipping notification

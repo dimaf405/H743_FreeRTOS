@@ -56,6 +56,69 @@ float vector_norm(const algorithms::Vector3 &value) noexcept
                      value.z * value.z);
 }
 
+bool finite_message_vector(const float (&value)[3]) noexcept
+{
+    return std::isfinite(value[0]) && std::isfinite(value[1]) &&
+           std::isfinite(value[2]);
+}
+
+template<std::size_t Count>
+bool commit_calibration_parameters(
+    param_t id_handle, const param_t (&value_handles)[Count],
+    std::uint32_t device_id, const float (&next_values)[Count]) noexcept
+{
+    if (device_id == 0U ||
+        device_id > static_cast<std::uint32_t>(INT32_MAX)) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < Count; ++index) {
+        if (!std::isfinite(next_values[index])) {
+            return false;
+        }
+    }
+
+    std::int32_t old_id{};
+    float old_values[Count]{};
+    px4::AtomicTransaction transaction;
+    if (param_get(id_handle, &old_id) != 0) {
+        return false;
+    }
+    for (std::size_t index = 0U; index < Count; ++index) {
+        if (param_get(value_handles[index], &old_values[index]) != 0) {
+            return false;
+        }
+    }
+
+    const std::int32_t next_id = static_cast<std::int32_t>(device_id);
+    bool written = param_set_no_notification(id_handle, &next_id) == 0;
+    for (std::size_t index = 0U; index < Count; ++index) {
+        written =
+            param_set_no_notification(value_handles[index],
+                                      &next_values[index]) == 0 &&
+            written;
+    }
+    if (!written) {
+        // ID 和各轴 offset/scale 是一个不可拆分的校准事务；任一写失败都在同一
+        // 参数锁内恢复整组旧值，绝不通知前端观察半套坐标校正。
+        bool restored = param_set_no_notification(id_handle, &old_id) == 0;
+        for (std::size_t index = 0U; index < Count; ++index) {
+            restored =
+                param_set_no_notification(value_handles[index],
+                                          &old_values[index]) == 0 &&
+                restored;
+        }
+        if (!restored) {
+            PX4_ERR("IMU autocal parameter rollback failed");
+        }
+        return false;
+    }
+
+    // 这里只更新参数内存并发送一次 generation；Flash/SD 物理保存仍由现有
+    // Parameter autosave 负责，实时传感器前端不直接执行阻塞持久化。
+    param_notify_changes();
+    return true;
+}
+
 void update_moments(algorithms::Vector3 &mean,
                     algorithms::Vector3 &m2,
                     std::uint32_t &count,
@@ -108,8 +171,22 @@ float variance(float m2, std::uint32_t count) noexcept
 VehicleImu::VehicleImu(
     dima::platform::ArmedFlashCoordinator &armed) noexcept
     : px4::ScheduledWorkItem("vehicle_imu", px4::wq_configurations::sensors),
-      armed_(armed)
+      armed_(armed),
+      parameter_commit_worker_(*this)
 {
+}
+
+VehicleImu::ParameterCommitWorkItem::ParameterCommitWorkItem(
+    VehicleImu &owner) noexcept
+    : px4::ScheduledWorkItem("imu_param_commit",
+                             px4::wq_configurations::lp_default),
+      owner_(owner)
+{
+}
+
+void VehicleImu::ParameterCommitWorkItem::Run()
+{
+    owner_.run_parameter_commit();
 }
 
 bool VehicleImu::start()
@@ -117,8 +194,11 @@ bool VehicleImu::start()
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (!ScheduleEnable()) {
+    reset_parameter_commit();
+    if (!ScheduleEnable() || !parameter_commit_worker_.ScheduleEnable()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
+        parameter_commit_worker_.ScheduleCancelAndDrain();
         return false;
     }
 
@@ -153,6 +233,10 @@ bool VehicleImu::start()
     have_previous_status_gyro_ = false;
     reset_status_window();
     clear_pending_configuration();
+    clear_learned_calibrations();
+    autocal_last_bias_check_us_ = 0U;
+    autocal_quiet_until_us_ = 0U;
+    autocal_retry_after_us_ = 0U;
     reset_integrators(true);
     // 参数、初始配置和两个发布端均成功后才注册回调；任一步失败完整回滚，
     // 不让部分启动的实时前端消费传感器数据。
@@ -165,6 +249,7 @@ bool VehicleImu::start()
         invalidate_parameters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        parameter_commit_worker_.ScheduleCancelAndDrain();
         PX4_ERR("parameter binding or uORB advertisement failed");
         return false;
     }
@@ -173,6 +258,7 @@ bool VehicleImu::start()
         invalidate_parameters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        parameter_commit_worker_.ScheduleCancelAndDrain();
         PX4_ERR("gyro callback registration failed");
         return false;
     }
@@ -181,6 +267,7 @@ bool VehicleImu::start()
         invalidate_parameters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        parameter_commit_worker_.ScheduleCancelAndDrain();
         PX4_ERR("parameter callback registration failed");
         return false;
     }
@@ -192,6 +279,7 @@ bool VehicleImu::start()
         invalidate_parameters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        parameter_commit_worker_.ScheduleCancelAndDrain();
         return false;
     }
     return true;
@@ -202,8 +290,13 @@ void VehicleImu::stop()
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     parameter_update_sub_.unregisterCallback();
     gyro_sub_.unregisterCallback();
+    // 先排空 realtime producer，再排空 lp_default consumer，保证参数句柄失效前
+    // 不再有提交器读取快照或执行事务。
     ScheduleCancelAndDrain();
+    parameter_commit_worker_.ScheduleCancelAndDrain();
+    reset_parameter_commit();
     clear_pending_configuration();
+    clear_learned_calibrations();
     invalidate_parameters();
     reset_integrators(true);
     accel_validator_.reset();
@@ -270,6 +363,7 @@ bool VehicleImu::gyro_calibration_matches(
 bool VehicleImu::bind_parameters() noexcept
 {
     return board_rotation_.bind() && integration_rate_.bind() &&
+           imu_autocal_.bind() &&
            clipping_notifications_.bind() &&
            accel_id_.bind() &&
            accel_x_offset_.bind() && accel_y_offset_.bind() &&
@@ -283,6 +377,7 @@ void VehicleImu::invalidate_parameters() noexcept
 {
     board_rotation_.invalidate();
     integration_rate_.invalidate();
+    imu_autocal_.invalidate();
     clipping_notifications_.invalidate();
     accel_id_.invalidate();
     accel_x_offset_.invalidate();
@@ -303,6 +398,7 @@ bool VehicleImu::refresh_parameter_cache() noexcept
 {
     bool refreshed = board_rotation_.update();
     refreshed = integration_rate_.update() && refreshed;
+    refreshed = imu_autocal_.update() && refreshed;
     refreshed = clipping_notifications_.update() && refreshed;
     refreshed = accel_id_.update() && refreshed;
     refreshed = accel_x_offset_.update() && refreshed;
@@ -348,6 +444,12 @@ VehicleImu::ConfigurationReadResult VehicleImu::read_configuration(
         return ConfigurationReadResult::Invalid;
     }
     candidate.clipping_notifications = clipping_notifications != 0;
+    const std::int32_t imu_autocal = imu_autocal_.get();
+    if (imu_autocal != 0 && imu_autocal != 1) {
+        PX4_WARN("unsupported SENS_IMU_AUTOCAL=%ld",
+                 static_cast<long>(imu_autocal));
+        return ConfigurationReadResult::Invalid;
+    }
 
     candidate.accel.configured_device_id = accel_id_.get();
     if (candidate.accel.configured_device_id < 0) {
@@ -490,6 +592,26 @@ void VehicleImu::apply_configuration(
     const Configuration &configuration) noexcept
 {
     // 校正或积分周期变化后清空所有积分/状态统计窗口，不能跨配置边界拼接 delta。
+    const bool accel_calibration_changed =
+        !algorithms::calibration_equal(active_configuration_.accel,
+                                       configuration.accel);
+    const bool gyro_calibration_changed =
+        !algorithms::calibration_equal(active_configuration_.gyro,
+                                       configuration.gyro);
+    if (accel_calibration_changed) {
+        learned_accel_calibration_ = {};
+    }
+    if (gyro_calibration_changed) {
+        learned_gyro_calibration_ = {};
+    }
+    if ((accel_calibration_changed || gyro_calibration_changed) &&
+        state_ == dima::middleware::lifecycle::ModuleState::Running) {
+        const std::uint64_t now_us = hrt_absolute_time();
+        autocal_quiet_until_us_ =
+            now_us > UINT64_MAX - kAutocalQuietPeriodUs
+                ? UINT64_MAX
+                : now_us + kAutocalQuietPeriodUs;
+    }
     active_configuration_ = configuration;
     reset_integrators(true);
     reset_status_window();
@@ -514,6 +636,373 @@ void VehicleImu::clear_pending_configuration() noexcept
     pending_configuration_ = Configuration{};
     pending_configuration_instance_ = 0U;
     configuration_pending_ = false;
+}
+
+void VehicleImu::clear_learned_calibrations() noexcept
+{
+    learned_accel_calibration_ = {};
+    learned_gyro_calibration_ = {};
+}
+
+VehicleImu::Vector3 VehicleImu::bias_to_sensor_frame(
+    const float (&bias)[3]) const noexcept
+{
+    // active rotation 是 sensor->body 的 row-major R。EKF bias 位于机体系，
+    // 写回传感器 offset 必须先做 R^T*bias：sensor_j=sum_i R_ij*body_i。
+    const float *const rotation = active_configuration_.rotation_matrix;
+    return {
+        rotation[0] * bias[0] + rotation[3] * bias[1] +
+            rotation[6] * bias[2],
+        rotation[1] * bias[0] + rotation[4] * bias[1] +
+            rotation[7] * bias[2],
+        rotation[2] * bias[0] + rotation[5] * bias[1] +
+            rotation[8] * bias[2]};
+}
+
+void VehicleImu::capture_estimator_bias(std::uint64_t now_us) noexcept
+{
+    estimator_sensor_bias_s estimator_bias{};
+    if (!estimator_sensor_bias_sub_.copy(&estimator_bias) ||
+        estimator_bias.timestamp == 0U ||
+        now_us < estimator_bias.timestamp ||
+        now_us - estimator_bias.timestamp > kBiasFreshnessUs) {
+        return;
+    }
+
+    if (estimator_bias.accel_bias_valid &&
+        estimator_bias.accel_bias_stable &&
+        estimator_bias.accel_device_id != 0U &&
+        estimator_bias.accel_device_id == accel_device_id_ &&
+        active_configuration_.accel.enabled &&
+        finite_message_vector(estimator_bias.accel_bias) &&
+        finite_message_vector(estimator_bias.accel_bias_variance)) {
+        const Vector3 sensor_bias =
+            bias_to_sensor_frame(estimator_bias.accel_bias);
+        const auto &active = active_configuration_.accel;
+        // corrected=(raw-offset)*scale，所以机体系 bias 写回传感器 offset 时：
+        // offset_new=offset_old+(R^T*bias)./scale。符号和除 scale 次序与 PX4
+        // Accelerometer::BiasCorrectedSensorOffset 完全一致。
+        const Vector3 offset{
+            active.offset.x + sensor_bias.x / active.scale.x,
+            active.offset.y + sensor_bias.y / active.scale.y,
+            active.offset.z + sensor_bias.z / active.scale.z};
+        if (algorithms::finite_vector(offset)) {
+            learned_accel_calibration_.offset = offset;
+            learned_accel_calibration_.device_id = accel_device_id_;
+            learned_accel_calibration_.valid = true;
+        }
+    }
+
+    if (estimator_bias.gyro_bias_valid &&
+        estimator_bias.gyro_bias_stable &&
+        estimator_bias.gyro_device_id != 0U &&
+        estimator_bias.gyro_device_id == gyro_device_id_ &&
+        active_configuration_.gyro.enabled &&
+        finite_message_vector(estimator_bias.gyro_bias) &&
+        finite_message_vector(estimator_bias.gyro_bias_variance)) {
+        const Vector3 sensor_bias =
+            bias_to_sensor_frame(estimator_bias.gyro_bias);
+        const auto &active = active_configuration_.gyro;
+        // 陀螺校正没有 scale：offset_new=offset_old+R^T*bias。
+        const Vector3 offset{active.offset.x + sensor_bias.x,
+                             active.offset.y + sensor_bias.y,
+                             active.offset.z + sensor_bias.z};
+        if (algorithms::finite_vector(offset)) {
+            learned_gyro_calibration_.offset = offset;
+            learned_gyro_calibration_.device_id = gyro_device_id_;
+            learned_gyro_calibration_.valid = true;
+        }
+    }
+}
+
+bool VehicleImu::save_accel_bias() noexcept
+{
+    if (!learned_accel_calibration_.valid) {
+        return true;
+    }
+    if (learned_accel_calibration_.device_id != accel_device_id_ ||
+        accel_device_id_ == 0U) {
+        learned_accel_calibration_ = {};
+        return true;
+    }
+
+    const auto &active = active_configuration_.accel;
+    const bool calibrated = algorithms::calibration_id_matches(
+        active.configured_device_id, accel_device_id_);
+    const Vector3 change{
+        learned_accel_calibration_.offset.x - active.offset.x,
+        learned_accel_calibration_.offset.y - active.offset.y,
+        learned_accel_calibration_.offset.z - active.offset.z};
+    // PX4 仅在 offset 变化超过 0.05 m/s^2 或设备尚未校准时保存，避免稳定
+    // 小噪声反复磨损参数存储；单实例无需多 EKF 方差加权。
+    if (calibrated && vector_norm(change) <= 0.05F) {
+        learned_accel_calibration_ = {};
+        return true;
+    }
+
+    algorithms::Calibration next{active};
+    next.offset = learned_accel_calibration_.offset;
+    next.configured_device_id = static_cast<std::int32_t>(accel_device_id_);
+    if (!algorithms::valid_accel_calibration(next)) {
+        learned_accel_calibration_ = {};
+        return true;
+    }
+
+    const float values[6]{next.offset.x, next.offset.y, next.offset.z,
+                          next.scale.x, next.scale.y, next.scale.z};
+    return queue_calibration_commit(CalibrationCommitKind::Accel,
+                                    accel_device_id_, values, 6U);
+}
+
+bool VehicleImu::save_gyro_bias() noexcept
+{
+    if (!learned_gyro_calibration_.valid) {
+        return true;
+    }
+    if (learned_gyro_calibration_.device_id != gyro_device_id_ ||
+        gyro_device_id_ == 0U) {
+        learned_gyro_calibration_ = {};
+        return true;
+    }
+
+    const auto &active = active_configuration_.gyro;
+    const bool calibrated = algorithms::calibration_id_matches(
+        active.configured_device_id, gyro_device_id_);
+    const Vector3 change{
+        learned_gyro_calibration_.offset.x - active.offset.x,
+        learned_gyro_calibration_.offset.y - active.offset.y,
+        learned_gyro_calibration_.offset.z - active.offset.z};
+    if (calibrated && vector_norm(change) <= 0.01F) {
+        learned_gyro_calibration_ = {};
+        return true;
+    }
+
+    algorithms::Calibration next{active};
+    next.offset = learned_gyro_calibration_.offset;
+    next.configured_device_id = static_cast<std::int32_t>(gyro_device_id_);
+    if (!algorithms::valid_gyro_calibration(next)) {
+        learned_gyro_calibration_ = {};
+        return true;
+    }
+
+    const float values[3]{next.offset.x, next.offset.y, next.offset.z};
+    return queue_calibration_commit(CalibrationCommitKind::Gyro,
+                                    gyro_device_id_, values, 3U);
+}
+
+bool VehicleImu::parameter_commit_idle() const noexcept
+{
+    return __atomic_load_n(&parameter_commit_state_, __ATOMIC_ACQUIRE) ==
+           static_cast<std::uint8_t>(ParameterCommitState::Idle);
+}
+
+bool VehicleImu::queue_calibration_commit(
+    CalibrationCommitKind kind, std::uint32_t device_id,
+    const float *values, std::size_t value_count) noexcept
+{
+    const std::size_t expected_count =
+        kind == CalibrationCommitKind::Accel
+            ? 6U
+            : (kind == CalibrationCommitKind::Gyro ? 3U : 0U);
+    if (!parameter_commit_idle() || device_id == 0U || values == nullptr ||
+        value_count != expected_count) {
+        return false;
+    }
+
+    CalibrationCommitRequest request{};
+    request.kind = kind;
+    request.device_id = device_id;
+    for (std::size_t index = 0U; index < value_count; ++index) {
+        if (!std::isfinite(values[index])) {
+            return false;
+        }
+        request.values[index] = values[index];
+    }
+
+    // request 全量写完后再以 release 发布 Pending；lp_default 只有 acquire 成功
+    // 后才复制该快照，因此不会读取 sensors 正在修改的 active configuration。
+    parameter_commit_request_ = request;
+    __atomic_store_n(
+        &parameter_commit_state_,
+        static_cast<std::uint8_t>(ParameterCommitState::Pending),
+        __ATOMIC_RELEASE);
+    if (!parameter_commit_worker_.ScheduleNow()) {
+        parameter_commit_request_ = {};
+        __atomic_store_n(
+            &parameter_commit_state_,
+            static_cast<std::uint8_t>(ParameterCommitState::Idle),
+            __ATOMIC_RELEASE);
+        return false;
+    }
+    return true;
+}
+
+void VehicleImu::run_parameter_commit() noexcept
+{
+    std::uint8_t expected =
+        static_cast<std::uint8_t>(ParameterCommitState::Pending);
+    if (!__atomic_compare_exchange_n(
+            &parameter_commit_state_, &expected,
+            static_cast<std::uint8_t>(ParameterCommitState::Running),
+            false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+        return;
+    }
+
+    // 复制不可变请求后只访问参数 Core；本 worker 不读取 realtime owner 的
+    // learned candidate 或 active configuration，参数更新并发到来不会撕裂事务。
+    const CalibrationCommitRequest request{parameter_commit_request_};
+    bool success = false;
+    if (request.kind == CalibrationCommitKind::Accel) {
+        const param_t handles[6]{
+            param_handle(dima::params::CAL_ACC0_XOFF),
+            param_handle(dima::params::CAL_ACC0_YOFF),
+            param_handle(dima::params::CAL_ACC0_ZOFF),
+            param_handle(dima::params::CAL_ACC0_XSCALE),
+            param_handle(dima::params::CAL_ACC0_YSCALE),
+            param_handle(dima::params::CAL_ACC0_ZSCALE)};
+        success = commit_calibration_parameters(
+            param_handle(dima::params::CAL_ACC0_ID), handles,
+            request.device_id, request.values);
+        if (success) {
+            PX4_INFO("Accel %lu autocal offset committed [%.3f %.3f %.3f]",
+                     static_cast<unsigned long>(request.device_id),
+                     static_cast<double>(request.values[0]),
+                     static_cast<double>(request.values[1]),
+                     static_cast<double>(request.values[2]));
+        }
+    } else if (request.kind == CalibrationCommitKind::Gyro) {
+        const param_t handles[3]{
+            param_handle(dima::params::CAL_GYRO0_XOFF),
+            param_handle(dima::params::CAL_GYRO0_YOFF),
+            param_handle(dima::params::CAL_GYRO0_ZOFF)};
+        const float values[3]{request.values[0], request.values[1],
+                              request.values[2]};
+        success = commit_calibration_parameters(
+            param_handle(dima::params::CAL_GYRO0_ID), handles,
+            request.device_id, values);
+        if (success) {
+            PX4_INFO("Gyro %lu autocal offset committed [%.3f %.3f %.3f]",
+                     static_cast<unsigned long>(request.device_id),
+                     static_cast<double>(request.values[0]),
+                     static_cast<double>(request.values[1]),
+                     static_cast<double>(request.values[2]));
+        }
+    }
+
+    if (!success) {
+        PX4_WARN("IMU autocal parameter transaction failed");
+    }
+    __atomic_store_n(
+        &parameter_commit_state_,
+        static_cast<std::uint8_t>(
+            success ? ParameterCommitState::Succeeded
+                    : ParameterCommitState::Failed),
+        __ATOMIC_RELEASE);
+    // 结果发布后主动唤醒 sensors 消费；若正在 shutdown，owner 已关闭调度，
+    // ScheduleNow 会安全失败，stop 仍会在句柄失效前 drain 本 worker。
+    (void)ScheduleNow();
+}
+
+void VehicleImu::consume_parameter_commit_result(
+    std::uint64_t now_us) noexcept
+{
+    const auto commit_state = static_cast<ParameterCommitState>(
+        __atomic_load_n(&parameter_commit_state_, __ATOMIC_ACQUIRE));
+    if (commit_state != ParameterCommitState::Succeeded &&
+        commit_state != ParameterCommitState::Failed) {
+        return;
+    }
+
+    const CalibrationCommitKind kind = parameter_commit_request_.kind;
+    if (commit_state == ParameterCommitState::Succeeded) {
+        if (kind == CalibrationCommitKind::Accel) {
+            learned_accel_calibration_ = {};
+        } else if (kind == CalibrationCommitKind::Gyro) {
+            learned_gyro_calibration_ = {};
+        }
+        // 成功后 30 s 内不重新采集估计 bias，避免 parameter_update 尚未被前端
+        // 应用时又基于旧 offset 生成第二份候选。
+        autocal_quiet_until_us_ =
+            now_us > UINT64_MAX - kAutocalQuietPeriodUs
+                ? UINT64_MAX
+                : now_us + kAutocalQuietPeriodUs;
+        autocal_retry_after_us_ = 0U;
+    } else {
+        // 失败保留 learned candidate，并限速到 1 Hz；参数服务短暂不可用不能让
+        // 8 kHz IMU 输入把 lp_default 反复唤醒。
+        autocal_retry_after_us_ =
+            now_us > UINT64_MAX - kAutocalUpdateIntervalUs
+                ? UINT64_MAX
+                : now_us + kAutocalUpdateIntervalUs;
+    }
+
+    parameter_commit_request_ = {};
+    __atomic_store_n(
+        &parameter_commit_state_,
+        static_cast<std::uint8_t>(ParameterCommitState::Idle),
+        __ATOMIC_RELEASE);
+}
+
+void VehicleImu::reset_parameter_commit() noexcept
+{
+    parameter_commit_request_ = {};
+    __atomic_store_n(
+        &parameter_commit_state_,
+        static_cast<std::uint8_t>(ParameterCommitState::Idle),
+        __ATOMIC_RELEASE);
+}
+
+void VehicleImu::service_estimator_bias(
+    std::uint64_t now_us, bool parameters_updated) noexcept
+{
+    consume_parameter_commit_result(now_us);
+    if (!parameter_commit_idle()) {
+        return;
+    }
+    if (!imu_autocal_.bound() || imu_autocal_.get() == 0) {
+        clear_learned_calibrations();
+        return;
+    }
+    if (parameters_updated || now_us < autocal_quiet_until_us_ ||
+        now_us < autocal_retry_after_us_) {
+        return;
+    }
+
+    const bool accel_calibrated = algorithms::calibration_id_matches(
+        active_configuration_.accel.configured_device_id,
+        accel_device_id_);
+    const bool gyro_calibrated = algorithms::calibration_id_matches(
+        active_configuration_.gyro.configured_device_id,
+        gyro_device_id_);
+    const bool capture_allowed =
+        armed_.armed() || !accel_calibrated || !gyro_calibrated;
+    const bool capture_due = autocal_last_bias_check_us_ == 0U ||
+                             now_us < autocal_last_bias_check_us_ ||
+                             now_us - autocal_last_bias_check_us_ >=
+                                 kAutocalUpdateIntervalUs;
+    if (capture_allowed && capture_due) {
+        capture_estimator_bias(now_us);
+        autocal_last_bias_check_us_ = now_us;
+        return;
+    }
+
+    if (!armed_.armed()) {
+        // 已武装阶段只缓存 EKF 稳定候选；解除武装后才原子更新参数。此路径不持有
+        // ArmedFlash interlock，也不调用 param_save_default，Manual/解锁安全链不受
+        // EKF 健康或持久化时延反向门控。
+        const bool accel_saved = save_accel_bias();
+        const bool gyro_saved =
+            parameter_commit_idle() ? save_gyro_bias() : true;
+        if (!accel_saved || !gyro_saved) {
+            PX4_WARN("IMU autocal write rejected; candidate retained");
+            autocal_retry_after_us_ =
+                now_us > UINT64_MAX - kAutocalUpdateIntervalUs
+                    ? UINT64_MAX
+                    : now_us + kAutocalUpdateIntervalUs;
+        } else {
+            autocal_retry_after_us_ = 0U;
+        }
+    }
 }
 
 VehicleImu::Vector3 VehicleImu::correct_accel(
@@ -1087,7 +1576,9 @@ void VehicleImu::Run()
     }
 
     parameter_update_s parameter_update{};
-    if (parameter_update_sub_.copy(&parameter_update)) {
+    const bool parameters_updated =
+        parameter_update_sub_.copy(&parameter_update);
+    if (parameters_updated) {
         process_parameter_update(parameter_update.instance);
     }
     service_pending_configuration();
@@ -1115,6 +1606,7 @@ void VehicleImu::Run()
     const std::uint64_t health_now_us = hrt_absolute_time();
     update_health_state(health_now_us);
     publish_status(health_now_us);
+    service_estimator_bias(health_now_us, parameters_updated);
 
     if (!ScheduleDelayed(kBackupScheduleUs)) {
         fail_module("backup scheduling failed");
