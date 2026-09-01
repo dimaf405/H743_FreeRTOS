@@ -28,6 +28,23 @@ PROTECTED_ROOTS = (
     "Dima/platform/api",
     "Dima/platform/common",
 )
+# 这些目录保存从 PX4 v1.17 裁剪出的算法闭包。它们仍属于产品源码并继续接受
+# 依赖方向、硬件所有权和生成闭包检查；这里只集中定义上游源码身份，供必须保留
+# PX4 原生 include/namespace 形式的规则复用，不能扩大到整个 Dima/lib。
+PX4_UPSTREAM_ALGORITHM_ROOTS = (
+    "Dima/lib/ekf2",
+    "Dima/lib/matrix",
+    "Dima/lib/mathlib",
+    "Dima/lib/geo",
+    "Dima/lib/lat_lon_alt",
+    "Dima/lib/world_magnetic_model",
+)
+# 上游算法只能借用这两个结构化兼容根。参数、生命周期、WorkQueue、uORB Core
+# 等其余 middleware 属于产品运行时，不得因“兼容 PX4”而被算法层反向引用。
+PX4_MIDDLEWARE_COMPAT_ROOTS = (
+    "Dima/middleware/px4_platform_common",
+    "Dima/middleware/lib/mathlib",
+)
 FREERTOS_ROOT = "Dima/platform/freertos"
 STM32_ROOT = "Dima/platform/stm32h7"
 COMMON_INCLUDE_ROOTS = (
@@ -64,6 +81,9 @@ LAYER_ROOTS = (
     ("adapters", ROOT / "Dima/adapters"),
 )
 ALLOWED_LAYER_DEPENDENCIES = {
+    # PX4 算法闭包只能依赖同层 lib、薄 middleware 兼容头和平台 API；即使其
+    # 上游源码风格被保留，也不能反向访问 drivers/modules/rover/application。
+    "px4-upstream-algorithm": {"lib", "middleware", "platform/api"},
     "platform/freertos": {"platform/freertos", "platform/api"},
     "platform/stm32h7": {"platform/stm32h7", "platform/api"},
     "platform/common": {"platform/common", "platform/api"},
@@ -227,6 +247,18 @@ def is_vendored(path: pathlib.Path) -> bool:
     return "c_library_v2" in relative.parts
 
 
+def is_px4_upstream_algorithm(path: pathlib.Path) -> bool:
+    """按六个受控目录识别 PX4 算法源码，不把其他 Dima/lib 文件一并豁免。"""
+    try:
+        relative = path.resolve().relative_to(ROOT)
+    except ValueError:
+        return False
+    return any(
+        relative.is_relative_to(pathlib.Path(root))
+        for root in PX4_UPSTREAM_ALGORITHM_ROOTS
+    )
+
+
 def first_party_sources() -> list[pathlib.Path]:
     roots = ("Dima", "Boards", "Core", "Bootloader", "USB_DEVICE")
     return sources_under(roots)
@@ -295,6 +327,14 @@ def protected_layer(path: pathlib.Path) -> str | None:
         if path.is_relative_to(root):
             return name
     return None
+
+
+def is_px4_middleware_compat(path: pathlib.Path) -> bool:
+    relative = path.resolve().relative_to(ROOT).as_posix()
+    return any(
+        relative == root or relative.startswith(root + "/")
+        for root in PX4_MIDDLEWARE_COMPAT_ROOTS
+    )
 
 
 def resolve_common_include(source: pathlib.Path,

@@ -18,6 +18,7 @@ from architecture.common import (
     ROOT,
     Violation,
     first_party_sources,
+    is_px4_upstream_algorithm,
 )
 from architecture.dependency import (
     scan_build_isolation,
@@ -156,6 +157,10 @@ def scan_first_party_include_depth(violations: list[Violation]) -> None:
     """R302：第一方 include 最多跨一个 domain，防止路径深度固化内部目录布局。"""
     for path in _project_include_sources():
         if not _is_scanned_project_source(path):
+            continue
+        # PX4 算法源码内部的深层/相对 include 是上游目录结构的一部分；项目自有
+        # 调用方仍会被扫描，因此该跳过不会放行外部代码固化算法内部路径。
+        if is_px4_upstream_algorithm(path):
             continue
         for line_number, line in enumerate(
                 path.read_text(encoding="utf-8").splitlines(), 1):

@@ -20,6 +20,8 @@ from architecture.common import (
     Violation,
     sources_under,
     is_vendored,
+    is_px4_upstream_algorithm,
+    is_px4_middleware_compat,
     first_party_sources,
     low_level_include,
     vendor_include,
@@ -38,7 +40,13 @@ def scan_include_directions(violations: list[Violation]) -> None:
     """解析第一方 include 目标并按 ALLOWED_LAYER_DEPENDENCIES 拒绝反向依赖。"""
     roots = PROTECTED_ROOTS + (FREERTOS_ROOT, STM32_ROOT)
     for path in sources_under(roots):
-        source_layer = protected_layer(path)
+        # PX4 算法继续按真实 include 逐项检查，只把源端归入受限的上游算法层；
+        # 这样可允许其官方兼容头，同时仍拒绝对 driver/module/rover 的反向依赖。
+        source_layer = (
+            "px4-upstream-algorithm"
+            if is_px4_upstream_algorithm(path)
+            else protected_layer(path)
+        )
         if source_layer is None:
             continue
         for line_number, line in enumerate(
@@ -48,8 +56,15 @@ def scan_include_directions(violations: list[Violation]) -> None:
                 continue
             target = resolve_common_include(path, match.group(1))
             target_layer = protected_layer(target) if target else None
-            if (target_layer is None or target_layer in
-                    ALLOWED_LAYER_DEPENDENCIES[source_layer]):
+            middleware_escape = (
+                source_layer == "px4-upstream-algorithm"
+                and target_layer == "middleware"
+                and target is not None
+                and not is_px4_middleware_compat(target)
+            )
+            if (not middleware_escape and
+                    (target_layer is None or target_layer in
+                     ALLOWED_LAYER_DEPENDENCIES[source_layer])):
                 continue
             target_relative = target.relative_to(ROOT).as_posix()
             violations.append(Violation(
@@ -371,6 +386,10 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
         except ValueError:
             continue
         if any(rel.startswith(root + "/") for root in ns_exempt_roots):
+            continue
+        # matrix/mathlib/EKF 等上游文件原生使用全局、matrix、math 与 estimator
+        # 命名空间；逐文件改包裹会偏离 PX4 公式和类型 ABI，因此只豁免该闭包。
+        if is_px4_upstream_algorithm(path):
             continue
         if rel in forwarding_header_ok:
             continue

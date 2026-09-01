@@ -18,6 +18,7 @@ GENERATED_ROOT = ROOT / "build/generated/uORB"
 COMPAT_ROOT = ROOT / "build/generated/messages"
 PASCAL_MESSAGE_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 LOCAL_EXTENSION_RE = re.compile(r"(?m)^\s*@[A-Za-z_]")
+ORB_DECLARE_RE = re.compile(r"\bORB_DECLARE\(([a-z][a-z0-9_]*)\);")
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -168,13 +169,32 @@ def _scan_topic_outputs(violations: list[Violation]) -> None:
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
             orb_ids = document["orb_ids"]
+            header = headers.get(path.stem)
+            declared_topics = (
+                ORB_DECLARE_RE.findall(header.read_text(encoding="utf-8"))
+                if header is not None else []
+            )
+            main_orb_id = document.get("main_orb_id")
+            ids_are_valid = (
+                isinstance(orb_ids, list)
+                and bool(orb_ids)
+                and all(isinstance(value, int) for value in orb_ids)
+            )
+            # PX4 官方 msg.json.em 对只有 TOPICS alias、没有结构体同名 Topic
+            # 的消息生成 main_orb_id=-1。用同批官方头的 ORB_DECLARE 数量和
+            # 名称交叉验证这一合法情形，不能宽泛放行任意负 ID。
+            alias_only_identity = (
+                ids_are_valid
+                and main_orb_id == -1
+                and bool(declared_topics)
+                and path.stem not in declared_topics
+                and len(declared_topics) == len(orb_ids)
+            )
             valid = (
                 isinstance(document.get("name"), str)
                 and isinstance(document.get("fields"), str)
-                and isinstance(orb_ids, list)
-                and bool(orb_ids)
-                and all(isinstance(value, int) for value in orb_ids)
-                and document.get("main_orb_id") in orb_ids
+                and ids_are_valid
+                and (main_orb_id in orb_ids or alias_only_identity)
             )
             if not valid:
                 raise TypeError("topic identity or field catalog is invalid")
