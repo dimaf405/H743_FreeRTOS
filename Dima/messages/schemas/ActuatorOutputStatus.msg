@@ -11,6 +11,7 @@ uint8 STATE_ACTIVE = 2
 uint8 STATE_RETRY = 3
 uint8 STATE_FAULT = 4
 uint8 STATE_DISARMED_NEUTRAL = 5
+uint8 STATE_CONTROL_INHIBITED = 6 # 收到新鲜的显式失效控制帧，且 PWM 已确认停波。
 
 uint64 timestamp
 uint64 timestamp_sample
