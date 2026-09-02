@@ -30,6 +30,11 @@ outbound:
     requestable: true
     scheduler: none
 
+  - message: STORAGE_INFORMATION
+    handler: StorageInformation
+    requestable: true
+    scheduler: none
+
   - message: RC_CHANNELS
     handler: RcChannels
     requestable: true

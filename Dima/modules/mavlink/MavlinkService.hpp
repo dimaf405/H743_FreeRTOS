@@ -85,7 +85,10 @@ private:
     static bool send_frame(void *ctx, mavlink_message_t &msg) noexcept;
     static void send_frame_void(void *ctx, mavlink_message_t &msg) noexcept;
     static std::uint8_t request_message(void *ctx,
-                                        std::uint16_t message_id) noexcept;
+                                        std::uint16_t message_id,
+                                        float param2, float param3,
+                                        float param4, float param5,
+                                        float param6, float param7) noexcept;
     static std::uint8_t set_message_interval(
         void *ctx, std::uint16_t message_id, float interval_us,
         float param3, float param4, float param7) noexcept;

@@ -44,7 +44,10 @@ public:
      * 解析 MAV_CMD_REQUEST_MESSAGE：按需发送一次目标消息并返回 ACK 使用的 MAV_RESULT。
      */
     using RequestMessageFn = std::uint8_t (*)(void *ctx,
-                                               std::uint16_t message_id);
+                                               std::uint16_t message_id,
+                                               float param2, float param3,
+                                               float param4, float param5,
+                                               float param6, float param7);
     using SetMessageIntervalFn = std::uint8_t (*)(
         void *ctx, std::uint16_t message_id, float interval_us,
         float param3, float param4, float param7);
@@ -67,7 +70,10 @@ private:
                      std::int32_t result_param2 = 0) noexcept;
 
     std::uint8_t handle_request_message_command(
-        std::uint16_t message_id) noexcept;
+        std::uint16_t message_id,
+        float param2 = 0.0F, float param3 = 0.0F,
+        float param4 = 0.0F, float param5 = 0.0F,
+        float param6 = 0.0F, float param7 = 0.0F) noexcept;
 
     void handle_message_command_long(const mavlink_message_t *msg) noexcept;
     void handle_message_set_mode(const mavlink_message_t *msg) noexcept;

@@ -142,12 +142,15 @@ void MavlinkCommands::acknowledge(std::uint8_t sysid, std::uint8_t compid,
 }
 
 std::uint8_t MavlinkCommands::handle_request_message_command(
-    std::uint16_t message_id) noexcept
+    std::uint16_t message_id, float param2, float param3, float param4,
+    float param5, float param6, float param7) noexcept
 {
-    // 可请求消息集合与速率上限由生成合同及 MavlinkService 持有，本层只转交，
-    // 避免在命令解析器中再维护一份 message-id 清单。
+    // 可请求消息集合由生成合同持有；param2..7 保持 PX4
+    // MavlinkStream::request_message() 原始语义，STORAGE_INFORMATION 用
+    // param2 选择存储索引，本层不维护第二份 message-id 清单。
     if (request_message_ != nullptr) {
-        return request_message_(callback_ctx_, message_id);
+        return request_message_(callback_ctx_, message_id, param2, param3,
+                                param4, param5, param6, param7);
     }
     return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
 }
@@ -280,6 +283,12 @@ void MavlinkCommands::handle_message_command_both(
     } else if (command == MAV_CMD_REQUEST_PROTOCOL_VERSION) {
         result = handle_request_message_command(MAVLINK_MSG_ID_PROTOCOL_VERSION);
 
+    } else if (command == MAV_CMD_REQUEST_STORAGE_INFORMATION) {
+        // 保留 PX4 的 deprecated 兼容入口；旧命令请求默认全部存储，
+        // 新的 MAV_CMD_REQUEST_MESSAGE 则由 param2 指定 0/1 索引。
+        result = handle_request_message_command(
+            MAVLINK_MSG_ID_STORAGE_INFORMATION);
+
     } else if (command == MAV_CMD_SET_MESSAGE_INTERVAL) {
         // param1 是目标 message id；param2/3/4/7 分别承载 interval
         // 及扩展参数，具体限频和支持性由生成 stream 合同的回调判定。
@@ -322,7 +331,10 @@ void MavlinkCommands::handle_message_command_both(
                                                requested_message_id);
             }
         } else {
-            result = handle_request_message_command(message_id);
+            result = handle_request_message_command(
+                message_id, vehicle_command.param2, vehicle_command.param3,
+                vehicle_command.param4, vehicle_command.param5,
+                vehicle_command.param6, vehicle_command.param7);
         }
 
     } else {

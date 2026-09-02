@@ -408,6 +408,10 @@ bool MavlinkService::send_contract_message(
         return send_component_metadata();
     case stream_contract::MessageHandler::ComponentInformation:
         return send_component_information();
+    case stream_contract::MessageHandler::StorageInformation:
+        // 容量查询可进入 FatFs，只能由 request_message() 投递到
+        // wq:storage；周期调度和 MAVLink owner 不得直接调用。
+        return false;
     case stream_contract::MessageHandler::RcChannels:
         update_rc_input();
         rc_stream_active_ = rc_sample_streamable(now) &&
@@ -468,7 +472,10 @@ void MavlinkService::stream_configured_messages(
 }
 
 std::uint8_t MavlinkService::request_message(void *ctx,
-                                             std::uint16_t message_id) noexcept
+                                             std::uint16_t message_id,
+                                             float param2, float param3,
+                                             float param4, float param5,
+                                             float param6, float param7) noexcept
 {
     if (ctx == nullptr) {
         return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
@@ -479,6 +486,28 @@ std::uint8_t MavlinkService::request_message(void *ctx,
     if (contract == nullptr || !contract->requestable) {
         return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
     }
+    if (contract->handler ==
+        stream_contract::MessageHandler::StorageInformation) {
+        // PX4 v1.17 的 STORAGE_INFORMATION request_message 对 param2 做 roundf，
+        // 并且只接受 0=全部或 1=第一块。其他参数按上游语义忽略。
+        if (!std::isfinite(param2)) {
+            return vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED;
+        }
+        const long requested_storage = std::lround(param2);
+        if (requested_storage < 0L || requested_storage > 1L) {
+            return vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED;
+        }
+        return self.log_handler_.request_storage_information(
+                   static_cast<std::uint8_t>(requested_storage))
+            ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED
+            : vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
+    }
+
+    (void)param3;
+    (void)param4;
+    (void)param5;
+    (void)param6;
+    (void)param7;
     return self.send_contract_message(
                contract->handler, hrt_absolute_time(), true)
         ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED
