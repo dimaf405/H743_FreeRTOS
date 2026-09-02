@@ -115,9 +115,9 @@
 /* No RTC available yet; fixed timestamp for file operations */
 
 #define	_FS_LOCK	0
-/* FileStorage serializes access and owns the only FIL object. */
+/* FatFsFileStore owns all FIL objects and serializes every physical call. */
 
 #define _FS_REENTRANT	0
-/* FileStorage serializes the only FatFs client with its backend mutex. */
+/* The shared FatFsFileStore backend mutex serializes Parameter and Log clients. */
 
 /*--- End of configuration options ---*/

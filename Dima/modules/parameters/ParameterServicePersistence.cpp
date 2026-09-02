@@ -174,7 +174,36 @@ int ParameterService::advance_persistence() noexcept
         if (hrt_absolute_time() < sd_mirror_ready_after_us_) {
             return -EAGAIN;
         }
-        result = dima::file_storage_begin_save(payload_, persistence_size_);
+        result = dima::file_storage_begin_save(
+            dima::platform::AtomicFileDomain::Parameters,
+            payload_, persistence_size_);
+        if (result == -EBUSY) {
+            // Mission 与 Parameter 共享唯一 FatFs owner；跨域 busy 是正常串行化，
+            // 保留当前 payload/阶段并稍后重试，不能把它记成 SD 提交失败。
+            return -EAGAIN;
+        }
+        if (result == -ESTALE) {
+            // 共享 SD 会话被热插拔或 Mission 介质错误重建后，文件层
+            // 已丢弃旧卡的 primary/backup/tmp 来源。先用独立比较缓冲
+            // 重读三代并运行参数 codec，下一调度周期才允许轮换；
+            // 当前 payload_ 中待持久化的新代不被覆盖。
+            snapshot_codec::SnapshotInfo previous_info{};
+            std::size_t previous_size{};
+            const int previous = dima::file_storage_load(
+                dima::platform::AtomicFileDomain::Parameters,
+                comparison_payload_, sizeof(comparison_payload_),
+                previous_size, &snapshot_codec::validate, &previous_info);
+            if (previous == -EBUSY || previous == -EDEADLK ||
+                previous == -EAGAIN) {
+                return -EAGAIN;
+            }
+            if (sd_media_failure(previous)) {
+                sd_result_ = previous;
+                sd_available_ = false;
+                return finish_persistence();
+            }
+            return record_maintenance_progress() ? -EAGAIN : -EPERM;
+        }
         if (result == 0) {
             persistence_phase_ = PersistencePhase::ContinueSdWrite;
             return record_maintenance_progress() ? -EAGAIN : -EPERM;
@@ -186,7 +215,8 @@ int ParameterService::advance_persistence() noexcept
         return finish_persistence();
 
     case PersistencePhase::ContinueSdWrite:
-        result = dima::file_storage_continue_save();
+        result = dima::file_storage_continue_save(
+            dima::platform::AtomicFileDomain::Parameters);
         if (result == -EAGAIN) {
             return record_maintenance_progress() ? -EAGAIN : -EPERM;
         }
@@ -303,7 +333,8 @@ void ParameterService::cancel_persistence() noexcept
     // 取消必须同时撤销 FlashFS 与 FatFs 临时事务，再释放 interlock/ticket；
     // 任一后端不得继续引用 payload_。
     flashfs_.cancel_operation();
-    dima::file_storage_cancel_save();
+    dima::file_storage_cancel_save(
+        dima::platform::AtomicFileDomain::Parameters);
     if (maintenance_interlock_acquired_) {
         armed_flash_.end_maintenance();
         maintenance_interlock_acquired_ = false;
@@ -433,6 +464,7 @@ int ParameterService::storage_load(param_storage_visitor_t visitor,
     std::size_t sd_size{};
     const int sd_result = self.sd_available_
         ? dima::file_storage_load(
+              dima::platform::AtomicFileDomain::Parameters,
               self.comparison_payload_, sizeof(self.comparison_payload_),
               sd_size,
               &snapshot_codec::validate, &sd_info)

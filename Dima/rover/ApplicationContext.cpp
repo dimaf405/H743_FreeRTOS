@@ -49,7 +49,7 @@ ApplicationContext::ApplicationContext(
       boot_health_(services.boot_control, services.clock, maintenance_),
       log_service_(),
       mavlink_service_(services.console, services.boot_control),
-      parameter_service_(flashfs_, services.parameter_files,
+      parameter_service_(flashfs_, services.atomic_files,
                          services.armed_flash,
                          services.synchronization, services.critical,
                          maintenance_),

@@ -657,7 +657,7 @@ DIMA_COMMON_CXX_SOURCES := \
 DIMA_DRONECAN_COMMON_CXX_SOURCES := \
 	$(DIMA_DRONECAN_RUNTIME_SOURCES)
 DIMA_FATFS_FREERTOS_CXX_SOURCES := \
-	Dima/platform/freertos/storage/FatFsParameterFileStore.cpp
+	Dima/platform/freertos/storage/FatFsAtomicFileStore.cpp
 DIMA_FREERTOS_CXX_SOURCES := \
 	Dima/platform/freertos/Backend.cpp \
 	Dima/platform/freertos/HeapOperators.cpp \

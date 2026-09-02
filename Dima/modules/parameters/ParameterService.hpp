@@ -9,7 +9,7 @@
 #include <parameters/parameter_contract.hpp>
 #include "api/Execution.hpp"
 #include "api/Flash.hpp"
-#include "api/ParameterFileStore.hpp"
+#include "api/AtomicFileStore.hpp"
 #include "api/Synchronization.hpp"
 #include "uORB/Publication.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
@@ -26,7 +26,7 @@ class ParameterService final : public dima::middleware::lifecycle::ModuleBase,
 public:
     ParameterService(
         dima::parameters::FlashFS &flashfs,
-        dima::platform::ParameterFileStore &parameter_files,
+        dima::platform::AtomicFileStore &atomic_files,
         dima::platform::ArmedFlashCoordinator &armed_flash,
         dima::platform::Synchronization &synchronization,
         dima::platform::CriticalSection &critical,
@@ -110,7 +110,7 @@ private:
     static const param_storage_backend_s storage_backend_;
 
     dima::parameters::FlashFS &flashfs_;
-    dima::platform::ParameterFileStore &parameter_files_;
+    dima::platform::AtomicFileStore &atomic_files_;
     dima::platform::ArmedFlashCoordinator &armed_flash_;
     dima::platform::Synchronization &synchronization_;
     dima::platform::CriticalSection &critical_;

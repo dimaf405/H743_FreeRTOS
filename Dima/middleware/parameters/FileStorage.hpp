@@ -4,7 +4,8 @@
 #include <cstdint>
 
 namespace dima::platform {
-class ParameterFileStore;
+enum class AtomicFileDomain : std::uint8_t;
+class AtomicFileStore;
 class Synchronization;
 }
 
@@ -14,15 +15,17 @@ using FileStorageValidator = int (*)(const std::uint8_t *data,
                                      std::size_t size,
                                      void *context) noexcept;
 
-int file_storage_initialize(platform::ParameterFileStore &store,
+int file_storage_initialize(platform::AtomicFileStore &store,
                             platform::Synchronization &synchronization,
                             bool &available) noexcept;
 int file_storage_poll(bool &available) noexcept;
-int file_storage_begin_save(const std::uint8_t *data,
+int file_storage_begin_save(platform::AtomicFileDomain domain,
+                            const std::uint8_t *data,
                             std::size_t size) noexcept;
-int file_storage_continue_save() noexcept;
-void file_storage_cancel_save() noexcept;
-int file_storage_load(std::uint8_t *destination, std::size_t capacity,
+int file_storage_continue_save(platform::AtomicFileDomain domain) noexcept;
+void file_storage_cancel_save(platform::AtomicFileDomain domain) noexcept;
+int file_storage_load(platform::AtomicFileDomain domain,
+                      std::uint8_t *destination, std::size_t capacity,
                       std::size_t &output_size,
                       FileStorageValidator validator,
                       void *validator_context) noexcept;

@@ -12,14 +12,14 @@ namespace dima::modules::parameters {
 
 ParameterService::ParameterService(
     dima::parameters::FlashFS &flashfs,
-    dima::platform::ParameterFileStore &parameter_files,
+    dima::platform::AtomicFileStore &atomic_files,
     dima::platform::ArmedFlashCoordinator &armed_flash,
     dima::platform::Synchronization &synchronization,
     dima::platform::CriticalSection &critical,
     dima::middleware::maintenance::
         RuntimeMaintenanceCoordinator &maintenance) noexcept
     : ScheduledWorkItem("param", px4::wq_configurations::storage),
-      flashfs_(flashfs), parameter_files_(parameter_files),
+      flashfs_(flashfs), atomic_files_(atomic_files),
       armed_flash_(armed_flash),
       synchronization_(synchronization), critical_(critical),
       maintenance_(maintenance),
@@ -118,7 +118,7 @@ bool ParameterService::init() noexcept
     param_register_notify_callback(&ParameterService::notify_params, this);
 
     if (dima::file_storage_initialize(
-            parameter_files_, synchronization_, sd_available_) != 0) {
+            atomic_files_, synchronization_, sd_available_) != 0) {
         return fail_init();
     }
     last_sd_poll_us_ = hrt_absolute_time();
@@ -133,7 +133,7 @@ bool ParameterService::init() noexcept
                 : last_sd_poll_us_ + kSdMountSettleUs;
         PX4_INFO("param: SD mirror mounted");
     } else {
-        PX4_WARN("param: SD absent; FlashFS remains active");
+        PX4_WARN("param: SD backend unavailable; FlashFS remains active");
     }
     if (param_register_storage_backend(&storage_backend_, this) != 0) {
         return fail_init();
