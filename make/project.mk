@@ -563,6 +563,26 @@ DIMA_EKF2_MODULE_CXX_SOURCES := \
 DIMA_EKF2_CXX_SOURCES := \
 	$(DIMA_EKF2_CORE_CXX_SOURCES) $(DIMA_EKF2_MODULE_CXX_SOURCES)
 
+DIMA_MISSION_MODULE_CXX_SOURCES := \
+	$(sort $(wildcard Dima/modules/mission/*.cpp))
+
+# Logging/MAVLink 模块目录是正式运行源码的权威闭包；新增 PX4 handler 或 writer
+# 时由 Make 自动发现，禁止再维护容易遗漏的第二份手写源文件列表。
+DIMA_LOGGING_MODULE_CXX_SOURCES := \
+	$(sort $(wildcard Dima/modules/logging/*.cpp))
+DIMA_MAVLINK_MODULE_CXX_SOURCES := \
+	$(sort $(wildcard Dima/modules/mavlink/*.cpp))
+
+# Rover 纯算法按职责目录闭包发现；测试、运行模块和消息适配均不位于该目录，
+# 因而新增控制核不需要维护第二份逐文件来源清单。
+DIMA_ROVER_LIB_CXX_SOURCES := \
+	$(sort $(wildcard Dima/lib/rover/*.cpp))
+
+# Rover 模式目录是运行模式的权威来源闭包；新增 AutoMode 等正式消费者时只需
+# 增加实现文件，禁止再维护一份容易漏项的手写文件列表。
+DIMA_ROVER_MODE_CXX_SOURCES := \
+	$(sort $(wildcard Dima/rover/modes/*.cpp))
+
 DIMA_COMMON_CXX_SOURCES := \
 	Dima/platform/common/Execution.cpp \
 	Dima/platform/common/Flash.cpp \
@@ -573,7 +593,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/application/app_bootstrap.cpp \
 	Dima/rover/ApplicationContext.cpp \
 	Dima/rover/control/RoverDifferential.cpp \
-	Dima/rover/modes/ManualMode.cpp \
+	$(DIMA_ROVER_MODE_CXX_SOURCES) \
 	Dima/lib/timesync/Timesync.cpp \
 	Dima/lib/sensors/SensorRotation.cpp \
 	Dima/lib/sensors/validation/DataValidator.cpp \
@@ -594,20 +614,9 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/modules/sensors/calibration/SensorCalibrationAccel.cpp \
 	Dima/modules/sensors/calibration/SensorCalibrationMag.cpp \
 	Dima/modules/sensors/calibration/SensorCalibrationParameters.cpp \
-	Dima/modules/logging/LogService.cpp \
-	Dima/modules/mavlink/HeartbeatPacer.cpp \
+	$(DIMA_LOGGING_MODULE_CXX_SOURCES) \
 	Dima/adapters/mavlink/MavlinkChannelState.cpp \
-	Dima/modules/mavlink/MavlinkCommands.cpp \
-	Dima/modules/mavlink/MavlinkIdentity.cpp \
-	Dima/modules/mavlink/MavlinkMetadataFtp.cpp \
-	Dima/modules/mavlink/MavlinkMission.cpp \
-	Dima/modules/mavlink/MavlinkParameterExt.cpp \
-	Dima/modules/mavlink/MavlinkParameters.cpp \
-	Dima/modules/mavlink/MavlinkRcStream.cpp \
-	Dima/modules/mavlink/MavlinkSensorStreams.cpp \
-	Dima/modules/mavlink/MavlinkService.cpp \
-	Dima/modules/mavlink/MavlinkSystemMessages.cpp \
-	Dima/modules/mavlink/MavlinkTimesync.cpp \
+	$(DIMA_MAVLINK_MODULE_CXX_SOURCES) \
 	Dima/modules/motor/MotorOutput.cpp \
 	Dima/modules/motor/MotorOutputFrames.cpp \
 	Dima/modules/motor/MotorOutputParameters.cpp \
@@ -616,9 +625,10 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/modules/parameters/ParameterServicePersistence.cpp \
 	Dima/modules/parameters/ParameterServiceSdMirror.cpp \
 	Dima/modules/parameters/ParameterSnapshotCodec.cpp \
+	$(DIMA_MISSION_MODULE_CXX_SOURCES) \
 	Dima/modules/serial/SerialConfig.cpp \
 	Dima/application/app_main.cpp \
-	Dima/lib/rover/DifferentialDrive.cpp \
+	$(DIMA_ROVER_LIB_CXX_SOURCES) \
 	Dima/drivers/rc/sbus/SbusProtocol.cpp \
 	Dima/drivers/rc/sbus/SbusRc.cpp \
 	Dima/modules/rc/RCUpdate.cpp \
@@ -720,8 +730,12 @@ DIMA_COMPOSITION_OBJECTS := \
 DIMA_ROVER_OBJECTS := \
 	$(filter-out $(DIMA_COMPOSITION_OBJECTS), \
 		$(filter $(BUILD_DIR)/Dima/rover/%,$(PROJECT_OBJECTS)))
+DIMA_ROVER_MODE_OBJECTS := \
+	$(filter $(BUILD_DIR)/Dima/rover/modes/%,$(PROJECT_OBJECTS))
 DIMA_LIB_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/lib/%,$(PROJECT_OBJECTS))
+DIMA_ROVER_CONTROL_LIB_OBJECT := \
+	$(BUILD_DIR)/Dima/lib/rover/RoverControl.o
 DIMA_EKF2_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_EKF2_CXX_SOURCES:.cpp=.o))
 DIMA_EKF2_CORE_OBJECTS := \
@@ -745,10 +759,14 @@ DIMA_RC_DRIVER_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/drivers/rc/%,$(PROJECT_OBJECTS))
 DIMA_MODULE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/modules/%,$(PROJECT_OBJECTS))
+DIMA_LOGGING_MODULE_OBJECTS := \
+	$(filter $(BUILD_DIR)/Dima/modules/logging/%,$(PROJECT_OBJECTS))
 DIMA_SENSOR_MODULE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/modules/sensors/%,$(PROJECT_OBJECTS))
 DIMA_PARAMETER_MODULE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/modules/parameters/%,$(PROJECT_OBJECTS))
+DIMA_MISSION_MODULE_OBJECTS := \
+	$(filter $(BUILD_DIR)/Dima/modules/mission/%,$(PROJECT_OBJECTS))
 DIMA_MAVLINK_MODULE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/modules/mavlink/%,$(PROJECT_OBJECTS))
 DIMA_MAVLINK_SENSOR_STREAMS_OBJECT := \
@@ -825,6 +843,10 @@ $(DIMA_ROVER_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_MIDDLEWARE_INCLUDES) $(DIMA_PLATFORM_INCLUDES) \
 	$(DIMA_MESSAGE_GENERATED_INCLUDES) \
 	$(DIMA_PARAMETER_GENERATED_INCLUDES)
+# AutoMode 通过 MissionService 的短临界区 API 读取冻结任务快照；只给模式对象
+# 开放 modules include 根，不把该依赖扩散到纯差速控制或其他 Rover 对象。
+$(DIMA_ROVER_MODE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_MODULE_INCLUDES) $(DIMA_MATRIX_INCLUDES)
 $(DIMA_COMPOSITION_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_ROVER_INCLUDES) $(DIMA_LIB_INCLUDES) \
 	$(DIMA_MIDDLEWARE_INCLUDES) \
@@ -884,6 +906,9 @@ $(DIMA_SENSOR_MODULE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 $(DIMA_COMMANDER_CALIBRATION_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_LIB_SENSOR_INCLUDES)
 $(DIMA_PARAMETER_MODULE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_PARAMETER_MIDDLEWARE_INCLUDES)
+$(DIMA_MISSION_MODULE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_ADAPTER_INCLUDES) $(DIMA_MAVLINK_GENERATED_INCLUDES) \
 	$(DIMA_PARAMETER_MIDDLEWARE_INCLUDES)
 $(DIMA_MAVLINK_MODULE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_ADAPTER_INCLUDES) $(DIMA_MAVLINK_GENERATED_INCLUDES)
