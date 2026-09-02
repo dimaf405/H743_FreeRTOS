@@ -6,6 +6,7 @@
 #include "logging/LogService.hpp"
 #include "um982/Um982Gps.hpp"
 #include "mavlink/MavlinkService.hpp"
+#include "mission/MissionService.hpp"
 #include "parameters/ParameterService.hpp"
 #include "parameters/flashfs.h"
 #include "api/PlatformTypes.hpp"
@@ -78,8 +79,9 @@ private:
     dima::middleware::lifecycle::ModuleManager module_manager_{};
     dima::modules::boot_health::BootHealthService boot_health_;
     dima::modules::logging::LogService log_service_;
-    dima::modules::mavlink::MavlinkService mavlink_service_;
     dima::modules::parameters::ParameterService parameter_service_;
+    dima::modules::mission::MissionService mission_service_;
+    dima::modules::mavlink::MavlinkService mavlink_service_;
     dima::modules::serial::SerialConfig serial_config_;
     dima::drivers::gps::Um982Gps um982_gps_;
     dima::drivers::imu::ICM42688P icm42688p_;
@@ -105,8 +107,9 @@ private:
     bool modules_registered_{false};
     bool boot_started_{false};
     bool log_started_{false};
-    bool mavlink_started_{false};
     bool parameter_started_{false};
+    bool mission_started_{false};
+    bool mavlink_started_{false};
     bool serial_config_started_{false};
     bool um982_gps_started_{false};
     bool icm42688p_started_{false};

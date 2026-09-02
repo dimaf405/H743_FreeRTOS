@@ -48,11 +48,15 @@ ApplicationContext::ApplicationContext(
                services.armed_flash, services.synchronization),
       boot_health_(services.boot_control, services.clock, maintenance_),
       log_service_(),
-      mavlink_service_(services.console, services.boot_control),
       parameter_service_(flashfs_, services.atomic_files,
                          services.armed_flash,
                          services.synchronization, services.critical,
                          maintenance_),
+      // SYS_DM_BACKEND=0 的 PX4 Dataman 默认后端复用组合根唯一 FlashFS；
+      // Parameter、DroneCAN 与 Mission 不得各自创建板载 Flash owner。
+      mission_service_(flashfs_, services.synchronization,
+                       services.armed_flash),
+      mavlink_service_(services.console, services.boot_control),
       serial_config_(services.serial_ports),
       um982_gps_(services.async_serial_port, services.clock, serial_config_,
                  services.armed_flash, maintenance_),
@@ -86,7 +90,8 @@ bool ApplicationContext::owner_call(bool bind_if_unset) noexcept
 bool ApplicationContext::register_modules() noexcept
 {
     if (!register_all_modules(
-            module_manager_, parameter_service_, log_service_, serial_config_,
+            module_manager_, parameter_service_, mission_service_,
+            log_service_, serial_config_,
             um982_gps_, icm42688p_, vehicle_imu_, vehicle_magnetometer_,
             sensor_calibration_, dronecan_mag2_, ekf2_, motor_output_,
             commander_, mavlink_service_,
@@ -249,6 +254,16 @@ bool ApplicationContext::start() noexcept
         return false;
     }
     PX4_INFO("Parameter service started");
+
+    // Mission 失败只锁闭 AUTO，不得拖垮 Manual、参数、恢复和安全输出链。
+    // PX4 Dataman 的 Mission State/bank 恢复在 wq:storage 异步执行；loaded 前
+    // MAVLink 回读只报告空 RAM 快照，上传/清空仍由 backend readiness 门控。
+    mission_started_ = module_manager_.start(mission_service_);
+    if (!mission_started_) {
+        PX4_ERR("Mission service unavailable; AUTO remains locked");
+    } else {
+        PX4_INFO("Mission service started");
+    }
 
     services_.diagnostics.set_stage(dima::platform::StartupStage::LogStart);
     log_started_ = module_manager_.start(log_service_);
@@ -614,6 +629,11 @@ bool ApplicationContext::stop_started_modules() noexcept
     if (mavlink_started_) {
         const bool result = module_manager_.stop(mavlink_service_);
         mavlink_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (mission_started_) {
+        const bool result = module_manager_.stop(mission_service_);
+        mission_started_ = !result;
         stopped = result && stopped;
     }
     if (commander_started_) {
