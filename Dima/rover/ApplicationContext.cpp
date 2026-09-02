@@ -69,9 +69,9 @@ ApplicationContext::ApplicationContext(
       dronecan_mag2_(services.can, services.armed_flash, maintenance_,
                      flashfs_),
       motor_output_(services.actuator_pwm),
-      commander_(services.armed_flash, maintenance_,
-                 mission_service_),
-      sbus_rc_(services.timestamped_serial_input, serial_config_)
+      commander_(services.armed_flash, maintenance_, mission_service_),
+      sbus_rc_(services.timestamped_serial_input, serial_config_),
+      auto_mode_(mission_service_)
 {
 }
 
@@ -98,7 +98,7 @@ bool ApplicationContext::register_modules() noexcept
             sensor_calibration_, dronecan_mag2_, ekf2_, motor_output_,
             commander_, mavlink_service_,
             sbus_rc_, rc_update_, rc_manual_input_, manual_mode_,
-            rover_differential_, boot_health_)) {
+            auto_mode_, rover_differential_, boot_health_)) {
         module_manager_.reset();
         return false;
     }
@@ -363,6 +363,17 @@ bool ApplicationContext::start() noexcept
         PX4_ERR("EKF2 unavailable; Manual control remains enabled");
     }
 
+    // AUTO 外环只在 Mission 与 EKF 两个生产者均成功启动后运行；自身启动失败
+    // 也只让 readiness 保持 false，不能回滚 Manual、Commander 或 PWM 安全链。
+    if (mission_started_ && ekf2_started_) {
+        auto_mode_started_ = module_manager_.start(auto_mode_);
+    }
+    if (!auto_mode_started_) {
+        PX4_ERR("Rover AUTO mode unavailable; AUTO remains locked");
+    } else {
+        PX4_INFO("Rover AUTO navigation started");
+    }
+
     sensor_calibration_started_ =
         module_manager_.start(sensor_calibration_);
     if (!sensor_calibration_started_) {
@@ -587,6 +598,13 @@ bool ApplicationContext::stop_started_modules() noexcept
     if (sensor_calibration_started_) {
         const bool result = module_manager_.stop(sensor_calibration_);
         sensor_calibration_started_ = !result;
+        stopped = result && stopped;
+    }
+    if (auto_mode_started_) {
+        // 先 drain wq:nav，确保它不再读取 vehicle_local_position/Mission，再停止
+        // EKF 和 Mission 生产者。
+        const bool result = module_manager_.stop(auto_mode_);
+        auto_mode_started_ = !result;
         stopped = result && stopped;
     }
     if (ekf2_started_) {

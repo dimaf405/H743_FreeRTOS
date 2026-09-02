@@ -13,6 +13,7 @@
 #include "api/Services.hpp"
 #include "control/RoverDifferential.hpp"
 #include "rc/RcManualInput.hpp"
+#include "modes/AutoMode.hpp"
 #include "modes/ManualMode.hpp"
 #include "motor/MotorOutput.hpp"
 #include "rc/RCUpdate.hpp"
@@ -96,6 +97,7 @@ private:
     dima::modules::rc::RCUpdate rc_update_{};
     dima::modules::rc::RcManualInput rc_manual_input_{};
     dima::rover::modes::ManualMode manual_mode_{};
+    dima::rover::modes::AutoMode auto_mode_;
     dima::rover::control::RoverDifferential rover_differential_{};
     dima::platform::TaskHandle owner_task_{};
     RuntimeState runtime_state_{RuntimeState::Stopped};
@@ -124,6 +126,7 @@ private:
     bool rc_update_started_{false};
     bool rc_manual_input_started_{false};
     bool manual_mode_started_{false};
+    bool auto_mode_started_{false};
     bool rover_differential_started_{false};
     enum class SerialReconfigurePhase : std::uint8_t {
         // 参数签名变化后：Idle -> WaitForApproval -> Apply -> Idle。应用前停止 GPS/
