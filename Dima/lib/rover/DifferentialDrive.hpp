@@ -22,7 +22,13 @@ struct DifferentialDriveOutput {
     bool valid;
 };
 
-/** Fixed-storage two-axis differential-drive shaping and protection core. */
+/**
+ * 固定存储的差速混控与电机保护核。
+ *
+ * manual_source=true 使用人工 steering/throttle 优先级和倒车转向修正；
+ * Navigation 已在四环中完成物理量闭环及转向优先，零 longitudinal 必须立即
+ * 清除下游 slew 状态，非零命令仍保留电机斜率、Arm ramp 与换向延时保护。
+ */
 class DifferentialDrive {
 public:
     bool configure(const DifferentialDriveConfig &config) noexcept;

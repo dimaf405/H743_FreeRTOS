@@ -206,7 +206,11 @@ DifferentialDriveOutput DifferentialDrive::update(
     }
 
     const float target = clamp(longitudinal, -1.0F, 1.0F);
-    if (config_.throttle_slew_rate > 0.0F) {
+    if (!manual_source && std::fabs(target) <= kZeroThreshold) {
+        // Navigation 的零命令来自停车确认、SpotTurning 或 Hold，是安全状态而非
+        // 普通调速阶跃；必须立即清掉上一周期 slew，禁止残余纵向量混入原地转向。
+        limited_longitudinal_ = 0.0F;
+    } else if (config_.throttle_slew_rate > 0.0F) {
         const float maximum_change = config_.throttle_slew_rate * dt_s;
         limited_longitudinal_ += clamp(target - limited_longitudinal_,
                                        -maximum_change, maximum_change);
@@ -220,10 +224,25 @@ DifferentialDriveOutput DifferentialDrive::update(
         adjusted_steering = -adjusted_steering;
     }
 
+    if (!manual_source) {
+        // Speed PI 在进入本层前已按 1-|steering| 限制输出；MOT_SLEW_RATE 的历史
+        // 状态也必须重新投影到本周期可行域，否则减速转弯时会再次饱和并挤占转向。
+        const float longitudinal_limit =
+            std::fmax(0.0F, 1.0F - std::fabs(adjusted_steering));
+        limited_longitudinal_ = clamp(limited_longitudinal_,
+                                      -longitudinal_limit,
+                                      longitudinal_limit);
+    }
+
     float mixed_longitudinal = limited_longitudinal_;
     const float lower_motor_limit = -1.0F / config_.thrust_asymmetry;
+    // Manual 继续使用 RD_STR_THR_MIX；Navigation 固定 steering priority=1，
+    // 因为 Heading/YawRate 闭环的抗扰稳定性不能被人工油门优先参数削弱。
+    const float axis_priority = manual_source
+                                    ? config_.steering_throttle_mix
+                                    : 1.0F;
     prioritize_axes(mixed_longitudinal, adjusted_steering,
-                    config_.steering_throttle_mix, lower_motor_limit);
+                     axis_priority, lower_motor_limit);
 
     float right = shape_motor(mixed_longitudinal - adjusted_steering);
     float left = shape_motor(mixed_longitudinal + adjusted_steering);
