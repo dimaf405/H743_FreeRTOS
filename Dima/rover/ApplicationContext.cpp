@@ -47,7 +47,7 @@ ApplicationContext::ApplicationContext(
       flashfs_(services.parameter_partition, services.flash_transactions,
                services.armed_flash, services.synchronization),
       boot_health_(services.boot_control, services.clock, maintenance_),
-      log_service_(),
+      log_service_(services.log_files),
       parameter_service_(flashfs_, services.atomic_files,
                          services.armed_flash,
                          services.synchronization, services.critical,

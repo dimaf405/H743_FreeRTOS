@@ -7,6 +7,7 @@
 #include "uORB/Publication.hpp"
 #include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
+#include "SdLogWriter.hpp"
 
 #include <cstdint>
 
@@ -24,7 +25,7 @@ namespace dima::modules::logging {
 class LogService final : public dima::middleware::lifecycle::ModuleBase,
                          public px4::ScheduledWorkItem {
 public:
-    LogService() noexcept;
+    explicit LogService(dima::platform::LogFileStore &log_files) noexcept;
 
     bool initialize() noexcept;
     void shutdown() noexcept;
@@ -46,6 +47,7 @@ private:
     static uORB::Publication<mavlink_log_s> mavlink_log_publication_;
     uORB::SubscriptionData<input_rc_s> input_rc_subscription_{
         ORB_ID(input_rc)};
+    SdLogWriter sd_writer_;
     std::uint64_t last_sbus_sample_timestamp_us_{0U};
     std::uint64_t last_sbus_output_time_us_{0U};
     bool sbus_sample_pending_{false};

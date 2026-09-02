@@ -79,8 +79,9 @@ void enqueue_structured_events() noexcept
 uORB::Publication<mavlink_log_s> LogService::mavlink_log_publication_{
     ORB_ID(mavlink_log)};
 
-LogService::LogService() noexcept
-    : ScheduledWorkItem("dima_log", px4::wq_configurations::lp_default)
+LogService::LogService(dima::platform::LogFileStore &log_files) noexcept
+    : ScheduledWorkItem("dima_log", px4::wq_configurations::lp_default),
+      sd_writer_(log_files)
 {
 }
 
@@ -107,14 +108,17 @@ bool LogService::start() noexcept
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (!initialized_ || !ScheduleEnable()) {
+    if (!initialized_ || !ScheduleEnable() || !sd_writer_.start()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
+        sd_writer_.stop();
         return false;
     }
     reset_debug_state();
     if (!ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        sd_writer_.stop();
         return false;
     }
     state_ = dima::middleware::lifecycle::ModuleState::Running;
@@ -126,6 +130,7 @@ void LogService::stop() noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
+    sd_writer_.stop();
     reset_debug_state();
 }
 
