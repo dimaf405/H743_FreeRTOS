@@ -231,7 +231,8 @@ UORB_UPSTREAM_ROOT := tools/upstream/uorb_v1_17
 UORB_SOURCE_MANIFEST := $(UORB_UPSTREAM_ROOT)/SOURCE_MANIFEST.json
 UORB_UPSTREAM_DEPS := \
 	$(wildcard $(UORB_UPSTREAM_ROOT)/Tools/msg/*.py) \
-	$(wildcard $(UORB_UPSTREAM_ROOT)/Tools/msg/templates/uorb/*)
+	$(wildcard $(UORB_UPSTREAM_ROOT)/Tools/msg/templates/uorb/*) \
+	$(wildcard $(UORB_UPSTREAM_ROOT)/src/lib/heatshrink/*.py)
 MESSAGE_GENERATED_DIR := $(BUILD_DIR)/generated/uORB
 MESSAGE_COMPAT_GENERATED_DIR := $(BUILD_DIR)/generated/messages
 MESSAGE_GENERATED_MAKEFILE := $(MESSAGE_GENERATED_DIR)/uorb_sources.mk

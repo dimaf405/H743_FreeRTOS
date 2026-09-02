@@ -104,7 +104,11 @@ def _scan_upstream_schema_identity(
 def _expected_inputs(schemas: list[pathlib.Path]) -> dict[str, str]:
     upstream_dependencies = sorted(
         path
-        for path in (UPSTREAM_ROOT / "Tools/msg").rglob("*")
+        for dependency_root in (
+            UPSTREAM_ROOT / "Tools/msg",
+            UPSTREAM_ROOT / "src/lib/heatshrink",
+        )
+        for path in dependency_root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     )
     orchestration_inputs = (
@@ -148,7 +152,9 @@ def _scan_topic_outputs(violations: list[Violation]) -> None:
     sources = {
         path.stem: path
         for path in topics.glob("*.cpp")
-        if path.name != "uORBTopics.cpp"
+        if path.name not in {
+            "uORBTopics.cpp", "uORBMessageFieldsGenerated.cpp",
+        }
     }
     json_files = {path.stem: path for path in topics.glob("*.json")}
     if not headers or set(headers) != set(sources) or set(headers) != set(json_files):
@@ -201,6 +207,28 @@ def _scan_topic_outputs(violations: list[Violation]) -> None:
         except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
             violations.append(Violation(
                 path, 1, "R333", f"invalid official uORB JSON: {error}",
+            ))
+
+    # 压缩格式和 Topic 三元组同属一次官方生成事务，但它不是一个 Topic，不能
+    # 混入 header/source/JSON 集合相等性判断。
+    fields_header = topics / "uORBMessageFieldsGenerated.hpp"
+    fields_source = topics / "uORBMessageFieldsGenerated.cpp"
+    try:
+        fields_header_text = fields_header.read_text(encoding="utf-8")
+        fields_source_text = fields_source.read_text(encoding="utf-8")
+    except OSError as error:
+        violations.append(Violation(
+            fields_header, 1, "R333",
+            f"generated compressed uORB fields are unavailable: {error}",
+        ))
+    else:
+        if not all(token in fields_header_text for token in (
+            "orb_compressed_message_formats",
+            "orb_tokenized_fields_max_length",
+        )) or "compressed_fields[]" not in fields_source_text:
+            violations.append(Violation(
+                fields_header, 1, "R333",
+                "generated compressed uORB field contract is incomplete",
             ))
 
     aggregate_header = topics / "uORBTopics.hpp"

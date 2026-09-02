@@ -36,7 +36,8 @@
     "msg/versioned/VehicleCommand.msg": "69468413ecf43ded88642a450d9ba484f43ddac1dccfb25aa12f54bc99d7a9ac",
     "msg/versioned/VehicleCommandAck.msg": "c3b3f42ef255678d0b112435183ba546ba772abd74e498448f8294c520ed3b8c",
     "msg/versioned/VehicleControlMode.msg": "7aefe90197d96024c4e4c5a9f71e5dba1ad9b6f6a16b272e81f81329bb012bcd",
-    "msg/versioned/VehicleStatus.msg": "ceece55d0104452a199018918fe96dfb560f91bef3f57f31e8fa90a0c4232b1f"
+    "msg/versioned/VehicleStatus.msg": "ceece55d0104452a199018918fe96dfb560f91bef3f57f31e8fa90a0c4232b1f",
+    "src/lib/heatshrink/heatshrink_encode.py": "90d7481f63bc6fbec7088429456ef23aaa3437a8795e5d1f538d9bf63578e8c9"
   },
   "format": 1,
   "project": "PX4-Autopilot"

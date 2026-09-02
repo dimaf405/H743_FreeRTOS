@@ -112,27 +112,40 @@ def verify_upstream_source(root: Path) -> None:
     )
 
 
-def upstream_paths(root: Path) -> tuple[Path, Path, list[Path]]:
+def upstream_paths(root: Path) -> tuple[Path, Path, Path, list[Path]]:
     root = root.resolve()
-    script = require_file(
+    topic_script = require_file(
         root / "Tools/msg/px_generate_uorb_topic_files.py",
         "PX4 uORB generator",
+    )
+    fields_script = require_file(
+        root / "Tools/msg/px_generate_uorb_compressed_fields.py",
+        "PX4 compressed uORB fields generator",
+    )
+    require_file(
+        root / "src/lib/heatshrink/heatshrink_encode.py",
+        "PX4 heatshrink encoder",
     )
     template_dir = root / "Tools/msg/templates/uorb"
     if not template_dir.is_dir():
         raise RuntimeError(f"missing PX4 uORB templates: {template_dir}")
     dependencies = sorted(
         path
-        for path in (root / "Tools/msg").rglob("*")
+        for dependency_root in (
+            root / "Tools/msg",
+            root / "src/lib/heatshrink",
+        )
+        for path in dependency_root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     )
     if not dependencies:
         raise RuntimeError("PX4 uORB upstream dependency closure is empty")
-    return script, template_dir, dependencies
+    return topic_script, fields_script, template_dir, dependencies
 
 
 def run_upstream(
-    script: Path,
+    topic_script: Path,
+    fields_script: Path,
     template_dir: Path,
     schemas: list[Path],
     topics_dir: Path,
@@ -145,7 +158,7 @@ def run_upstream(
         subprocess.run(
             [
                 sys.executable,
-                str(script),
+                str(topic_script),
                 mode,
                 "-f",
                 *(str(path) for path in schemas),
@@ -157,6 +170,26 @@ def run_upstream(
             check=True,
             env=environment,
         )
+
+    json_files = sorted(topics_dir.glob("*.json"), key=lambda path: path.name)
+    if not json_files:
+        raise RuntimeError("PX4 uORB generator produced no JSON field contracts")
+    # ULog F 消息必须和 Topic 头、ID、hash 来自同一次官方生成；这里直接调用
+    # PX4 原始压缩字段脚本，不在本地维护字段 token、依赖或消息清单。
+    subprocess.run(
+        [
+            sys.executable,
+            str(fields_script),
+            "-f",
+            *(str(path) for path in json_files),
+            "--source-output-file",
+            str(topics_dir / "uORBMessageFieldsGenerated.cpp"),
+            "--header-output-file",
+            str(topics_dir / "uORBMessageFieldsGenerated.hpp"),
+        ],
+        check=True,
+        env=environment,
+    )
 
 
 def generate_forwarders(topics_dir: Path, destination: Path) -> list[Path]:
@@ -202,8 +235,9 @@ def make_fragment(
     target_topics_dir = output / "topics"
     headers = [
         target_topics_dir / path.name
-        for path in sorted(staged_topics_dir.glob("*.h"))
-    ] + [target_topics_dir / "uORBTopics.hpp"]
+        for pattern in ("*.h", "*.hpp")
+        for path in sorted(staged_topics_dir.glob(pattern))
+    ]
     sources = [
         target_topics_dir / path.name
         for path in sorted(staged_topics_dir.glob("*.cpp"))
@@ -219,6 +253,8 @@ def make_fragment(
     for required in (
         staged_topics_dir / "uORBTopics.hpp",
         staged_topics_dir / "uORBTopics.cpp",
+        staged_topics_dir / "uORBMessageFieldsGenerated.hpp",
+        staged_topics_dir / "uORBMessageFieldsGenerated.cpp",
     ):
         if not required.is_file():
             raise RuntimeError(f"official uORB aggregate output is missing: {required}")
@@ -368,7 +404,9 @@ def main() -> int:
     args = parse_args()
     schemas = schema_files(args.schemas)
     verify_upstream_source(args.upstream_root)
-    script, template_dir, dependencies = upstream_paths(args.upstream_root)
+    topic_script, fields_script, template_dir, dependencies = upstream_paths(
+        args.upstream_root
+    )
     output = args.output.resolve()
     compat_output = args.compat_output.resolve()
     output_stage = make_staging_directory(output)
@@ -376,7 +414,9 @@ def main() -> int:
 
     try:
         topics_dir = output_stage / "topics"
-        run_upstream(script, template_dir, schemas, topics_dir)
+        run_upstream(
+            topic_script, fields_script, template_dir, schemas, topics_dir
+        )
         generate_forwarders(topics_dir, compat_stage)
 
         makefile = output_stage / "uorb_sources.mk"
