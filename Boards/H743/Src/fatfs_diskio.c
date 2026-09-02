@@ -29,8 +29,12 @@ static uint8_t scratch[SD_BLOCK_SIZE]
 /* Private variables -------------------------------------------------------*/
 
 static volatile DSTATUS Stat = STA_NOINIT;
-/* 介质级错误必须粘住“强制重初始化”状态；新卡常复用相同 RCA，仅凭旧 handle 的
- * CMD13 返回 TRANSFER 不能证明它仍是上一代介质。 */
+/*
+ * 本板没有 card-detect GPIO，因此严格采用 PX4 H743 SDIO 的无 NCD 分支：
+ * 板级始终假定卡已插入，由 HAL_SD_Init 与后续块 I/O 判定后端是否可用。
+ * Stat 只表示当前 SDMMC 会话是否已初始化，不能把 PROGRAMMING/SENDING 等
+ * 瞬时卡状态误解为物理拔卡。
+ */
 static uint8_t ReinitializeRequired = 1U;
 
 /* Private functions -------------------------------------------------------*/
@@ -56,16 +60,8 @@ static void SD_ConfigureHandle(void)
   */
 static DSTATUS SD_CheckStatus(void)
 {
-  Stat = STA_NOINIT;
   if (ReinitializeRequired != 0U || hsd1.Instance != SDMMC1) {
-    return Stat;
-  }
-  if (HAL_SD_GetCardState(&hsd1) == HAL_SD_CARD_TRANSFER) {
-    Stat &= ~STA_NOINIT;
-  } else {
-    // 一旦卡状态不再是 TRANSFER，后续 disk_initialize 必须走完整 DeInit/Init，
-    // 不能让另一次状态查询把错误会话重新标成 ready。
-    ReinitializeRequired = 1U;
+    Stat |= STA_NOINIT;
   }
   return Stat;
 }
@@ -80,12 +76,11 @@ static DSTATUS SD_Reinitialize(void)
   if (HAL_SD_Init(&hsd1) != HAL_OK) {
     return Stat;
   }
+  /* HAL_SD_Init 成功即对应 PX4 块设备已建立；运行中介质故障由
+   * read/write/sync 错误撤销会话，不再用一次 CMD13 瞬时状态伪造拔卡事件。 */
   ReinitializeRequired = 0U;
-  const DSTATUS status = SD_CheckStatus();
-  if (status != 0U) {
-    SD_InvalidateSession();
-  }
-  return status;
+  Stat &= (DSTATUS)~STA_NOINIT;
+  return Stat;
 }
 
 static DRESULT SD_WaitReady(void)
@@ -124,6 +119,8 @@ DSTATUS disk_initialize(BYTE pdrv)
 DSTATUS disk_status(BYTE pdrv)
 {
   if (pdrv != 0) return STA_NOINIT;
+  /* PX4 无 card-detect GPIO 机型不轮询卡的 TRANSFER 状态判定物理在位；
+   * FatFs 只查询已初始化会话，真实介质错误会由块 I/O 路径粘住 NOINIT。 */
   return SD_CheckStatus();
 }
 

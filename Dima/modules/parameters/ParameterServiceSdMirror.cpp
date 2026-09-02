@@ -55,8 +55,9 @@ void ParameterService::service_sd_mirror() noexcept
 
 void ParameterService::poll_sd_card() noexcept
 {
-    // armed 时不探测/挂载介质；disarmed 下 3 s 轮询。卡重新出现且参数未保存时
-    // 请求 autosave，卡移除只降级 SD 副本，FlashFS 仍是运行主存储。
+    // 按 PX4 无 card-detect GPIO 的机型逻辑，这里轮询的是 FatFs 后端能否
+    // 成功挂载，而不是用 HAL 瞬时卡状态猜测物理插拔。armed 时不重挂载；
+    // disarmed 下 3 s 轮询。后端恢复且参数未保存时请求 autosave。
     const std::uint64_t now = hrt_absolute_time();
     if (armed_flash_.armed() ||
         (last_sd_poll_us_ != 0U && now >= last_sd_poll_us_ &&
@@ -89,7 +90,7 @@ void ParameterService::poll_sd_card() noexcept
     } else {
         sd_mirror_ready_after_us_ = 0U;
         sd_mirror_required_ = flashfs_ready_ && storage_generation_ != 0U;
-        PX4_WARN("param: SD card removed; FlashFS remains active");
+        PX4_WARN("param: SD backend unavailable; FlashFS remains active");
     }
 }
 
