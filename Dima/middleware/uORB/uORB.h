@@ -30,6 +30,12 @@
         static_cast<uint8_t>(_queue_size), uORB::kMaximumInstances,            \
         __orb_runtime_##_name}
 
+/**
+ * 将 PX4 生成 JSON 中的单字节字段 token 还原成 ULog 规范 C 类型名。
+ * token 表由锁定的官方 helper 产生，本函数必须与上游映射逐项一致。
+ */
+const char *orb_get_c_type(unsigned char short_type);
+
 void orb_print_message_internal(const struct orb_metadata *meta,
                                 const void *data,
                                 bool print_topic_name);

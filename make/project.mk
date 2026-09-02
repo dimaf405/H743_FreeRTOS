@@ -647,6 +647,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/lifecycle/module_manager.cpp \
 	Dima/middleware/work_queue/WorkQueue.cpp \
 	Dima/middleware/uORB/uORB.cpp \
+	Dima/middleware/uORB/uORBMessageFields.cpp \
 	Dima/middleware/parameters/param.cpp \
 	Dima/middleware/parameters/param_storage.cpp \
 	Dima/middleware/parameters/autosave.cpp \
@@ -790,6 +791,8 @@ DIMA_MIDDLEWARE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/middleware/%,$(PROJECT_OBJECTS))
 DIMA_UORB_RUNTIME_OBJECT := \
 	$(BUILD_DIR)/Dima/middleware/uORB/uORB.o
+DIMA_UORB_MESSAGE_FIELDS_OBJECT := \
+	$(BUILD_DIR)/Dima/middleware/uORB/uORBMessageFields.o
 DIMA_PARAMETER_MIDDLEWARE_OBJECTS := \
 	$(filter $(BUILD_DIR)/Dima/middleware/parameters/%,$(PROJECT_OBJECTS))
 DIMA_LOG_EVENT_MIDDLEWARE_OBJECTS := \
@@ -938,6 +941,11 @@ $(DIMA_MIDDLEWARE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 # 开放生成 include 根，不把消息合同扩散到其他中间件。
 $(DIMA_UORB_RUNTIME_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_MESSAGE_GENERATED_INCLUDES)
+# PX4 MessageFormatReader 原样消费生成的压缩字段；heatshrink 只暴露给该
+# 翻译单元，不扩散到其他中间件或模块。
+$(DIMA_UORB_MESSAGE_FIELDS_OBJECT): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_LIB_INCLUDES) $(DIMA_MESSAGE_GENERATED_INCLUDES) \
+	$(DIMA_HEATSHRINK_INCLUDES)
 $(DIMA_PARAMETER_MIDDLEWARE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_LIB_INCLUDES) $(DIMA_MESSAGE_GENERATED_INCLUDES) \
 	$(DIMA_PARAMETER_GENERATED_INCLUDES)
@@ -1013,6 +1021,11 @@ DIMA_PROJECT_CXXFLAGS = $(DIMA_PROJECT_CFLAGS) \
 # 原有 -fno-exceptions/-fno-rtti 仍由上方统一继承。
 $(DIMA_EKF2_ABI_OBJECTS): DIMA_PROJECT_CXXFLAGS += -fno-strict-aliasing
 $(DIMA_EKF2_OBJECTS): DIMA_PROJECT_CXXFLAGS += -fno-associative-math
+# 当前裁剪 Topic 没有 nested dependency，官方生成 capacity=0；GCC 10 会在
+# 未执行的 Array<T,0>::push_back 路径报 array-bounds。只对逐字节同步的 PX4
+# MessageFormatReader 抑制该误报，不修改上游容器，也不放宽其他项目源码。
+$(DIMA_UORB_MESSAGE_FIELDS_OBJECT): DIMA_PROJECT_CXXFLAGS += \
+	-Wno-array-bounds
 ifeq ($(DEBUG), 1)
 DIMA_PROJECT_CFLAGS += -g -gdwarf-2
 endif

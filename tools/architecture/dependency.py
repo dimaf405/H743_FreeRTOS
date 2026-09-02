@@ -347,6 +347,12 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
         "Dima/middleware/uORB/SubscriptionData.hpp",
         "Dima/middleware/work_queue/ScheduledWorkItem.hpp",
     }
+    # 这两个文件逐字节同步 PX4 v1.17 MessageFormatReader；上游把 namespace
+    # 名称与左花括号分成两行，不能仅为本地风格门禁改写原件。
+    upstream_namespace_files = {
+        "Dima/middleware/uORB/uORBMessageFields.cpp",
+        "Dima/middleware/uORB/uORBMessageFields.hpp",
+    }
     c_abi_files = {
         "Dima/adapters/usb_console/UsbConsole.cpp",
         "Dima/application/app_bootstrap.cpp",
@@ -390,6 +396,8 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
         # matrix/mathlib/EKF 等上游文件原生使用全局、matrix、math 与 estimator
         # 命名空间；逐文件改包裹会偏离 PX4 公式和类型 ABI，因此只豁免该闭包。
         if is_px4_upstream_algorithm(path):
+            continue
+        if rel in upstream_namespace_files:
             continue
         if rel in forwarding_header_ok:
             continue
