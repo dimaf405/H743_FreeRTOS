@@ -42,10 +42,12 @@ constexpr MavlinkMetadataFtp::VirtualFile kMetadataFiles[]{
 MavlinkService::MavlinkService(
     dima::platform::Console &console,
     dima::platform::BootControl &boot_control,
-    dima::modules::mission::MissionService &mission_service) noexcept
+    dima::modules::mission::MissionService &mission_service,
+    dima::platform::LogFileStore &log_files) noexcept
     : px4::ScheduledWorkItem("mavlink", px4::wq_configurations::lp_default),
       console_(console), boot_control_(boot_control),
-      mission_(mission_service, &MavlinkService::send_frame, this)
+      mission_(mission_service, &MavlinkService::send_frame, this),
+      log_handler_(log_files, &MavlinkService::send_frame, this)
 {
     metadata_ftp_.init(
         kMetadataFiles,
@@ -59,8 +61,10 @@ bool MavlinkService::start() noexcept
         return true;
     }
     reset_runtime_state();
-    if (!ScheduleEnable()) {
+    if (!ScheduleEnable() || !log_handler_.start()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        ScheduleCancelAndDrain();
+        log_handler_.stop();
         return false;
     }
 
@@ -80,6 +84,8 @@ bool MavlinkService::start() noexcept
         !parameters_.prepare_parameter_catalogue()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        // 日志 handler 已独立启用；主服务启动失败时必须同步回收其 storage worker。
+        log_handler_.stop();
         reset_runtime_state();
         PX4_ERR("MAVLink protocol parameters unavailable");
         return false;
@@ -88,6 +94,7 @@ bool MavlinkService::start() noexcept
     if (!ScheduleOnInterval(kRunIntervalUs, kRunIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
+        log_handler_.stop();
         reset_runtime_state();
         return false;
     }
@@ -100,6 +107,7 @@ void MavlinkService::stop() noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
+    log_handler_.stop();
     reset_runtime_state();
 }
 
@@ -172,6 +180,7 @@ void MavlinkService::Run()
         reset_parser_state();
         parameters_.reset();
         mission_.reset_link();
+        log_handler_.reset_link();
         metadata_ftp_.reset();
         reset_sensor_link_state();
     }
@@ -198,7 +207,8 @@ void MavlinkService::Run()
         drain_rx();
     }
 
-    /* TX priority: ACK -> Heartbeat -> RC -> Metadata FTP -> Sensors -> Params -> Log. */
+    /* TX priority: ACK -> Heartbeat -> RC -> Metadata FTP -> Sensors -> Onboard Log
+     * -> Params -> STATUSTEXT。日志每轮有固定分片上限，不得独占 USB。 */
     process_command_acks();
     now = hrt_absolute_time();
     maybe_perform_reboot(now);
@@ -246,6 +256,7 @@ void MavlinkService::Run()
     }
     stream_configured_messages(
         now, dima::generated::mavlink_streams::TxStage::PostMetadata);
+    log_handler_.send();
     parameters_.send();
     stream_statustext();
 }
@@ -288,6 +299,10 @@ void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
 
     case stream_contract::InboundHandler::Mission:
         mission_.handle_message(&msg);
+        break;
+
+    case stream_contract::InboundHandler::LogTransfer:
+        log_handler_.handle_message(msg);
         break;
 
     case stream_contract::InboundHandler::MetadataFtp:

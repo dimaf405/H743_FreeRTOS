@@ -145,6 +145,18 @@ inbound:
   - message: MISSION_ACK
     handler: Mission
 
+  - message: LOG_REQUEST_LIST
+    handler: LogTransfer
+
+  - message: LOG_REQUEST_DATA
+    handler: LogTransfer
+
+  - message: LOG_REQUEST_END
+    handler: LogTransfer
+
+  - message: LOG_ERASE
+    handler: LogTransfer
+
   - message: FILE_TRANSFER_PROTOCOL
     handler: MetadataFtp
 

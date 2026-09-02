@@ -4,7 +4,8 @@
  *
  * 帧协议来自官方生成的裁剪方言；接收侧分派给 Commands/Parameters/Mission/Timesync，
  * 发送侧固定优先级为 COMMAND_ACK/HEARTBEAT -> 原始 RC -> Metadata FTP 待发响应
- * -> 传感器 -> 参数 -> STATUSTEXT。批准重启后优先送达 ACK，最迟在固定期限执行。
+ * -> 传感器 -> 板载日志分片 -> 参数 -> STATUSTEXT。板载日志每轮限量发送，不能
+ * 挤占心跳、命令确认和传感器通道；批准重启后优先送达 ACK，最迟在固定期限执行。
  * 模块运行在低优先级 WorkQueue，热路径只用定长缓冲和有界 USB 写，不动态分配。
  */
 
@@ -31,6 +32,7 @@
 #include "lifecycle/module_base.hpp"
 #include "api/Boot.hpp"
 #include "api/Console.hpp"
+#include "api/LogFileStore.hpp"
 #include "parameters/param.h"
 #include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
@@ -38,6 +40,7 @@
 #include "HeartbeatPacer.hpp"
 #include "MavlinkCommands.hpp"
 #include "MavlinkIdentity.hpp"
+#include "MavlinkLogHandler.hpp"
 #include "MavlinkMission.hpp"
 #include "MavlinkMetadataFtp.hpp"
 #include "MavlinkParameters.hpp"
@@ -54,7 +57,9 @@ class MavlinkService final : public dima::middleware::lifecycle::ModuleBase,
 public:
     MavlinkService(dima::platform::Console &console,
                    dima::platform::BootControl &boot_control,
-                   dima::modules::mission::MissionService &mission_service) noexcept;
+                   dima::modules::mission::MissionService &mission_service,
+                   dima::platform::LogFileStore &log_files)
+        noexcept;
 
     bool start() noexcept override;
     void stop() noexcept override;
@@ -147,6 +152,7 @@ private:
                               &MavlinkService::set_message_interval,
                               &MavlinkService::get_message_interval, this};
     MavlinkMission mission_;
+    MavlinkLogHandler log_handler_;
     MavlinkMetadataFtp metadata_ftp_{&MavlinkService::send_frame, this};
 
     uORB::SubscriptionData<vehicle_command_ack_s>
