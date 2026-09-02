@@ -36,7 +36,7 @@ bool Commander::execute_action(const action_request_s &request,
 
     switch (request.action) {
     case action_request_s::ACTION_DISARM:
-        return disarm(reason) == TransitionResult::Changed;
+        return disarm(reason, now) == TransitionResult::Changed;
 
     case action_request_s::ACTION_ARM:
         // 正向动作必须满足队列新鲜度；安全负向动作即使延迟也仍允许执行。
@@ -48,7 +48,7 @@ bool Commander::execute_action(const action_request_s &request,
 
     case action_request_s::ACTION_TOGGLE_ARMING:
         if (actuator_armed_.armed) {
-            return disarm(reason) == TransitionResult::Changed;
+            return disarm(reason, now) == TransitionResult::Changed;
         }
         if (!action_request_fresh(request, now)) {
             PX4_WARN("Commander rejected stale Toggle-Arm request");
@@ -77,7 +77,8 @@ bool Commander::execute_action(const action_request_s &request,
             changed = true;
         }
         if (actuator_armed_.armed) {
-            changed = disarm(reason) == TransitionResult::Changed || changed;
+            changed = disarm(reason, now) == TransitionResult::Changed ||
+                      changed;
         }
         if (changed) {
             PX4_WARN("Kill engaged; Rover requires a new Arm action");
@@ -85,14 +86,49 @@ bool Commander::execute_action(const action_request_s &request,
         return changed;
     }
 
+    case action_request_s::ACTION_SWITCH_MODE:
+        if (!action_request_fresh(request, now)) {
+            PX4_WARN("Commander rejected stale mode switch");
+            return false;
+        }
+        if (request.mode == vehicle_status_s::NAVIGATION_STATE_MANUAL) {
+            if (rc_action_source(request.source) && !rc_input_valid(now)) {
+                PX4_WARN("Commander rejected Manual switch without RC");
+                return false;
+            }
+            return change_navigation_state(
+                vehicle_status_s::NAVIGATION_STATE_MANUAL, now);
+        }
+        if (request.mode ==
+                vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION &&
+            request.source == action_request_s::SOURCE_RC_MODE_SLOT) {
+            // QGC PX4 插件以 SET_MODE(AUTO_MISSION) 作为启动入口。
+            // 这里不直接改 nav_state，而是调用与 MAV_CMD_MISSION_START
+            // 完全相同的事务：必须已 Armed，且任务、参数、AutoMode
+            // 和 EKF 全部就绪。Disarmed 请求会被拒绝，不会隐式 Arm。
+            bool state_changed = false;
+            const std::uint8_t result = start_mission(now, state_changed);
+            if (result !=
+                    vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED) {
+                PX4_WARN("Commander rejected AUTO mission mode request (%u)",
+                         result);
+            }
+            return state_changed;
+        }
+        {
+            PX4_WARN("Commander rejected unsupported or stale mode switch");
+            return false;
+        }
+
     case action_request_s::ACTION_TERMINATION:
         // Termination 只允许从 false 锁存到 true，Runtime stop/start 不会清除，
         // 必须通过 MCU 复位才能恢复。
         if (!termination_latched_) {
             termination_latched_ = true;
-            vehicle_status_.nav_state =
-                vehicle_status_s::NAVIGATION_STATE_TERMINATION;
-            vehicle_status_.nav_state_timestamp = now;
+            // 统一经过导航状态事务，确保从 AUTO 进入 Termination 时同时锁存
+            // Mission suspend；否则电机虽已 hard-off，QGC 仍会把任务误报为 Active。
+            (void)change_navigation_state(
+                vehicle_status_s::NAVIGATION_STATE_TERMINATION, now);
             PX4_ERR("Termination engaged");
             return true;
         }
@@ -111,6 +147,7 @@ std::uint8_t Commander::reason_from_source(std::uint8_t source) noexcept
         return vehicle_status_s::ARM_DISARM_REASON_STICK_GESTURE;
     case action_request_s::SOURCE_RC_SWITCH:
     case action_request_s::SOURCE_RC_BUTTON:
+    case action_request_s::SOURCE_RC_MODE_SLOT:
         return vehicle_status_s::ARM_DISARM_REASON_RC_SWITCH;
     default:
         return vehicle_status_s::ARM_DISARM_REASON_COMMAND_INTERNAL;

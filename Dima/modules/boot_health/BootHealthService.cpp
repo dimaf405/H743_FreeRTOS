@@ -203,14 +203,26 @@ bool BootHealthService::safety_topics_consistent(
         status.arming_state == vehicle_status_s::ARMING_STATE_DISARMED;
     const bool manual =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL;
+    const bool automatic =
+        status.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
+        status.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
     const bool termination =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_TERMINATION;
-    // 本 Rover 运行时只承认 Manual 与 Termination；can_set 只允许主动进入 Manual，
-    // Termination 必须由安全故障路径触发。
+    // BootHealth 必须复核 Commander 的完整四模式产品投影；AUTO 仍只能由
+    // Mission Start/安全 Hold 进入，can_set 对用户继续只开放 Manual。
     const std::uint32_t manual_mask =
         1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
+    const std::uint32_t auto_mission_mask =
+        1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION;
+    const std::uint32_t auto_loiter_mask =
+        1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
     const std::uint32_t termination_mask =
         1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+    const std::uint32_t implemented_mask =
+        manual_mask | auto_mission_mask | auto_loiter_mask |
+        termination_mask;
 
     return (status_armed || status_disarmed) &&
            armed.armed == status_armed && control.flag_armed == armed.armed &&
@@ -220,23 +232,24 @@ bool BootHealthService::safety_topics_consistent(
            !armed.prearmed && !armed.lockdown &&
            !armed.in_esc_calibration_mode &&
            armed.termination == termination &&
-           (!termination || status.failsafe) && (manual || termination) &&
+           (!termination || status.failsafe) &&
+           (manual || automatic || termination) &&
            control.flag_control_manual_enabled == manual &&
+           control.flag_control_auto_enabled == automatic &&
+           control.flag_control_position_enabled == automatic &&
+           control.flag_control_velocity_enabled == automatic &&
+           control.flag_control_attitude_enabled == automatic &&
+           control.flag_control_rates_enabled == automatic &&
            control.flag_control_termination_enabled == termination &&
            control.source_id == status.nav_state &&
            !control.flag_multicopter_position_control_enabled &&
-           !control.flag_control_auto_enabled &&
            !control.flag_control_offboard_enabled &&
-           !control.flag_control_position_enabled &&
-           !control.flag_control_velocity_enabled &&
            !control.flag_control_altitude_enabled &&
            !control.flag_control_climb_rate_enabled &&
            !control.flag_control_acceleration_enabled &&
-           !control.flag_control_attitude_enabled &&
-           !control.flag_control_rates_enabled &&
            !control.flag_control_allocation_enabled &&
            status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROVER &&
-           status.valid_nav_states_mask == (manual_mask | termination_mask) &&
+           status.valid_nav_states_mask == implemented_mask &&
            status.can_set_nav_states_mask == manual_mask;
 }
 
@@ -323,12 +336,19 @@ bool BootHealthService::output_status_runtime_healthy(
 
     const actuator_armed_s &armed = actuator_armed_subscription_.get();
     const vehicle_status_s &status = vehicle_status_subscription_.get();
-    // Hard-Safe 必须同时满足状态、safe_off、空 active mask 和全零脉宽，
-    // 不能只相信一个布尔位。
+    // Hard-Safe 与 Control-Inhibited 都必须同时满足状态、safe_off、空 active
+    // mask 和全零脉宽，不能只相信一个布尔位。后者还要求新鲜的显式失效帧，
+    // 该活性证据已经由 MotorOutput 在状态转换前核验。
     const bool hard_safe =
         output.state == actuator_output_status_s::STATE_HARD_SAFE_OFF &&
         output.safe_off && output.active_output_mask == 0U;
-    if (hard_safe) {
+    const bool control_inhibited =
+        output.state == actuator_output_status_s::STATE_CONTROL_INHIBITED &&
+        output.safe_off && !output.command_valid &&
+        output.active_output_mask == 0U && output.drive_available &&
+        output_mapping_valid(output);
+    const bool stopped_frame = hard_safe || control_inhibited;
+    if (stopped_frame) {
         for (const std::uint16_t pulse : output.pwm_us) {
             if (pulse != 0U) {
                 return false;
@@ -343,13 +363,24 @@ bool BootHealthService::output_status_runtime_healthy(
     }
 
     if (armed.armed) {
-        // 解锁沿后的短窗口允许 PWM 尚处 Hard-Safe；窗口结束后必须进入 Active，
-        // 且命令、左右映射和整帧范围全部有效。
+        // 解锁沿或控制模式换代的短窗口允许 PWM 尚处停波态；窗口结束后通常
+        // 必须进入 Active。
+        // 唯一例外是 AUTO_LOITER 的 Control-Inhibited：控制链仍持续发布明确失效帧、
+        // PWM 已物理停波，因此 watchdog 可以继续喂；Commander 另行核对同代导航
+        // 故障流，缺失时仍会强制 Disarm。
         const bool in_transition = status.armed_time != 0U &&
             status.armed_time <= now_us &&
             now_us - status.armed_time <= kActuatorArmTransitionUs;
-        if (in_transition && hard_safe) {
+        const bool mode_transition = status.nav_state_timestamp != 0U &&
+            status.nav_state_timestamp <= now_us &&
+            now_us - status.nav_state_timestamp <=
+                kActuatorArmTransitionUs;
+        if ((in_transition || mode_transition) && stopped_frame) {
             return true;
+        }
+        if (control_inhibited) {
+            return status.nav_state ==
+                vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
         }
         return output.state == actuator_output_status_s::STATE_ACTIVE &&
                !output.safe_off && output.drive_available &&

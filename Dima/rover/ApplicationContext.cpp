@@ -69,7 +69,8 @@ ApplicationContext::ApplicationContext(
       dronecan_mag2_(services.can, services.armed_flash, maintenance_,
                      flashfs_),
       motor_output_(services.actuator_pwm),
-      commander_(services.armed_flash, maintenance_),
+      commander_(services.armed_flash, maintenance_,
+                 mission_service_),
       sbus_rc_(services.timestamped_serial_input, serial_config_)
 {
 }

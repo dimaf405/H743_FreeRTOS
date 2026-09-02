@@ -12,9 +12,11 @@ namespace dima::modules::safety {
 Commander::Commander(
     dima::platform::ArmedFlashCoordinator &armed_flash,
     dima::middleware::maintenance::RuntimeMaintenanceCoordinator
-        &maintenance) noexcept
+        &maintenance,
+    dima::modules::mission::MissionService &mission_service) noexcept
     : px4::ScheduledWorkItem("commander", px4::wq_configurations::hp_default),
-      armed_flash_(armed_flash), maintenance_(maintenance)
+      armed_flash_(armed_flash), maintenance_(maintenance),
+      mission_service_(mission_service)
 {
 }
 
@@ -87,8 +89,19 @@ bool Commander::start()
         PX4_ERR("Commander sensor calibration callback registration failed");
         return false;
     }
+    if (!navigation_status_subscription_.registerCallback()) {
+        state_ = dima::middleware::lifecycle::ModuleState::Error;
+        sensor_calibration_subscription_.unregisterCallback();
+        parameter_update_subscription_.unregisterCallback();
+        manual_control_subscription_.unregisterCallback();
+        action_request_subscription_.unregisterCallback();
+        ScheduleCancelAndDrain();
+        PX4_ERR("Commander navigation status callback registration failed");
+        return false;
+    }
     if (!vehicle_command_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        navigation_status_subscription_.unregisterCallback();
         sensor_calibration_subscription_.unregisterCallback();
         parameter_update_subscription_.unregisterCallback();
         manual_control_subscription_.unregisterCallback();
@@ -118,6 +131,7 @@ void Commander::stop()
     armed_flash_.disarm();
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     vehicle_command_subscription_.unregisterCallback();
+    navigation_status_subscription_.unregisterCallback();
     sensor_calibration_subscription_.unregisterCallback();
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
@@ -149,9 +163,11 @@ void Commander::Run()
     (void)refresh_manual_control();
     (void)refresh_actuator_output_status();
     state_changed = refresh_sensor_calibration_status() || state_changed;
+    state_changed = refresh_navigation_status() || state_changed;
 
     std::uint64_t now = hrt_absolute_time();
     state_changed = evaluate_safety(now) || state_changed;
+    state_changed = evaluate_navigation(now) || state_changed;
     state_changed = update_public_projection(now) || state_changed;
     if (state_changed && !publish_state(now)) {
         (void)handle_publication_failure(now);
@@ -162,6 +178,7 @@ void Commander::Run()
     while (action_request_subscription_.copy(&request)) {
         now = hrt_absolute_time();
         bool action_changed = execute_action(request, now);
+        action_changed = evaluate_navigation(now) || action_changed;
         action_changed = update_public_projection(now) || action_changed;
 
         // 每一个状态转换都完成一次固定顺序发布，保持 Arm/Kill 队列顺序。
@@ -176,6 +193,7 @@ void Commander::Run()
         now = hrt_absolute_time();
         state_changed = true;
         state_changed = evaluate_safety(now) || state_changed;
+        state_changed = evaluate_navigation(now) || state_changed;
         state_changed = update_public_projection(now) || state_changed;
         if (state_changed && !publish_state(now)) {
             (void)handle_publication_failure(now);
@@ -185,6 +203,7 @@ void Commander::Run()
 
     now = hrt_absolute_time();
     state_changed = evaluate_safety(now);
+    state_changed = evaluate_navigation(now) || state_changed;
     state_changed = update_public_projection(now) || state_changed;
     const bool heartbeat_due = now - last_publish_time_ >= kPublishIntervalUs;
     if ((state_changed || heartbeat_due) && !publish_state(now)) {
@@ -228,6 +247,7 @@ void Commander::enter_error(const char *reason) noexcept
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     armed_flash_.disarm();
     vehicle_command_subscription_.unregisterCallback();
+    navigation_status_subscription_.unregisterCallback();
     sensor_calibration_subscription_.unregisterCallback();
     parameter_update_subscription_.unregisterCallback();
     manual_control_subscription_.unregisterCallback();
@@ -268,6 +288,29 @@ bool Commander::refresh_sensor_calibration_status() noexcept
         if (!status.active) {
             sensor_calibration_dispatch_time_ = 0U;
         }
+    }
+    return changed;
+}
+
+bool Commander::refresh_navigation_status() noexcept
+{
+    rover_navigation_status_s status{};
+    bool changed = false;
+    while (navigation_status_subscription_.copy(&status)) {
+        const bool timestamp_forward = status.timestamp != 0U &&
+            (!navigation_status_valid_ ||
+             status.timestamp >= navigation_status_.timestamp);
+        if (!timestamp_forward) {
+            // 导航状态时间回退本身就是否定安全证据；保留上一代内容但令其失效，
+            // Commander 随后会把正在执行的任务降级到 AUTO_LOITER。
+            navigation_status_valid_ = false;
+            changed = true;
+            continue;
+        }
+        changed = !navigation_status_valid_ ||
+            status.timestamp != navigation_status_.timestamp || changed;
+        navigation_status_ = status;
+        navigation_status_valid_ = true;
     }
     return changed;
 }

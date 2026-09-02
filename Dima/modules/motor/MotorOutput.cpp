@@ -145,15 +145,18 @@ void MotorOutput::Run()
         }
     }
 
+    const bool output_permitted = parameters_valid_ &&
+        parameters_.drive_available && safety_permits_output(now);
     const bool command_valid = motor_command_valid(now);
-    const bool active_output = parameters_valid_ &&
-        parameters_.drive_available && safety_permits_output(now) &&
-        command_valid;
+    const bool control_inhibited = output_permitted && !command_valid &&
+        motor_control_inhibit_valid(now);
+    const bool active_output = output_permitted && command_valid;
     const bool disarmed_neutral = !active_output &&
         safety_permits_disarmed_neutral(now);
 
-    // 四态输出策略：Active 写入受控波形；Disarmed Neutral 保持可配置的中位；
-    // 其余场景执行 Hard Safe Off。后端暂不可用时只允许进入 Retry，绝不沿用旧帧。
+    // 输出策略：Active 写入受控波形；Disarmed Neutral 保持可配置的中位；
+    // 新鲜的精确失效帧停波后标记 Control Inhibited；其余场景执行 Hard Safe Off。
+    // 后端暂不可用时只允许进入 Retry，绝不沿用旧帧。
     if (!active_output && !disarmed_neutral) {
         const dima::platform::ActuatorPwmResult result = force_safe_off();
         if (result == dima::platform::ActuatorPwmResult::Fault) {
@@ -162,7 +165,9 @@ void MotorOutput::Run()
         }
         const std::uint8_t output_state =
             result == dima::platform::ActuatorPwmResult::Applied
-                ? actuator_output_status_s::STATE_HARD_SAFE_OFF
+                ? (control_inhibited
+                       ? actuator_output_status_s::STATE_CONTROL_INHIBITED
+                       : actuator_output_status_s::STATE_HARD_SAFE_OFF)
                 : actuator_output_status_s::STATE_RETRY;
         if (!publish_status(now, output_state, command_valid)) {
             enter_error(kEventPublishFailure);

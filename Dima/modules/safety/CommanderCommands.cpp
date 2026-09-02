@@ -7,6 +7,7 @@
 #include "calibration/SensorCalibrationAlgorithms.hpp"
 #include "logging/logging.hpp"
 
+#include <cerrno>
 #include <cstddef>
 #include <cmath>
 
@@ -17,6 +18,12 @@ namespace calibration = dima::lib::sensors::calibration;
 
 constexpr std::uint8_t kMavAutopilotSystemId = 1U;
 constexpr std::uint8_t kMavAutopilotComponentId = 1U;
+
+bool default_command_parameter(double value) noexcept
+{
+    return std::isnan(value) ||
+           (std::isfinite(value) && std::fabs(value) <= 1.0e-6);
+}
 
 } // namespace
 
@@ -48,13 +55,32 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                     ? vehicle_status_s::ARM_DISARM_REASON_COMMAND_EXTERNAL
                     : vehicle_status_s::ARM_DISARM_REASON_COMMAND_INTERNAL;
                 const TransitionResult transition = action == 1
-                    ? arm(reason, now) : disarm(reason);
+                    ? arm(reason, now) : disarm(reason, now);
                 state_changed = transition == TransitionResult::Changed ||
                                 state_changed;
                 result = transition == TransitionResult::Denied
                     ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED
                     : vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
             }
+            break;
+        }
+
+        case vehicle_command_s::VEHICLE_CMD_MISSION_START: {
+            // 首版只执行 active 任务的完整范围；非零 first/last 或其他扩展参数
+            // 明确 UNSUPPORTED，不能静默丢弃 QGC 请求的部分任务语义。
+            const bool whole_mission =
+                default_command_parameter(cmd.param1) &&
+                default_command_parameter(cmd.param2) &&
+                default_command_parameter(cmd.param3) &&
+                default_command_parameter(cmd.param4) &&
+                default_command_parameter(cmd.param5) &&
+                default_command_parameter(cmd.param6) &&
+                default_command_parameter(cmd.param7);
+            if (!whole_mission) {
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
+                break;
+            }
+            result = start_mission(now, state_changed);
             break;
         }
 
@@ -219,6 +245,37 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
         answer_command(cmd, result, now);
     }
     return state_changed;
+}
+
+std::uint8_t Commander::start_mission(std::uint64_t now,
+                                      bool &state_changed) noexcept
+{
+    // Mission Start 绝不隐式 Arm。新鲜 AutoMode 状态同时证明任务、四环
+    // 参数和 EKF 健康；MissionService 再以同一 mission_id 做最终原子门。
+    // MAV_CMD_MISSION_START 与 QGC SET_MODE(AUTO_MISSION) 共用本函数，
+    // 避免两个入口在任务持久化、估计器或安全条件上产生偏差。
+    if (!actuator_armed_.armed || !mission_start_ready(now)) {
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED;
+    }
+
+    const int started = mission_service_.start_execution();
+    if (started == 0 || started == -EALREADY) {
+        mission_suspend_pending_ = false;
+        state_changed = change_navigation_state(
+            vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION,
+            now) || state_changed;
+        PX4_INFO("AUTO mission start accepted id=%lu",
+                 static_cast<unsigned long>(active_mission_generation_));
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
+    }
+    if (started == -EAGAIN || started == -EBUSY) {
+        return vehicle_command_ack_s::
+            VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
+    }
+    if (started == -EPERM) {
+        return vehicle_command_ack_s::VEHICLE_CMD_RESULT_DENIED;
+    }
+    return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
 }
 
 void Commander::answer_command(const vehicle_command_s &command,

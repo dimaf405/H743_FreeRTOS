@@ -89,6 +89,7 @@ private:
     bool safety_permits_disarmed_neutral(
         std::uint64_t now_us) const noexcept;
     bool motor_command_valid(std::uint64_t now_us) const noexcept;
+    bool motor_control_inhibit_valid(std::uint64_t now_us) const noexcept;
     bool build_frame(dima::platform::ActuatorPwmFrame &frame) const noexcept;
     bool build_neutral_frame(
         dima::platform::ActuatorPwmFrame &frame) const noexcept;

@@ -33,11 +33,14 @@
 
 #pragma once
 
+#include "mission/MissionService.hpp"
+
 #include "action_request.hpp"
 #include "actuator_armed.hpp"
 #include "actuator_output_status.hpp"
 #include "manual_control_setpoint.hpp"
 #include "parameter_update.hpp"
+#include "rover_navigation_status.hpp"
 #include "sensor_calibration_request.hpp"
 #include "sensor_calibration_status.hpp"
 #include "vehicle_command.hpp"
@@ -70,7 +73,8 @@ public:
     explicit Commander(
         dima::platform::ArmedFlashCoordinator &armed_flash,
         dima::middleware::maintenance::RuntimeMaintenanceCoordinator
-            &maintenance) noexcept;
+            &maintenance,
+        dima::modules::mission::MissionService &mission_service) noexcept;
     ~Commander() override;
 
     bool start() override;
@@ -87,6 +91,8 @@ private:
     static constexpr std::uint64_t kActuatorArmTransitionUs = 250000ULL;
     static constexpr std::uint64_t kSensorCalibrationStatusTimeoutUs =
         1500000ULL;
+    static constexpr std::uint64_t kNavigationStatusTimeoutUs = 200000ULL;
+    static constexpr std::uint64_t kAutoTransitionGraceUs = 250000ULL;
     // 安全正向动作不得在队列中滞留超过一个公开状态心跳周期。
     static constexpr std::uint64_t kActionRequestMaxAgeUs = kPublishIntervalUs;
 
@@ -110,18 +116,28 @@ private:
     bool refresh_manual_control() noexcept;
     bool refresh_actuator_output_status() noexcept;
     bool refresh_sensor_calibration_status() noexcept;
+    bool refresh_navigation_status() noexcept;
     bool evaluate_safety(std::uint64_t now) noexcept;
+    bool evaluate_navigation(std::uint64_t now) noexcept;
     bool update_public_projection(std::uint64_t now) noexcept;
     bool execute_action(const action_request_s &request,
                         std::uint64_t now) noexcept;
     TransitionResult arm(std::uint8_t reason, std::uint64_t now) noexcept;
-    TransitionResult disarm(std::uint8_t reason) noexcept;
+    TransitionResult disarm(std::uint8_t reason,
+                            std::uint64_t now) noexcept;
+    bool change_navigation_state(std::uint8_t nav_state,
+                                 std::uint64_t now) noexcept;
+    bool mission_start_ready(std::uint64_t now) noexcept;
+    bool navigation_status_fresh(std::uint64_t now) const noexcept;
+    void suspend_active_mission() noexcept;
     bool rc_input_valid(std::uint64_t now) const noexcept;
     bool sticks_centered() const noexcept;
     bool actuator_output_status_fresh(std::uint64_t now) const noexcept;
     bool actuator_output_mapping_valid() const noexcept;
     bool actuator_output_ready_for_arming(std::uint64_t now) const noexcept;
     bool actuator_output_recovered_disarmed(std::uint64_t now) const noexcept;
+    bool navigation_control_inhibit_expected(
+        std::uint64_t now) const noexcept;
     bool actuator_output_fault_while_armed(std::uint64_t now) const noexcept;
     bool preflight_checks_pass(std::uint64_t now) const noexcept;
     bool action_request_fresh(const action_request_s &request,
@@ -131,6 +147,8 @@ private:
     void initialize_public_state(std::uint64_t now) noexcept;
     void initialize_disarmed_snapshot(std::uint64_t now) noexcept;
     bool handle_vehicle_command(std::uint64_t now) noexcept;
+    std::uint8_t start_mission(std::uint64_t now,
+                               bool &state_changed) noexcept;
     void answer_command(const vehicle_command_s &command, std::uint8_t result,
                         std::uint64_t now,
                         std::int32_t result_param2 = 0) noexcept;
@@ -142,6 +160,7 @@ private:
     dima::platform::ArmedFlashCoordinator &armed_flash_;
     dima::middleware::maintenance::RuntimeMaintenanceCoordinator
         &maintenance_;
+    dima::modules::mission::MissionService &mission_service_;
     uORB::SubscriptionCallbackWorkItem action_request_subscription_{
         ORB_ID(action_request), *this};
     uORB::SubscriptionCallbackWorkItem manual_control_subscription_{
@@ -152,6 +171,8 @@ private:
         ORB_ID(vehicle_command), *this};
     uORB::SubscriptionCallbackWorkItem sensor_calibration_subscription_{
         ORB_ID(sensor_calibration_status), *this};
+    uORB::SubscriptionCallbackWorkItem navigation_status_subscription_{
+        ORB_ID(rover_navigation_status), *this};
     uORB::SubscriptionData<actuator_output_status_s>
         actuator_output_status_subscription_{ORB_ID(actuator_output_status)};
     uORB::Publication<actuator_armed_s> actuator_armed_publication_{
@@ -172,6 +193,7 @@ private:
     manual_control_setpoint_s manual_control_setpoint_{};
     actuator_output_status_s actuator_output_status_{};
     sensor_calibration_status_s sensor_calibration_status_{};
+    rover_navigation_status_s navigation_status_{};
     param_t rc_loss_timeout_handle_{PARAM_INVALID};
     param_t arm_stick_deadzone_handle_{PARAM_INVALID};
     param_t rc_loss_action_handle_{PARAM_INVALID};
@@ -182,6 +204,8 @@ private:
     std::int32_t data_link_loss_action_{0};
     std::uint64_t last_publish_time_{0U};
     std::uint64_t sensor_calibration_dispatch_time_{0U};
+    std::uint32_t active_mission_generation_{0U};
+    std::uint16_t active_mission_count_{0U};
     std::uint32_t last_actuator_output_sequence_{0U};
     std::uint8_t recoverable_failsafe_causes_{FailsafeNone};
     dima::middleware::lifecycle::ModuleState state_{
@@ -190,6 +214,8 @@ private:
     bool parameters_valid_{false};
     bool have_manual_control_{false};
     bool actuator_output_status_valid_{false};
+    bool navigation_status_valid_{false};
+    bool mission_suspend_pending_{false};
     bool termination_latched_{false};
 };
 

@@ -8,6 +8,7 @@
 
 #include "logging/logging.hpp"
 
+#include <cerrno>
 #include <cmath>
 
 namespace dima::modules::safety {
@@ -20,6 +21,10 @@ constexpr std::int32_t kRcLossActionDisarm = 6;
 constexpr std::int32_t kDataLinkLossActionDisabled = 0;
 constexpr std::uint32_t kManualModeMask =
     1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
+constexpr std::uint32_t kAutoMissionModeMask =
+    1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION;
+constexpr std::uint32_t kAutoLoiterModeMask =
+    1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
 constexpr std::uint32_t kTerminationModeMask =
     1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
 
@@ -153,7 +158,8 @@ bool Commander::evaluate_safety(std::uint64_t now) noexcept
         if (rc_loss_requires_disarm || !parameters_valid_ ||
             actuator_failed) {
             state_changed = disarm(
-                vehicle_status_s::ARM_DISARM_REASON_FAILURE_DETECTOR) ==
+                vehicle_status_s::ARM_DISARM_REASON_FAILURE_DETECTOR,
+                now) ==
                 TransitionResult::Changed || state_changed;
             PX4_WARN("Commander forced disarm: RC, parameter or actuator failure");
         }
@@ -162,6 +168,169 @@ bool Commander::evaluate_safety(std::uint64_t now) noexcept
     const bool causes_changed = causes != recoverable_failsafe_causes_;
     recoverable_failsafe_causes_ = causes;
     return state_changed || causes_changed;
+}
+
+bool Commander::navigation_status_fresh(std::uint64_t now) const noexcept
+{
+    return navigation_status_valid_ && navigation_status_.timestamp != 0U &&
+        navigation_status_.timestamp_sample != 0U &&
+        navigation_status_.timestamp_sample <= navigation_status_.timestamp &&
+        navigation_status_.timestamp <= now &&
+        now - navigation_status_.timestamp <= kNavigationStatusTimeoutUs &&
+        navigation_status_.timestamp_sample <= now &&
+        now - navigation_status_.timestamp_sample <=
+            kNavigationStatusTimeoutUs;
+}
+
+bool Commander::mission_start_ready(std::uint64_t now) noexcept
+{
+    if (!actuator_armed_.armed || actuator_armed_.kill ||
+        actuator_armed_.termination || termination_latched_ ||
+        vehicle_status_.failsafe ||
+        vehicle_status_.calibration_enabled ||
+        vehicle_status_.rc_calibration_in_progress ||
+        !navigation_status_fresh(now) ||
+        !navigation_status_.ready_for_auto ||
+        !navigation_status_.mission_committed ||
+        !navigation_status_.parameters_valid ||
+        !navigation_status_.estimator_healthy) {
+        return false;
+    }
+
+    dima::modules::mission::MissionStatus mission{};
+    if (mission_service_.status(mission) != 0 || !mission.loaded ||
+        !mission.committed || mission.mutation_in_progress ||
+        mission.mission_id == 0U || mission.count == 0U ||
+        mission.current >= mission.count ||
+        mission.mission_id != navigation_status_.mission_generation ||
+        mission.current != navigation_status_.mission_current ||
+        mission.count != navigation_status_.mission_count) {
+        return false;
+    }
+
+    active_mission_generation_ = mission.mission_id;
+    active_mission_count_ = mission.count;
+    return true;
+}
+
+void Commander::suspend_active_mission() noexcept
+{
+    if (!mission_suspend_pending_) {
+        return;
+    }
+
+    std::uint32_t mission_id = active_mission_generation_;
+    if (mission_id == 0U) {
+        dima::modules::mission::MissionStatus mission{};
+        if (mission_service_.status(mission) != 0) {
+            return;
+        }
+        mission_id = mission.mission_id;
+    }
+    if (mission_id == 0U) {
+        mission_suspend_pending_ = false;
+        return;
+    }
+
+    const int result = mission_service_.suspend_execution(mission_id);
+    // mutex 短暂忙时保留 pending 并在下一 20 ms 周期重试；任务已完成、已换代
+    // 或本来未运行都不需要继续阻塞 Manual/AUTO_LOITER。
+    if (result != -EAGAIN) {
+        mission_suspend_pending_ = false;
+    }
+}
+
+bool Commander::change_navigation_state(std::uint8_t nav_state,
+                                        std::uint64_t now) noexcept
+{
+    const bool supported =
+        nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
+        nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
+        nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER ||
+        nav_state == vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+    if (!supported || (termination_latched_ &&
+                       nav_state !=
+                           vehicle_status_s::NAVIGATION_STATE_TERMINATION)) {
+        return false;
+    }
+
+    if (vehicle_status_.nav_state == nav_state) {
+        if (nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
+            suspend_active_mission();
+        }
+        return false;
+    }
+
+    if (vehicle_status_.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION &&
+        nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
+        mission_suspend_pending_ = true;
+    }
+    vehicle_status_.nav_state = nav_state;
+    vehicle_status_.nav_state_timestamp = now;
+    // AUTO_LOITER 是安全投影而非新的用户意图；保留 AUTO_MISSION 意图便于
+    // QGC 区分“任务请求”与“控制器主动保持”。Manual 则明确接管用户意图。
+    if (nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER) {
+        vehicle_status_.nav_state_user_intention = nav_state;
+    }
+    suspend_active_mission();
+    return true;
+}
+
+bool Commander::evaluate_navigation(std::uint64_t now) noexcept
+{
+    if (vehicle_status_.nav_state !=
+        vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
+        suspend_active_mission();
+        return false;
+    }
+
+    const bool transition_grace =
+        vehicle_status_.nav_state_timestamp != 0U &&
+        vehicle_status_.nav_state_timestamp <= now &&
+        now - vehicle_status_.nav_state_timestamp <= kAutoTransitionGraceUs;
+    const bool new_status = navigation_status_fresh(now) &&
+        navigation_status_.timestamp > vehicle_status_.nav_state_timestamp;
+    if (transition_grace) {
+        // change_navigation_state() 与三 Topic 同拍发布之间存在跨 WorkQueue 窗口：
+        // AutoMode 可能用旧 Manual 快照生成一条“发布时间晚于切换、语义仍属旧代”
+        // 的 NOT_AUTO 帧。交接期统一等待新投影收敛，MotorOutput 仍因请求无效保持
+        // 停止；250 ms 后才以最新状态决定继续 Mission、完成或降级 Hold。
+        return false;
+    }
+    if (!new_status) {
+        PX4_WARN("AUTO mission lost navigation status; entering Hold");
+        return change_navigation_state(
+            vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, now);
+    }
+
+    const bool same_mission = active_mission_generation_ != 0U &&
+        navigation_status_.mission_generation == active_mission_generation_ &&
+        navigation_status_.mission_count == active_mission_count_ &&
+        navigation_status_.mission_current < active_mission_count_;
+    const bool mission_complete = same_mission &&
+        navigation_status_.waypoint_state ==
+            rover_navigation_status_s::WAYPOINT_MISSION_COMPLETE;
+    if (mission_complete) {
+        PX4_INFO("AUTO mission complete; entering Hold");
+        return change_navigation_state(
+            vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, now);
+    }
+
+    const bool healthy = same_mission &&
+        navigation_status_.mission_committed &&
+        navigation_status_.parameters_valid &&
+        navigation_status_.estimator_healthy &&
+        navigation_status_.request_valid &&
+        navigation_status_.failure_reason ==
+            rover_navigation_status_s::FAILURE_NONE;
+    if (!healthy) {
+        PX4_WARN("AUTO mission navigation fault %u; entering Hold",
+                 static_cast<unsigned>(navigation_status_.failure_reason));
+        return change_navigation_state(
+            vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, now);
+    }
+    return false;
 }
 
 bool Commander::update_public_projection(std::uint64_t now) noexcept
@@ -187,11 +356,22 @@ bool Commander::update_public_projection(std::uint64_t now) noexcept
 
     const bool manual_mode = vehicle_status_.nav_state ==
                              vehicle_status_s::NAVIGATION_STATE_MANUAL;
+    const bool auto_mode =
+        vehicle_status_.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
+        vehicle_status_.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
     const bool termination_mode = vehicle_status_.nav_state ==
-                                  vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+                                   vehicle_status_s::NAVIGATION_STATE_TERMINATION;
     const bool mode_changed =
         vehicle_control_mode_.flag_control_manual_enabled != manual_mode ||
-        vehicle_control_mode_.flag_control_termination_enabled != termination_mode ||
+        vehicle_control_mode_.flag_control_auto_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_position_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_velocity_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_attitude_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_rates_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_termination_enabled !=
+            termination_mode ||
         vehicle_control_mode_.flag_armed != actuator_armed_.armed ||
         vehicle_control_mode_.source_id != vehicle_status_.nav_state;
     changed = mode_changed || changed;
@@ -199,6 +379,13 @@ bool Commander::update_public_projection(std::uint64_t now) noexcept
     vehicle_control_mode_ = vehicle_control_mode_s{};
     vehicle_control_mode_.flag_armed = actuator_armed_.armed;
     vehicle_control_mode_.flag_control_manual_enabled = manual_mode;
+    // Rover AUTO 的“姿态”只表示 yaw Heading P，“rates”只表示 yaw-rate PI；
+    // roll/pitch/altitude/climb/allocation 始终关闭。五个正向标志必须成组出现。
+    vehicle_control_mode_.flag_control_auto_enabled = auto_mode;
+    vehicle_control_mode_.flag_control_position_enabled = auto_mode;
+    vehicle_control_mode_.flag_control_velocity_enabled = auto_mode;
+    vehicle_control_mode_.flag_control_attitude_enabled = auto_mode;
+    vehicle_control_mode_.flag_control_rates_enabled = auto_mode;
     vehicle_control_mode_.flag_control_termination_enabled = termination_mode;
     vehicle_control_mode_.source_id = vehicle_status_.nav_state;
     return changed;
@@ -232,10 +419,14 @@ Commander::TransitionResult Commander::arm(
     return TransitionResult::Changed;
 }
 
-Commander::TransitionResult Commander::disarm(std::uint8_t reason) noexcept
+Commander::TransitionResult Commander::disarm(std::uint8_t reason,
+                                              std::uint64_t now) noexcept
 {
+    const bool mode_changed = change_navigation_state(
+        vehicle_status_s::NAVIGATION_STATE_MANUAL, now);
     if (!actuator_armed_.armed) {
-        return TransitionResult::NotChanged;
+        return mode_changed ? TransitionResult::Changed
+                            : TransitionResult::NotChanged;
     }
 
     actuator_armed_.armed = false;
@@ -362,6 +553,57 @@ bool Commander::actuator_output_recovered_disarmed(
     return true;
 }
 
+bool Commander::navigation_control_inhibit_expected(
+    std::uint64_t now) const noexcept
+{
+    // AUTO_MISSION 中待降级的故障或 AUTO_LOITER 中持续上报的同一故障，才允许
+    // 把 Control Inhibited 解释为计划内停波。前一种覆盖 Commander 本轮先评估
+    // 执行器、随后才切 Hold 的固定顺序，避免失效帧比模式转换更早到达时误 Disarm。
+    // 这里按发布时刻判断状态流活性，不能用 timestamp_sample 的年龄：EKF 样本
+    // 失鲜正是该故障合同要表达的内容。
+    // mission_id/count/current 再与 Mission Start 冻结代际交叉核对，防止旧任务、
+    // NOT_AUTO 帧或已经停止更新的 AutoMode 为停波状态背书。
+    const bool navigation_fault_state =
+        vehicle_status_.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
+        vehicle_status_.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+    if (!navigation_fault_state ||
+        vehicle_status_.nav_state_timestamp == 0U ||
+        !navigation_status_valid_ || navigation_status_.timestamp == 0U ||
+        navigation_status_.timestamp <= vehicle_status_.nav_state_timestamp ||
+        navigation_status_.timestamp > now ||
+        now - navigation_status_.timestamp > kNavigationStatusTimeoutUs ||
+        navigation_status_.mission_generation != active_mission_generation_ ||
+        navigation_status_.mission_count != active_mission_count_ ||
+        active_mission_generation_ == 0U || active_mission_count_ == 0U ||
+        navigation_status_.mission_current >= active_mission_count_ ||
+        !navigation_status_.mission_committed ||
+        navigation_status_.request_valid ||
+        navigation_status_.control_state !=
+            rover_navigation_status_s::CONTROL_INACTIVE ||
+        !std::isnan(navigation_status_.speed_setpoint_m_s) ||
+        !std::isnan(navigation_status_.yaw_rate_setpoint_rad_s)) {
+        return false;
+    }
+
+    // 每种允许保持 Armed 的失效都要求字段自洽。任务/模式不可用不在白名单内；
+    // 这类异常以及导航状态流停止更新仍按执行链故障强制 Disarm。
+    switch (navigation_status_.failure_reason) {
+    case rover_navigation_status_s::FAILURE_PARAMETER_INVALID:
+        return !navigation_status_.parameters_valid;
+    case rover_navigation_status_s::FAILURE_ESTIMATOR_UNHEALTHY:
+    case rover_navigation_status_s::FAILURE_ESTIMATOR_STALE:
+        return !navigation_status_.estimator_healthy;
+    case rover_navigation_status_s::FAILURE_ESTIMATOR_RESET:
+    case rover_navigation_status_s::FAILURE_TIME_REGRESSION:
+    case rover_navigation_status_s::FAILURE_OUTPUT_NONFINITE:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool Commander::actuator_output_fault_while_armed(
     std::uint64_t now) const noexcept
 {
@@ -371,32 +613,61 @@ bool Commander::actuator_output_fault_while_armed(
     const bool in_transition = vehicle_status_.armed_time != 0U &&
         vehicle_status_.armed_time <= now &&
         now - vehicle_status_.armed_time <= kActuatorArmTransitionUs;
+    const bool mode_transition = vehicle_status_.nav_state_timestamp != 0U &&
+        vehicle_status_.nav_state_timestamp <= now &&
+        now - vehicle_status_.nav_state_timestamp <=
+            kActuatorArmTransitionUs;
     if (!actuator_output_status_fresh(now)) {
-        return !in_transition;
+        return !(in_transition || mode_transition);
     }
     if (actuator_output_status_.state ==
         actuator_output_status_s::STATE_FAULT) {
         return true;
     }
-    if (in_transition &&
-        actuator_output_status_.timestamp < vehicle_status_.armed_time) {
+    const std::uint64_t transition_start = mode_transition
+        ? vehicle_status_.nav_state_timestamp
+        : vehicle_status_.armed_time;
+    if ((in_transition || mode_transition) &&
+        actuator_output_status_.timestamp < transition_start) {
         return false;
     }
-    if (in_transition &&
-        actuator_output_status_.state != actuator_output_status_s::STATE_ACTIVE) {
-        // 三项 Arm Topic 收敛期间允许暂时看到上一帧健康 Neutral/Hard-Off；
-        // 后端 Retry、映射破损或不可驱动仍立即视为故障，不能被过渡宽限掩盖。
+    if (in_transition || mode_transition) {
+        // Arm 或控制来源切换期间允许短暂看到上一帧 Active(command_valid=false)、
+        // Neutral/Hard-Off/Control-Inhibited；后端 Retry、映射破损或不可驱动
+        // 仍立即视为故障，不能被 250 ms 宽限掩盖。
         return actuator_output_status_.state ==
                    actuator_output_status_s::STATE_RETRY ||
                !actuator_output_mapping_valid() ||
                !actuator_output_status_.backend_ready ||
                !actuator_output_status_.drive_available;
     }
-    return !actuator_output_mapping_valid() ||
-           actuator_output_status_.state !=
+    if (!actuator_output_mapping_valid() ||
+        !actuator_output_status_.backend_ready ||
+        !actuator_output_status_.drive_available) {
+        return true;
+    }
+
+    if (actuator_output_status_.state ==
+        actuator_output_status_s::STATE_CONTROL_INHIBITED) {
+        // 该例外只接受 AutoMode 故障流、RoverDifferential 新鲜全 NaN 帧与
+        // MotorOutput 已确认物理停波三层同时成立。普通 Hard Safe Off、生产者
+        // 超时、Retry/Fault、非零 PWM 或错误映射都不会落入这里。
+        if (!navigation_control_inhibit_expected(now) ||
+            !actuator_output_status_.safe_off ||
+            actuator_output_status_.command_valid ||
+            actuator_output_status_.active_output_mask != 0U) {
+            return true;
+        }
+        for (const std::uint16_t pulse : actuator_output_status_.pwm_us) {
+            if (pulse != 0U) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    return actuator_output_status_.state !=
                actuator_output_status_s::STATE_ACTIVE ||
-           !actuator_output_status_.backend_ready ||
-           !actuator_output_status_.drive_available ||
            actuator_output_status_.safe_off ||
            !actuator_output_status_.command_valid ||
            actuator_output_status_.active_output_mask !=
@@ -454,7 +725,10 @@ void Commander::reset_runtime_state() noexcept
     manual_control_setpoint_ = manual_control_setpoint_s{};
     actuator_output_status_ = actuator_output_status_s{};
     sensor_calibration_status_ = sensor_calibration_status_s{};
+    navigation_status_ = rover_navigation_status_s{};
     sensor_calibration_dispatch_time_ = 0U;
+    active_mission_generation_ = 0U;
+    active_mission_count_ = 0U;
     rc_loss_timeout_handle_ = PARAM_INVALID;
     arm_stick_deadzone_handle_ = PARAM_INVALID;
     rc_loss_action_handle_ = PARAM_INVALID;
@@ -470,6 +744,8 @@ void Commander::reset_runtime_state() noexcept
     parameters_valid_ = false;
     have_manual_control_ = false;
     actuator_output_status_valid_ = false;
+    navigation_status_valid_ = false;
+    mission_suspend_pending_ = false;
     // Termination 是唯一跨 Application Runtime 保留的安全锁存；
     // 此处故意不清 termination_latched_，只能由 MCU 复位解除。
 }
@@ -492,7 +768,11 @@ void Commander::initialize_public_state(std::uint64_t now) noexcept
                                     ? vehicle_status_s::NAVIGATION_STATE_TERMINATION
                                     : vehicle_status_s::NAVIGATION_STATE_MANUAL;
     vehicle_status_.valid_nav_states_mask =
-        kManualModeMask | kTerminationModeMask;
+        kManualModeMask | kAutoMissionModeMask | kAutoLoiterModeMask |
+        kTerminationModeMask;
+    // AUTO_MISSION 只能经过完整 Mission Start readiness 事务进入；
+    // QGC SET_MODE(AUTO_MISSION) 也只是该事务的兼容别名。AUTO_LOITER
+    // 只由 Commander 安全降级进入，所以可直接设置的通用模式仍仅为 Manual。
     vehicle_status_.can_set_nav_states_mask = kManualModeMask;
     vehicle_status_.failure_detector_status = vehicle_status_s::FAILURE_NONE;
     vehicle_status_.hil_state = vehicle_status_s::HIL_STATE_OFF;
@@ -512,6 +792,8 @@ void Commander::initialize_disarmed_snapshot(std::uint64_t now) noexcept
     // 发布/调度失败的保底快照保留 Kill 锁存，但清除 Armed 和 ready_to_arm；
     // 这样恢复通信不会隐式解除操作员已经触发的紧急停机。
     const bool kill_latched = actuator_armed_.kill;
+    mission_suspend_pending_ = true;
+    suspend_active_mission();
     armed_flash_.disarm();
 
     initialize_public_state(now);
