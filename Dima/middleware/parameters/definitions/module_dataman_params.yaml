@@ -1,0 +1,20 @@
+module_name: Dataman
+
+parameters:
+  - group: System
+    definitions:
+      SYS_DM_BACKEND:
+        description:
+          short: Dataman storage backend
+          long: |-
+            If the board supports persistent storage, Default storage uses that
+            board storage. Otherwise it uses non-persistent RAM storage.
+        type: enum
+        values:
+          -1: Dataman disabled
+          0: Default storage
+          1: RAM storage
+        default: 0
+        min: -1
+        max: 1
+        reboot_required: true
