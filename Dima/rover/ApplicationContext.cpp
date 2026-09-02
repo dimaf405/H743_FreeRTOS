@@ -56,7 +56,8 @@ ApplicationContext::ApplicationContext(
       // Parameter、DroneCAN 与 Mission 不得各自创建板载 Flash owner。
       mission_service_(flashfs_, services.synchronization,
                        services.armed_flash),
-      mavlink_service_(services.console, services.boot_control),
+      mavlink_service_(services.console, services.boot_control,
+                       mission_service_),
       serial_config_(services.serial_ports),
       um982_gps_(services.async_serial_port, services.clock, serial_config_,
                  services.armed_flash, maintenance_),

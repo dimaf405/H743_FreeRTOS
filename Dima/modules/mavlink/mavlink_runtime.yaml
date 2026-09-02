@@ -124,7 +124,22 @@ inbound:
   - message: MISSION_REQUEST_LIST
     handler: Mission
 
+  - message: MISSION_COUNT
+    handler: Mission
+
+  - message: MISSION_ITEM_INT
+    handler: Mission
+
+  - message: MISSION_REQUEST_INT
+    handler: Mission
+
+  - message: MISSION_SET_CURRENT
+    handler: Mission
+
   - message: MISSION_CLEAR_ALL
+    handler: Mission
+
+  - message: MISSION_ACK
     handler: Mission
 
   - message: FILE_TRANSFER_PROTOCOL

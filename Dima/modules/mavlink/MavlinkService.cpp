@@ -41,9 +41,11 @@ constexpr MavlinkMetadataFtp::VirtualFile kMetadataFiles[]{
 
 MavlinkService::MavlinkService(
     dima::platform::Console &console,
-    dima::platform::BootControl &boot_control) noexcept
+    dima::platform::BootControl &boot_control,
+    dima::modules::mission::MissionService &mission_service) noexcept
     : px4::ScheduledWorkItem("mavlink", px4::wq_configurations::lp_default),
-      console_(console), boot_control_(boot_control)
+      console_(console), boot_control_(boot_control),
+      mission_(mission_service, &MavlinkService::send_frame, this)
 {
     metadata_ftp_.init(
         kMetadataFiles,
@@ -113,6 +115,7 @@ void MavlinkService::reset_runtime_state() noexcept
     identity_.set_state(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, MAV_STATE_BOOT);
     heartbeat_pacer_.reset();
     parameters_.reset();
+    mission_.reset();
     timesync_.reset();
     metadata_ftp_.reset();
     pending_ack_ = mavlink_command_ack_t{};
@@ -168,6 +171,7 @@ void MavlinkService::Run()
         discard_rx();
         reset_parser_state();
         parameters_.reset();
+        mission_.reset_link();
         metadata_ftp_.reset();
         reset_sensor_link_state();
     }
@@ -224,6 +228,7 @@ void MavlinkService::Run()
         }
     }
 
+    mission_.update(now, link_ready && was_link_ready_);
     if (!link_ready || !was_link_ready_) {
         return;
     }

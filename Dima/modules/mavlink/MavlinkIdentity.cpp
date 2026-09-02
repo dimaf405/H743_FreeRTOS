@@ -27,11 +27,12 @@ void MavlinkIdentity::set_state(uint8_t base_mode,
 
 uint64_t MavlinkIdentity::capabilities() const noexcept
 {
-    // 只声明本固件实际实现的参数 float/逐字节编码、FTP、COMMAND_INT 和 MAVLink2；
-    // 未实现的任务上传、参数 EXT 写入等能力不得为迎合 QGC 而虚报。
+    // 只声明本固件实际实现的参数 float/逐字节编码、FTP、COMMAND_INT、
+    // MISSION_ITEM_INT 事务和 MAVLink2；未实现的参数 EXT 写入等能力不得虚报。
     return static_cast<std::uint64_t>(MAV_PROTOCOL_CAPABILITY_PARAM_FLOAT)
          | static_cast<std::uint64_t>(MAV_PROTOCOL_CAPABILITY_FTP)
          | static_cast<std::uint64_t>(MAV_PROTOCOL_CAPABILITY_COMMAND_INT)
+         | static_cast<std::uint64_t>(MAV_PROTOCOL_CAPABILITY_MISSION_INT)
          | static_cast<std::uint64_t>(
                MAV_PROTOCOL_CAPABILITY_PARAM_ENCODE_BYTEWISE)
          | static_cast<std::uint64_t>(MAV_PROTOCOL_CAPABILITY_MAVLINK2);

@@ -53,7 +53,8 @@ class MavlinkService final : public dima::middleware::lifecycle::ModuleBase,
                              public px4::ScheduledWorkItem {
 public:
     MavlinkService(dima::platform::Console &console,
-                   dima::platform::BootControl &boot_control) noexcept;
+                   dima::platform::BootControl &boot_control,
+                   dima::modules::mission::MissionService &mission_service) noexcept;
 
     bool start() noexcept override;
     void stop() noexcept override;
@@ -145,7 +146,7 @@ private:
     MavlinkCommands commands_{&MavlinkService::request_message,
                               &MavlinkService::set_message_interval,
                               &MavlinkService::get_message_interval, this};
-    MavlinkMission mission_{&MavlinkService::send_frame_void, this};
+    MavlinkMission mission_;
     MavlinkMetadataFtp metadata_ftp_{&MavlinkService::send_frame, this};
 
     uORB::SubscriptionData<vehicle_command_ack_s>
