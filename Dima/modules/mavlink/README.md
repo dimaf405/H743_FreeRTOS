@@ -1,6 +1,6 @@
 # MAVLink 服务合同
 
-`MavlinkService` 是 Application Runtime 唯一的 USB CDC 数据面所有者。它使用固定缓冲、无动态分配，负责 MAVLink v2 RX/TX、参数、只读 Component Metadata FTP、命令 ACK、任务空集合、TIMESYNC、RC、传感器流和 STATUSTEXT。
+`MavlinkService` 是 Application Runtime 唯一的 USB CDC 数据面所有者。它使用固定缓冲、无动态分配，负责 MAVLink v2 RX/TX、参数、只读 Component Metadata FTP、命令 ACK、任务、Onboard Log、`STORAGE_INFORMATION`、TIMESYNC、RC、传感器流和 STATUSTEXT。
 
 传感器与估计器流合同固定对照 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 的 `MAVLINK_MODE_CONFIG` 以及 `HIGHRES_IMU`、`SCALED_IMU`、`ATTITUDE`、`LOCAL_POSITION_NED`、`GLOBAL_POSITION_INT`、`ESTIMATOR_STATUS` stream；本地适配只保留实际存在的单套传感器/EKF2 实例和固定内存发送路径。
 
@@ -21,6 +21,7 @@
 - `LOCAL_POSITION_NED`：30 Hz，直接映射 `vehicle_local_position` 的 NED position/velocity。
 - `GLOBAL_POSITION_INT`：10 Hz，映射 WGS84 global position 与 NED velocity；严格沿用 PX4 v1.17 的回退合同：存在有效 `home_position` 时为 `gpos.alt-home.alt`，否则为 `gpos.alt`。N1 尚无 `home_position`，因此当前固定走官方无 Home 回退，不把本地 NED 原点另解释为 Home。
 - `ESTIMATOR_STATUS`：5 Hz，逐项映射 PX4 `estimator_status` 的 innovation ratio、accuracy 和 `solution_status_flags`，MAVLink 层不重建第二套估计器健康模型。
+- `STORAGE_INFORMATION`：对照 PX4 v1.17 只响应 `MAV_CMD_REQUEST_MESSAGE`（并保留 deprecated `MAV_CMD_REQUEST_STORAGE_INFORMATION`）；索引 0/1 返回第一块 SD，可用时上报 `READY` 及 MiB 容量，不可用时上报 `EMPTY/count=0`。`f_getfree` 只在 `wq:storage` 执行，MAVLink owner 仅处理固定 Ring 中的响应。
 
 全部已配置周期流都支持 `MAV_CMD_REQUEST_MESSAGE`。与 PX4 `MavlinkStream::request_message()` 一致，一次请求是独立 one-shot，不受周期流 `last_send` 节拍限制；由 topic 更新驱动的 IMU 流在没有新样本时仍可拒绝本次请求。`HEARTBEAT` one-shot 直接发送；RC 保持 5 Hz、GPS 保持 5 Hz、`SYS_STATUS` 保持 1 Hz。GPS 可见性由持续的 `GPS_RAW_INT`/`SYS_STATUS` 表达，不再重复输出 detected/healthy/stale/not-detected 文本摘要。
 
@@ -30,9 +31,15 @@
 - `SensorCalibration` 独占 gyro `param1=1`、mag `param2=1`、accel `param5=1` 及非 RC 的全零取消。
 - 接受后立即发送 `COMMAND_ACK ACCEPTED`；长事务严格使用 PX4 v2 `[cal] ...` STATUSTEXT 驱动 QGC。`SensorCalibration` 与 PX4 Commander worker 一样运行在非实时 `wq:lp_default`，协议文本使用不受普通日志等级过滤的 RAW 路径；放入实时 `wq:sensors` 会被项目日志层拒绝格式化。Armed、另一校准进行中或传感器无新鲜样本时返回拒绝结果，并以 `[cal] calibration failed: <type>` 终止 QGC 等待。
 
+## Onboard Log
+
+- `MavlinkLogHandler` 对照 PX4 v1.17.0 同名实现处理 `LOG_REQUEST_LIST/DATA/END/ERASE`，并复用同一 storage worker/Ring 生成 `STORAGE_INFORMATION`；日志 ID 从 0 开始，`LOG_DATA` 长度直接由 mavgen 字段容量派生。
+- PX4 的文件扫描、稳定列表、按 offset 读取和整树擦除语义保留；平台适配只把 POSIX 调用换成 `LogFileStore`，实际 FatFs/SDMMC 工作固定在 `wq:storage`，通信队列仅发送固定 8 槽响应 Ring。
+- 无卡或无文件按 `common.xml` 强制回一条 `id=0,num_logs=0`，使 QGC 结束 Refresh；板上无 RTC，`LOG_ENTRY.time_utc=0`，避免用 FatFs 固定日期伪装真实采集时间。
+
 ## TX 与连接边界
 
-优先级为 ACK、Heartbeat/Version、RC、Metadata FTP、传感器、参数、STATUSTEXT。物理 USB ready 下降沿会丢弃旧 RX 半帧，重置 parser/channel/FTP/参数传输会话，并恢复 PX4 USB 周期流默认节拍；`ETIMEDOUT/EIO/EPIPE` 保留 FTP 回复等待 QGC 同 sequence 重传。
+优先级为 ACK、Heartbeat/Version、RC、Metadata FTP、传感器、Onboard Log、参数、STATUSTEXT。物理 USB ready 下降沿会丢弃旧 RX 半帧，重置 parser/channel/FTP/参数/日志传输会话，并恢复 PX4 USB 周期流默认节拍；`ETIMEDOUT/EIO/EPIPE` 保留 FTP 回复等待 QGC 同 sequence 重传。
 
 周期遥测各自保存 PX4 风格的默认值和 `SET_MESSAGE_INTERVAL` 配置，不存在跨 message ID 的统一 10 Hz 限流策略。`COMMAND_ACK`、参数传输、Mission、Metadata/FTP、TIMESYNC、PING、STATUSTEXT 和版本/组件信息属于事务或诊断传输，不套用周期流节拍。
 

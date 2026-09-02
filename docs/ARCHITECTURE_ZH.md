@@ -26,7 +26,7 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 │   ├── lifecycle/            Module 生命周期
 ├── modules/                  具有独立生命周期的运行模块
 │   ├── boot_health/          BootHealth 启动健康观察
-│   ├── logging/              LogService 日志转储服务
+│   ├── logging/              LogService、Topic ULog producer 与异步文件 writer
 │   ├── ekf2/                 单实例 PX4 EKF2 运行模块
 │   ├── mavlink/              MAVLink v2.0（心跳、命令、参数、Mission、时间同步）
 │   ├── mission/              固定 64 项任务仓库、编解码与持久事务
@@ -111,15 +111,15 @@ wq:sensors       传感器采样与处理
 wq:nav           Position、Waypoint、PivotTurn
 wq:io            六路 MotorOutput、SBUS、GNSS 和串口协议
 wq:lp_default    Log、MAVLink 和校准非实时服务（4 KiB 静态栈）
-wq:storage       Parameter、Autosave、FlashFS 和 SD/FatFs（4 KiB 静态栈）
+wq:storage       Parameter、Autosave、FlashFS、SD 参数镜像、ULog 写入与日志下载（4 KiB 静态栈）
 service:param    参数、Flash 主副本和 SD 镜像
 service:mission  PX4 Dataman 双 bank、Mission State、板载 Flash/RAM backend
 service:console  USB MAVLink
-service:logger   非实时日志
+service:logger   实时结构化日志、SD ULog 与 MAVLink Onboard Log
 ```
 
 USB、Flash、SD 和阻塞日志不得运行在控制或 Estimator WorkQueue。
-`wq:lp_default` 的 Parameter/结构化日志/MAVLink 共用调用链在 QGC 连接时曾以 2 KiB 栈越界至少 56 bytes；栈已固定为 4 KiB，并由 R228 禁止回退。运行期 SD 重初始化可能进入同步 HAL/FatFs，因此 ParameterService 与 Autosave 进一步隔离到优先级更低的 `wq:storage`；该队列阻塞不得影响 HEARTBEAT、传感器遥测或结构化日志。八个 WorkQueue 加 `appMainTask` 合计 36 KiB，仍位于固定 48 KiB `.dima_task_pool` 内。
+`wq:lp_default` 的 Parameter/结构化日志/MAVLink 共用调用链在 QGC 连接时曾以 2 KiB 栈越界至少 56 bytes；栈已固定为 4 KiB，并由 R228 禁止回退。Topic ULog producer 在该队列只向固定 64 KiB SPSC Ring 发布完整消息；运行期 SD 重初始化、ULog 分片写入/同步/关闭、目录枚举和分块读取可能进入同步 HAL/FatFs，因此全部隔离到优先级更低的 `wq:storage`。MAVLink 只交换固定请求/响应 Ring，该队列阻塞不得影响 HEARTBEAT、传感器遥测或实时结构化日志。板上没有 card-detect GPIO，`disk_status` 不能证明物理在位；复用旧挂载前必须执行最长 500 ms 的主动 `CTRL_SYNC`，其成功结果只表示“最近一次探测可用”。八个 WorkQueue 加 `appMainTask` 合计 36 KiB，仍位于固定 48 KiB `.dima_task_pool` 内。
 
 ### 4.2 Application Runtime 生命周期
 
@@ -195,6 +195,7 @@ AUTO: Mission + vehicle_local_position + vehicle_odometry health
 - 传感器发布分层固定采用 PX4 单实例子集：ICM42688P 驱动发布原始 `sensor_accel/sensor_gyro`，`VehicleImu` 应用 correction、旋转和积分后发布 `vehicle_imu/vehicle_imu_status`；DroneCAN Mag2 驱动只发布原始 `sensor_mag`，独立 `VehicleMagnetometer` 按 device ID 选择匹配校准或 identity correction 后发布 `vehicle_magnetometer`。校准事务持有 arming interlock 时，两个前端直接在 Disarmed 状态应用 correction，不得二次获取同一不可重入互锁；提交与回滚均以同一 `parameter_update.instance` 和 active correction 逐项匹配作为完成握手，在前端确认前不得释放互锁。gyro/accel/mag 校准命令与 QGC `[cal]` 状态机运行于非实时 `wq:lp_default`，与 PX4 Commander worker 的非实时职责一致；项目日志层连 RAW 记录也拒绝实时上下文格式化，因此禁止把校准事务放入 `wq:sensors`。Accel 固定六面稳定采样；Mag 固定六面、每面 0.5 rad 净旋转、7 s 内 40 个空间去重点，共 240 点，scale 范围与 PX4 Metadata/前端统一为 0.1..3.0。
 - 单路 USB CDC 的 Application data plane 由 MavlinkService 独占；在线参数使用 MAVLink Classic/Ext 协议。General Metadata 声明 Parameter type 1 和 Actuator type 5，MavlinkService 提供 General/Parameter/Actuator 三个只读 FTP 虚拟文件，不提供目录、写操作或 Event/Peripheral Metadata。Actuator Metadata 只开放六路 PWM 分配与参数编辑，MotorRight/MotorLeft 排除执行器测试；固件不实现 `MAV_CMD_ACTUATOR_TEST` 或 `SERVO_OUTPUT_RAW`。原始 RC 样本新鲜且通道数有效时把校准前 `input_rc` 以 5 Hz 发布为 `RC_CHANNELS`；完全无帧或样本超时才停流，恢复立即发送。PX4 USB/QGC 配置流的单实例子集以 50 Hz `HIGHRES_IMU` 发布校准/旋转后的 `vehicle_imu` 与 `vehicle_magnetometer`（SI/Gauss），并以 25 Hz `SCALED_IMU` 发布第 1 套 `vehicle_imu` 与原始 `sensor_mag`（mG/mrad/s/milliGauss）；GPS 以 5 Hz `GPS_RAW_INT` 发布，1 Hz `SYS_STATUS` 分别表达 gyro/accel/mag/GPS 的 present、enabled 与 health。周期流相互独立，不以 health 位作为发送门禁；均支持不受周期 last-send 限制的 one-shot `MAV_CMD_REQUEST_MESSAGE` 以及 PX4 `SET/GET_MESSAGE_INTERVAL` 语义。固定 PX4 v1.17 没有注册 `RAW_IMU`，因此不把 SI 数据伪装成比例未定义的 raw 消息。MAVLink 手柄、`PARAM_MAP_RC` 和 Offboard 仍不声明。
 - EKF2 导航输出通过权威 `mavlink_runtime.yaml` 生成调度合同：`ATTITUDE` 50 Hz、`LOCAL_POSITION_NED` 30 Hz、`GLOBAL_POSITION_INT` 10 Hz、`ESTIMATOR_STATUS` 5 Hz。UM982 的原始 `GPS_RAW_INT` 不以 EKF 融合资格为发送门禁；EKF2 是 `estimator_gps_status` 唯一发布者，`SYS_STATUS` GPS health 要求原始流新鲜且 EKF `checks_passed`，从而把接收机可见性与融合健康分层表达。
+- Onboard Log 对照 PX4 v1.17.0：生成链自动从权威 `.msg` catalog 产生压缩字段合同，Logger 定义段依次写 header/Flag Bits、`F`、used 参数 `P` 和 current/system default `Q`；每个 Topic 实例首次数据写 `A`、后续按 `o_size_no_padding` 写 `D`，`mavlink_log` 单独映射为 `L`，并写 500 ms `S` 与 Ring 拥塞 `O`。producer 每 5 ms 在 `wq:lp_default` 有界扫描，64 KiB SPSC consumer 在 `wq:storage` 以最大 4096-byte 分片写 `sessNNN/log100.ulg` 并每 1 s `f_sync`；介质/文件 generation 变化后丢弃旧 Ring、ID 和 Topic generation，从 header 全量重建。`LOG_REQUEST_LIST/DATA/END/ERASE` 由权威 runtime YAML 路由；列表与 90-byte 分片 I/O 在 `wq:storage`，USB owner 每轮最多发送四片。`MAV_CMD_REQUEST_MESSAGE(STORAGE_INFORMATION)` 及 PX4 deprecated 兼容命令使用同一 storage Ring，`f_getfree` 不进入 MAVLink 队列；无卡时回复 `EMPTY/count=0`。无卡/无日志仍发送 `num_logs=0`，板上无 RTC 时不伪造 UTC 日期。
 - Parameter 继续以 FlashFS 为主存储、SD 为 generation 镜像；Mission 不再访问 FatFs。Mission 严格采用 PX4 `SYS_DM_BACKEND`：`-1` 禁用、`0` 使用板载 FlashFS、`1` 使用非持久 RAM。上传逐项写入 `DM_KEY_WAYPOINTS_OFFBOARD_0/1` 语义的 inactive bank，每项成功后才请求下一项；最后通过 Mission State 的 FlashFS commit marker 原子切换 active bank，清空任务同样切 bank，`MISSION_SET_CURRENT` 只更新 Mission State。掉电发生在 state commit 前时仍加载旧 bank；无 SD 卡不影响默认 backend 的上传、回读或 AUTO 任务门控。
 - 参数扫描不执行整段 cache invalidate；raw Flash 仅在 program/erase 成功后处理实际修改范围，D-cache 关闭时中央 helper no-op。
 - 每次 load 都重新验证有效 payload 长度、条目 CRC 和最终 commit；最新记录损坏时回退到更早有效记录。FlashFS 物理格式不兼容 ParameterJournal v1，首次部署必须执行参数导出/迁移，初始化失败不得自动擦除旧扇区。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。

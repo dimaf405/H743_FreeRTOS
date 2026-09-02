@@ -20,7 +20,7 @@
 ## 容易混淆的分层
 
 - `lib/protocols/sbus/` 只解析 SBUS 字节与帧；`drivers/rc/sbus/` 负责串口线路配置、调度和原始 Topic 发布，`modules/rc/` 负责产品级 RC 转换。
-- `middleware/logging/` 提供日志宏、过滤策略和固定 Ring；`modules/logging/` 是低优先级、有生命周期的转储服务。
+- `middleware/logging/` 提供日志宏与过滤策略；`modules/logging/` 发布实时 STATUSTEXT 来源，并由 `wq:lp_default` producer 自动遍历生成的 uORB catalog，把 `F/P/Q/A/D/L/S/O` 发布到固定 64 KiB Ring，`wq:storage` consumer 只负责 FatFs 分片写入、同步、关闭和介质恢复。
 - `middleware/parameters/` 提供 Parameter Core、生成输入、Autosave、FlashFS 和参数 SD 镜像；Mission 直接复用唯一 FlashFS，并按 PX4 `SYS_DM_BACKEND` 在板载 Flash/RAM/Disabled 三种 backend 间选择。
 - `modules/rc/RcManualInput.*` 只拥有 RC 来源转换；`rover/modes/ManualMode.*` 才是 Rover Manual 模式。二者通过 `manual_control_setpoint` 解耦，未来 MAVLink 不反向依赖 RC。
 - `lib/rover/` 提供 Pure Pursuit、Speed PI、Heading P、YawRate PI、停车/原地转向状态机和差速混控纯算法；`rover/modes/AutoMode` 与 `rover/control/RoverDifferential` 只负责把任务、估计、参数、消息和安全状态接入这些算法。
