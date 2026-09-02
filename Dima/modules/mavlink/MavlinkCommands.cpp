@@ -3,6 +3,7 @@
 
 #include "logging/logging.hpp"
 #include "api/Time.hpp"
+#include "vehicle_status.hpp"
 
 #include <cmath>
 
@@ -47,9 +48,51 @@ void MavlinkCommands::handle_message(const mavlink_message_t *msg) noexcept
         handle_message_command_int(msg);
         break;
 
+    case MAVLINK_MSG_ID_SET_MODE:
+        handle_message_set_mode(msg);
+        break;
+
     default:
         break;
     }
+}
+
+void MavlinkCommands::handle_message_set_mode(
+    const mavlink_message_t *msg) noexcept
+{
+    mavlink_set_mode_t set_mode{};
+    mavlink_msg_set_mode_decode(msg, &set_mode);
+    if (set_mode.target_system != MAVLINK_SYSTEM_ID) {
+        return;
+    }
+
+    // PX4 custom_mode 的 main mode 位于 bit 16..23，AUTO sub-mode
+    // 位于 bit 24..31；QGC 5.1.3 的 Mission 模式因此为 0x04040000。
+    constexpr std::uint32_t kPx4CustomModeManual = 1UL << 16;
+    constexpr std::uint32_t kPx4CustomModeAutoMission =
+        (4UL << 16) | (4UL << 24);
+    const bool custom_mode_enabled =
+        (set_mode.base_mode & MAV_MODE_FLAG_CUSTOM_MODE_ENABLED) != 0U;
+    if (!custom_mode_enabled ||
+        (set_mode.custom_mode != kPx4CustomModeManual &&
+         set_mode.custom_mode != kPx4CustomModeAutoMission)) {
+        // SET_MODE 没有协议 ACK；不支持的模式保持原状态，QGC 从
+        // 后续 HEARTBEAT 观察拒绝，不得映射成近似模式。
+        PX4_WARN("SET_MODE rejected: unsupported PX4 custom mode");
+        return;
+    }
+
+    action_request_s request{};
+    request.timestamp = hrt_absolute_time();
+    request.action = action_request_s::ACTION_SWITCH_MODE;
+    // 复用 PX4 锁定 schema 已有的“mode slot”来源。Manual 是直接安全
+    // 切换；AUTO_MISSION 只是 QGC 兼容入口，Commander 会将它收敛到
+    // 完整 Mission Start readiness 事务，不会因 SET_MODE 绕过 Armed/EKF。
+    request.source = action_request_s::SOURCE_RC_MODE_SLOT;
+    request.mode = set_mode.custom_mode == kPx4CustomModeManual
+        ? vehicle_status_s::NAVIGATION_STATE_MANUAL
+        : vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION;
+    (void)action_request_publication_.publish(request);
 }
 
 bool MavlinkCommands::evaluate_target_ok(

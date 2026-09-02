@@ -121,6 +121,9 @@ inbound:
   - message: COMMAND_INT
     handler: Commands
 
+  - message: SET_MODE
+    handler: Commands
+
   - message: MISSION_REQUEST_LIST
     handler: Mission
 

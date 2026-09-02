@@ -28,6 +28,7 @@
  *   target 不匹配 — 静默丢弃（协议规定不对非本机命令应答）。
  */
 
+#include "action_request.hpp"
 #include "vehicle_command.hpp"
 #include "vehicle_command_ack.hpp"
 #include "mavlink/MavlinkBridge.h"
@@ -69,6 +70,7 @@ private:
         std::uint16_t message_id) noexcept;
 
     void handle_message_command_long(const mavlink_message_t *msg) noexcept;
+    void handle_message_set_mode(const mavlink_message_t *msg) noexcept;
 
     /* 移植自 PX4 v1.17.0 mavlink_receiver.cpp handle_message_command_int
      * （与 handle_message_command_long 对偶）：NAN 误发为 int 检查
@@ -89,6 +91,8 @@ private:
     SetMessageIntervalFn set_message_interval_{nullptr};
     GetMessageIntervalFn get_message_interval_{nullptr};
     void *callback_ctx_{nullptr};
+    uORB::Publication<action_request_s> action_request_publication_{
+        ORB_ID(action_request)};
     uORB::Publication<vehicle_command_s> _cmd_pub{ORB_ID(vehicle_command)};
     uORB::Publication<vehicle_command_ack_s> _cmd_ack_pub{
         ORB_ID(vehicle_command_ack)};

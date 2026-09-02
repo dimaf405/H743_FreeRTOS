@@ -88,10 +88,17 @@ void HeartbeatPacer::refresh_state_from_orb() noexcept
     const vehicle_control_mode_s &control_mode =
         control_mode_subscription_.get();
 
-    // 只编码本 Rover 实现的 Manual/Termination；未知 nav_state 不伪装成某模式。
+    // 只编码本 Rover 实现的 Manual/AUTO Mission/AUTO Loiter/Termination；
+    // 未实现 nav_state 不伪装成相近模式。
     switch (status.nav_state) {
     case vehicle_status_s::NAVIGATION_STATE_MANUAL:
         custom_mode_ = kPx4CustomModeManual;
+        break;
+    case vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION:
+        custom_mode_ = kPx4CustomModeAutoMission;
+        break;
+    case vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER:
+        custom_mode_ = kPx4CustomModeAutoLoiter;
         break;
     case vehicle_status_s::NAVIGATION_STATE_TERMINATION:
         custom_mode_ = kPx4CustomModeTermination;
@@ -108,6 +115,13 @@ void HeartbeatPacer::refresh_state_from_orb() noexcept
     if (status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
         control_mode.flag_control_manual_enabled) {
         base_mode |= MAV_MODE_FLAG_MANUAL_INPUT_ENABLED;
+    }
+    if ((status.nav_state ==
+             vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
+         status.nav_state ==
+             vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER) &&
+        control_mode.flag_control_auto_enabled) {
+        base_mode |= MAV_MODE_FLAG_AUTO_ENABLED;
     }
     if (status.arming_state == vehicle_status_s::ARMING_STATE_ARMED) {
         base_mode |= MAV_MODE_FLAG_SAFETY_ARMED;

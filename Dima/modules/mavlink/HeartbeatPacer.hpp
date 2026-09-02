@@ -34,8 +34,13 @@ public:
                     MessageHandler::Heartbeat));
     static_assert(kIntervalUs > 0U,
                   "generated HEARTBEAT interval must be enabled");
-    // PX4 custom_mode 的 main_mode 位于高 16 bit：Manual=1，Termination=10。
+    // PX4 custom_mode：main_mode 位于 bits 16..23，AUTO sub_mode 位于
+    // bits 24..31；只编码本产品真正实现的四种状态。
     static constexpr std::uint32_t kPx4CustomModeManual = 1UL << 16;
+    static constexpr std::uint32_t kPx4CustomModeAutoMission =
+        (4UL << 16) | (4UL << 24);
+    static constexpr std::uint32_t kPx4CustomModeAutoLoiter =
+        (4UL << 16) | (3UL << 24);
     static constexpr std::uint32_t kPx4CustomModeTermination = 10UL << 16;
 
     explicit HeartbeatPacer(MavlinkIdentity &identity) noexcept;
