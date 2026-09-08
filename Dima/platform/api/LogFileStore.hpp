@@ -22,11 +22,30 @@ struct StorageInformation {
     std::uint64_t available_bytes{0U};
 };
 
+struct LogTimeReference {
+    std::uint64_t boot_utc_us{0U};
+    bool valid{false};
+};
+
+struct LogSessionContext {
+    std::uint16_t maximum_directories{0U};
+    std::uint64_t hardware_uid{0U};
+    std::uint64_t start_monotonic_us{0U};
+    LogTimeReference time_reference{};
+};
+
 class LogFileStore {
 public:
     virtual ~LogFileStore() = default;
 
     virtual int initialize() noexcept = 0;
+
+    /**
+     * 仅发布启动期目录上限，不执行 FatFs I/O。这样 Mode 0/3 尚无记录意图时，
+     * storage worker 的首次恢复扫描也能按本次重启参数收敛历史会话。
+     */
+    virtual int configure_log_maintenance(
+        std::uint16_t maximum_directories) noexcept = 0;
 
     /**
      * 读取最近一次有界主动探测仍可用的 SD volume 容量。无 card-detect GPIO
@@ -35,12 +54,21 @@ public:
      */
     virtual int storage_information(StorageInformation &information) noexcept = 0;
 
-    virtual int start_log() noexcept = 0;
+    /**
+     * 创建一个全新的 sessNNN/log100.ulg 会话。-EAGAIN 表示恢复或回收状态机
+     * 已推进一步但尚未完成；调用方应在 storage worker 上尽快重试，而不能把
+     * 它当作拔卡故障进入三秒退避。
+     */
+    virtual int start_log(const LogSessionContext &context) noexcept = 0;
     virtual int append_log(const std::uint8_t *data,
                            std::size_t size) noexcept = 0;
     virtual int sync_log() noexcept = 0;
     virtual int close_log() noexcept = 0;
     virtual bool log_open() noexcept = 0;
+    virtual int update_log_time(const LogTimeReference &reference) noexcept = 0;
+
+    /** 在 wq:storage 上每次推进有限的恢复、删除或空间校正操作。 */
+    virtual int service_log_maintenance() noexcept = 0;
 
     virtual int create_log_list(std::uint16_t &count) noexcept = 0;
     virtual int read_log_entry(std::uint16_t id,
