@@ -380,8 +380,6 @@ void RCUpdate::rebuild_functions(std::uint8_t channel_count) noexcept
         }
     };
 
-    assign(Mapping::Roll, rc_channels_s::FUNCTION_ROLL);
-    assign(Mapping::Pitch, rc_channels_s::FUNCTION_PITCH);
     assign(Mapping::Throttle, rc_channels_s::FUNCTION_THROTTLE);
     assign(Mapping::Yaw, rc_channels_s::FUNCTION_YAW);
     assign(Mapping::ArmSw, rc_channels_s::FUNCTION_ARMSWITCH);

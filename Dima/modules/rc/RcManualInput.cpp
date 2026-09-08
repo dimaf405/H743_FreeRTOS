@@ -184,8 +184,11 @@ void RcManualInput::process_rc_channels(const rc_channels_s &channels) noexcept
         channels, rc_channels_s::FUNCTION_THROTTLE, setpoint.throttle);
     bool yaw_mapped = mapped_channel(
         channels, rc_channels_s::FUNCTION_YAW, setpoint.yaw);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_ROLL, setpoint.roll);
-    (void)mapped_channel(channels, rc_channels_s::FUNCTION_PITCH, setpoint.pitch);
+    // RC_MAP_ROLL/PITCH 只作为 stock QGC 四轴完成门的固定非零标记；
+    // 差速 Rover 运行链明确不消费这两个伪映射，避免第三路模式开关或
+    // 两个真实控制轴被误解释成不存在的横滚/俯仰控制。
+    setpoint.roll = kUnavailableControl;
+    setpoint.pitch = kUnavailableControl;
 
     setpoint.valid = throttle_mapped && yaw_mapped;
     setpoint.sticks_moving = false;
