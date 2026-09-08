@@ -184,6 +184,9 @@ bool Commander::navigation_status_fresh(std::uint64_t now) const noexcept
 
 bool Commander::mission_start_ready(std::uint64_t now) noexcept
 {
+    // PX4 的 Mission 模式门禁检查 Armed、任务和导航估计条件；Rover 控制器参数
+    // 只决定模式进入后的输出是否可运行。这里不读取 parameters_valid，避免把
+    // 尚未调参错误解释为模式切换失败；下游仍以全 NaN 请求和物理停波 fail-closed。
     if (!actuator_armed_.armed || actuator_armed_.kill ||
         actuator_armed_.termination || termination_latched_ ||
         vehicle_status_.failsafe ||
@@ -192,7 +195,6 @@ bool Commander::mission_start_ready(std::uint64_t now) noexcept
         !navigation_status_fresh(now) ||
         !navigation_status_.ready_for_auto ||
         !navigation_status_.mission_committed ||
-        !navigation_status_.parameters_valid ||
         !navigation_status_.estimator_healthy) {
         return false;
     }
@@ -315,6 +317,21 @@ bool Commander::evaluate_navigation(std::uint64_t now) noexcept
         PX4_INFO("AUTO mission complete; entering Hold");
         return change_navigation_state(
             vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER, now);
+    }
+
+    const bool controller_parameter_inhibited = same_mission &&
+        navigation_status_.ready_for_auto &&
+        navigation_status_.mission_committed &&
+        !navigation_status_.parameters_valid &&
+        navigation_status_.estimator_healthy &&
+        !navigation_status_.request_valid &&
+        navigation_status_.failure_reason ==
+            rover_navigation_status_s::FAILURE_PARAMETER_INVALID;
+    if (controller_parameter_inhibited) {
+        // PX4 Rover 在模式已经切换后执行控制器 sanity checks：失败时停止控制输出，
+        // 但不会撤销 AUTO_MISSION。这里保持同样的模式语义；三层全 NaN/停波合同
+        // 仍由 navigation_control_inhibit_expected() 复核，不能借此放行任何 PWM。
+        return false;
     }
 
     const bool healthy = same_mission &&
@@ -556,9 +573,9 @@ bool Commander::actuator_output_recovered_disarmed(
 bool Commander::navigation_control_inhibit_expected(
     std::uint64_t now) const noexcept
 {
-    // AUTO_MISSION 中待降级的故障或 AUTO_LOITER 中持续上报的同一故障，才允许
-    // 把 Control Inhibited 解释为计划内停波。前一种覆盖 Commander 本轮先评估
-    // 执行器、随后才切 Hold 的固定顺序，避免失效帧比模式转换更早到达时误 Disarm。
+    // AUTO_MISSION 中参数未就绪时允许保持当前模式并停波；其他导航故障在等待
+    // 降级 Hold 的窗口，以及 AUTO_LOITER 持续上报同一故障时，也允许把
+    // Control Inhibited 解释为计划内停波，避免失效帧先到时被误判为执行器故障。
     // 这里按发布时刻判断状态流活性，不能用 timestamp_sample 的年龄：EKF 样本
     // 失鲜正是该故障合同要表达的内容。
     // mission_id/count/current 再与 Mission Start 冻结代际交叉核对，防止旧任务、

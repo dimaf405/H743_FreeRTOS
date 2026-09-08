@@ -365,9 +365,9 @@ bool BootHealthService::output_status_runtime_healthy(
     if (armed.armed) {
         // 解锁沿或控制模式换代的短窗口允许 PWM 尚处停波态；窗口结束后通常
         // 必须进入 Active。
-        // 唯一例外是 AUTO_LOITER 的 Control-Inhibited：控制链仍持续发布明确失效帧、
-        // PWM 已物理停波，因此 watchdog 可以继续喂；Commander 另行核对同代导航
-        // 故障流，缺失时仍会强制 Disarm。
+        // AUTO_MISSION 的参数 sanity failure 与 AUTO_LOITER 的导航降级都允许
+        // Control-Inhibited：控制链仍持续发布明确失效帧且 PWM 已物理停波，因此
+        // watchdog 可以继续喂；Commander 另行核对同代原因，异常时仍强制 Disarm。
         const bool in_transition = status.armed_time != 0U &&
             status.armed_time <= now_us &&
             now_us - status.armed_time <= kActuatorArmTransitionUs;
@@ -380,7 +380,9 @@ bool BootHealthService::output_status_runtime_healthy(
         }
         if (control_inhibited) {
             return status.nav_state ==
-                vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+                       vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
+                   status.nav_state ==
+                       vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
         }
         return output.state == actuator_output_status_s::STATE_ACTIVE &&
                !output.safe_off && output.drive_available &&

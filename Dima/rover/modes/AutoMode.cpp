@@ -125,16 +125,14 @@ void AutoMode::Run()
         mission_status_available && refresh_mission_plan(mission);
     const bool safety_fresh = safety_snapshot_fresh(now);
     const bool estimator_is_healthy = estimator_healthy(now);
-    // Armed 期间参数更新只标记为 pending，当前已验证快照继续服务正在执行的
-    // Mission，避免半套重配造成控制跳变；但 pending 代尚未经过 Disarmed 原子
-    // 应用与完整校验，因此不得把它当作“可启动新任务”。这只锁闭 Mission Start
-    // readiness，不会令已有 AUTO 请求失效或把车辆误切入 Hold。
+    // 与 PX4 v1.17 一致，Mission 模式的进入条件只描述任务、估计器和安全状态，
+    // 不把 RO_*/RD_*/PP_* 控制器调参结果升级为模式切换门禁。Armed 期间的新参数
+    // 仍冻结为 pending，当前已应用快照继续服务；若控制配置不可用，后续只发布
+    // 无效 Navigation 请求并保持物理停波，而不是拒绝用户切入 Mission。
     bool ready_for_auto = mission_status_available &&
         mission_plan_available && mission.loaded &&
         mission.committed && mission.count > 0U &&
-        !mission.mutation_in_progress && parameters_valid_ &&
-        !parameter_update_pending_ &&
-        safety_fresh && estimator_is_healthy;
+        !mission.mutation_in_progress && safety_fresh && estimator_is_healthy;
 
     const bool estimator_time_regressed =
         (have_local_position_ &&
@@ -177,7 +175,7 @@ void AutoMode::Run()
         if (!publish_invalid(
                 now, mission,
                 rover_navigation_status_s::FAILURE_PARAMETER_INVALID,
-                false, estimator_is_healthy)) {
+                ready_for_auto, estimator_is_healthy)) {
             enter_error(kEventPublishFailure);
         }
         return;
@@ -383,7 +381,7 @@ bool AutoMode::bind_parameters() noexcept
     }
 
     // 参数句柄存在是模块可运行的结构合同；车辆增益仍为零时只保持
-    // parameters_valid=false，使 QGC 可在 Disarmed 下标定后解锁 AUTO。
+    // parameters_valid=false，使 QGC 可在 Disarmed 下标定后恢复 AUTO 输出。
     (void)apply_parameter_snapshot();
     return true;
 }
@@ -1191,9 +1189,9 @@ bool AutoMode::publish_cycle(
     status.yaw_rate_setpoint_rad_s =
         valid ? guidance.yaw_rate_setpoint_rad_s : kUnavailable;
 
-    // 失效周期先发布原因、再发布显式无效请求：Commander 因而能在下游停波状态
-    // 到达前看到同代导航证据并切入 Hold。有效周期采用相同固定顺序，避免正负
-    // 路径形成不同的跨 WorkQueue 竞态；两次 publish 任一失败仍由调用者报错。
+    // 失效周期先发布原因、再发布显式无效请求：Commander 因而能区分“参数未就绪
+    // 但保持 Mission 停波”和“估计器等导航故障需切入 Hold”。有效周期采用相同
+    // 固定顺序，避免正负路径形成不同的跨 WorkQueue 竞态；任一 publish 失败报错。
     const bool status_published = navigation_status_publication_.publish(status);
     const bool request_published = motion_request_publication_.publish(request);
     return request_published && status_published;

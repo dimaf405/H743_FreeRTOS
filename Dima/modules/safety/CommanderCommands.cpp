@@ -269,8 +269,9 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
 std::uint8_t Commander::start_mission(std::uint64_t now,
                                       bool &state_changed) noexcept
 {
-    // Mission Start 绝不隐式 Arm。新鲜 AutoMode 状态同时证明任务、四环
-    // 参数和 EKF 健康；MissionService 再以同一 mission_id 做最终原子门。
+    // Mission Start 绝不隐式 Arm。新鲜 AutoMode 状态证明任务与 EKF 健康；
+    // RO_*/RD_*/PP_* 调参只在模式进入后决定控制输出，不构成切换门禁。
+    // MissionService 再以同一 mission_id 做最终原子门。
     // MAV_CMD_MISSION_START 与 QGC SET_MODE(AUTO_MISSION) 共用本函数，
     // 避免两个入口在任务持久化、估计器或安全条件上产生偏差。
     if (!actuator_armed_.armed || !mission_start_ready(now)) {
