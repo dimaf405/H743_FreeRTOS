@@ -53,12 +53,16 @@ class LogWriter final {
 public:
     explicit LogWriter(dima::platform::LogFileStore &store) noexcept;
 
-    bool start() noexcept;
-    void request_stop() noexcept;
+    bool start(const dima::platform::LogSessionContext &context) noexcept;
+    void set_recording_intent(bool enabled) noexcept;
+    void end_session() noexcept;
     void stop() noexcept;
+    void update_time_reference(
+        const dima::platform::LogTimeReference &reference) noexcept;
 
     bool ready() const noexcept;
     std::uint32_t session_generation() const noexcept;
+    dima::platform::LogSessionContext session_context() const noexcept;
     std::size_t available_bytes() const noexcept;
 
     /**
@@ -85,6 +89,8 @@ private:
     static constexpr std::uint32_t kWriteChunkBytes = 8192U;
     static constexpr std::uint32_t kRunIntervalUs = 20000U;
     static constexpr std::uint64_t kRetryIntervalUs = 3000000ULL;
+    static constexpr std::uint64_t kSpaceRetryIntervalUs = 60000000ULL;
+    static constexpr std::uint64_t kOpenWarningIntervalUs = 60000000ULL;
     static constexpr std::uint64_t kSyncIntervalUs = 1000000ULL;
 
     static_assert((kRingCapacity & kRingMask) == 0U,
@@ -92,10 +98,15 @@ private:
 
     std::uint32_t pending_bytes() const noexcept;
     void discard_ring() noexcept;
-    bool append_one_chunk() noexcept;
-    void handle_storage_failure(std::uint64_t now_us) noexcept;
+    int append_one_chunk(
+        std::uint32_t maximum_bytes = kWriteChunkBytes) noexcept;
+    void report_open_failure(int error, std::uint64_t now_us) noexcept;
+    void handle_storage_failure(int error, std::uint64_t now_us) noexcept;
     bool open_file(std::uint64_t now_us) noexcept;
-    void finish_stop() noexcept;
+    int apply_time_reference(std::uint32_t generation) noexcept;
+    void finish_session() noexcept;
+    void finish_worker_stop() noexcept;
+    dima::platform::LogTimeReference time_reference_snapshot() const noexcept;
     void run_storage() noexcept;
 
     dima::platform::LogFileStore &store_;
@@ -106,9 +117,21 @@ private:
     px4::atomic<std::uint32_t> session_generation_{0U};
     px4::atomic_bool accepting_{false};
     px4::atomic_bool running_{false};
+    px4::atomic_bool session_requested_{false};
+    px4::atomic_bool close_requested_{false};
     px4::atomic_bool stop_requested_{false};
+    dima::platform::LogSessionContext base_context_{};
+    dima::platform::LogSessionContext published_context_{};
+    dima::platform::LogTimeReference time_reference_{};
+    std::uint32_t applied_time_reference_generation_{0U};
+    px4::atomic<std::uint32_t> time_reference_generation_{0U};
     std::uint64_t last_open_attempt_us_{0U};
+    std::uint64_t retry_interval_us_{kRetryIntervalUs};
     std::uint64_t last_sync_us_{0U};
+    std::uint64_t last_open_warning_us_{0U};
+    int last_open_error_{0};
+    bool initial_probe_attempted_{false};
+    bool volume_ready_{false};
 };
 
 } // namespace dima::modules::logging
