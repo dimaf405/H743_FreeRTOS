@@ -12,8 +12,10 @@ Dima module_*.yaml
 → Tools/module_config/generate_params.py
 → build/generated/parameters/module_params.c
 → src/lib/parameters/px_process_params.py
-→ parameters.xml + parameters.json
-→ src/lib/parameters/px_generate_params.py
+→ 初次 parameters.xml + parameters.json
+→ 从官方 JSON 的单枚举或 min=max 自动生成 readonly_params.yaml
+→ px_process_params.py --readonly-config（最终 XML/JSON）
+→ px_generate_params.py --readonly-config
 → 上游原始暂存头
 → dima_parameters.hpp / dima::params
 → Dima 运行时合同与 Component Metadata
@@ -21,9 +23,11 @@ Dima module_*.yaml
 
 `module_params.c` 和上游原始头只是在构建目录中串接工具的中间产物，不进入源码树，也不得人工修改。原始脚本固定输出的文件名和 `px4` 命名空间仅保留在该暂存头；公开安装头机械适配为 `dima_parameters.hpp`、`dima::parameter_catalog` 和 `dima::params`，不改变枚举、数组、类型或顺序。采用较新的 YAML 工具只替换生成方式，不导入上游主线的新参数、新默认值或新产品策略。
 
+`readonly_params.yaml` 同样是构建目录中的自动派生物，使用上游支持的 block 模式；不是另一份受版本控制的参数定义或手写过滤名单。两遍生成之间逐项核对，只允许固定项增加 `readOnly: true`，禁止参数数量、顺序、类型、默认值或范围发生变化。
+
 ## 生成物与下游边界
 
-- 参数数量、handle、类型、默认值、范围、枚举、单位、volatile 与 reboot 语义完全由官方 XML、JSON 和生成头决定，不设置固定容量或第二份排序表。
+- 参数数量、handle、类型、默认值、范围、枚举、单位、readOnly、volatile 与 reboot 语义完全由官方 XML、JSON 和生成头决定，不设置固定容量或第二份排序表。
 - `parameter_contract.hpp`、公开转发头、Component Metadata JSON/XZ/Flash 数组、Dima 只读策略与持久化适配只读取官方产物，不重新解释 YAML 或中间 C。
 - MAVLink Classic/Ext 参数协议按官方连续 handle 遍历完整目录；LIST、按 index 补读、READ/SET 与 ACK 使用同一目录索引，不再先维护一份 QGC/public 参数名单。
 - `CAL_MAG1_ID`、`CAL_MAG1_ROT`、`CAL_MAG2_ID`、`CAL_MAG2_ROT`、`SENS_DPRES_OFF` 保持删除，不出现在 YAML、生成头、Metadata、参数协议目录、别名或虚拟参数中。当前产品在缺少这些参数时仍能正常进入并执行校准，这是本次重构必须保持的行为基线。
@@ -39,6 +43,10 @@ Dima module_*.yaml
 - `RO_CAL_*` 集中到 `Rover Auto Calibration` group。RC 校准仍是 `Radio Calibration`，可变映射仍是 `RC Mapping`，六个模式槽仍属于 `Commander`，保持现有生成器的结构识别。
 
 锁定的上游 YAML schema 只允许显式 `Developer/System`，不能因 QGC JSON 支持任意字符串就加入 `Advanced/Calibration` 并绕过校验。类别是标准 Metadata 展示字段，不改变权限、持久化、参数名或数值；QGC 仅特意将 Standard 置首，不会按类别名称自动隐藏、自动中文化或禁止修改。完整目录仍以生成 JSON 为准，决策和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
+
+单枚举或 `min=max` 的参数现由生成器统一标记为标准 `readOnly`；默认值必须等于唯一合法值，矛盾时生成失败。单 bitmask 仍有关闭/开启两种状态，不按单枚举处理。当前 301 项中有 10 项只读，QGC 5.1.3 参数页勾选 **Hide read-only（隐藏只读参数）** 后列表为 291 项，普通浏览与搜索都过滤只读项。该 QGC 开关默认关闭，固件不能替地面站设置它，也不宣称重开页面后仍保持。
+
+完整协议目录保留只读 Fact，确保 Radio、Airframe、安全状态等页面仍能读取产品合同。运行时固定约束和持久化加载过滤也使用同一单值识别规则，因此没有 min/max、只有一个枚举值的 `EKF2_HGT_REF` 同样拒绝非 GPS 值；不把只读展示误当作固件端写入校验。
 
 ## Parameter Core 与持久化
 

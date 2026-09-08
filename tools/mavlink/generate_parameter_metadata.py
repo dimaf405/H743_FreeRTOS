@@ -28,7 +28,7 @@ CALIBRATION_VALUE_NAME = re.compile(
 PARAMETER_FIELDS = {
     "name", "type", "shortDesc", "longDesc", "units", "default",
     "decimalPlaces", "min", "max", "increment", "rebootRequired",
-    "group", "category", "volatile", "values", "bitmask",
+    "group", "category", "volatile", "readOnly", "values", "bitmask",
 }
 
 
@@ -275,7 +275,8 @@ def validate_parameter(parameter: object, index: int) -> None:
     for field in ("shortDesc", "longDesc", "units", "group", "category"):
         if field in parameter and not isinstance(parameter[field], str):
             raise RuntimeError(f"parameter {name} field {field} is not text")
-    for field in ("rebootRequired", "volatile"):
+    # readOnly 沿用上游正式字段，QGC 可据此隐藏固定项；不能删掉兼容页面的 Fact。
+    for field in ("rebootRequired", "volatile", "readOnly"):
         if field in parameter and not isinstance(parameter[field], bool):
             raise RuntimeError(f"parameter {name} field {field} is not boolean")
 

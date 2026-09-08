@@ -168,11 +168,44 @@ def xml_parameter_names(path: Path) -> list[str]:
 
 
 def fixed_parameter(parameter: dict[str, Any]) -> bool:
-    return (
+    """只把单枚举或 min=max 视为固定值；单 bitmask 仍可开关，不属于单值。"""
+    fixed_range = (
         "min" in parameter
         and "max" in parameter
         and parameter["min"] == parameter["max"]
-        and parameter.get("default") == parameter["min"]
+    )
+    values = parameter.get("values", [])
+    single_enum = len(values) == 1
+    if not fixed_range and not single_enum:
+        return False
+
+    # 默认值必须等于唯一合法值；定义矛盾时停止生成，不能静默隐藏或固定错误值。
+    value = parameter["min"] if fixed_range else values[0]["value"]
+    if parameter.get("default") != value or (
+        single_enum and values[0]["value"] != value
+    ):
+        raise RuntimeError(f"fixed parameter {parameter['name']} has conflicting values")
+    return True
+
+
+def write_readonly_config(path: Path, catalogue: list[dict[str, Any]]) -> None:
+    """从官方 JSON 生成上游只读配置，不增加受版本控制的参数名名单。"""
+    # JSON 是 YAML 的子集，交给上游 readonly_config loader 读取；后续 XML、
+    # JSON 和只读 handle 数组仍由上游原工具输出，不在适配层改写生成物。
+    path.write_text(
+        json.dumps(
+            {
+                "mode": "block",
+                "parameters": sorted(
+                    parameter["name"]
+                    for parameter in catalogue
+                    if fixed_parameter(parameter)
+                ),
+            },
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -427,7 +460,7 @@ def render_parameter_contract(
         "    float float_value;",
         "};",
         "",
-        "// min=max=default 的产品约束从官方 JSON 结构化字段派生，消费者不得另列名称。",
+        "// 单枚举或 min=max 的产品约束从官方 JSON 派生，消费者不得另列名称。",
         "inline constexpr FixedParameterConstraint kFixedParameterConstraints[]{",
         *fixed_rows,
         "};",
@@ -616,20 +649,33 @@ def main() -> int:
                 args.board,
             ]
         )
-        run_tool(
-            [
-                sys.executable,
-                str(tools["process"]),
-                "--src-path",
-                str(output_stage),
-                "--xml",
-                str(parameters_xml),
-                "--json",
-                str(parameters_json),
-                "--board",
-                args.board,
-            ]
-        )
+        process_arguments = [
+            sys.executable,
+            str(tools["process"]),
+            "--src-path",
+            str(output_stage),
+            "--xml",
+            str(parameters_xml),
+            "--json",
+            str(parameters_json),
+            "--board",
+            args.board,
+        ]
+        run_tool(process_arguments)
+        initial_catalogue = load_catalogue(parameters_json)
+        readonly_config = output_stage / "readonly_params.yaml"
+        write_readonly_config(readonly_config, initial_catalogue)
+
+        # 第一遍只读取官方结构化取值域；第二遍使用上游标准只读入口生成最终
+        # 元数据，供 QGC 的 Hide read-only 过滤使用，同时保留所有兼容 Fact。
+        run_tool([*process_arguments, "--readonly-config", str(readonly_config)])
+        catalogue = load_catalogue(parameters_json)
+        expected_catalogue = [
+            {**parameter, **({"readOnly": True} if fixed_parameter(parameter) else {})}
+            for parameter in initial_catalogue
+        ]
+        if catalogue != expected_catalogue:
+            raise RuntimeError("readonly generation changed the official parameter catalogue")
         run_tool(
             [
                 sys.executable,
@@ -638,12 +684,13 @@ def main() -> int:
                 str(parameters_xml),
                 "--dest",
                 str(output_stage),
+                "--readonly-config",
+                str(readonly_config),
             ]
         )
 
         official_header = output_stage / "px4_parameters.hpp"
         require_file(official_header, "upstream generated parameter header")
-        catalogue = load_catalogue(parameters_json)
         xml_names = xml_parameter_names(parameters_xml)
         contract = output_stage / "parameter_contract.hpp"
         contract.write_text(

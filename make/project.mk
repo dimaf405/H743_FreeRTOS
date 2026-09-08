@@ -281,6 +281,7 @@ PARAMETER_GENERATED_OUTPUTS := \
 	$(PARAMETER_GENERATED_DIR)/module_params.c \
 	$(PARAMETER_GENERATED_DIR)/parameters.xml \
 	$(PARAMETER_GENERATED_DIR)/parameters.json \
+	$(PARAMETER_GENERATED_DIR)/readonly_params.yaml \
 	$(PARAMETER_GENERATED_DIR)/px4_parameters.hpp \
 	$(PARAMETER_GENERATED_DIR)/parameter_contract.hpp \
 	$(PARAMETER_INCLUDE_DIR)/parameters/dima_parameters.hpp \

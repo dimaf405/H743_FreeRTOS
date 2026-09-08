@@ -109,3 +109,34 @@ git -c core.safecrlf=false diff --check
 观察到其他会话的 upload/build，未操作其进程或串口；正式构建在没有观察到并发 make 时启动。并发文档更新按最新内容保留，不整体回退日志、存储、RC 或其他工作。
 
 仍待单独授权：QGC 参数目录和分类缓存更新、Radio/Flight Modes/Airframe/安全状态页无新增缺参告警、旧生产快照及 `.params` 导入、真实串口重配置、固定圆内校准路径/停车和掉电回滚。本轮结论只到源码、权威生成、架构和 Windows 制品层面。
+
+## 7. 单值参数的只读与隐藏（2026-09-08 后续变更）
+
+为使只有一个合法值的参数不占用可调列表，生成器从上游首轮 JSON 自动识别单枚举或 `min=max`，生成构建目录内的 `readonly_params.yaml`，再将它传给上游 `px_process_params.py` 与 `px_generate_params.py` 的正式 `--readonly-config` 入口。最终 XML、JSON、头文件和 Component Metadata 使用同一只读集合，不新增手写参数名列表、不修改上游脚本或生成物。默认值与唯一合法值冲突时停止生成；只有一个 bit 的 bitmask 仍可开关，不当成单值。
+
+当前协议总数仍为 **301 项**，其中 **10 项标记 readOnly**，过滤后的可调列表为 **291 项**。类型、默认值、范围、枚举、分类和 handle 顺序保留；既有固定值约束从 9 项扩为 10 项，使原来仅有一个枚举值的 `EKF2_HGT_REF` 也进入 MAVLink 写入校验和旧快照加载过滤，保持 GNSS-only 高度合同。第 5 节的制品记录是此前参数分类变更的证据，不代表本节新增只读行为。
+
+对照的 QGC 仍为官方 5.1.3 commit `7fe5b11b18a4c2eec17beb1b2a3ef45ac0c4e32e`：
+
+- `FactMetaData.cc` 读取标准 `readOnly`；`ParameterEditorController::_buildListsForComponent()`、`_factAdded()`、`_shouldShow()` 在启用隐藏开关时过滤只读项，涵盖分类列表和搜索。
+- 参数页已有 **Hide read-only（隐藏只读参数）** 复选框；`ParameterEditorController.h` 中 `_hideReadOnly` 默认是 `false`。升级固件并获取新版 Metadata 后，需要勾选该项；固件不能替用户改变 QGC 默认设置，也不承诺重新打开页面后继续保持。未勾选时这些参数仍显示为只读。
+- Radio/Airframe/安全状态页面仍从完整参数目录获取固定 Fact。彻底从 MAVLink 目录删除这些项会影响这些页面，本实现通过 QGC 自身的列表过滤保留依赖。
+
+本节已完成的非测试静态验收：
+
+- Windows 原生执行第 5 节的 `parameter-generated parameter-metadata-verify` 及完整 `dima_rover uorb-generated-verify mavlink-generated-verify parameter-metadata-verify logger-generated-verify` 命令，均最终 exit 0。
+- 与改动前 301 项 JSON 逐属性比较，只增加 10 个 `readOnly: true`；上游头除只读数组外逐字一致。XML、JSON、Component Metadata、上游只读数组和运行时固定约束集合一致，10 项只读、291 项可调，没有新增或删除参数。
+- 已在最终 Application BIN 中找到新版完整参数 Metadata XZ 字节，确认生成数据进入固件；ELF 的固定约束数组为 120 B，对应 10 项。
+- 首轮构建的进度终检报告 `41/100 actions`、59 个 unclaimed；保留构建目录和日志、确认未观察到仍运行的 make 且 HEAD 不变后，原命令重跑 `[7/7]` 完成。未绕过进度或架构门禁，未修改构建进度工具；该计数异常没有在重跑时复现，不将其根因归为已证实的并发构建。
+- 架构 `PASS - 454 first-party source files`，43 个 uORB schema、49 个 Logger Topic、301 个参数、8 种 Profile 组合；MAVLink 仍是锁定的 230 条官方 wire 定义。Application/MCUboot 无未解析符号，向量 `0x08040400`，签名、Factory 布局和 watchdog prepare/feed 链通过。
+
+本节制品基于 HEAD `121b8885357d377b5365413067d1300635f73b3b` 加本地未提交变更，image digest 为 `2d87e14dd377c854e8ff0d03fa8730e367130d049118e9d7c1cebf11e4d5437e`。Application `text/data/bss=625136/12688/571136` bytes；Flash `637864/782336`、SRAM `590752/884736` bytes。
+
+| 制品 | 大小（bytes） | SHA-256 |
+|---|---:|---|
+| `build/H743_FreeRTOS.elf` | 11129176 | `8e13cd1c883268a933e06f7cb7ba069c7dc2ab8680bac6dbcbab374982592d4e` |
+| `build/H743_FreeRTOS.bin` | 637864 | `ded2a702dcd8d897d004903c1180949e99b40c23657c34884130e0779c3b1b2c` |
+| `build/H743_FreeRTOS_signed.bin` | 639039 | `3b6658d79e66ef1b369af70a6b3629424c52e2c72b5c72294c8a061c55d8e383` |
+| `build/H743_FreeRTOS_factory.hex` | 1654139 | `f1f24ab4e7c90a47a1cd7b6c6129b2c90955b3c3e57c1f72e2c079d91abe7bcd` |
+
+没有新增或修改测试文件、测试框架或测试基础设施，也没有手工编辑参数/消息派生列表。未刷机、操作 QGC 或占用板端串口；QGC Metadata 刷新、隐藏开关及相关页面交互仍为 `BOARD/QGC PENDING`。
