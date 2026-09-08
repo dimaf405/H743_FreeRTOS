@@ -24,6 +24,22 @@ parameters:
       min: 0.1
       max: 35
       increment: 0.1
+    COM_FLTMODE${i}:
+      description:
+        short: Mode slot ${i}
+        long: |-
+          Selects the mode applied when the main RC mode channel is in this
+          slot. Auto Calibration is accepted only while disarmed and never
+          arms the vehicle implicitly. Reserved / Unassigned remains inert.
+      type: enum
+      values:
+        -1: Calibration Reserved / Unassigned
+        0: Manual
+        3: Mission
+        23: Auto Calibration
+      instance_start: 1
+      num_instances: 6
+      default: -1
 - group: RC Mapping
   definitions:
     RC_MAP_ROLL:
@@ -170,13 +186,34 @@ parameters:
       max: 18
     RC_MAP_FLTMODE:
       description:
-        short: RC_MAP_FLTMODE
+        short: Main mode selector channel
+        long: |-
+          Selects the RC channel whose calibrated position is divided into
+          the six COM_FLTMODE slots. Zero disables RC mode selection.
       type: enum
       values:
         0: Disabled
+        1: Channel 1
+        2: Channel 2
+        3: Channel 3
+        4: Channel 4
+        5: Channel 5
+        6: Channel 6
+        7: Channel 7
+        8: Channel 8
+        9: Channel 9
+        10: Channel 10
+        11: Channel 11
+        12: Channel 12
+        13: Channel 13
+        14: Channel 14
+        15: Channel 15
+        16: Channel 16
+        17: Channel 17
+        18: Channel 18
       default: 0
       min: 0
-      max: 0
+      max: 18
     RC_ARMSWITCH_TH:
       description:
         short: RC_ARMSWITCH_TH

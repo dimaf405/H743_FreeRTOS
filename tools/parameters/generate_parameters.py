@@ -32,6 +32,8 @@ FORBIDDEN_PARAMETERS = (
 RC_CALIBRATION_NAME = re.compile(
     r"^RC(?P<channel>[1-9][0-9]*)_(?P<field>[A-Z][A-Z0-9_]*)$"
 )
+FLIGHT_MODE_SLOT_NAME = re.compile(r"^COM_FLTMODE(?P<slot>[1-9][0-9]*)$")
+FLIGHT_MODE_SLOT_COUNT = 6
 PARAMETER_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 GENERATED_HEADER = """/****************************************************************************
@@ -279,6 +281,76 @@ def rc_contract(
     return calibration, mapping
 
 
+def flight_mode_slot_contract(
+    catalogue: list[dict[str, Any]],
+) -> tuple[list[tuple[str, int]], list[int]]:
+    """从 PX4 多实例参数输出推导六槽 handle、默认值与离散合法值。"""
+    slots: dict[int, tuple[str, int, list[int]]] = {}
+
+    for parameter in catalogue:
+        match = FLIGHT_MODE_SLOT_NAME.fullmatch(parameter["name"])
+        if match is None:
+            continue
+        if parameter.get("group") != "Commander" or parameter["type"] != "Int32":
+            raise RuntimeError(
+                f"flight mode slot has unexpected contract: {parameter['name']}"
+            )
+
+        raw_values = parameter.get("values")
+        if not isinstance(raw_values, list) or not raw_values:
+            raise RuntimeError(
+                f"flight mode slot has no enum values: {parameter['name']}"
+            )
+        values: list[int] = []
+        for entry in raw_values:
+            value = entry.get("value") if isinstance(entry, dict) else None
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise RuntimeError(
+                    f"flight mode slot has a non-int value: {parameter['name']}"
+                )
+            values.append(value)
+        values.sort()
+        # 合法模式集合由权威 YAML 决定；生成器只约束至少保留预留、Manual、
+        # Mission 三类基础槽并拒绝重复，不能在工具里再维护一份模式数值表。
+        if len(values) < 3 or len(values) != len(set(values)):
+            raise RuntimeError(
+                f"flight mode slot must expose at least three unique values: {parameter['name']}"
+            )
+
+        default = parameter.get("default")
+        if isinstance(default, bool) or not isinstance(default, int):
+            raise RuntimeError(
+                f"flight mode slot has a non-int default: {parameter['name']}"
+            )
+        if default not in values:
+            raise RuntimeError(
+                f"flight mode slot default is not selectable: {parameter['name']}"
+            )
+
+        slot = int(match.group("slot"))
+        if slot in slots:
+            raise RuntimeError(f"duplicate flight mode slot: {slot}")
+        slots[slot] = (parameter["name"], default, values)
+
+    expected_slots = list(range(1, FLIGHT_MODE_SLOT_COUNT + 1))
+    if sorted(slots) != expected_slots:
+        raise RuntimeError(
+            f"flight mode slots must be contiguous 1..{FLIGHT_MODE_SLOT_COUNT}"
+        )
+
+    allowed_values = slots[1][2]
+    for slot in expected_slots[1:]:
+        if slots[slot][2] != allowed_values:
+            raise RuntimeError(
+                f"flight mode slot {slot} enum differs from slot 1"
+            )
+
+    parameters = [
+        (slots[slot][0], slots[slot][1]) for slot in expected_slots
+    ]
+    return parameters, allowed_values
+
+
 def render_parameter_contract(
     catalogue: list[dict[str, Any]], xml_names: list[str]
 ) -> str:
@@ -294,6 +366,7 @@ def render_parameter_contract(
     if not fixed:
         raise RuntimeError("Dima fixed-parameter policy resolved to an empty set")
     calibration, mapping = rc_contract(catalogue)
+    flight_mode_slots, flight_mode_values = flight_mode_slot_contract(catalogue)
 
     calibration_fields = [field for field, _ in calibration[0][1]]
     calibration_members = [f"    dima::params {field};" for field in calibration_fields]
@@ -306,6 +379,11 @@ def render_parameter_contract(
 
     mapping_roles = [f"    {role}," for role, _ in mapping]
     mapping_rows = [f"    dima::params::{name}," for _, name in mapping]
+    flight_mode_slot_rows = [
+        f"    {{dima::params::{name}, {default}}},"
+        for name, default in flight_mode_slots
+    ]
+    flight_mode_value_rows = [f"    {value}," for value in flight_mode_values]
 
     fixed_rows: list[str] = []
     for parameter in fixed:
@@ -355,6 +433,32 @@ def render_parameter_contract(
         "};",
         "inline constexpr std::size_t kFixedParameterConstraintCount =",
         "    sizeof(kFixedParameterConstraints) / sizeof(kFixedParameterConstraints[0]);",
+        "",
+        "struct FlightModeSlotParameter {",
+        "    dima::params parameter;",
+        "    std::int32_t default_value;",
+        "};",
+        "",
+        "// 六槽参数、默认值和离散合法值均从官方 JSON 推导，消费者不得复制名称或数值表。",
+        "inline constexpr FlightModeSlotParameter kFlightModeSlotParameters[]{",
+        *flight_mode_slot_rows,
+        "};",
+        "inline constexpr std::size_t kFlightModeSlotCount =",
+        "    sizeof(kFlightModeSlotParameters) / sizeof(kFlightModeSlotParameters[0]);",
+        "inline constexpr std::int32_t kFlightModeSlotAllowedValues[]{",
+        *flight_mode_value_rows,
+        "};",
+        "inline constexpr std::size_t kFlightModeSlotAllowedValueCount =",
+        "    sizeof(kFlightModeSlotAllowedValues) / sizeof(kFlightModeSlotAllowedValues[0]);",
+        "inline constexpr bool flight_mode_slot_value_allowed(std::int32_t value) noexcept",
+        "{",
+        "    for (const std::int32_t allowed : kFlightModeSlotAllowedValues) {",
+        "        if (allowed == value) {",
+        "            return true;",
+        "        }",
+        "    }",
+        "    return false;",
+        "}",
         "",
         "struct RcCalibrationParameters {",
         *calibration_members,
