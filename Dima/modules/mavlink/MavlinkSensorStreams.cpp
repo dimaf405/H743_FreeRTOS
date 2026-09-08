@@ -12,6 +12,8 @@
 
 #include "logging/logging.hpp"
 #include "api/Time.hpp"
+#include "api/Services.hpp"
+#include "api/TaskRuntime.hpp"
 
 #include <matrix/math.hpp>
 
@@ -657,6 +659,13 @@ bool MavlinkService::send_system_status(std::uint64_t) noexcept
     if (imu_healthy_) status.onboard_control_sensors_health |= gyro | accel;
     if (mag_healthy_) status.onboard_control_sensors_health |= mag;
     if (gps_healthy_) status.onboard_control_sensors_health |= gps;
+    // SYS_STATUS.load 使用标准千分比；无效/重建基线窗口保留上次有效值，
+    // 不因计数回绕或任务重启对 QGC 产生虚假的 0%/100% 尖峰。
+    const auto cpu = dima::platform::services().tasks.cpu_usage();
+    if (cpu.valid) {
+        cpu_load_permille_ = cpu.load_permille;
+    }
+    status.load = cpu_load_permille_;
     status.voltage_battery = UINT16_MAX;
     status.current_battery = -1;
     status.battery_remaining = -1;

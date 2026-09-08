@@ -204,6 +204,7 @@ private:
     std::uint8_t ack_retry_{0U};
 
     std::uint16_t statustext_id_{0U};
+    std::uint16_t cpu_load_permille_{0U};
     struct ConfiguredStreamState {
         std::int32_t interval_us{-1};
         std::uint64_t last_tx_us{0U};
