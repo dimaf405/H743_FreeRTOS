@@ -8,6 +8,8 @@ import re
 import struct
 import sys
 
+from elf_support.layout import APP_FLASH_SIZE
+
 from .formatting import color_enabled, colored, report_progress_error
 from .models import ProgressError
 from .plan import normalized_path
@@ -29,29 +31,10 @@ def artifact_line(label: str, path: pathlib.Path, address: int | None = None) ->
     return f"  {label:<10} {normalized_path(str(path))} ({size} bytes{location})"
 
 
-# Flash 常驻段可按名称识别；运行期 RAM 必须以 VMA 为准，不能再把
-# 名为 .data/.bss 的段硬编码为 DTCM，否则 D2 迁移后报告会静默失真。
-_FLASH_SECTIONS = frozenset({
-    ".text", ".rodata", ".ARM.extab", ".ARM.exidx",
-    ".preinit_array", ".init_array", ".fini_array",
-    ".eh_frame", ".glue_7", ".glue_7t",
-})
-_FLASH_SECTION_PREFIXES = (".text.", ".rodata.")
-
-
-def _section_belongs(name: str, exact: frozenset[str], prefixes: tuple[str, ...]) -> bool:
-    if name in exact:
-        return True
-    return any(name.startswith(p) for p in prefixes)
-
-
-def _parse_elf_sections(
+def _parse_elf_memory_layout(
     elf_path: pathlib.Path,
-) -> list[tuple[str, int, int]] | None:
-    """Parse ELF section headers with pure Python (no external tools).
-
-    Returns a list of ``(name, vma, size)`` tuples, or *None* on failure.
-    """
+) -> tuple[list[tuple[str, int, int]], int] | None:
+    """Return allocated sections and their Flash load-image span, or None."""
     try:
         data = elf_path.read_bytes()
     except OSError:
@@ -68,6 +51,8 @@ def _parse_elf_sections(
             # Layout at offset 32: e_shoff(4), e_flags(4), e_ehsize(2),
             #   e_phentsize(2), e_phnum(2), e_shentsize(2), e_shnum(2),
             #   e_shstrndx(2)
+            e_phoff = struct.unpack_from(f"{endian}I", data, 28)[0]
+            e_phentsize, e_phnum = struct.unpack_from(f"{endian}HH", data, 42)
             e_shoff = struct.unpack_from(f"{endian}I", data, 32)[0]
             e_shentsize, e_shnum, e_shstrndx = struct.unpack_from(
                 f"{endian}HHH", data, 46
@@ -76,6 +61,8 @@ def _parse_elf_sections(
             # Layout at offset 40: e_shoff(8), e_flags(4), e_ehsize(2),
             #   e_phentsize(2), e_phnum(2), e_shentsize(2), e_shnum(2),
             #   e_shstrndx(2)
+            e_phoff = struct.unpack_from(f"{endian}Q", data, 32)[0]
+            e_phentsize, e_phnum = struct.unpack_from(f"{endian}HH", data, 54)
             e_shoff = struct.unpack_from(f"{endian}Q", data, 40)[0]
             e_shentsize, e_shnum, e_shstrndx = struct.unpack_from(
                 f"{endian}HHH", data, 58
@@ -85,26 +72,48 @@ def _parse_elf_sections(
     except struct.error:
         return None
 
+    # Flash 按已分配且有内容的 section 的 LMA 统计，包含 RAM 初始化镜像及
+    # 链接空隙；PT_LOAD 可能包含 ELF 文件头，不能把段头部填充误算成烧录数据。
+    min_phentsize = 32 if ei_class == 1 else 56
+    if e_phoff == 0 or e_phentsize < min_phentsize:
+        return None
+    flash_loads: list[tuple[int, int, int]] = []
+    for index in range(e_phnum):
+        offset = e_phoff + index * e_phentsize
+        if offset + min_phentsize > len(data):
+            return None
+        if ei_class == 1:
+            p_type, _, p_vaddr, p_paddr, p_filesz = struct.unpack_from(
+                f"{endian}IIIII", data, offset,
+            )
+        else:
+            p_type, _, _, p_vaddr, p_paddr, p_filesz = struct.unpack_from(
+                f"{endian}IIQQQQ", data, offset,
+            )
+        if (p_type == 1 and p_filesz > 0 and
+                0x08000000 <= p_paddr < p_paddr + p_filesz <= 0x08200000):
+            flash_loads.append((p_vaddr, p_paddr, p_filesz))
+
     min_shentsize = 40 if ei_class == 1 else 64
     if e_shoff == 0 or e_shnum == 0 or e_shentsize < min_shentsize:
         return None
 
-    def _read_shdr(index: int) -> tuple[int, int, int, int, int] | None:
-        """Return (sh_name, sh_addr, sh_size, sh_flags, sh_offset)."""
+    def _read_shdr(index: int) -> tuple[int, int, int, int, int, int] | None:
+        """Return name, address, size, flags, offset and type."""
         off = e_shoff + index * e_shentsize
         if off + e_shentsize > len(data):
             return None
         if ei_class == 1:
             # ELF32 Shdr: name(4) type(4) flags(4) addr(4) offset(4) size(4) ...
-            sh_name, _, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
+            sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
                 f"{endian}IIIIII", data, off
             )[:6]
         else:
             # ELF64 Shdr: name(4) type(4) flags(8) addr(8) offset(8) size(8) ...
-            sh_name, _, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
+            sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size = struct.unpack_from(
                 f"{endian}IIQQQQ", data, off
             )[:6]
-        return sh_name, sh_addr, sh_size, sh_flags, sh_offset
+        return sh_name, sh_addr, sh_size, sh_flags, sh_offset, sh_type
 
     # Read the section-header string table.
     strtab_info = _read_shdr(e_shstrndx)
@@ -118,14 +127,26 @@ def _parse_elf_sections(
         return data[start:end].decode("utf-8", errors="replace")
 
     sections: list[tuple[str, int, int]] = []
+    flash_begin = 0x08200000
+    flash_end = 0x08000000
     for i in range(e_shnum):
         info = _read_shdr(i)
         if info is None:
             continue
-        sh_name_idx, sh_addr, sh_size, _, _ = info
+        sh_name_idx, sh_addr, sh_size, sh_flags, _, sh_type = info
+        if sh_flags & 0x2 == 0:  # SHF_ALLOC: 调试段不占运行期内存。
+            continue
         name = _section_name(sh_name_idx)
         sections.append((name, sh_addr, sh_size))
-    return sections
+        if sh_type == 8 or sh_size == 0:  # SHT_NOBITS 不进入加载镜像。
+            continue
+        for vma, lma, file_bytes in flash_loads:
+            if vma <= sh_addr and sh_addr + sh_size <= vma + file_bytes:
+                section_lma = lma + sh_addr - vma
+                flash_begin = min(flash_begin, section_lma)
+                flash_end = max(flash_end, section_lma + sh_size)
+                break
+    return sections, max(0, flash_end - flash_begin)
 
 
 def parse_elf_memory_usage(
@@ -138,36 +159,31 @@ def parse_elf_memory_usage(
     Keys: ``flash``, ``dtcm``, ``ram_d1``, ``ram_d2``, ``ram_dma``, ``ram_d3``.
     Returns ``None`` when the ELF cannot be parsed.
     """
-    sections = _parse_elf_sections(elf_path)
-    if sections is None:
+    layout = _parse_elf_memory_layout(elf_path)
+    if layout is None:
         return None
+    sections, flash_span = layout
 
     counts: dict[str, int] = {
-        "flash": 0, "dtcm": 0,
+        "flash": flash_span, "dtcm": 0,
         "ram_d1": 0, "ram_d2": 0, "ram_dma": 0, "ram_d3": 0,
     }
-    for name, vma, size in sections:
+    for _, vma, size in sections:
         if size == 0:
             continue
-        # Flash-resident sections (code + constants + init data load image).
-        if _section_belongs(name, _FLASH_SECTIONS, _FLASH_SECTION_PREFIXES):
-            counts["flash"] += size
-            continue
         # 普通 .data/.bss 默认位于 D2，所有运行期 RAM 段统一按 VMA 归属。
-        if 0x08000000 <= vma < 0x08200000:
-            # Flash-mapped (e.g. .isr_vector, .ARM).
-            counts["flash"] += size
-        elif 0x20000000 <= vma < 0x20020000:
+        if 0x20000000 <= vma < 0x20020000:
             # DTCM (e.g. ._user_heap_stack).
-            counts["dtcm"] += size
+            counts["dtcm"] = max(counts["dtcm"], vma + size - 0x20000000)
         elif 0x24000000 <= vma < 0x24080000:
-            counts["ram_d1"] += size
+            # MPU 对齐可能在段之间留下空隙，真实剩余量必须按地址跨度计算。
+            counts["ram_d1"] = max(counts["ram_d1"], vma + size - 0x24000000)
         elif 0x30000000 <= vma < 0x30040000:
-            counts["ram_d2"] += size
+            counts["ram_d2"] = max(counts["ram_d2"], vma + size - 0x30000000)
         elif 0x30040000 <= vma < 0x30048000:
-            counts["ram_dma"] += size
+            counts["ram_dma"] = max(counts["ram_dma"], vma + size - 0x30040000)
         elif 0x38000000 <= vma < 0x38010000:
-            counts["ram_d3"] += size
+            counts["ram_d3"] = max(counts["ram_d3"], vma + size - 0x38000000)
     return counts
 
 
@@ -195,7 +211,10 @@ def print_memory_summary(
     """Print a compact Flash / RAM usage table."""
     try:
         layout = pathlib.Path(layout_header).read_text(encoding="utf-8")
-        flash_total = integer_macro(layout, "H743_PRIMARY_SLOT_SIZE") - integer_macro(layout, "H743_MCUBOOT_HEADER_SIZE")
+        # 使用正式 ELF 验证器的应用链接上限；槽位减 header 还包含尾部保留，
+        # 不能把这部分空间误报为可继续增长的应用 Flash。
+        flash_total = min(APP_FLASH_SIZE, integer_macro(layout, "H743_PRIMARY_SLOT_SIZE") -
+                          integer_macro(layout, "H743_MCUBOOT_HEADER_SIZE"))
     except ProgressError:
         flash_total = 0
 
