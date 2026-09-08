@@ -192,6 +192,30 @@ def run_upstream(
     )
 
 
+def generate_enum_labels(topics_dir: Path, schemas: list[Path]) -> None:
+    """由 schema 的显式标注和官方生成常量派生可读名称，不维护第二份枚举表。"""
+    for schema in schemas:
+        annotation = re.search(r"^# ENUM_LABELS ([A-Z_ ]+)$", schema.read_text(encoding="utf-8"), re.MULTILINE)
+        if annotation is None:
+            continue
+        topic = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", schema.stem).lower()
+        header = topics_dir / f"{topic}.h"
+        constants = re.findall(r"static constexpr uint[0-9]+_t ([A-Z][A-Z0-9_]*) =", header.read_text(encoding="utf-8"))
+        lines = ["// Generated from msg ENUM_LABELS and PX4 constants. DO NOT EDIT.", "#pragma once",
+                 f"#include <uORB/topics/{topic}.h>", "namespace dima::generated::uorb_labels {"]
+        for prefix in annotation.group(1).split():
+            selected = [name for name in constants if name.startswith(prefix + "_")]
+            if not selected:
+                raise RuntimeError(f"empty enum label group {schema.name}: {prefix}")
+            lines += [f"inline const char *{topic}_{prefix.lower()}_name(unsigned long long value) noexcept", "{", "    switch (value) {"]
+            for name in selected:
+                label = name[len(prefix) + 1:].lower().replace("_", " ")
+                lines.append(f'    case {topic}_s::{name}: return "{label}";')
+            lines += ['    default: return "unknown";', "    }", "}"]
+        lines += ["} // namespace dima::generated::uorb_labels", ""]
+        (topics_dir / f"{topic}_labels.hpp").write_text("\n".join(lines), encoding="utf-8", newline="\n")
+
+
 def generate_forwarders(topics_dir: Path, destination: Path) -> list[Path]:
     """从官方头的 ORB_DECLARE 派生旧 include 转发层，包括 Topic alias。"""
     destination.mkdir(parents=True, exist_ok=True)
@@ -417,6 +441,7 @@ def main() -> int:
         run_upstream(
             topic_script, fields_script, template_dir, schemas, topics_dir
         )
+        generate_enum_labels(topics_dir, schemas)
         generate_forwarders(topics_dir, compat_stage)
 
         makefile = output_stage / "uorb_sources.mk"
