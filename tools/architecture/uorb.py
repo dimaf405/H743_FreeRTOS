@@ -19,6 +19,10 @@ COMPAT_ROOT = ROOT / "build/generated/messages"
 PASCAL_MESSAGE_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 LOCAL_EXTENSION_RE = re.compile(r"(?m)^\s*@[A-Za-z_]")
 ORB_DECLARE_RE = re.compile(r"\bORB_DECLARE\(([a-z][a-z0-9_]*)\);")
+QUEUE_LENGTH_RE = re.compile(
+    r"^uint8\s+ORB_QUEUE_LENGTH\s*=\s*[1-9][0-9]*$"
+)
+TOPICS_DIRECTIVE_RE = re.compile(r"^#\s*TOPICS\s+(.+)$")
 
 
 def _sha256(path: pathlib.Path) -> str:
@@ -31,6 +35,38 @@ def _sha256(path: pathlib.Path) -> str:
 
 def _repository_path(path: pathlib.Path) -> str:
     return path.resolve().relative_to(ROOT).as_posix()
+
+
+def _schema_contract(
+    path: pathlib.Path,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """将不含队列深度的 payload 与显式 Topic 声明分开核对。"""
+    declarations: list[str] = []
+    topics: list[str] = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        topic_match = TOPICS_DIRECTIVE_RE.fullmatch(raw_line.strip())
+        if topic_match:
+            topics.extend(topic_match.group(1).split())
+            continue
+        declaration = raw_line.split("#", 1)[0].strip()
+        if not declaration or QUEUE_LENGTH_RE.fullmatch(declaration):
+            continue
+        declarations.append(" ".join(declaration.split()))
+    return tuple(declarations), tuple(topics)
+
+
+def _topics_preserve_upstream(
+    topics: tuple[str, ...], upstream_topics: tuple[str, ...],
+) -> bool:
+    # 没有显式 TOPICS 时，两边继续使用同名 schema 的官方默认 Topic。
+    # 显式别名仅允许按上游顺序取子集，并保留首个主 Topic；未知、重命名、
+    # 重复或重排都拒绝。这里不维护产品 Topic 名单，也不改变 payload 规则。
+    if not upstream_topics:
+        return not topics
+    return (
+        bool(topics) and topics[0] == upstream_topics[0]
+        and topics == tuple(topic for topic in upstream_topics if topic in topics)
+    )
 
 
 def _schema_files(violations: list[Violation]) -> list[pathlib.Path]:
@@ -72,7 +108,7 @@ def _schema_files(violations: list[Violation]) -> list[pathlib.Path]:
 def _scan_upstream_schema_identity(
     schemas: list[pathlib.Path], violations: list[Violation]
 ) -> None:
-    """凡上游存在唯一同名消息就逐字节对照；Dima 专用消息仍走同一生成器。"""
+    """上游同名消息保留 payload 与主 Topic，仅允许队列调整和别名子集。"""
     reference_root = UPSTREAM_ROOT / "msg"
     references: dict[str, list[pathlib.Path]] = {}
     for reference in sorted(reference_root.rglob("*.msg")):
@@ -90,10 +126,22 @@ def _scan_upstream_schema_identity(
         elif len(candidates) == 1:
             matched += 1
             if schema.read_bytes() != candidates[0].read_bytes():
-                violations.append(Violation(
-                    schema, 1, "R333",
-                    "PX4-named schema differs from the pinned upstream file",
-                ))
+                # 字段、类型与常量继续逐项对齐固定上游；队列深度和不参与本产品
+                # 功能的别名可从权威 .msg 调整，派生 ID/hash/目录仍由官方工具生成。
+                payload, topics = _schema_contract(schema)
+                upstream_payload, upstream_topics = _schema_contract(candidates[0])
+                if payload != upstream_payload:
+                    violations.append(Violation(
+                        schema, 1, "R333",
+                        "PX4-named schema payload differs from the pinned "
+                        "upstream file",
+                    ))
+                if not _topics_preserve_upstream(topics, upstream_topics):
+                    violations.append(Violation(
+                        schema, 1, "R333",
+                        "PX4-named schema topics must retain the primary topic "
+                        "and form an ordered subset of the pinned upstream topics",
+                    ))
     if schemas and matched == 0:
         violations.append(Violation(
             SCHEMA_ROOT, 1, "R333",

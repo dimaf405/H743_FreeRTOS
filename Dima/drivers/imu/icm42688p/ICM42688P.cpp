@@ -106,8 +106,7 @@ bool ICM42688P::start()
         return false;
     }
 
-    if (!accel_pub_.advertise() || !gyro_pub_.advertise() ||
-        !accel_fifo_pub_.advertise() || !gyro_fifo_pub_.advertise()) {
+    if (!accel_pub_.advertise() || !gyro_pub_.advertise()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         interrupts_.unregister_sources();
         spi_.shutdown();

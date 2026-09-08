@@ -13,9 +13,7 @@
 #include "api/SensorInterrupts.hpp"
 #include "api/Spi.hpp"
 #include "sensor_accel.hpp"
-#include "sensor_accel_fifo.hpp"
 #include "sensor_gyro.hpp"
-#include "sensor_gyro_fifo.hpp"
 #include "uORB/Publication.hpp"
 #include "work_queue/WorkQueue.hpp"
 
@@ -144,10 +142,6 @@ private:
     dima::platform::InterruptSources &interrupts_;
     uORB::Publication<sensor_accel_s> accel_pub_{ORB_ID(sensor_accel)};
     uORB::Publication<sensor_gyro_s> gyro_pub_{ORB_ID(sensor_gyro)};
-    uORB::Publication<sensor_accel_fifo_s> accel_fifo_pub_{
-        ORB_ID(sensor_accel_fifo)};
-    uORB::Publication<sensor_gyro_fifo_s> gyro_fifo_pub_{
-        ORB_ID(sensor_gyro_fifo)};
 
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};

@@ -21,4 +21,4 @@ bool flag_control_termination_enabled		# true if flighttermination is enabled
 # TODO: use dedicated topic for external requests
 uint8 source_id                  # Mode ID (nav_state)
 
-# TOPICS vehicle_control_mode config_control_setpoints
+# TOPICS vehicle_control_mode

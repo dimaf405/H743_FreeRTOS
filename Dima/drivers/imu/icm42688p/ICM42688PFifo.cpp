@@ -18,7 +18,14 @@ namespace {
 
 using namespace icm42688p::registers;
 
-constexpr float kExpectedSampleIntervalUs = 125.0F;
+// 驱动私有批次工作区，只承载普通 sensor_accel/sensor_gyro 所需的整数样本与
+// 缩放因子；容量由既有单次 FIFO 读取上限决定，不再借用未消费的 uORB 消息。
+struct SensorBatch {
+    std::int16_t x[kWatermarkSamples]{};
+    std::int16_t y[kWatermarkSamples]{};
+    std::int16_t z[kWatermarkSamples]{};
+    float scale{};
+};
 
 std::int16_t negate_saturated(std::int16_t value) noexcept
 {
@@ -114,7 +121,6 @@ bool ICM42688P::process_fifo(std::uint64_t timestamp_sample,
     std::size_t valid_samples = 0U;
     float temperature_sum = 0.0F;
     std::int16_t temperatures[icm42688p::registers::kWatermarkSamples]{};
-    float sample_interval_us = kExpectedSampleIntervalUs;
     bool accel_wide = false;
     bool gyro_wide = false;
     for (; valid_samples < samples; ++valid_samples) {
@@ -126,13 +132,6 @@ bool ICM42688P::process_fifo(std::uint64_t timestamp_sample,
         temperatures[valid_samples] = decoded.temperature;
         temperature_sum += static_cast<float>(decoded.temperature);
 
-        /* FIFO timestamp_ticks 转 us；只接受 50..250 us 的合理区间，否则回退
-         * 8 kHz 标称 125 us，防坏时间戳污染整批 dt。 */
-        const float candidate_interval =
-            static_cast<float>(decoded.timestamp_ticks) * kTimestampTickUs;
-        if (candidate_interval >= 50.0F && candidate_interval <= 250.0F) {
-            sample_interval_us = candidate_interval;
-        }
         accel_wide = accel_wide ||
                      icm42688p::fifo::requires_wide_scale(decoded.accel);
         gyro_wide = gyro_wide ||
@@ -163,65 +162,49 @@ bool ICM42688P::process_fifo(std::uint64_t timestamp_sample,
         return false;
     }
 
-    sensor_accel_fifo_s accel_fifo{};
-    sensor_gyro_fifo_s gyro_fifo{};
-    accel_fifo.device_id = kDeviceId;
-    gyro_fifo.device_id = kDeviceId;
-    accel_fifo.samples = static_cast<std::uint8_t>(valid_samples);
-    gyro_fifo.samples = static_cast<std::uint8_t>(valid_samples);
-    accel_fifo.dt = sample_interval_us;
-    gyro_fifo.dt = sample_interval_us;
-    accel_fifo.scale = icm42688p::fifo::accel_scale(accel_wide);
-    gyro_fifo.scale = icm42688p::fifo::gyro_scale(gyro_wide);
+    SensorBatch accel_batch{};
+    SensorBatch gyro_batch{};
+    accel_batch.scale = icm42688p::fifo::accel_scale(accel_wide);
+    gyro_batch.scale = icm42688p::fifo::gyro_scale(gyro_wide);
 
     for (std::size_t index = 0U; index < valid_samples; ++index) {
         const FifoPacket &packet = packets[index];
         icm42688p::fifo::DecodedSample decoded{};
         (void)icm42688p::fifo::decode_sample(packet, decoded);
-        accel_fifo.x[index] = icm42688p::fifo::compact_accel(
+        accel_batch.x[index] = icm42688p::fifo::compact_accel(
             decoded.accel[0], combine_i16(packet.accel_x_high,
                                           packet.accel_x_low),
             accel_wide);
-        accel_fifo.y[index] = icm42688p::fifo::compact_accel(
+        accel_batch.y[index] = icm42688p::fifo::compact_accel(
             decoded.accel[1], combine_i16(packet.accel_y_high,
                                           packet.accel_y_low),
             accel_wide);
-        accel_fifo.z[index] = icm42688p::fifo::compact_accel(
+        accel_batch.z[index] = icm42688p::fifo::compact_accel(
             decoded.accel[2], combine_i16(packet.accel_z_high,
                                           packet.accel_z_low),
             accel_wide);
-        gyro_fifo.x[index] = icm42688p::fifo::compact_gyro(
+        gyro_batch.x[index] = icm42688p::fifo::compact_gyro(
             decoded.gyro[0], combine_i16(packet.gyro_x_high,
                                          packet.gyro_x_low),
             gyro_wide);
-        gyro_fifo.y[index] = icm42688p::fifo::compact_gyro(
+        gyro_batch.y[index] = icm42688p::fifo::compact_gyro(
             decoded.gyro[1], combine_i16(packet.gyro_y_high,
                                          packet.gyro_y_low),
             gyro_wide);
-        gyro_fifo.z[index] = icm42688p::fifo::compact_gyro(
+        gyro_batch.z[index] = icm42688p::fifo::compact_gyro(
             decoded.gyro[2], combine_i16(packet.gyro_z_high,
                                          packet.gyro_z_low),
             gyro_wide);
 
         /* 板上安装坐标为 (x,-y,-z)，在原始整数域变换，scale 仍保持每轴一致。 */
-        accel_fifo.y[index] = negate_saturated(accel_fifo.y[index]);
-        accel_fifo.z[index] = negate_saturated(accel_fifo.z[index]);
-        gyro_fifo.y[index] = negate_saturated(gyro_fifo.y[index]);
-        gyro_fifo.z[index] = negate_saturated(gyro_fifo.z[index]);
+        accel_batch.y[index] = negate_saturated(accel_batch.y[index]);
+        accel_batch.z[index] = negate_saturated(accel_batch.z[index]);
+        gyro_batch.y[index] = negate_saturated(gyro_batch.y[index]);
+        gyro_batch.z[index] = negate_saturated(gyro_batch.z[index]);
     }
 
-    /* timestamp_sample 表示批末样本；批首=末-(N-1)*dt，浮点跨度加 0.5 后取整，
-     * 下溢饱和为 0。FIFO 消息用批首，单样本平均消息用批末。 */
-    const std::uint64_t batch_span_us = static_cast<std::uint64_t>(
-        (static_cast<float>(valid_samples - 1U) * sample_interval_us) + 0.5F);
-    const std::uint64_t timestamp_first =
-        timestamp_sample >= batch_span_us ? timestamp_sample - batch_span_us
-                                          : 0U;
+    // 普通 IMU 输出继续使用批末采样时间；批首时间只服务于已退役 FIFO Topic。
     const std::uint64_t now_us = hrt_absolute_time();
-    accel_fifo.timestamp_sample = timestamp_first;
-    gyro_fifo.timestamp_sample = timestamp_first;
-    accel_fifo.timestamp = now_us;
-    gyro_fifo.timestamp = now_us;
 
     sensor_accel_s accel{};
     sensor_gyro_s gyro{};
@@ -238,34 +221,33 @@ bool ICM42688P::process_fifo(std::uint64_t timestamp_sample,
     accel.error_count = sensor_error_count();
     gyro.error_count = accel.error_count;
 
-    accel.x = batch_average(accel_fifo.x, valid_samples, accel_fifo.scale,
+    accel.x = batch_average(accel_batch.x, valid_samples, accel_batch.scale,
                             last_accel_[0], have_last_accel_);
-    accel.y = batch_average(accel_fifo.y, valid_samples, accel_fifo.scale,
+    accel.y = batch_average(accel_batch.y, valid_samples, accel_batch.scale,
                             last_accel_[1], have_last_accel_);
-    accel.z = batch_average(accel_fifo.z, valid_samples, accel_fifo.scale,
+    accel.z = batch_average(accel_batch.z, valid_samples, accel_batch.scale,
                             last_accel_[2], have_last_accel_);
-    gyro.x = batch_average(gyro_fifo.x, valid_samples, gyro_fifo.scale,
+    gyro.x = batch_average(gyro_batch.x, valid_samples, gyro_batch.scale,
                            last_gyro_[0], have_last_gyro_);
-    gyro.y = batch_average(gyro_fifo.y, valid_samples, gyro_fifo.scale,
+    gyro.y = batch_average(gyro_batch.y, valid_samples, gyro_batch.scale,
                            last_gyro_[1], have_last_gyro_);
-    gyro.z = batch_average(gyro_fifo.z, valid_samples, gyro_fifo.scale,
+    gyro.z = batch_average(gyro_batch.z, valid_samples, gyro_batch.scale,
                            last_gyro_[2], have_last_gyro_);
     have_last_accel_ = true;
     have_last_gyro_ = true;
 
-    accel.clip_counter[0] = clipping(accel_fifo.x, valid_samples);
-    accel.clip_counter[1] = clipping(accel_fifo.y, valid_samples);
-    accel.clip_counter[2] = clipping(accel_fifo.z, valid_samples);
-    gyro.clip_counter[0] = clipping(gyro_fifo.x, valid_samples);
-    gyro.clip_counter[1] = clipping(gyro_fifo.y, valid_samples);
-    gyro.clip_counter[2] = clipping(gyro_fifo.z, valid_samples);
+    accel.clip_counter[0] = clipping(accel_batch.x, valid_samples);
+    accel.clip_counter[1] = clipping(accel_batch.y, valid_samples);
+    accel.clip_counter[2] = clipping(accel_batch.z, valid_samples);
+    gyro.clip_counter[0] = clipping(gyro_batch.x, valid_samples);
+    gyro.clip_counter[1] = clipping(gyro_batch.y, valid_samples);
+    gyro.clip_counter[2] = clipping(gyro_batch.z, valid_samples);
 
-    const bool gyro_fifo_published = gyro_fifo_pub_.publish(gyro_fifo);
+    // 两条真实输出都必须尝试发布，不能用短路求值跳过加速度；恢复计数仍以
+    // 两者同时成功为准，避免把部分输出故障当成传感器已经恢复。
     const bool gyro_published = gyro_pub_.publish(gyro);
-    const bool accel_fifo_published = accel_fifo_pub_.publish(accel_fifo);
     const bool accel_published = accel_pub_.publish(accel);
-    const bool published = gyro_fifo_published && gyro_published &&
-                           accel_fifo_published && accel_published;
+    const bool published = gyro_published && accel_published;
     if (published) {
         ++stats_.publications;
         if (restart_fault_active_) {

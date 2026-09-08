@@ -280,6 +280,12 @@ SdLogWriter::StepResult SdLogWriter::write_format_group() noexcept
             ++output_aliases;
         }
     }
+    if (output_aliases == 0U) {
+        // 无日志输出的组直接消费完整格式，保留下组剩余字节；下一轮 readMore
+        // 继续解码，不为不会发送的字段执行展开和搬移。
+        format_reader_->clearFormatFromBuffer();
+        return StepResult::Skipped;
+    }
     /* 一份字段定义最多对应多个 Topic alias。先按 PX4 最大 F 结构保守预留整组
      * 空间，之后所有 alias 要么全部写入，要么在修改 reader buffer 前整体重试。 */
     if (writer_.available_bytes() <
@@ -344,7 +350,7 @@ SdLogWriter::StepResult SdLogWriter::write_format_group() noexcept
     }
 
     format_reader_->clearFormatAndRestoreLeftover();
-    return output_aliases == 0U ? StepResult::Skipped : StepResult::Emitted;
+    return StepResult::Emitted;
 }
 
 void SdLogWriter::process_formats() noexcept

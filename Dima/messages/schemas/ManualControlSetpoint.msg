@@ -41,7 +41,7 @@ bool sticks_moving
 
 uint16 buttons		# From uint16 buttons field of Mavlink manual_control message
 
-# TOPICS manual_control_setpoint manual_control_input
+# TOPICS manual_control_setpoint
 # DEPRECATED: float32 x
 # DEPRECATED: float32 y
 # DEPRECATED: float32 z
