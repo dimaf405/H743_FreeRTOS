@@ -42,6 +42,9 @@ public:
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
+    bool calibration_parameters_applied(std::uint32_t instance, float heading_p,
+                                        float lookahead_gain) const noexcept;
+    bool calibration_configuration_ready(std::uint32_t instance) const noexcept;
 
 private:
     static constexpr std::uint32_t kRunIntervalUs = 20000U;
@@ -187,6 +190,17 @@ private:
     std::uint64_t projection_reference_timestamp_{0U};
     std::uint32_t segment_mission_id_{0U};
     std::uint32_t request_sequence_{0U};
+    std::uint32_t pending_parameter_instance_{0U};
+    std::uint32_t pending_parameter_set_count_{0U};
+    bool have_parameter_instance_{false};
+    // 下列 applied_* 快照只在参数 mutex 下读写；raw 目标与 ready 分开，
+    // heading=0 的原配置可以确认已安全抑制，但不能被解释为导航已就绪。
+    std::uint32_t applied_parameter_instance_{0U};
+    std::uint32_t applied_parameter_set_count_{0U};
+    float applied_heading_p_{0.0F};
+    float applied_lookahead_gain_{0.0F};
+    bool applied_snapshot_valid_{false};
+    bool applied_configuration_ready_{false};
     std::uint16_t segment_sequence_{0U};
     std::uint8_t xy_reset_counter_{0U};
     std::uint8_t velocity_reset_counter_{0U};

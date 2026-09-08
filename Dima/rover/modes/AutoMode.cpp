@@ -390,6 +390,8 @@ bool AutoMode::bind_parameters() noexcept
 
 void AutoMode::invalidate_parameter_bindings() noexcept
 {
+    px4::AtomicTransaction transaction;
+    applied_snapshot_valid_ = applied_configuration_ready_ = false;
     lookahead_gain_.invalidate();
     lookahead_min_.invalidate();
     lookahead_max_.invalidate();
@@ -418,6 +420,10 @@ void AutoMode::invalidate_parameter_bindings() noexcept
 
 bool AutoMode::apply_parameter_snapshot() noexcept
 {
+    // 锁不仅覆盖 param_get，还覆盖控制器 configure/安全抑制和最终确认快照。
+    // 其他线程不能把“读到了候选”误认为“这一代已经实际配置完毕”。
+    px4::AtomicTransaction apply_transaction;
+    applied_snapshot_valid_ = applied_configuration_ready_ = false;
     if (!lookahead_gain_.bound() || !lookahead_min_.bound() ||
         !lookahead_max_.bound() || !acceptance_radius_.bound() ||
         !yaw_p_.bound() || !yaw_rate_limit_.bound() ||
@@ -443,7 +449,6 @@ bool AutoMode::apply_parameter_snapshot() noexcept
     {
         // 四环与路径参数必须来自同一 Parameter epoch，禁止把一次 QGC 批量
         // 写入的前半组旧值和后半组新值拼成不可复现的控制器配置。
-        px4::AtomicTransaction transaction;
         loaded =
             param_get(lookahead_gain_.handle(),
                       &candidate.pure_pursuit.lookahead_gain) == 0 &&
@@ -514,15 +519,29 @@ bool AutoMode::apply_parameter_snapshot() noexcept
 
     dima::lib::rover::SpeedController speed_validator{};
     dima::lib::rover::YawRateController yaw_rate_validator{};
+    const auto finish_application = [&](bool configured) {
+        parameters_valid_ = configured;
+        reset_control_state();
+        // loaded 但非法的旧 heading=0 回滚只确认已抑制，不伪造配置 ready。
+        // set_count 关联实际参数与收到的通知，防止把尚未通知的新值标到旧代。
+        if (loaded && have_parameter_instance_ &&
+            pending_parameter_set_count_ == param_set_count()) {
+            applied_parameter_instance_ = pending_parameter_instance_;
+            applied_parameter_set_count_ = pending_parameter_set_count_;
+            applied_heading_p_ = candidate.heading.proportional_gain;
+            applied_lookahead_gain_ = candidate.pure_pursuit.lookahead_gain;
+            applied_configuration_ready_ = configured;
+            applied_snapshot_valid_ = true;
+        }
+        return configured;
+    };
     if (!loaded || !valid_config(candidate) ||
         !speed_validator.configure(candidate.speed_inner) ||
         !yaw_rate_validator.configure(candidate.yaw_rate_inner) ||
         !pure_pursuit_.configure(candidate.pure_pursuit) ||
         !heading_controller_.configure(candidate.heading) ||
         !driving_state_.configure(candidate.driving)) {
-        parameters_valid_ = false;
-        reset_control_state();
-        return false;
+        return finish_application(false);
     }
 
     lookahead_gain_.set(candidate.pure_pursuit.lookahead_gain);
@@ -551,9 +570,24 @@ bool AutoMode::apply_parameter_snapshot() noexcept
     wheel_track_.set(candidate.yaw_rate_inner.wheel_track_m);
 
     config_ = candidate;
-    parameters_valid_ = true;
-    reset_control_state();
-    return true;
+    return finish_application(true);
+}
+
+bool AutoMode::calibration_parameters_applied(std::uint32_t instance,
+                                             float heading_p, float lookahead_gain) const noexcept
+{
+    px4::AtomicTransaction transaction;
+    return applied_snapshot_valid_ && applied_parameter_instance_ == instance &&
+        applied_parameter_set_count_ == param_set_count() &&
+        applied_heading_p_ == heading_p && applied_lookahead_gain_ == lookahead_gain;
+}
+
+bool AutoMode::calibration_configuration_ready(std::uint32_t instance) const noexcept
+{
+    // 与回滚确认分离：正常候选要进入导航验收时，还必须是完整四环/路径配置。
+    px4::AtomicTransaction transaction;
+    return applied_snapshot_valid_ && applied_parameter_instance_ == instance &&
+        applied_parameter_set_count_ == param_set_count() && applied_configuration_ready_;
 }
 
 void AutoMode::apply_pending_parameters(std::uint64_t now) noexcept
@@ -565,7 +599,13 @@ void AutoMode::apply_pending_parameters(std::uint64_t now) noexcept
     }
 
     parameter_update_pending_ = false;
-    if (!apply_parameter_snapshot()) {
+    const bool previous_parameters_valid = parameters_valid_;
+    if (!apply_parameter_snapshot() && previous_parameters_valid) {
+        // parameter_update 是全局变更通知，不携带“本模块哪个参数变化”的信息。
+        // Rover 的速度增益、轮距等出厂默认值允许保持未配置，此时任意无关参数
+        // 写入都会重新校验出同一份无效快照。仅在已应用的有效 AUTO 配置退化为
+        // 无效配置时上报错误；未配置状态仍由 parameters_valid_=false 抑制导航
+        // 输出，但不参与 Mission 模式切换，也不把 RC 映射等无关写入误报成故障。
         (void)dima::events::report(kEventParameterInvalid,
                                    dima::events::Severity::Error);
     }
@@ -575,6 +615,9 @@ void AutoMode::update_subscriptions() noexcept
 {
     if (parameter_update_subscription_.update()) {
         parameter_update_pending_ = true;
+        pending_parameter_instance_ = parameter_update_subscription_.get().instance;
+        pending_parameter_set_count_ = parameter_update_subscription_.get().set_count;
+        have_parameter_instance_ = true;
     }
     if (local_position_subscription_.update()) {
         local_position_ = local_position_subscription_.get();
@@ -1193,6 +1236,12 @@ void AutoMode::reset_control_state() noexcept
 
 void AutoMode::reset_runtime_state() noexcept
 {
+    {
+        px4::AtomicTransaction transaction;
+        applied_snapshot_valid_ = applied_configuration_ready_ = false;
+        applied_parameter_instance_ = applied_parameter_set_count_ = 0U;
+        applied_heading_p_ = applied_lookahead_gain_ = 0.0F;
+    }
     reset_control_state();
     config_ = {};
     projection_ = {};
@@ -1223,11 +1272,17 @@ void AutoMode::reset_runtime_state() noexcept
     have_mission_status_ = false;
     parameters_valid_ = false;
     parameter_update_pending_ = false;
+    pending_parameter_instance_ = pending_parameter_set_count_ = 0U;
+    have_parameter_instance_ = false;
     auto_was_active_ = false;
 }
 
 void AutoMode::enter_error(std::uint32_t event_id) noexcept
 {
+    {
+        px4::AtomicTransaction transaction;
+        applied_snapshot_valid_ = applied_configuration_ready_ = false;
+    }
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     ScheduleCancelAndDrain();
     reset_control_state();
