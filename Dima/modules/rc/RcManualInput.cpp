@@ -2,9 +2,11 @@
  * PX4-Autopilot v1.17.0 ManualControl RC subset adapted to the Dima platform.
  ****************************************************************************/
 #include "RcManualInput.hpp"
+#include "rover/RoverModeContract.hpp"
 
 #include "logging/logging.hpp"
 #include "api/Time.hpp"
+#include "vehicle_status.hpp"
 
 #include <cmath>
 #include <limits>
@@ -215,6 +217,7 @@ void RcManualInput::process_switches(
     // 去抖同时要求状态一致、样本数足够且基于原始 sample_time 的持续时间足够；
     // 调度器重复处理同一 Topic 不会被累计成多个稳定样本。
     const bool candidate_matches = candidate_sample_count_ != 0U &&
+        switches.mode_slot == candidate_switches_.mode_slot &&
         switches.arm_switch == candidate_switches_.arm_switch &&
         switches.kill_switch == candidate_switches_.kill_switch;
     if (!candidate_matches) {
@@ -237,7 +240,7 @@ void RcManualInput::process_switches(
     }
 
     if (!switches_initialized_) {
-        // 首个稳定离散样本只建立基线，禁止上电状态触发 Arm/Kill。
+        // 首个稳定离散样本只建立基线，禁止上电状态触发模式或 Arm/Kill。
         previous_switches_ = candidate_switches_;
         switches_initialized_ = true;
         return;
@@ -249,13 +252,17 @@ void RcManualInput::process_switches(
         kill_changed &&
         candidate_switches_.kill_switch ==
             manual_control_switches_s::SWITCH_POS_ON;
+    const bool arm_changed =
+        candidate_switches_.arm_switch != previous_switches_.arm_switch;
+    const bool mode_changed =
+        candidate_switches_.mode_slot != previous_switches_.mode_slot;
 
     // Kill 与 Arm 同帧变化时必须先发布 Kill，防止中间态 ARMED 快照逃逸到 MotorOutput。
     if (kill_engaged) {
         publish_action(action_request_s::ACTION_KILL);
     }
 
-    if (candidate_switches_.arm_switch != previous_switches_.arm_switch) {
+    if (arm_changed) {
         if (candidate_switches_.arm_switch ==
             manual_control_switches_s::SWITCH_POS_ON) {
             publish_action(action_request_s::ACTION_ARM);
@@ -273,7 +280,43 @@ void RcManualInput::process_switches(
         publish_action(action_request_s::ACTION_UNKILL);
     }
 
+    // Arm/Kill 与模式同帧变化时只执行安全动作并消费该模式边沿；禁止先切
+    // AUTO 再解锁，也禁止解除 Kill 的同一复合动作恢复任务。操作者必须在
+    // 安全状态稳定后重新拨动模式开关，才会产生新的模式请求。
+    if (!kill_changed && !arm_changed && mode_changed) {
+        evaluate_mode_slot(candidate_switches_.mode_slot);
+    }
+
     previous_switches_ = candidate_switches_;
+}
+
+void RcManualInput::evaluate_mode_slot(std::uint8_t mode_slot) noexcept
+{
+    namespace contract = dima::generated::parameters;
+    if (mode_slot == manual_control_switches_s::MODE_SLOT_NONE) {
+        return;
+    }
+    const std::size_t index = static_cast<std::size_t>(mode_slot - 1U);
+    if (index >= mode_slot_values_.size()) {
+        PX4_WARN("RC mode slot overflow: %u", mode_slot);
+        return;
+    }
+
+    const std::int32_t selection = mode_slot_values_[index];
+    if (!contract::flight_mode_slot_value_allowed(selection) ||
+        selection < 0) {
+        // 负值是权威 YAML 定义的 Calibration Reserved/Unassigned：当前只
+        // 占位，不发布动作，因此从 Mission 拨入预留槽也保持现有模式。
+        return;
+    }
+    if (!dima::middleware::rover::mode_contract::rc_slot_supported(selection)) {
+        // 即使未来 YAML 被扩展，未实现的导航态也必须在实际消费者处闭锁，
+        // 不能仅因 QGC 元数据出现一个枚举值就宣称板端支持该模式。
+        PX4_WARN("RC mode slot selected unsupported mode: %ld",
+                 static_cast<long>(selection));
+        return;
+    }
+    publish_mode_action(static_cast<std::uint8_t>(selection));
 }
 
 void RcManualInput::publish_action(std::uint8_t action) noexcept
@@ -283,6 +326,16 @@ void RcManualInput::publish_action(std::uint8_t action) noexcept
     request.action = action;
     request.source = action_request_s::SOURCE_RC_SWITCH;
     request.mode = 0U;
+    (void)action_request_publication_.publish(request);
+}
+
+void RcManualInput::publish_mode_action(std::uint8_t mode) noexcept
+{
+    action_request_s request{};
+    request.timestamp = hrt_absolute_time();
+    request.action = action_request_s::ACTION_SWITCH_MODE;
+    request.source = action_request_s::SOURCE_RC_MODE_SLOT;
+    request.mode = mode;
     (void)action_request_publication_.publish(request);
 }
 
@@ -298,12 +351,21 @@ void RcManualInput::reset_switch_baseline() noexcept
 
 void RcManualInput::reset_switch_parameter_state() noexcept
 {
+    namespace contract = dima::generated::parameters;
     arm_mapping_handle_ = PARAM_INVALID;
     kill_mapping_handle_ = PARAM_INVALID;
+    mode_mapping_handle_ = PARAM_INVALID;
     arm_threshold_handle_ = PARAM_INVALID;
     kill_threshold_handle_ = PARAM_INVALID;
+    mode_slot_handles_.fill(PARAM_INVALID);
+    for (std::size_t index = 0U; index < mode_slot_values_.size(); ++index) {
+        mode_slot_values_[index] =
+            contract::kFlightModeSlotParameters[index].default_value;
+    }
+    mode_slot_invalid_reported_.fill(false);
     arm_mapping_ = 0;
     kill_mapping_ = 0;
+    mode_mapping_ = 0;
     arm_threshold_ = 0.75F;
     kill_threshold_ = 0.75F;
     switch_configuration_initialized_ = false;
@@ -311,35 +373,72 @@ void RcManualInput::reset_switch_parameter_state() noexcept
 
 bool RcManualInput::initialize_switch_parameter_handles() noexcept
 {
-    // 直接消费生成参数枚举；开关业务只声明所需角色，不复制字符串名称表。
+    namespace contract = dima::generated::parameters;
+    // 直接消费生成参数枚举；模式/开关业务只声明所需角色，不复制字符串名称表。
     arm_mapping_handle_ = param_handle(dima::params::RC_MAP_ARM_SW);
     kill_mapping_handle_ = param_handle(dima::params::RC_MAP_KILL_SW);
+    mode_mapping_handle_ = param_handle(dima::params::RC_MAP_FLTMODE);
     arm_threshold_handle_ = param_handle(dima::params::RC_ARMSWITCH_TH);
     kill_threshold_handle_ = param_handle(dima::params::RC_KILLSWITCH_TH);
-    return arm_mapping_handle_ != PARAM_INVALID &&
-           kill_mapping_handle_ != PARAM_INVALID &&
-           arm_threshold_handle_ != PARAM_INVALID &&
-           kill_threshold_handle_ != PARAM_INVALID;
+    bool valid = arm_mapping_handle_ != PARAM_INVALID &&
+                 kill_mapping_handle_ != PARAM_INVALID &&
+                 mode_mapping_handle_ != PARAM_INVALID &&
+                 arm_threshold_handle_ != PARAM_INVALID &&
+                 kill_threshold_handle_ != PARAM_INVALID;
+    for (std::size_t index = 0U; index < mode_slot_handles_.size(); ++index) {
+        mode_slot_handles_[index] = param_handle(
+            contract::kFlightModeSlotParameters[index].parameter);
+        valid = valid && mode_slot_handles_[index] != PARAM_INVALID;
+    }
+    return valid;
 }
 
 bool RcManualInput::refresh_switch_configuration() noexcept
 {
+    namespace contract = dima::generated::parameters;
     std::int32_t arm_mapping = 0;
     std::int32_t kill_mapping = 0;
+    std::int32_t mode_mapping = 0;
     float arm_threshold = 0.0F;
     float kill_threshold = 0.0F;
+    std::array<std::int32_t, kFlightModeSlotCount> mode_slot_values{};
     if (param_get(arm_mapping_handle_, &arm_mapping) != 0 ||
         param_get(kill_mapping_handle_, &kill_mapping) != 0 ||
+        param_get(mode_mapping_handle_, &mode_mapping) != 0 ||
         param_get(arm_threshold_handle_, &arm_threshold) != 0 ||
         param_get(kill_threshold_handle_, &kill_threshold) != 0) {
         return false;
     }
+    for (std::size_t index = 0U; index < mode_slot_values.size(); ++index) {
+        if (param_get(mode_slot_handles_[index], &mode_slot_values[index]) != 0) {
+            return false;
+        }
+        if (!contract::flight_mode_slot_value_allowed(
+                mode_slot_values[index])) {
+            if (!mode_slot_invalid_reported_[index]) {
+                PX4_WARN("invalid RC mode slot %u value %ld; using default",
+                         static_cast<unsigned>(index + 1U),
+                         static_cast<long>(mode_slot_values[index]));
+                mode_slot_invalid_reported_[index] = true;
+            }
+            // 非法值只降级当前槽，不使 Throttle/Yaw 整条手动链失效；默认值
+            // 同样来自生成合同，因此旧快照或内部误写不会绕过 YAML 权威定义。
+            mode_slot_values[index] =
+                contract::kFlightModeSlotParameters[index].default_value;
+        } else {
+            mode_slot_invalid_reported_[index] = false;
+        }
+    }
 
     const bool changed = switch_configuration_initialized_ &&
         (arm_mapping != arm_mapping_ || kill_mapping != kill_mapping_ ||
+         mode_mapping != mode_mapping_ ||
+         mode_slot_values != mode_slot_values_ ||
          arm_threshold != arm_threshold_ || kill_threshold != kill_threshold_);
     arm_mapping_ = arm_mapping;
     kill_mapping_ = kill_mapping;
+    mode_mapping_ = mode_mapping;
+    mode_slot_values_ = mode_slot_values;
     arm_threshold_ = arm_threshold;
     kill_threshold_ = kill_threshold;
     switch_configuration_initialized_ = true;

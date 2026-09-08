@@ -446,6 +446,7 @@ void RCUpdate::publish_switches(std::uint64_t sample_time) noexcept
     manual_control_switches_s switches{};
     switches.timestamp = hrt_absolute_time();
     switches.timestamp_sample = sample_time;
+    switches.mode_slot = mode_slot();
     switches.arm_switch = switch_position(rc_channels_s::FUNCTION_ARMSWITCH, arm_threshold_);
     switches.kill_switch = switch_position(rc_channels_s::FUNCTION_KILLSWITCH, kill_threshold_);
     switches.switch_changes = last_switches_.switch_changes;
@@ -457,6 +458,58 @@ void RCUpdate::publish_switches(std::uint64_t sample_time) noexcept
     (void)switches_pub_.publish(switches);
     last_switches_ = switches;
     switches_initialized_ = true;
+}
+
+std::uint8_t RCUpdate::mode_slot() noexcept
+{
+    const std::size_t mapping_index =
+        static_cast<std::size_t>(Mapping::Fltmode);
+    const std::int32_t mapping = mappings_[mapping_index];
+    if (mapping <= 0) {
+        return manual_control_switches_s::MODE_SLOT_NONE;
+    }
+
+    // 参数使用 1..18，数组使用 0..17。映射虽在加载时做静态范围校验，
+    // 这里仍要求真实接收通道、校准和归一化样本同时有效；任一缺失都不得
+    // 合成一个看似合法的模式槽位。
+    const std::size_t channel = static_cast<std::size_t>(mapping - 1);
+    const bool available = channel < kChannelCount &&
+        mapping <= rc_.channel_count && calibration_valid_[channel] &&
+        std::isfinite(rc_.channels[channel]) &&
+        rc_.channels[channel] >= -1.0F && rc_.channels[channel] <= 1.0F;
+    if (!available) {
+        if (!mapping_runtime_invalid_reported_[mapping_index]) {
+            const std::uint32_t arguments[2]{
+                static_cast<std::uint32_t>(mapping_index),
+                static_cast<std::uint32_t>(mapping)};
+            (void)dima::events::report(kEventInvalidMapping,
+                                       dima::events::Severity::Warning,
+                                       arguments, 2U);
+            mapping_runtime_invalid_reported_[mapping_index] = true;
+        }
+        return manual_control_switches_s::MODE_SLOT_NONE;
+    }
+    mapping_runtime_invalid_reported_[mapping_index] = false;
+
+    // 与 PX4 v1.17/QGC 5.1.3 保持同一六槽公式：输入 x∈[-1,1]，
+    // 两端各外扩 0.05 后按 N=6 等分，并增加半槽宽 1/N 使浮点转整数时
+    // 落入最近槽位。标准三段开关的 x=-1/0/1 因而对应槽 1/4/6。
+    constexpr float kSlotMin = -1.0F - 0.05F;
+    constexpr float kSlotMax = 1.0F + 0.05F;
+    constexpr float kSlotCount =
+        static_cast<float>(manual_control_switches_s::MODE_SLOT_NUM);
+    constexpr float kSlotWidthHalf = 1.0F / kSlotCount;
+    const float value = rc_.channels[channel];
+    const float mapped =
+        (((((value - kSlotMin) * kSlotCount) + kSlotWidthHalf) /
+          (kSlotMax - kSlotMin)) + kSlotWidthHalf) + 1.0F;
+    std::uint8_t slot = static_cast<std::uint8_t>(mapped);
+    if (slot < manual_control_switches_s::MODE_SLOT_1) {
+        slot = manual_control_switches_s::MODE_SLOT_1;
+    } else if (slot > manual_control_switches_s::MODE_SLOT_NUM) {
+        slot = manual_control_switches_s::MODE_SLOT_NUM;
+    }
+    return slot;
 }
 
 std::uint8_t RCUpdate::switch_position(std::uint8_t function, float threshold) const noexcept
@@ -476,9 +529,10 @@ std::uint8_t RCUpdate::switch_position(std::uint8_t function, float threshold) c
 bool RCUpdate::switches_equal(const manual_control_switches_s &lhs,
                               const manual_control_switches_s &rhs) const noexcept
 {
-    // 当前产品只生产 Arm/Kill 两个离散开关，其余 PX4 兼容字段保持零值，
-    // 不再让已删除的 Aux/Flaps 功能参与变化计数。
-    return lhs.arm_switch == rhs.arm_switch &&
+    // 当前产品只生产主模式槽及 Arm/Kill；Gear/Loiter/Offboard/Return 等
+    // PX4 兼容字段保持零值，不得参与变化计数或暗示对应功能已经实现。
+    return lhs.mode_slot == rhs.mode_slot &&
+           lhs.arm_switch == rhs.arm_switch &&
            lhs.kill_switch == rhs.kill_switch;
 }
 

@@ -61,6 +61,7 @@ private:
     void publish_current(std::uint64_t now_us) noexcept;
     void publish_lost(std::uint64_t now_us) noexcept;
     void publish_switches(std::uint64_t sample_time) noexcept;
+    std::uint8_t mode_slot() noexcept;
     std::uint8_t switch_position(std::uint8_t function, float threshold) const noexcept;
     bool switches_equal(const manual_control_switches_s &lhs,
                         const manual_control_switches_s &rhs) const noexcept;

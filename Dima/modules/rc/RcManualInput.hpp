@@ -10,10 +10,13 @@
 #include "rc_channels.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
+#include <parameters/parameter_contract.hpp>
 #include "uORB/Publication.hpp"
 #include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace dima::modules::rc {
@@ -32,11 +35,17 @@ public:
 private:
     static constexpr std::uint64_t kSwitchDebounceUs = 200000ULL;
     static constexpr std::uint8_t kRequiredStableSamples = 2U;
+    static constexpr std::size_t kFlightModeSlotCount =
+        dima::generated::parameters::kFlightModeSlotCount;
+    static_assert(kFlightModeSlotCount ==
+                  manual_control_switches_s::MODE_SLOT_NUM);
 
     void Run() override;
     void process_rc_channels(const rc_channels_s &channels) noexcept;
     void process_switches(const manual_control_switches_s &switches) noexcept;
+    void evaluate_mode_slot(std::uint8_t mode_slot) noexcept;
     void publish_action(std::uint8_t action) noexcept;
+    void publish_mode_action(std::uint8_t mode) noexcept;
     void reset_switch_baseline() noexcept;
     void reset_switch_parameter_state() noexcept;
     bool initialize_switch_parameter_handles() noexcept;
@@ -62,10 +71,15 @@ private:
     manual_control_switches_s candidate_switches_{};
     param_t arm_mapping_handle_{PARAM_INVALID};
     param_t kill_mapping_handle_{PARAM_INVALID};
+    param_t mode_mapping_handle_{PARAM_INVALID};
     param_t arm_threshold_handle_{PARAM_INVALID};
     param_t kill_threshold_handle_{PARAM_INVALID};
+    std::array<param_t, kFlightModeSlotCount> mode_slot_handles_{};
+    std::array<std::int32_t, kFlightModeSlotCount> mode_slot_values_{};
+    std::array<bool, kFlightModeSlotCount> mode_slot_invalid_reported_{};
     std::int32_t arm_mapping_{0};
     std::int32_t kill_mapping_{0};
+    std::int32_t mode_mapping_{0};
     float arm_threshold_{0.75F};
     float kill_threshold_{0.75F};
     std::uint64_t candidate_since_us_{0U};

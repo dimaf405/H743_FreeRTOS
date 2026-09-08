@@ -39,14 +39,16 @@ SBUS 属于无强 CRC 的弱协议，冷启动、Failsafe 清除、UART/DMA 恢�
 
 协议锁定后，`RCUpdate` 还要求采样时间连续健康 100 ms 才把 `rc_channels.signal_lost` 清零。单次 UART PE/NE/FE 只丢弃可疑字节并重启 DMA，不立即发布 `rc_lost`；若从最后一份已发布健康帧起超过 `COM_RC_LOSS_T` 仍未恢复，`RCUpdate` 才判定 RC 丢失。接收机显式 Failsafe，以及 Ring 溢出、DMA/RTO/未知错误、重启或回滚失败等本机硬故障仍立即进入 lost/Error，不受 RC 断连延时掩盖。
 
-Arm/Kill 离散状态必须至少两份严格前进且一致的样本，并保持 200 ms 才能进入边沿转换。Runtime 启动、RC 恢复以及映射/阈值变化后的首个稳定状态只建立基线；Arm 仅由稳定 OFF→ON 触发，Disarm 仅由稳定 ON→OFF 触发。
+主模式槽和 Arm/Kill 离散状态必须至少两份严格前进且一致的样本，并保持 200 ms 才能进入边沿转换。Runtime 启动、RC 恢复以及相关映射、阈值或槽位值变化后的首个稳定状态只建立基线；Arm 仅由稳定 OFF→ON 触发，Disarm 仅由稳定 ON→OFF 触发。Arm/Kill 与模式同帧变化时抑制该次模式请求，安全状态稳定后必须重新拨动模式开关。
 
 ## QGC 校准与映射
 
 MavlinkService 在原始样本新鲜且通道数有效时，从校准前的 `input_rc` 以 5 Hz 发送 `RC_CHANNELS`；接收机 failsafe/lost 标志仍让 `RCUpdate`/Commander 拒绝控制，但不会隐藏同时存在的原始通道，便于 QGC 校准和诊断。完全无帧、零通道或样本超时期间停流，恢复后立即发送。QGC 写回 `RC1..18_MIN/TRIM/MAX/REV`、`RC_CHAN_CNT` 和四个主控制映射；`RCUpdate` 在 `parameter_update` 后重新加载并继续执行范围、方向和通道有效性门禁。
 
-默认只为差速 Rover 预设 `RC_MAP_THROTTLE=1`、`RC_MAP_YAW=2`，Roll/Pitch 默认未映射。Stock QGC 的校准向导仍固定识别四轴，因此保留 Roll/Pitch 参数和规范化消息字段；Rover 的 `manual_control_setpoint.valid`、解锁预检及运动控制只依赖中心双向 Throttle/Yaw，Roll/Pitch 不进入车辆输出。
+默认只为差速 Rover 的真实运行控制预设 `RC_MAP_THROTTLE=1`、`RC_MAP_YAW=2`。Stock QGC 的 Radio 完成门固定要求四个主轴都非零，因此 `RC_MAP_PITCH=1`、`RC_MAP_ROLL=2` 是不可修改的完成标记；它们不进入 `RCUpdate` 功能映射，`manual_control_setpoint.roll/pitch` 始终为 NaN。真实 `RC_CHANNELS.chancount` 仍来自接收机，不伪造第四路；Rover 的有效性、解锁预检和运动控制只依赖中心双向 Throttle/Yaw。
 
-Arm 只实现二段开关。启用 QGC Advanced UI 后在 Parameters 页面配置 `RC_MAP_ARM_SW=1..18` 和 `RC_ARMSWITCH_TH=-1..1`；正阈值高端为 ON，负阈值反向。Runtime 启动、RC 恢复或 Arm/Kill 映射及阈值变化后的第一份状态只建立基线，随后 OFF→ON 请求 Arm、ON→OFF 请求 Disarm，配置过程不会合成解锁边沿。当前没有可选择模式：`COM_FLTMODE1..6` 不再定义，`RC_MAP_FLTMODE` 仅保留既有 QGC/参数 handle 兼容且固定为 `0=Disabled`，RCUpdate 与 Commander 不消费 mode-slot。瞬时按键、长按 Toggle 和完整多模式能力不在本阶段。
+Arm 只实现二段开关。启用 QGC Advanced UI 后在 Parameters 页面配置 `RC_MAP_ARM_SW=1..18` 和 `RC_ARMSWITCH_TH=-1..1`；正阈值高端为 ON，负阈值反向。Runtime 启动、RC 恢复或 Arm/Kill 映射及阈值变化后的第一份状态只建立基线，随后 OFF→ON 请求 Arm、ON→OFF 请求 Disarm，配置过程不会合成解锁边沿。
 
-`COM_RC_IN_MODE` 只允许 `0=RC only`，其他控制源模式在协议写入时拒绝、在存储加载时 fail-closed。固定翼 Flaps 与通用 Aux 映射及其后端 uORB 字段已退役；RC1～RC18 校准能力和其余功能映射仍保留完整的 `0..18` 范围。`PARAM_MAP_RC` 在线参数调节不在本阶段。
+`RC_MAP_FLTMODE=0..18` 选择主模式通道，0 为禁用；同一校准通道按 PX4 v1.17 公式分为六槽，标准三段开关的低/中/高对应槽 1/4/6。`COM_FLTMODE1..6` 由一个多实例 YAML 定义生成，每槽只允许 `-1=Calibration Reserved/Unassigned`、`0=Manual`、`3=Mission`，默认均为 -1。推荐三段配置为槽 1 Manual、槽 4 Mission、槽 6 Calibration Reserved；预留槽不发布动作，Mission 仍通过 Commander 完整的 Armed、任务、参数、AutoMode 和 EKF readiness 事务，拒绝后不会自动重试。瞬时模式按键、长按 Toggle 和其他飞行模式不在本阶段。
+
+`COM_RC_IN_MODE` 只允许 `0=RC only`，其他控制源模式在协议写入时拒绝、在存储加载时 fail-closed。Gear、Loiter、Offboard、Return、固定翼 Flaps 与通用 Aux 均不定义 QGC 映射或阈值参数；保留的 Throttle、Yaw、Arm、Kill 和主模式通道仍具有完整 `0..18` 范围。`PARAM_MAP_RC` 在线参数调节不在本阶段。
