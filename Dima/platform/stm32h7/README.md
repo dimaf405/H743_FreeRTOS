@@ -40,3 +40,5 @@ STM32H7 平台层，也不能把 `system/` 当作杂项目录。平台内部依�
   Fault 入口提供 fail-closed 弱实现，`FlashDevice.cpp` 只在安全读窗口内提供强实现。
 - 所有翻译单元必须显式列入 `make/project.mk`；`cache.c` 与 `flash_bank1.c`
   还必须同步进入 `Bootloader/Makefile`，不得保留旧路径转发文件。
+
+- **SD 内存边界：** memory 的集中 cache C ABI 支持 clean、invalidate 与 clean-invalidate；直接 DMA 的调用方必须证明整条 cache line 独占。MPU Region 5 覆盖由链接符号指定的 8 KiB D1 SD 双缓冲，Region 6 的 UART/SPI DMA 区与 Region 7 的诊断区保持原布局。SDMMC/FatFs 的唯一板级端口位于 Boards/H743/Src/fatfs_diskio.cpp。

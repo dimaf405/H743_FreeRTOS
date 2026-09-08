@@ -23,10 +23,10 @@
 
 ## 参数与输出
 
-参数只从 `module_ekf2*.yaml` 的正式生成枚举读取。Rover 向 GSF 固定声明 `is_fixed_wing=false`，固定翼向心加速度补偿不会运行，因此权威参数链不暴露无实际消费者的 `EKF2_GSF_TAS`。运行期刷新先构造并验证完整候选；读取失败保留旧值，`reboot_required` 字段继续使用启动快照，不半应用已分配缓冲和融合模式。磁偏角自动保存时，`wq:estimator` 只发布一个固定 float 快照，`EKF2_MAG_DECL` 的 bind/read/commit 和日志由非实时 `wq:lp_default` 提交器完成；失败不阻塞滤波并以 1 Hz 限速重试，物理持久化仍由既有 autosave 负责。
+参数只从 `module_ekf2*.yaml` 的正式生成枚举读取。Rover 向 GSF 固定声明 `is_fixed_wing=false`，固定翼向心加速度补偿不会运行，因此权威参数链不暴露无实际消费者的 `EKF2_GSF_TAS`。运行期刷新先构造并验证完整候选；读取失败保留旧值，`reboot_required` 字段继续使用启动快照，不半应用已分配缓冲和融合模式。磁偏角自动更新时，`wq:estimator` 只发布一个固定 float 快照，`EKF2_MAG_DECL` 的 bind/read/commit 和日志由非实时 `wq:lp_default` 提交器完成；失败不阻塞滤波并以 1 Hz 限速重试。该参数由权威 YAML 标为 volatile，仅 RAM 更新，autosave/显式保存都不持久化；组合校准活动期间延后独立写回，不把正常延后报告成故障。
 
 模块发布姿态、local/global position、odometry、Estimator status/event/flags、GNSS/Mag/Gravity/fake aid source、GPS checks、sensor bias、GSF yaw 和 EKF2 timestamps。`estimator_gps_status` 的唯一发布者是本模块；UM982 只发布原始 GPS Topic。
 
-Bias stable 判定沿用 PX4：方差最大值 `<1e-3`、最大/最小比 `<100`、变化不超过 limit 的 10%，且正确的 alignment/fault/clipping/fusion 条件累计超过 10 s。`estimator_sensor_bias` 只提供带 device ID、方差、valid/stable 的运行时估计；参数写回由 VehicleImu 在 Disarmed 后完成。
+Bias stable 判定沿用 PX4：方差最大值 `<1e-3`、最大/最小比 `<100`、变化不超过 limit 的 10%，且正确的 alignment/fault/clipping/fusion 条件累计超过 10 s。`estimator_sensor_bias` 只提供带 device ID、方差、valid/stable 的运行时估计；普通参数写回由 VehicleImu 在 Disarmed 后完成。组合校准期间暂停独立后台写回，由协调器按实际前端快照统一提交合格 ID/offset，并在新前端/EKF 代次和残差确认后保存；不将位置、速度、姿态或协方差保存成固定标定值。
 
 本目录不得直接访问 Rover 控制器、Arming、PWM、Flash 或 MAVLink wire codec。
