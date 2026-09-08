@@ -35,13 +35,14 @@ public:
     static_assert(kIntervalUs > 0U,
                   "generated HEARTBEAT interval must be enabled");
     // PX4 custom_mode：main_mode 位于 bits 16..23，AUTO sub_mode 位于
-    // bits 24..31；只编码本产品真正实现的四种状态。
-    static constexpr std::uint32_t kPx4CustomModeManual = 1UL << 16;
+    // bits 24..31；编号与可发现模式均由同一产品 YAML 生成。
+    static constexpr std::uint32_t kPx4CustomModeManual = dima::generated::mavlink_streams::kPx4CustomModeManual;
     static constexpr std::uint32_t kPx4CustomModeAutoMission =
-        (4UL << 16) | (4UL << 24);
+        dima::generated::mavlink_streams::kPx4CustomModeAutoMission;
     static constexpr std::uint32_t kPx4CustomModeAutoLoiter =
-        (4UL << 16) | (3UL << 24);
-    static constexpr std::uint32_t kPx4CustomModeTermination = 10UL << 16;
+        dima::generated::mavlink_streams::kPx4CustomModeAutoLoiter;
+    static constexpr std::uint32_t kPx4CustomModeTermination = dima::generated::mavlink_streams::kPx4CustomModeTermination;
+    static constexpr std::uint32_t kPx4CustomModeAutoCalibration = dima::generated::mavlink_streams::kPx4CustomModeAutoCalibration;
 
     explicit HeartbeatPacer(MavlinkIdentity &identity) noexcept;
 

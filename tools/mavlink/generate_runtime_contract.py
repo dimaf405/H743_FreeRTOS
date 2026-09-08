@@ -29,7 +29,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 MESSAGE_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 HANDLER_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 MESSAGE_HEADER = re.compile(r"^mavlink_msg_([a-z0-9_]+)\.h$")
-POLICY_KEYS = frozenset({"version", "outbound", "inbound"})
+POLICY_KEYS = frozenset({"version", "outbound", "inbound", "px4_custom_modes"})
 OUTBOUND_KEYS = frozenset({
     "message",
     "handler",
@@ -272,8 +272,105 @@ def normalize_inbound(
     return normalized
 
 
+def render_mode_contract(modes: dict[str, Any], generated: pathlib.Path) -> str:
+    # 只发现 mavgen 输出的枚举符号，不解析其数值；标准模式和属性仍由官方
+    # common.xml 决定。nav_state 也仅引用 uORB 生成常量，不复制第二份编号。
+    symbols: set[str] = set()
+    for path in sorted(generated.rglob("*.h")):
+        if MESSAGE_HEADER.fullmatch(path.name):
+            continue
+        symbols.update(re.findall(
+            r"^\s*(MAV_STANDARD_MODE_[A-Z0-9_]+|MAV_MODE_PROPERTY_[A-Z0-9_]+)\s*=",
+            path.read_text(encoding="utf-8"), re.MULTILINE,
+        ))
+    if not isinstance(modes, dict) or not modes:
+        raise ContractError("px4_custom_modes must be a non-empty mapping")
+    mode_lines: list[str] = []
+    descriptors: list[str] = []
+    packed_values: set[int] = set()
+    nav_states: set[str] = set()
+    display_names: set[str] = set()
+    for name, mode in modes.items():
+        if not isinstance(name, str) or not HANDLER_NAME.fullmatch(name) or not isinstance(mode, dict):
+            raise ContractError("invalid PX4 custom mode entry")
+        field = f"px4_custom_modes.{name}"
+        reject_unknown_keys(mode, frozenset({
+            "main", "sub", "nav_state", "name", "standard_mode", "properties",
+        }), field)
+        if any(type(mode.get(key)) is not int or not 0 <= mode[key] <= 255 for key in ("main", "sub")):
+            raise ContractError(f"PX4 mode bytes out of range: {name}")
+        packed = (mode["main"] << 16) | (mode["sub"] << 24)
+        if packed == 0 or packed in packed_values:
+            raise ContractError(f"duplicate or zero PX4 custom mode: {name}")
+        packed_values.add(packed)
+        nav_state = required_name(mode, "nav_state", field, re.compile(r"^NAVIGATION_STATE_[A-Z0-9_]+$"))
+        if nav_state in nav_states:
+            raise ContractError(f"duplicate PX4 navigation state: {nav_state}")
+        nav_states.add(nav_state)
+        display_name = mode.get("name")
+        if (not isinstance(display_name, str) or not display_name or
+                not display_name.isascii() or not display_name.isprintable() or
+                display_name.casefold() in display_names):
+            raise ContractError(f"invalid or duplicate mode display name: {name}")
+        display_names.add(display_name.casefold())
+        standard_mode = required_name(mode, "standard_mode", field, re.compile(r"^MAV_STANDARD_MODE_[A-Z0-9_]+$"))
+        properties = mode.get("properties")
+        if (standard_mode not in symbols or standard_mode.endswith("_ENUM_END") or
+                not isinstance(properties, list)):
+            raise ContractError(f"invalid mode standard/properties: {name}")
+        if any(not isinstance(prop, str) or not prop.startswith("MAV_MODE_PROPERTY_") or
+               prop not in symbols or prop.endswith("_ENUM_END")
+               for prop in properties) or len(set(properties)) != len(properties):
+            raise ContractError(f"invalid or duplicate mode property: {name}")
+        property_expression = " | ".join(properties) if properties else "0U"
+        name_literal = json.dumps(display_name)
+        mode_lines.append(f"inline constexpr std::uint32_t kPx4CustomMode{name} = 0x{packed:08X}U;")
+        mode_lines.append(
+            f"static_assert(sizeof({name_literal}) <= sizeof(mavlink_available_modes_t{{}}.mode_name), "
+            f'"mode name exceeds the official MAVLink field: {name}");'
+        )
+        descriptors.append(
+            f"    {{vehicle_status_s::{nav_state}, {standard_mode}, "
+            f"kPx4CustomMode{name}, {property_expression}, {name_literal}"
+            "}"
+        )
+    mode_contract = "\n".join(mode_lines)
+    mode_descriptors = ",\n".join(descriptors)
+    return f"""{mode_contract}
+
+struct ModeContract {{
+    std::uint8_t nav_state;
+    std::uint8_t standard_mode;
+    std::uint32_t custom_mode;
+    std::uint32_t properties;
+    const char *name;
+}};
+
+// 同一目录供 HEARTBEAT、模式发现和当前/用户意图投影使用。
+inline constexpr ModeContract kModes[]{{
+{mode_descriptors}
+}};
+inline constexpr std::size_t kModeCount = sizeof(kModes) / sizeof(kModes[0]);
+static_assert(kModeCount <= UINT8_MAX, "mode count exceeds AVAILABLE_MODES");
+
+constexpr const ModeContract *find_mode(std::uint8_t nav_state) noexcept
+{{
+    for (const ModeContract &mode : kModes) {{
+        if (mode.nav_state == nav_state) return &mode;
+    }}
+    return nullptr;
+}}
+
+constexpr std::uint32_t custom_mode_for_nav_state(std::uint8_t nav_state) noexcept
+{{
+    const ModeContract *mode = find_mode(nav_state);
+    return mode != nullptr ? mode->custom_mode : 0U;
+}}
+"""
+
+
 def render_contract(
-    outbound: list[dict[str, Any]], inbound: list[dict[str, str]]
+    outbound: list[dict[str, Any]], inbound: list[dict[str, str]], mode_contract: str
 ) -> str:
     handlers = ",\n".join(f"    {entry['handler']}" for entry in outbound)
     inbound_handlers = list(dict.fromkeys(entry["handler"] for entry in inbound))
@@ -307,12 +404,15 @@ def render_contract(
 
 #include <cstddef>
 #include <cstdint>
+#include <uORB/topics/vehicle_status.h>
 
 #ifndef MAVLINK_MSG_ID_HEARTBEAT
 #error "include MavlinkBridge.h before mavlink_stream_contract.hpp"
 #endif
 
 namespace dima::generated::mavlink_streams {{
+
+{mode_contract}
 
 enum class MessageHandler : std::uint8_t {{
 {handlers}
@@ -534,7 +634,8 @@ def generate(arguments: argparse.Namespace) -> None:
     inbound = normalize_inbound(policy, available)
 
     contract_path = staging / "mavlink_stream_contract.hpp"
-    write_utf8(contract_path, render_contract(outbound, inbound))
+    mode_contract = render_mode_contract(policy.get("px4_custom_modes"), staging)
+    write_utf8(contract_path, render_contract(outbound, inbound, mode_contract))
     write_manifest(
         staging,
         dialect,

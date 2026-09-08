@@ -249,6 +249,7 @@ void MavlinkService::Run()
             heartbeat_pacer_.reset();
         }
     }
+    stream_available_modes();
     stream_configured_messages(
         now, dima::generated::mavlink_streams::TxStage::PreMetadata);
     if (!metadata_ftp_.service(now)) {
@@ -386,6 +387,9 @@ void MavlinkService::reset_configured_streams() noexcept
         ++index;
     }
     rc_stream_active_ = false;
+    available_modes_next_ = available_modes_end_ = 0U;
+    last_current_mode_ = {};
+    have_current_mode_tx_ = false;
 }
 
 bool MavlinkService::send_contract_message(
@@ -404,6 +408,11 @@ bool MavlinkService::send_contract_message(
         return send_autopilot_version();
     case stream_contract::MessageHandler::ProtocolVersion:
         return send_protocol_version();
+    case stream_contract::MessageHandler::AvailableModes:
+        // 全量/单项索引只由 request_message() 冻结，不能经无参周期入口发送。
+        return false;
+    case stream_contract::MessageHandler::CurrentMode:
+        return send_current_mode();
     case stream_contract::MessageHandler::ComponentMetadata:
         return send_component_metadata();
     case stream_contract::MessageHandler::ComponentInformation:
@@ -464,7 +473,11 @@ void MavlinkService::stream_configured_messages(
             }
             continue;
         }
-        if (stream_due(now, state.last_tx_us, state.interval_us) &&
+        // CURRENT_MODE 使用官方 0.5 Hz 默认节拍，同时在当前/意图模式变化时
+        // 立即发送；SET_MESSAGE_INTERVAL 停流仍由上面的负间隔门禁统一处理。
+        const bool mode_changed = contract.handler ==
+            stream_contract::MessageHandler::CurrentMode && current_mode_changed();
+        if ((stream_due(now, state.last_tx_us, state.interval_us) || mode_changed) &&
             send_contract_message(contract.handler, now, false)) {
             state.last_tx_us = now;
         }
@@ -485,6 +498,9 @@ std::uint8_t MavlinkService::request_message(void *ctx,
         stream_contract::find_message(message_id);
     if (contract == nullptr || !contract->requestable) {
         return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
+    }
+    if (contract->handler == stream_contract::MessageHandler::AvailableModes) {
+        return self.request_available_modes(param2);
     }
     if (contract->handler ==
         stream_contract::MessageHandler::StorageInformation) {

@@ -27,6 +27,7 @@
 #include "vehicle_local_position.hpp"
 #include "vehicle_magnetometer.hpp"
 #include "vehicle_odometry.hpp"
+#include "vehicle_status.hpp"
 #include "mavlink/MavlinkBridge.h"
 #include "mavlink_stream_contract.hpp"
 #include "lifecycle/module_base.hpp"
@@ -132,6 +133,11 @@ private:
     bool send_local_position_ned(std::uint64_t now) noexcept;
     bool send_global_position_int(std::uint64_t now) noexcept;
     bool send_estimator_status(std::uint64_t now) noexcept;
+    std::uint8_t request_available_modes(float index) noexcept;
+    void stream_available_modes() noexcept;
+    bool current_mode_snapshot(mavlink_current_mode_t &mode) noexcept;
+    bool current_mode_changed() noexcept;
+    bool send_current_mode() noexcept;
     void stream_statustext() noexcept;
     bool send_message(mavlink_message_t &msg,
                       std::uint32_t timeout_ms = kTxTimeoutMs) noexcept;
@@ -193,6 +199,8 @@ private:
         vehicle_odometry_subscription_{ORB_ID(vehicle_odometry)};
     uORB::SubscriptionData<estimator_status_s>
         estimator_status_subscription_{ORB_ID(estimator_status)};
+    uORB::SubscriptionData<vehicle_status_s>
+        vehicle_status_subscription_{ORB_ID(vehicle_status)};
 
     std::uint8_t rx_buffer_[kRxBatchBytes]{};
     std::uint8_t tx_buffer_[MAVLINK_MAX_PACKET_LEN]{};
@@ -205,6 +213,12 @@ private:
 
     std::uint16_t statustext_id_{0U};
     std::uint16_t cpu_load_permille_{0U};
+    // AVAILABLE_MODES 只冻结静态目录区间，每轮一帧；CURRENT_MODE 的提交快照
+    // 仅在真实发送成功后推进，丢帧不会吞掉模式变化或用户意图变化。
+    std::uint8_t available_modes_next_{0U};
+    std::uint8_t available_modes_end_{0U};
+    mavlink_current_mode_t last_current_mode_{};
+    bool have_current_mode_tx_{false};
     struct ConfiguredStreamState {
         std::int32_t interval_us{-1};
         std::uint64_t last_tx_us{0U};

@@ -1,6 +1,45 @@
 version: 1
 
-# 该文件只定义 Dima 的发送频率、调度阶段和业务 handler。
+# PX4 v1.17.0 px4_custom_mode.h @ d6f12ad1：main/sub 是 opaque custom_mode
+# 的产品投影策略，编号只在此权威输入定义，收发端共同消费生成常量。
+px4_custom_modes:
+  Manual:
+    main: 1
+    sub: 0
+    nav_state: NAVIGATION_STATE_MANUAL
+    name: Manual
+    standard_mode: MAV_STANDARD_MODE_NON_STANDARD
+    properties: []
+  AutoMission:
+    main: 4
+    sub: 4
+    nav_state: NAVIGATION_STATE_AUTO_MISSION
+    name: Mission
+    standard_mode: MAV_STANDARD_MODE_MISSION
+    properties: []
+  AutoLoiter:
+    main: 4
+    sub: 3
+    nav_state: NAVIGATION_STATE_AUTO_LOITER
+    name: Hold
+    standard_mode: MAV_STANDARD_MODE_NON_STANDARD
+    properties: [MAV_MODE_PROPERTY_NOT_USER_SELECTABLE]
+  AutoCalibration:
+    main: 4
+    sub: 11
+    nav_state: NAVIGATION_STATE_EXTERNAL1
+    name: Auto Calibration
+    standard_mode: MAV_STANDARD_MODE_NON_STANDARD
+    properties: []
+  Termination:
+    main: 10
+    sub: 0
+    nav_state: NAVIGATION_STATE_TERMINATION
+    name: Termination
+    standard_mode: MAV_STANDARD_MODE_NON_STANDARD
+    properties: [MAV_MODE_PROPERTY_NOT_USER_SELECTABLE]
+
+# 该文件定义 Dima 的模式投影、发送频率、调度阶段和业务 handler。
 # wire ID、CRC、payload 字段及编解码规则始终由 dima.xml + mavgen.py 决定。
 outbound:
   - message: HEARTBEAT
@@ -19,6 +58,20 @@ outbound:
     handler: ProtocolVersion
     requestable: true
     scheduler: none
+
+  # 静态模式目录使用官方 Standard Modes 服务；不新增私有 wire 消息。
+  - message: AVAILABLE_MODES
+    handler: AvailableModes
+    requestable: true
+    scheduler: none
+
+  - message: CURRENT_MODE
+    handler: CurrentMode
+    requestable: true
+    scheduler: service
+    tx_stage: pre_metadata
+    default_interval_us: 2000000
+    interval_configurable: true
 
   - message: COMPONENT_METADATA
     handler: ComponentMetadata
