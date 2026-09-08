@@ -47,6 +47,9 @@ defined in linker script */
 .word  _sbss
 /* end address for the .bss section. defined in linker script */
 .word  _ebss
+/* 大块 CPU SRAM 静态对象的独立清零边界；Bootloader 可提供空区间。 */
+.word  __dima_sram_bss_start__
+.word  __dima_sram_bss_end__
 /* stack used for SystemInit_ExtMemCtl; always internal RAM used */
 
 /**
@@ -115,6 +118,21 @@ FillZerobss:
 LoopFillZerobss:
   cmp r2, r4
   bcc FillZerobss
+
+/* D1 大块静态对象与 D2 .bss 不连续，必须在任何 C++ 构造之前独立清零。
+ * 先比较后写入兼容 MCUboot 的空段；不触碰相邻 heap、任务栈或 D3 诊断。 */
+  ldr r2, =__dima_sram_bss_start__
+  ldr r4, =__dima_sram_bss_end__
+  movs r3, #0
+  b LoopFillZeroSramBss
+
+FillZeroSramBss:
+  str r3, [r2]
+  adds r2, r2, #4
+
+LoopFillZeroSramBss:
+  cmp r2, r4
+  bcc FillZeroSramBss
 
 /* Call static constructors */
     bl __libc_init_array

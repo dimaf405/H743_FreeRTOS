@@ -232,6 +232,17 @@ SECTIONS
     . = ALIGN(32);
   } >RAM_D1
 
+  /* 大块 CPU 静态对象放在 D1 固定 heap/task pool 之后；NOLOAD 不携带 Flash
+     初值，Reset_Handler 必须在 C++ 构造之前清零。该段不作为 DMA 缓冲区。 */
+  .dima_sram_bss (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_sram_bss_start__ = .;
+    *(.dima_sram_bss .dima_sram_bss.*)
+    . = ALIGN(32);
+    __dima_sram_bss_end__ = .;
+  } >RAM_D1
+
   /* SRAM capture is persisted to 0x08020000 for ROM USB DFU readback. */
   .dima_boot_diag (NOLOAD) :
   {
@@ -277,6 +288,17 @@ SECTIONS
          "DMA buffers exceed the fixed 32 KiB SRAM3 region")
   ASSERT(ADDR(.dima_task_pool) >= 0x24040000,
          "Task pool must not overlap the 256 KiB D1 heap")
+  /* 新增静态段不能侵占既有任务栈或超出 D1；32 字节边界兼容启动按字清零
+     与 cache line 对齐，不把物理空闲误当成已分配平台 heap 的一部分。 */
+  ASSERT(ADDR(.dima_sram_bss) >=
+         ADDR(.dima_task_pool) + SIZEOF(.dima_task_pool),
+         "D1 static storage overlaps the task stack pool")
+  ASSERT((ADDR(.dima_sram_bss) & 31) == 0 &&
+         (SIZEOF(.dima_sram_bss) & 31) == 0,
+         "D1 static storage must be cache-line aligned")
+  ASSERT(ADDR(.dima_sram_bss) + SIZEOF(.dima_sram_bss) <=
+         ORIGIN(RAM_D1) + LENGTH(RAM_D1),
+         "D1 static storage exceeds AXI SRAM capacity")
   ASSERT(SIZEOF(.dima_task_pool) <= 48K,
          "Task pool exceeds its fixed platform budget")
 }

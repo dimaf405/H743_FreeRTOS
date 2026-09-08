@@ -191,6 +191,17 @@ SECTIONS
 
   
 
+  /* 共用 Reset_Handler 需要合法的额外 SRAM 清零边界；MCUboot 当前没有该段
+     对象，两端相等时启动循环直接跳过，不为应用日志预留内存。 */
+  .dima_sram_bss (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_sram_bss_start__ = .;
+    *(.dima_sram_bss .dima_sram_bss.*)
+    . = ALIGN(32);
+    __dima_sram_bss_end__ = .;
+  } >RAM_D1
+
   .ARM.attributes 0 : { *(.ARM.attributes) }
 
   ASSERT(_etext <= ORIGIN(FLASH) + LENGTH(FLASH),

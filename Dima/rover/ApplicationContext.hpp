@@ -71,15 +71,16 @@ private:
     bool stop_motor_output() noexcept;
     bool apply_serial_configuration() noexcept;
 
-    // 成员声明顺序也是构造/析构依赖顺序：底层协调器与 FlashFS 先于消费者，
-    // ModuleManager 不拥有对象，只登记这些静态生命周期实例。
+    // 成员装配遵循构造依赖：底层协调器与 FlashFS 先于消费者；ModuleManager
+    // 只登记静态实例，独立存储的 LogService 仍由本组合根统一控制启停。
     dima::platform::Services &services_;
     dima::middleware::maintenance::RuntimeMaintenanceCoordinator
         maintenance_;
     dima::parameters::FlashFS flashfs_;
     dima::middleware::lifecycle::ModuleManager module_manager_{};
     dima::modules::boot_health::BootHealthService boot_health_;
-    dima::modules::logging::LogService log_service_;
+    // 大型日志对象拥有独立 SRAM 静态存储，此处只保留唯一实例的引用。
+    dima::modules::logging::LogService &log_service_;
     dima::modules::parameters::ParameterService parameter_service_;
     dima::modules::mission::MissionService mission_service_;
     dima::modules::mavlink::MavlinkService mavlink_service_;

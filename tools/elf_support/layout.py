@@ -83,6 +83,8 @@ def verify_memory_layout(elf: Elf32) -> None:
     data = verify_section(elf, ".data", RAM_D2_BASE, RAM_D2_SIZE)
     bss = elf.section(".bss")
     assert bss is not None
+    sram_bss = elf.section(".dima_sram_bss")
+    assert sram_bss is not None
     # 普通初始化/零初始化数据必须完整位于 D2 SRAM1/2，DMA SRAM3 由独立段管理。
     if (bss.section_type != SHT_NOBITS or bss.size == 0 or
             not range_contains(RAM_D2_BASE, RAM_D2_SIZE,
@@ -108,6 +110,8 @@ def verify_memory_layout(elf: Elf32) -> None:
         "_edata": data.address + data.size,
         "_sbss": bss.address,
         "_ebss": bss.address + bss.size,
+        "__dima_sram_bss_start__": sram_bss.address,
+        "__dima_sram_bss_end__": sram_bss.address + sram_bss.size,
     }
     # 启动复制/清零只能依赖这些链接边界，逐项核对脚本和启动汇编的一致性。
     for symbol_name, expected_value in expected_boundaries.items():
@@ -129,6 +133,16 @@ def verify_memory_layout(elf: Elf32) -> None:
     if not range_contains(RAM_D1_BASE, RAM_D1_SIZE,
                           task_pool.address, task_pool.size):
         raise ElfVerificationError("task pool exceeds D1 SRAM capacity")
+    # 大块 CPU 静态存储必须是独立 NOLOAD 段，完整位于既有任务栈池之后；
+    # 不固化某个业务对象的大小，只验证区域、清零边界和 cache-line 对齐。
+    if (sram_bss.section_type != SHT_NOBITS or
+            not range_contains(RAM_D1_BASE, RAM_D1_SIZE,
+                               sram_bss.address, sram_bss.size) or
+            sram_bss.address < task_pool.address + task_pool.size or
+            sram_bss.address % 32 != 0 or sram_bss.size % 32 != 0):
+        raise ElfVerificationError(
+            ".dima_sram_bss must be aligned D1 NOLOAD storage after the task pool"
+        )
     verify_section(
         elf, ".dima_boot_diag", D3_DIAGNOSTICS_BASE,
         D3_DIAGNOSTICS_SIZE,

@@ -24,6 +24,16 @@ void *uorb_allocate(size_t size, size_t alignment) noexcept
                                    dima::platform::AllocationDomain::Startup);
 }
 
+dima::modules::logging::LogService &log_service_instance(
+    dima::platform::LogFileStore &log_files) noexcept
+{
+    // 日志及其 64 KiB Ring 独立放入大块 SRAM 零初始化段；物理区域由链接脚本
+    // 选择。首次构造仍发生在 Services 安装后的组合根构造中，不引入堆分配。
+    alignas(32) static dima::modules::logging::LogService instance
+        __attribute__((section(".dima_sram_bss"))){log_files};
+    return instance;
+}
+
 template <typename... Modules>
 bool register_all_modules(
     dima::middleware::lifecycle::ModuleManager &manager,
@@ -47,7 +57,7 @@ ApplicationContext::ApplicationContext(
       flashfs_(services.parameter_partition, services.flash_transactions,
                services.armed_flash, services.synchronization),
       boot_health_(services.boot_control, services.clock, maintenance_),
-      log_service_(services.log_files),
+      log_service_(log_service_instance(services.log_files)),
       parameter_service_(flashfs_, services.atomic_files,
                          services.armed_flash,
                          services.synchronization, services.critical,
