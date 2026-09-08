@@ -3,6 +3,7 @@ parameters:
 - group: GPS
   definitions:
     GPS_YAW_OFFSET:
+      category: System
       description:
         short: Heading/Yaw offset for dual antenna GPS
         long: |-
@@ -16,6 +17,7 @@ parameters:
       increment: 0.1
       decimal: 3
     GPS_YAW_BASELINE:
+      category: System
       description:
         short: Dual antenna measured baseline
         long: |-
@@ -229,6 +231,7 @@ parameters:
 - group: Sensors
   definitions:
     SENS_MAG_RATE:
+      category: Developer
       description:
         short: Magnetometer maximum publication rate
         long: |-
@@ -291,6 +294,7 @@ parameters:
       min: 0
       max: 40
     SENS_BOARD_X_OFF:
+      category: System
       description:
         short: Board roll fine adjustment
         long: Fine roll correction applied after SENS_BOARD_ROT.
@@ -302,6 +306,7 @@ parameters:
       increment: 0.1
       decimal: 2
     SENS_BOARD_Y_OFF:
+      category: System
       description:
         short: Board pitch fine adjustment
         long: Fine pitch correction applied after SENS_BOARD_ROT.
@@ -313,6 +318,7 @@ parameters:
       increment: 0.1
       decimal: 2
     SENS_BOARD_Z_OFF:
+      category: System
       description:
         short: Board yaw fine adjustment
         long: |-
@@ -326,6 +332,7 @@ parameters:
       increment: 0.1
       decimal: 2
     IMU_INTEG_RATE:
+      category: Developer
       description:
         short: IMU integration rate
         long: |-
@@ -349,7 +356,7 @@ parameters:
         long: |-
           Automatically initialize IMU accelerometer and gyroscope calibration
           from stable EKF2 in-run bias estimates when available.
-      category: System
+      category: Developer
       type: boolean
       default: 1
     SENS_IMU_CLPNOTI:
@@ -358,6 +365,6 @@ parameters:
         long: |-
           Emit a rate-limited warning when integrated accelerometer or gyroscope data
           reports clipping. This does not alter or discard samples.
-      category: System
+      category: Developer
       type: boolean
       default: 1

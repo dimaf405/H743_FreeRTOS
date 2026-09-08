@@ -373,6 +373,9 @@ def validate_parameter_catalogue(parameters: list[object]) -> dict[str, dict]:
 def validate_sensor_metadata(by_name: dict[str, dict]) -> None:
     # 参数名只承担可解析的结构角色；实际实例集合完全由生成目录发现，新增
     # ACC/GYRO/MAG 实例时无需在 Metadata 工具中同步维护参数清单。
+    # category 是标准展示字段，不是权限/持久化语义；锁定 YAML 工具只允许
+    # System/Developer（未指定为 Standard），校准值保持 System、诊断开关
+    # 放入 Developer；原名称、类型和数值范围仍严格核对，不放宽上游 schema。
     calibration_roles = [
         (name, parameter, match)
         for name, parameter in by_name.items()
@@ -427,7 +430,7 @@ def validate_sensor_metadata(by_name: dict[str, dict]) -> None:
     clipping = by_name.get("SENS_IMU_CLPNOTI")
     if (clipping is None or clipping.get("type") != "Int32" or
             clipping.get("group") != "Sensors" or
-            clipping.get("category") != "System" or
+            clipping.get("category") != "Developer" or
             clipping.get("default") != 1 or
             {entry.get("value") for entry in clipping.get("values", [])} !=
             {0, 1}):
