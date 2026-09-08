@@ -81,7 +81,8 @@ private:
 
     static constexpr std::uint32_t kRingCapacity = 64U * 1024U;
     static constexpr std::uint32_t kRingMask = kRingCapacity - 1U;
-    static constexpr std::uint32_t kWriteChunkBytes = 4096U;
+    // 一批最多覆盖两个 4 KiB SD DMA 半区；少量积压仍立即按实际连续长度写入。
+    static constexpr std::uint32_t kWriteChunkBytes = 8192U;
     static constexpr std::uint32_t kRunIntervalUs = 20000U;
     static constexpr std::uint64_t kRetryIntervalUs = 3000000ULL;
     static constexpr std::uint64_t kSyncIntervalUs = 1000000ULL;

@@ -147,6 +147,7 @@ def scan_hardware_ownership(violations: list[Violation]) -> None:
         "Dima/platform/stm32h7/memory/early_memory.c",
     }
     dma_owners = {
+        "Boards/H743/Src/fatfs_diskio.cpp",
         "Dima/platform/stm32h7/serial/UartTimestampedRxEndpoint.cpp",
         "Dima/platform/stm32h7/serial/UartDuplexDmaEndpoint.cpp",
         "Dima/platform/stm32h7/spi/Spi4.cpp",

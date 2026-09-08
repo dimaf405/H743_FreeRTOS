@@ -2,12 +2,20 @@
 
 #include "stm32h7xx.h"
 
+#define DIMA_MPU_SD_DMA_REGION     5U
+extern uint8_t __dima_sd_dma_start__;
+
 #define DIMA_MPU_DMA_REGION        6U
 #define DIMA_MPU_DIAGNOSTIC_REGION 7U
 
 #define DIMA_MPU_NORMAL_NONCACHEABLE \
     (MPU_RASR_XN_Msk | (3UL << MPU_RASR_AP_Pos) | \
      (1UL << MPU_RASR_TEX_Pos) | MPU_RASR_S_Msk)
+
+/* SIZE=12 对应 2^(12+1)=8192 字节；仅该专用区不可缓存，日志 Ring 仍缓存。 */
+#define DIMA_MPU_SD_DMA_RASR \
+    (DIMA_MPU_NORMAL_NONCACHEABLE | (12UL << MPU_RASR_SIZE_Pos) | \
+     MPU_RASR_ENABLE_Msk)
 
 #define DIMA_MPU_DMA_RASR \
     (DIMA_MPU_NORMAL_NONCACHEABLE | (14UL << MPU_RASR_SIZE_Pos) | \
@@ -48,6 +56,9 @@ void dima_stm32_early_memory_init(void)
         MPU->RASR = 0U;
     }
 
+    configure_region(DIMA_MPU_SD_DMA_REGION,
+                     (uint32_t)&__dima_sd_dma_start__,
+                     DIMA_MPU_SD_DMA_RASR);
     configure_region(DIMA_MPU_DMA_REGION, DIMA_DMA_REGION_BASE,
                      DIMA_MPU_DMA_RASR);
     configure_region(DIMA_MPU_DIAGNOSTIC_REGION,
@@ -107,6 +118,11 @@ bool dima_stm32_memory_contract_verify(uint32_t *failure_mask)
                             DIMA_DIAGNOSTIC_REGION_BASE,
                             DIMA_MPU_DIAGNOSTIC_RASR)) {
             failures |= 1UL << 5U;
+        }
+        if (!region_matches(DIMA_MPU_SD_DMA_REGION,
+                            (uint32_t)&__dima_sd_dma_start__,
+                            DIMA_MPU_SD_DMA_RASR)) {
+            failures |= 1UL << 6U;
         }
         MPU->RNR = saved_region;
     }

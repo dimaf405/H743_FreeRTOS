@@ -530,8 +530,8 @@ DIMA_DRONECAN_C_SOURCES := \
 	$(DIMA_DRONECAN_GENERATED_C_SOURCES)
 DIMA_FATFS_FREERTOS_C_SOURCES := \
 	Middlewares/Third_Party/FatFs/src/ff.c
-DIMA_FATFS_BOARD_C_SOURCES := \
-	Boards/H743/Src/fatfs_diskio.c
+DIMA_FATFS_BOARD_CXX_SOURCES := \
+	Boards/H743/Src/fatfs_diskio.cpp
 DIMA_HEATSHRINK_C_SOURCES := \
 	Middlewares/Third_Party/px4_heatshrink/lib/heatshrink/heatshrink/heatshrink_decoder.c
 DIMA_FREERTOS_C_SOURCES := \
@@ -546,8 +546,7 @@ DIMA_STM32_C_SOURCES := \
 DIMA_BOARD_C_SOURCES := \
 	Boards/H743/Src/board_init.c \
 	Boards/H743/Src/boot_diagnostics.c \
-	Boards/H743/Src/motor_pwm.c \
-	$(DIMA_FATFS_BOARD_C_SOURCES)
+	Boards/H743/Src/motor_pwm.c
 PROJECT_C_SOURCES := \
 	$(DIMA_DRONECAN_C_SOURCES) \
 	$(DIMA_HEATSHRINK_C_SOURCES) \
@@ -682,7 +681,8 @@ DIMA_STM32_CXX_SOURCES := \
 	Dima/platform/stm32h7/interrupts/SensorInterrupts.cpp \
 	Dima/platform/stm32h7/usb/UsbCdcTransport.cpp
 DIMA_BOARD_CXX_SOURCES := \
-	Boards/H743/Src/platform_composition.cpp
+	Boards/H743/Src/platform_composition.cpp \
+	$(DIMA_FATFS_BOARD_CXX_SOURCES)
 PROJECT_CXX_SOURCES := \
 	$(DIMA_COMMON_CXX_SOURCES) \
 	$(DIMA_DRONECAN_COMMON_CXX_SOURCES) \
@@ -705,6 +705,8 @@ DIMA_STM32_OBJECTS := \
 DIMA_BOARD_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_C_SOURCES:.c=.o)) \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_BOARD_CXX_SOURCES:.cpp=.o))
+DIMA_FATFS_BOARD_CXX_OBJECTS := \
+	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_BOARD_CXX_SOURCES:.cpp=.o))
 DIMA_FATFS_FREERTOS_CXX_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_FREERTOS_CXX_SOURCES:.cpp=.o))
 DIMA_FORMAT_CXX_OBJECT := \
@@ -712,7 +714,7 @@ DIMA_FORMAT_CXX_OBJECT := \
 DIMA_FATFS_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_FREERTOS_C_SOURCES:.c=.o)) \
 	$(DIMA_FATFS_FREERTOS_CXX_OBJECTS) \
-	$(addprefix $(BUILD_DIR)/,$(DIMA_FATFS_BOARD_C_SOURCES:.c=.o))
+	$(DIMA_FATFS_BOARD_CXX_OBJECTS)
 PROJECT_OBJECTS := $(PROJECT_C_OBJECTS) $(PROJECT_CXX_OBJECTS)
 DIMA_DRONECAN_COMMON_CXX_OBJECTS := \
 	$(addprefix $(BUILD_DIR)/,$(DIMA_DRONECAN_COMMON_CXX_SOURCES:.cpp=.o))

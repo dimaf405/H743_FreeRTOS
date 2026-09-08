@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import struct
+
 from .reader import (
+    STB_WEAK,
     SHT_NOBITS,
     Elf32,
     ElfVerificationError,
@@ -25,6 +28,8 @@ D3_DIAGNOSTICS_SIZE = 512
 PLATFORM_HEAP_SIZE = 256 * 1024
 TASK_POOL_BASE = RAM_D1_BASE + PLATFORM_HEAP_SIZE
 TASK_POOL_MAX_SIZE = 48 * 1024
+SD_DMA_SIZE = 8 * 1024
+SDMMC1_VECTOR_INDEX = 16 + 49
 
 
 def range_contains(base: int, size: int, address: int, length: int) -> bool:
@@ -85,6 +90,8 @@ def verify_memory_layout(elf: Elf32) -> None:
     assert bss is not None
     sram_bss = elf.section(".dima_sram_bss")
     assert sram_bss is not None
+    sd_dma = elf.section(".dima_sd_dma")
+    assert sd_dma is not None
     # 普通初始化/零初始化数据必须完整位于 D2 SRAM1/2，DMA SRAM3 由独立段管理。
     if (bss.section_type != SHT_NOBITS or bss.size == 0 or
             not range_contains(RAM_D2_BASE, RAM_D2_SIZE,
@@ -112,6 +119,10 @@ def verify_memory_layout(elf: Elf32) -> None:
         "_ebss": bss.address + bss.size,
         "__dima_sram_bss_start__": sram_bss.address,
         "__dima_sram_bss_end__": sram_bss.address + sram_bss.size,
+        "__dima_sd_dma_start__": sd_dma.address,
+        "__dima_sd_dma_end__": sd_dma.address + sd_dma.size,
+        "__dima_axi_sram_start__": RAM_D1_BASE,
+        "__dima_axi_sram_end__": RAM_D1_BASE + RAM_D1_SIZE,
     }
     # 启动复制/清零只能依赖这些链接边界，逐项核对脚本和启动汇编的一致性。
     for symbol_name, expected_value in expected_boundaries.items():
@@ -143,6 +154,24 @@ def verify_memory_layout(elf: Elf32) -> None:
         raise ElfVerificationError(
             ".dima_sram_bss must be aligned D1 NOLOAD storage after the task pool"
         )
+    # SD IDMA 的两个半区必须位于独立 MPU 可描述区；不接受普通日志段混入。
+    if (sd_dma.section_type != SHT_NOBITS or sd_dma.size != SD_DMA_SIZE or
+            sd_dma.address % SD_DMA_SIZE != 0 or
+            sd_dma.address < sram_bss.address + sram_bss.size or
+            not range_contains(RAM_D1_BASE, RAM_D1_SIZE,
+                               sd_dma.address, sd_dma.size)):
+        raise ElfVerificationError("SD IDMA requires an aligned 8 KiB D1 NOLOAD region")
+    irq = elf.symbol("SDMMC1_IRQHandler")
+    vector_value = struct.unpack_from(
+        "<I", elf.section_data(vector), SDMMC1_VECTOR_INDEX * 4,
+    )[0]
+    if (not irq.defined or irq.binding == STB_WEAK or
+            vector_value & 1 == 0 or
+            vector_value & ~1 != irq.normalized_address):
+        raise ElfVerificationError("SDMMC1 vector must bind its strong IDMA ISR")
+    statistics = elf.symbol("dima_sdmmc_get_io_stats")
+    if not statistics.defined or statistics.binding == STB_WEAK:
+        raise ElfVerificationError("SDMMC1 read-only diagnostics must remain linked")
     verify_section(
         elf, ".dima_boot_diag", D3_DIAGNOSTICS_BASE,
         D3_DIAGNOSTICS_SIZE,

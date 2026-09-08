@@ -76,6 +76,10 @@ ITCMRAM (xrw)      : ORIGIN = 0x00000000, LENGTH = 64K
 FLASH (rx)         : ORIGIN = 0x08040400, LENGTH = 0x000BF000
 }
 
+/* 直接 IDMA 仅接受本板 D1 范围；端口与 MPU 从链接符号获取边界。 */
+__dima_axi_sram_start__ = ORIGIN(RAM_D1);
+__dima_axi_sram_end__ = ORIGIN(RAM_D1) + LENGTH(RAM_D1);
+
 /* Define output sections */
 SECTIONS
 {
@@ -91,6 +95,8 @@ SECTIONS
   .text :
   {
     . = ALIGN(4);
+    /* 只读诊断供板端调试调用；即使无遥测消费者，也必须保留正式入口。 */
+    KEEP(*(.text.dima_sdmmc_get_io_stats))
     *(.text)           /* .text sections (code) */
     *(.text*)          /* .text* sections (code) */
     *(.glue_7)         /* glue arm to thumb code */
@@ -243,6 +249,15 @@ SECTIONS
     __dima_sram_bss_end__ = .;
   } >RAM_D1
 
+  /* 两个 4 KiB SDMMC IDMA 半区；MPU 8 KiB 区域要求同等起址对齐。
+     缓冲由 TX 填充或 RX DMA 写满后才读取，不依赖上电初值。 */
+  .dima_sd_dma ALIGN(8K) (NOLOAD) :
+  {
+    __dima_sd_dma_start__ = .;
+    KEEP(*(.dima_sd_dma))
+    __dima_sd_dma_end__ = .;
+  } >RAM_D1
+
   /* SRAM capture is persisted to 0x08020000 for ROM USB DFU readback. */
   .dima_boot_diag (NOLOAD) :
   {
@@ -299,6 +314,14 @@ SECTIONS
   ASSERT(ADDR(.dima_sram_bss) + SIZEOF(.dima_sram_bss) <=
          ORIGIN(RAM_D1) + LENGTH(RAM_D1),
          "D1 static storage exceeds AXI SRAM capacity")
+  ASSERT(SIZEOF(.dima_sd_dma) == 8K &&
+         (ADDR(.dima_sd_dma) & (8K - 1)) == 0,
+         "SD IDMA storage must be an aligned 8 KiB region")
+  ASSERT(ADDR(.dima_sd_dma) >=
+         ADDR(.dima_sram_bss) + SIZEOF(.dima_sram_bss) &&
+         ADDR(.dima_sd_dma) + SIZEOF(.dima_sd_dma) <=
+         ORIGIN(RAM_D1) + LENGTH(RAM_D1),
+         "SD IDMA storage overlaps D1 objects or exceeds AXI SRAM")
   ASSERT(SIZEOF(.dima_task_pool) <= 48K,
          "Task pool exceeds its fixed platform budget")
 }

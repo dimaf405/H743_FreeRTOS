@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+/* SDMMC1 使用独立 D1 缓冲，地址由链接符号提供；两半区各 4 KiB。 */
+#define DIMA_SD_DMA_REGION_SIZE    UINT32_C(0x00002000)
+
 #define DIMA_DMA_REGION_BASE       UINT32_C(0x30040000)
 #define DIMA_DMA_REGION_SIZE       UINT32_C(0x00008000)
 #define DIMA_DIAGNOSTIC_REGION_BASE UINT32_C(0x38000000)
