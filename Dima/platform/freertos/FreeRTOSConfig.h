@@ -9,6 +9,9 @@
 extern "C" {
 #endif
 
+/* 复用已初始化的 TIM2 单调时钟；调度切换只读计数，不启动第二个定时器。 */
+uint32_t dima_freertos_runtime_counter(void);
+
 __attribute__((noreturn)) void dima_freertos_assert_failed(
     const char *file, uint32_t line);
 
@@ -35,6 +38,12 @@ __attribute__((noreturn)) void dima_freertos_assert_failed(
 #define configTOTAL_HEAP_SIZE                    ((size_t)15360)
 #define configMAX_TASK_NAME_LEN                  DIMA_TASK_NAME_CAPACITY
 #define configUSE_TRACE_FACILITY                 1
+#define configGENERATE_RUN_TIME_STATS            1
+#define configUSE_STATS_FORMATTING_FUNCTIONS     0
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS() ((void)0)
+#define portGET_RUN_TIME_COUNTER_VALUE()         dima_freertos_runtime_counter()
+#define INCLUDE_xTaskGetIdleTaskHandle           1
+#define INCLUDE_xTimerGetTimerDaemonTaskHandle   1
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_MUTEXES                        1
 #define configQUEUE_REGISTRY_SIZE                8

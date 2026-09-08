@@ -2,6 +2,8 @@
 #include "BackendTimeout.hpp"
 
 #include "api/platform_config.h"
+#include "api/Services.hpp"
+#include "api/Time.hpp"
 
 #include <atomic>
 #include <cstring>
@@ -11,6 +13,7 @@ extern "C" {
 #include "portable.h"
 #include "semphr.h"
 #include "task.h"
+#include "timers.h"
 }
 
 namespace dima::platform::freertos {
@@ -423,6 +426,143 @@ public:
         return handle;
     }
 
+    CpuUsage cpu_usage() noexcept override
+    {
+        // 控制/ISR 只允许读取已有快照；任务枚举最多由非实时上下文每秒执行一次。
+        if (in_interrupt()) {
+            return {};
+        }
+        if (in_realtime_task() || !scheduler_running()) {
+            return cached_cpu_usage();
+        }
+        auto *services = try_services();
+        if (services == nullptr || !services->clock.initialized()) {
+            return cached_cpu_usage();
+        }
+        const std::uint64_t now = services->clock.now_us();
+        CriticalToken token = enter();
+        if (runtime_sampling_ ||
+            (runtime_attempt_us_ != 0U && now >= runtime_attempt_us_ &&
+             now - runtime_attempt_us_ < 1000000ULL)) {
+            const CpuUsage result = runtime_usage_;
+            leave(token);
+            return result;
+        }
+        runtime_sampling_ = true;
+        runtime_attempt_us_ = now;
+        leave(token);
+
+        std::uint32_t total{};
+        std::size_t idle_index = kRuntimeTaskCapacity;
+        // 名称指针属于 TCB，必须在调度暂停期间复制到自有固定表，避免任务删除/
+        // 重建后解引用过期名称。这里不关中断，也不使用格式化或动态分配。
+        vTaskSuspendAll();
+        // 已知任务来自固定平台槽和内核 Idle/Timer；逐项查询时禁止扫描栈高水位，
+        // 避免 uxTaskGetSystemState 在暂停调度期间遍历几十 KiB 的空闲栈。
+        std::size_t count = 0U;
+        for (const auto &slot : state_.task_slots) {
+            if (slot.in_use && slot.native != nullptr) {
+                vTaskGetInfo(slot.native, &runtime_native_[count++], pdFALSE, eInvalid);
+            }
+        }
+        const TaskHandle_t idle = xTaskGetIdleTaskHandle();
+        vTaskGetInfo(idle, &runtime_native_[count++], pdFALSE, eInvalid);
+        vTaskGetInfo(xTimerGetTimerDaemonTaskHandle(), &runtime_native_[count++],
+                     pdFALSE, eInvalid);
+        total = dima_freertos_runtime_counter();
+        if (count != uxTaskGetNumberOfTasks()) {
+            count = 0U;
+        }
+        for (std::size_t i = 0U; i < count; ++i) {
+            auto &row = runtime_pending_[i];
+            row = {};
+            row.id = runtime_native_[i].xTaskNumber;
+            row.runtime_counter = runtime_native_[i].ulRunTimeCounter;
+            if (runtime_native_[i].pcTaskName != nullptr) {
+                std::strncpy(row.name, runtime_native_[i].pcTaskName,
+                             sizeof(row.name) - 1U);
+            }
+            if (runtime_native_[i].xHandle == idle) {
+                idle_index = i;
+            }
+        }
+        (void)xTaskResumeAll();
+
+        const std::uint64_t sampled_us = services->clock.now_us();
+        const std::uint32_t window = total - runtime_previous_total_;
+        bool valid = runtime_baseline_valid_ && count != 0U &&
+                     count == runtime_previous_count_ &&
+                     idle_index < count && total > runtime_previous_total_ &&
+                     sampled_us > runtime_previous_us_ &&
+                     sampled_us - runtime_previous_us_ <= 60000000ULL &&
+                     window != 0U;
+        std::uint32_t deltas[kRuntimeTaskCapacity]{};
+        for (std::size_t i = 0U; i < count; ++i) {
+            const RuntimePrevious *previous = nullptr;
+            for (std::size_t j = 0U; j < runtime_previous_count_; ++j) {
+                if (runtime_previous_[j].id == runtime_pending_[i].id) {
+                    previous = &runtime_previous_[j];
+                    break;
+                }
+            }
+            if (previous == nullptr ||
+                runtime_pending_[i].runtime_counter < previous->counter) {
+                valid = false;
+            } else {
+                deltas[i] = runtime_pending_[i].runtime_counter -
+                            previous->counter;
+                if (deltas[i] > window) {
+                    valid = false;
+                }
+            }
+        }
+        CpuUsage next{};
+        next.timestamp_us = sampled_us;
+        next.window_us = valid ? window : 0U;
+        next.task_count = static_cast<std::uint16_t>(count);
+        next.valid = valid;
+        // 以 1 us 的运行时间计数求窗口差：load = 1000 * (1 - idle/window)。
+        // 64-bit 中间量避免乘 1000 溢出；回绕、任务代次变化和长窗口重建基线。
+        if (valid) {
+            next.load_permille = static_cast<std::uint16_t>(
+                1000ULL - (1000ULL * deltas[idle_index]) / window);
+        }
+        for (std::size_t i = 0U; i < count; ++i) {
+            runtime_pending_[i].valid = valid;
+            runtime_pending_[i].load_permille = valid
+                ? static_cast<std::uint16_t>((1000ULL * deltas[i]) / window)
+                : 0U;
+            runtime_previous_[i] = RuntimePrevious{
+                runtime_pending_[i].id, runtime_pending_[i].runtime_counter};
+        }
+        runtime_previous_count_ = count;
+        runtime_previous_total_ = total;
+        runtime_previous_us_ = sampled_us;
+        runtime_baseline_valid_ = count != 0U && idle_index < count;
+        // 只在发布有限快照时进入短临界区，读取者不会看到跨代的负载/任务表。
+        token = enter();
+        runtime_usage_ = next;
+        std::memcpy(runtime_published_, runtime_pending_,
+                    count * sizeof(TaskCpuUsage));
+        runtime_sampling_ = false;
+        leave(token);
+        return next;
+    }
+
+    bool task_cpu_usage(std::size_t index, TaskCpuUsage &usage) noexcept override
+    {
+        if (in_interrupt()) {
+            return false;
+        }
+        const CriticalToken token = enter();
+        const bool available = index < runtime_usage_.task_count;
+        if (available) {
+            usage = runtime_published_[index];
+        }
+        leave(token);
+        return available;
+    }
+
     void suspend_current() noexcept override
     {
         if (!in_interrupt()) {
@@ -602,6 +742,32 @@ private:
         std::memset(&slot.storage, 0, sizeof(slot.storage));
     }
 
+    static constexpr std::size_t kRuntimeTaskCapacity = kTaskCount + 2U;
+    struct RuntimePrevious {
+        std::uint32_t id{0U};
+        std::uint32_t counter{0U};
+    };
+
+    CpuUsage cached_cpu_usage() noexcept
+    {
+        const CriticalToken token = enter();
+        const CpuUsage result = runtime_usage_;
+        leave(token);
+        return result;
+    }
+
+    TaskStatus_t runtime_native_[kRuntimeTaskCapacity]{};
+    TaskCpuUsage runtime_pending_[kRuntimeTaskCapacity]{};
+    TaskCpuUsage runtime_published_[kRuntimeTaskCapacity]{};
+    RuntimePrevious runtime_previous_[kRuntimeTaskCapacity]{};
+    CpuUsage runtime_usage_{};
+    std::uint64_t runtime_attempt_us_{0U};
+    std::uint64_t runtime_previous_us_{0U};
+    std::uint32_t runtime_previous_total_{0U};
+    std::size_t runtime_previous_count_{0U};
+    bool runtime_baseline_valid_{false};
+    bool runtime_sampling_{false};
+
     BackendState &state_;
 };
 
@@ -622,3 +788,12 @@ Heap &heap() noexcept { return backend(); }
 FlashTransactionManager &flash_transactions() noexcept { return backend(); }
 
 } // namespace dima::platform::freertos
+
+extern "C" std::uint32_t dima_freertos_runtime_counter(void)
+{
+    // 时钟/Services 先于调度器就绪；防御启动早期查询，保留 32-bit 计数 ABI。
+    const auto *services = dima::platform::try_services();
+    return services != nullptr && services->clock.initialized()
+               ? static_cast<std::uint32_t>(services->clock.now_us())
+               : 0U;
+}
