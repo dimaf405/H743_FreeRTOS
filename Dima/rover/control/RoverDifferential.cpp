@@ -1,11 +1,12 @@
 #include "RoverDifferential.hpp"
-#include "rover/RoverModeContract.hpp"
 #include "RoverControlValidation.hpp"
 
 #include "events/events.hpp"
 #include "api/Time.hpp"
+#include "rover/RoverModeContract.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <limits>
 
 namespace dima::rover::control {
@@ -23,12 +24,9 @@ constexpr float kPi = 3.14159265358979323846F;
 constexpr float kDegreesToRadians = kPi / 180.0F;
 constexpr float kUnavailable = std::numeric_limits<float>::quiet_NaN();
 constexpr std::uint32_t kManualModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
+    dima::middleware::rover::mode_contract::kUserSettableMask;
 constexpr std::uint32_t kImplementedModeMask =
-    kManualModeMask |
-    (1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) |
-    (1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER) |
-    (1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION);
+    dima::middleware::rover::mode_contract::kImplementedMask;
 
 float angular_parameter_to_radians(float value) noexcept
 {
@@ -57,7 +55,7 @@ bool RoverDifferential::start()
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (!ScheduleEnable()) {
+    if (!ScheduleEnable() || !control_status_publication_.advertise()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
@@ -105,11 +103,17 @@ void RoverDifferential::Run()
     parameter_update_s parameter_update{};
     if (parameter_update_subscription_.copy(&parameter_update)) {
         parameter_update_pending_ = true;
+        pending_parameter_instance_ = parameter_update.instance;
     }
+    (void)calibration_sub_.update();
+    (void)calibration_rtk_sub_.update();
+    for (unsigned n = 0U; n < 8U && calibration_imu_sub_.update(); ++n) {}
+    for (unsigned n = 0U; n < 8U && sensor_gps_subscription_.update(); ++n)
+        sensor_gps_ = sensor_gps_subscription_.get();
 
-    // motion_request 是共享有界队列，但 Manual 与 Navigation 分别保存最新帧。
-    // 因此非活动模式发布的无效帧只会清自己的来源，不能以“队列最后一帧获胜”
-    // 覆盖 Commander 当前安全投影所选择的活动来源。
+    // motion_request 是共享有界队列，但 Manual、Navigation 与 Calibration
+    // 分别保存最新帧。因此非活动模式发布的无效帧只会清自己的来源，不能以
+    // “队列最后一帧获胜”覆盖 Commander 当前安全投影所选择的活动来源。
     rover_motion_request_s request{};
     for (std::uint8_t count = 0U;
          count < kMotionRequestQueueDepth &&
@@ -122,6 +126,8 @@ void RoverDifferential::Run()
                    rover_motion_request_s::SOURCE_NAVIGATION) {
             navigation_request_ = request;
             have_navigation_request_ = true;
+        } else if (request.source == rover_motion_request_s::SOURCE_CALIBRATION) {
+            calibration_request_ = request;
         }
     }
 
@@ -138,6 +144,7 @@ void RoverDifferential::Run()
     const std::uint64_t now = hrt_absolute_time();
     refresh_safety_snapshot(now);
     (void)apply_pending_parameters(now);
+    refresh_calibration_fence(now);
 
     // 斜率限制、换向延时和解锁渐入均依赖真实运行间隔；时钟回退时 dt 无定义，
     // 因而必须清空控制器并 fail-closed，不能退回名义周期继续输出。
@@ -170,7 +177,11 @@ bool RoverDifferential::bind_parameters() noexcept
                        throttle_max_.bind() && throttle_slew_rate_.bind() &&
                        reversal_delay_.bind() && throttle_expo_.bind() &&
                        thrust_asymmetry_.bind() && arm_ramp_.bind() &&
-                       maximum_speed_.bind() && speed_p_.bind() &&
+                       maximum_speed_.bind() && calibration_radius_.bind() &&
+                       calibration_stop_distance_.bind() &&
+                       calibration_throttle_ceiling_.bind() &&
+                       calibration_steering_ceiling_.bind() && calibration_cruise_.bind() &&
+                       calibration_fallback_.bind() && speed_p_.bind() &&
                        speed_i_.bind() && acceleration_limit_.bind() &&
                        deceleration_limit_.bind() && speed_threshold_.bind() &&
                        yaw_rate_p_.bind() && yaw_rate_i_.bind() &&
@@ -199,6 +210,12 @@ void RoverDifferential::invalidate_parameter_bindings() noexcept
     thrust_asymmetry_.invalidate();
     arm_ramp_.invalidate();
     maximum_speed_.invalidate();
+    calibration_radius_.invalidate();
+    calibration_stop_distance_.invalidate();
+    calibration_throttle_ceiling_.invalidate();
+    calibration_steering_ceiling_.invalidate();
+    calibration_cruise_.invalidate();
+    calibration_fallback_.invalidate();
     speed_p_.invalidate();
     speed_i_.invalidate();
     acceleration_limit_.invalidate();
@@ -216,12 +233,18 @@ void RoverDifferential::invalidate_parameter_bindings() noexcept
 
 bool RoverDifferential::apply_parameter_snapshot() noexcept
 {
+    px4::AtomicTransaction apply_transaction;
+    applied_parameter_valid_ = false;
     if (!command_timeout_.bound() || !reverse_steering_.bound() ||
         !steering_throttle_mix_.bound() || !throttle_min_.bound() ||
         !throttle_max_.bound() || !throttle_slew_rate_.bound() ||
         !reversal_delay_.bound() || !throttle_expo_.bound() ||
         !thrust_asymmetry_.bound() || !arm_ramp_.bound() ||
-        !maximum_speed_.bound() || !speed_p_.bound() || !speed_i_.bound() ||
+        !maximum_speed_.bound() || !calibration_radius_.bound() ||
+        !calibration_stop_distance_.bound() ||
+        !calibration_throttle_ceiling_.bound() ||
+        !calibration_steering_ceiling_.bound() || !calibration_cruise_.bound() ||
+        !calibration_fallback_.bound() || !speed_p_.bound() || !speed_i_.bound() ||
         !acceleration_limit_.bound() || !deceleration_limit_.bound() ||
         !speed_threshold_.bound() || !yaw_rate_p_.bound() ||
         !yaw_rate_i_.bound() || !yaw_rate_limit_.bound() ||
@@ -264,6 +287,16 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
                            &candidate.drive.arm_ramp_s) == 0 &&
                  param_get(maximum_speed_.handle(),
                            &candidate.speed.speed_at_full_throttle_m_s) == 0 &&
+                 param_get(calibration_radius_.handle(),
+                           &candidate.calibration_radius_m) == 0 &&
+                 param_get(calibration_stop_distance_.handle(),
+                           &candidate.calibration_stop_distance_m) == 0 &&
+                 param_get(calibration_throttle_ceiling_.handle(),
+                           &candidate.calibration_throttle_ceiling) == 0 &&
+                 param_get(calibration_steering_ceiling_.handle(),
+                           &candidate.calibration_steering_ceiling) == 0 &&
+                 param_get(calibration_cruise_.handle(), &candidate.calibration_entry_cruise) == 0 &&
+                 param_get(calibration_fallback_.handle(), &candidate.calibration_fallback_speed) == 0 &&
                  param_get(speed_p_.handle(),
                            &candidate.speed.proportional_gain) == 0 &&
                  param_get(speed_i_.handle(),
@@ -337,6 +370,12 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
     thrust_asymmetry_.set(candidate.drive.thrust_asymmetry);
     arm_ramp_.set(candidate.drive.arm_ramp_s);
     maximum_speed_.set(candidate.speed.speed_at_full_throttle_m_s);
+    calibration_radius_.set(candidate.calibration_radius_m);
+    calibration_stop_distance_.set(candidate.calibration_stop_distance_m);
+    calibration_throttle_ceiling_.set(candidate.calibration_throttle_ceiling);
+    calibration_steering_ceiling_.set(candidate.calibration_steering_ceiling);
+    calibration_cruise_.set(candidate.calibration_entry_cruise);
+    calibration_fallback_.set(candidate.calibration_fallback_speed);
     speed_p_.set(candidate.speed.proportional_gain);
     speed_i_.set(candidate.speed.integral_gain);
     acceleration_limit_.set(candidate.speed.acceleration_limit_m_s2);
@@ -352,7 +391,18 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
     wheel_track_.set(candidate.yaw_rate.wheel_track_m);
     parameters_ = candidate;
     parameters_valid_ = true;
+    applied_parameter_instance_ = pending_parameter_instance_;
+    applied_parameter_valid_ = true;
     return true;
+}
+
+bool RoverDifferential::calibration_parameters_applied(
+    std::uint32_t instance, float speed, float yaw_correction) const noexcept
+{
+    px4::AtomicTransaction transaction;
+    return applied_parameter_valid_ && applied_parameter_instance_ == instance &&
+        parameters_.speed.speed_at_full_throttle_m_s == speed &&
+        parameters_.yaw_rate.yaw_rate_correction == yaw_correction;
 }
 
 bool RoverDifferential::apply_pending_parameters(
@@ -473,7 +523,8 @@ bool RoverDifferential::safety_permits_output(
            status.can_set_nav_states_mask == kManualModeMask &&
            !status.failsafe &&
            (manual_projection(control, status) ||
-            navigation_projection(control, status));
+            navigation_projection(control, status) ||
+            (status.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1 && modes::calibration_projection(control)));
 }
 
 const rover_motion_request_s *RoverDifferential::active_request() const noexcept
@@ -482,6 +533,7 @@ const rover_motion_request_s *RoverDifferential::active_request() const noexcept
         return nullptr;
     }
     const std::uint8_t nav_state = safety_.vehicle_status.nav_state;
+    if (nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1) return &calibration_request_;
     if (nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL) {
         return have_manual_request_ ? &manual_request_ : nullptr;
     }
@@ -505,6 +557,8 @@ bool RoverDifferential::request_valid(
         return false;
     }
 
+    const bool calibration = safety_.vehicle_status.nav_state ==
+        vehicle_status_s::NAVIGATION_STATE_EXTERNAL1;
     if (navigation_source) {
         // Navigation one-of：只允许 SI 物理量，两个归一化字段必须明确为 NaN。
         // 首版禁止倒车航段，速度/yaw-rate 都必须落在已标定物理极限内，不能
@@ -522,6 +576,46 @@ bool RoverDifferential::request_valid(
                 parameters_.yaw_rate.yaw_rate_limit_rad_s) {
             return false;
         }
+    } else if (calibration) {
+        const auto &status = calibration_sub_.get();
+        if (request.source != rover_motion_request_s::SOURCE_CALIBRATION ||
+            !calibration_input_valid(now_us) ||
+            request.sequence != status.sequence ||
+            request.timestamp != status.timestamp) return false;
+        if (status.closed_loop) {
+            // 闭环校准沿用现有 SI one-of；只有明确倒车验收阶段允许负速度，
+            // 两个归一化字段必须为 NaN，不能把 Mission 请求混进本会话。
+            if (!navigation_parameters_valid_ ||
+                request.mode != rover_motion_request_s::MODE_SPEED_YAW_RATE ||
+                !std::isnan(request.normalized_longitudinal) ||
+                !std::isnan(request.normalized_steering) ||
+                !finite(request.speed_m_s) || !finite(parameters_.calibration_entry_cruise) || parameters_.calibration_entry_cruise <= 0.0F ||
+                std::fabs(request.speed_m_s) > parameters_.calibration_entry_cruise ||
+                (request.speed_m_s < 0.0F && !calibration_reverse()) ||
+                std::fabs(request.speed_m_s) > std::min(calibration_reverse() ? std::min(0.3F, calibration_fence_.speed_limit_m_s)
+                    : calibration_fence_.speed_limit_m_s,
+                    parameters_.speed.speed_at_full_throttle_m_s) ||
+                !finite(request.yaw_rate_rad_s) ||
+                std::fabs(request.yaw_rate_rad_s) > std::min(0.6F,
+                    parameters_.yaw_rate.yaw_rate_limit_rad_s)) return false;
+        } else {
+            // 原开环校准只允许 normalized axes；未知 stop distance、fence 或
+            // 传感器任一否定证据已经由 calibration_input_valid 拒绝。
+            if (request.mode != rover_motion_request_s::MODE_NORMALIZED_AXES ||
+                !normalized(request.normalized_longitudinal) ||
+                (request.normalized_longitudinal < 0.0F && !calibration_reverse()) ||
+                std::fabs(request.normalized_longitudinal) > (calibration_full_output() ? 1.0F : std::min(
+                    calibration_session_throttle_ceiling_, 0.40F)) ||
+                !normalized(request.normalized_steering) ||
+                std::fabs(request.normalized_steering) > std::min(
+                    calibration_session_steering_ceiling_, 0.35F) ||
+                !std::isnan(request.speed_m_s) ||
+                !std::isnan(request.yaw_rate_rad_s)) return false;
+        }
+        if (calibration_full_output() && (!navigation_estimator_valid(now_us) ||
+            !calibration_rtk_sub_.get().baseline_consistent ||
+            request.normalized_longitudinal < std::fabs(request.normalized_steering) ||
+            std::fabs(request.normalized_steering) > 0.05F)) return false;
     } else {
         // Manual one-of：只允许归一化双轴，物理量字段必须为 NaN，避免不同
         // 消费者对同一帧选择不同语义。
@@ -530,16 +624,15 @@ bool RoverDifferential::request_valid(
             !normalized(request.normalized_longitudinal) ||
             !normalized(request.normalized_steering) ||
             !std::isnan(request.speed_m_s) ||
-            !std::isnan(request.yaw_rate_rad_s)) {
-            return false;
-        }
+            !std::isnan(request.yaw_rate_rad_s)) return false;
     }
 
     // timeout_us = command_timeout_s * 1e6。timestamp 约束模块链路鲜度，
     // timestamp_sample 约束原始 RC 样本鲜度；两者都在窗口内才能避免刚转发的
     // 旧摇杆样本重新激活电机命令。
-    const std::uint64_t timeout_us = static_cast<std::uint64_t>(
+    std::uint64_t timeout_us = static_cast<std::uint64_t>(
         parameters_.command_timeout_s * 1000000.0F);
+    if (request.source == rover_motion_request_s::SOURCE_CALIBRATION && timeout_us > 100000ULL) timeout_us = 100000ULL;
     return timeout_us > 0U &&
            now_us - request.timestamp <= timeout_us &&
            now_us - request.timestamp_sample <= timeout_us;
@@ -637,6 +730,13 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
              vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
          safety_.vehicle_status.nav_state ==
              vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER);
+    const bool calibration_source = safety_.valid &&
+        safety_.vehicle_status.nav_state ==
+            vehicle_status_s::NAVIGATION_STATE_EXTERNAL1;
+    const bool calibration_closed_loop = calibration_source &&
+        calibration_sub_.get().closed_loop;
+    const bool closed_loop_source = navigation_source ||
+                                    calibration_closed_loop;
     const std::uint64_t request_sample =
         request != nullptr ? request->timestamp_sample : 0U;
     if (!parameters_valid_ || !safety_permits_output(now_us) ||
@@ -647,11 +747,27 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         return publish_invalid(now_us, request_sample);
     }
 
+    ControlCycleFeedback feedback{};
+    feedback.closed_loop = closed_loop_source;
+    feedback.measurement_valid = control_measurement(
+        now_us, feedback.speed_m_s, feedback.yaw_rate_rad_s,
+        feedback.timestamp_sample);
+
     float longitudinal = request->normalized_longitudinal;
     float steering = request->normalized_steering;
     std::uint64_t sample_time_us = request_sample;
-    if (navigation_source) {
-        if (!navigation_estimator_valid(now_us)) {
+    if (closed_loop_source) {
+        if (!feedback.measurement_valid) {
+            drive_.reset();
+            reset_navigation_control();
+            return publish_invalid(now_us, request_sample);
+        }
+        if (calibration_closed_loop &&
+            (std::hypot(vehicle_local_position_.vx, vehicle_local_position_.vy) >
+                (calibration_reverse() ? std::min(0.3F, calibration_fence_.speed_limit_m_s) : calibration_fence_.speed_limit_m_s) ||
+             std::fabs(feedback.yaw_rate_rad_s) > 0.6F)) {
+            // 原始 RTK/IMU 与实际 PI 消费的 EKF 反馈都必须落在同一物理包络；
+            // 两套来源不一致时不能继续用其中较小的一套放行动力。
             drive_.reset();
             reset_navigation_control();
             return publish_invalid(now_us, request_sample);
@@ -665,32 +781,29 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
             return publish_invalid(now_us, request_sample);
         }
 
-        const auto measured_speed = dima::lib::rover::measure_body_speed(
-            vehicle_local_position_.vx, vehicle_local_position_.vy,
-            vehicle_local_position_.heading,
-            parameters_.speed.measurement_threshold_m_s);
-        if (!measured_speed.valid) {
-            drive_.reset();
-            reset_navigation_control();
-            return publish_invalid(now_us, request_sample);
-        }
-
         // 转向优先：先由 YawRate PI（含差速运动学 FF）算 steering，再把速度
         // PI 的可用归一化范围限制为 1-|steering|。这样左右轮和在进入下游
-        // DifferentialDrive 前已可行，避免二次饱和破坏航向内环。
+        // DifferentialDrive 前已可行，避免二次饱和破坏航向内环。校准闭环
+        // 复用同一对象；校准闭环轴输出同时服从本会话冻结的用户 ceiling 和
+        // 0.35/0.40 固定硬边界，不能让反馈项绕过 RO_CAL_* 的操作者授权。
+        const float steering_limit = calibration_closed_loop
+            ? std::min(calibration_session_steering_ceiling_, 0.35F) : 1.0F;
         const auto yaw_rate = yaw_rate_controller_.update(
             request->yaw_rate_rad_s,
-            vehicle_odometry_.angular_velocity[2], 1.0F, dt_s);
+            feedback.yaw_rate_rad_s, steering_limit, dt_s);
         if (!yaw_rate.valid || !normalized(yaw_rate.output)) {
             drive_.reset();
             reset_navigation_control();
             return publish_invalid(now_us, request_sample);
         }
         steering = yaw_rate.output;
-        const float longitudinal_limit =
-            std::fmax(0.0F, 1.0F - std::fabs(steering));
+        feedback.saturated = std::fabs(steering) >=
+            steering_limit - 1.0e-5F;
+        const float longitudinal_limit = calibration_closed_loop
+            ? std::min(calibration_session_throttle_ceiling_, 0.40F)
+            : std::fmax(0.0F, 1.0F - std::fabs(steering));
         const auto speed = speed_controller_.update(
-            request->speed_m_s, measured_speed.speed_m_s,
+            request->speed_m_s, feedback.speed_m_s,
             longitudinal_limit, dt_s);
         if (!speed.valid || !normalized(speed.output)) {
             drive_.reset();
@@ -698,13 +811,23 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
             return publish_invalid(now_us, request_sample);
         }
         longitudinal = speed.output;
+        feedback.saturated = feedback.saturated ||
+            std::fabs(longitudinal) >= longitudinal_limit - 1.0e-5F;
+        if (calibration_closed_loop) {
+            const float bounded = std::clamp(longitudinal, calibration_reverse() ? -longitudinal_limit : 0.0F,
+                                             longitudinal_limit);
+            feedback.saturated = feedback.saturated || bounded != longitudinal;
+            longitudinal = bounded;
+        }
+        // 反馈发布控制器内部经过加减速度限制后的真实设定，而不是上游原始命令；
+        // 辨识/验证必须与本周期 PI 实际消费的 setpoint 对齐。
+        feedback.speed_setpoint_m_s = speed.adjusted_setpoint;
+        feedback.yaw_rate_setpoint_rad_s = yaw_rate.adjusted_setpoint;
+        feedback.speed_integral = speed.integral;
+        feedback.yaw_rate_integral = yaw_rate.integral;
         sample_time_us = request_sample;
-        if (vehicle_local_position_.timestamp_sample < sample_time_us) {
-            sample_time_us = vehicle_local_position_.timestamp_sample;
-        }
-        if (vehicle_odometry_.timestamp_sample < sample_time_us) {
-            sample_time_us = vehicle_odometry_.timestamp_sample;
-        }
+        if (feedback.timestamp_sample < sample_time_us)
+            sample_time_us = feedback.timestamp_sample;
     } else {
         // Manual 保持原来的归一化双轴与倒车转向修正；切离 AUTO 时立即清空
         // 两只 PI，下一次 Mission Start 不得继承旧积分或 slew 状态。
@@ -712,12 +835,25 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
     }
 
     const dima::lib::rover::DifferentialDriveOutput output = drive_.update(
-        longitudinal, steering, !navigation_source, true, now_us, dt_s);
+        longitudinal, steering, request->source == rover_motion_request_s::SOURCE_MANUAL, true, now_us, dt_s);
     if (!output.valid || !normalized(output.right) || !normalized(output.left)) {
         drive_.reset();
         reset_navigation_control();
         return publish_invalid(now_us, sample_time_us);
     }
+    if (calibration_source && calibration_full_output() && (output.right < 0.0F || output.left < 0.0F)) {
+        // longitudinal 与 steering 的内部限制器不同步，输入两轮同向不证明
+        // 整形后的两轮仍同向。满输出许可绝不覆盖任何负轮端命令。
+        drive_.reset();
+        reset_navigation_control();
+        return publish_invalid(now_us, sample_time_us);
+    }
+
+    feedback.motor_slew_active = output.motor_slew_active;
+    feedback.mixing_limited = output.mixing_limited;
+    feedback.shaping_active = output.shaping_active;
+    feedback.arm_ramp_active = output.arm_ramp_active;
+    feedback.reversal_held = output.reversal_held;
 
     actuator_motors_s motors{};
     motors.timestamp = now_us;
@@ -727,14 +863,59 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
     for (float &control : motors.control) {
         control = kUnavailable;
     }
-    motors.control[0] = output.right;
-    motors.control[1] = output.left;
-    return actuator_motors_publication_.publish(motors);
+    if (request->source == rover_motion_request_s::SOURCE_CALIBRATION) {
+        // 常规阶段仍为 0.40；仅已在入口授权的独立前进满输出阶段使用冻结
+        // MOT_THR_MAX。所有阶段都保留最终 0.15/s，不能用改整形绕过安全边界。
+        if (!finite(dt_s) || dt_s <= 0.0F || dt_s > 0.05F) return publish_invalid(now_us, sample_time_us);
+        const float step = 0.15F * dt_s;
+        const float motor_limit = calibration_motor_limit();
+        // 授权上限下降时历史 slew 不能继续携带超限输出；正常 FULL 阶段应先
+        // 完整停车再切出，这里仍独立 fail-closed，覆盖错序/陈旧状态等异常。
+        if (std::fabs(calibration_right_) > motor_limit + 1.0e-6F ||
+            std::fabs(calibration_left_) > motor_limit + 1.0e-6F)
+            return publish_invalid(now_us, sample_time_us);
+        const float target_right = std::clamp(output.right, -motor_limit, motor_limit);
+        const float target_left = std::clamp(output.left, -motor_limit, motor_limit);
+        feedback.saturated = feedback.saturated ||
+            target_right != output.right || target_left != output.left;
+        feedback.safety_output_limited = target_right != output.right || target_left != output.left;
+        calibration_right_ += std::clamp(target_right - calibration_right_,
+                                         -step, step);
+        calibration_left_ += std::clamp(target_left - calibration_left_,
+                                        -step, step);
+        feedback.safety_slew_active = std::fabs(target_right - calibration_right_) > 1.0e-6F ||
+            std::fabs(target_left - calibration_left_) > 1.0e-6F;
+        motors.control[0] = calibration_right_;
+        motors.control[1] = calibration_left_;
+        feedback.applied_longitudinal = 0.5F *
+            (calibration_right_ + calibration_left_);
+        feedback.applied_steering = 0.5F *
+            (calibration_left_ - calibration_right_);
+        feedback.input_limited =
+            std::fabs(feedback.applied_longitudinal - longitudinal) > 0.015F ||
+            std::fabs(feedback.applied_steering - steering) > 0.015F;
+    } else {
+        calibration_right_ = calibration_left_ = 0.0F;
+        motors.control[0] = output.right;
+        motors.control[1] = output.left;
+        feedback.applied_longitudinal = 0.5F *
+            (motors.control[0] + motors.control[1]);
+        feedback.applied_steering = 0.5F *
+            (motors.control[1] - motors.control[0]);
+    }
+    feedback.longitudinal = longitudinal;
+    feedback.steering = steering;
+    const bool motors_published = actuator_motors_publication_.publish(motors);
+    feedback.output_valid = motors_published;
+    const bool status_published = publish_control_status(now_us, request,
+                                                         feedback);
+    return motors_published && status_published;
 }
 
 bool RoverDifferential::publish_invalid(std::uint64_t now_us,
                                         std::uint64_t sample_time_us) noexcept
 {
+    calibration_right_ = calibration_left_ = 0.0F;
     actuator_motors_s motors{};
     motors.timestamp = now_us;
     motors.timestamp_sample = sample_time_us;
@@ -742,7 +923,19 @@ bool RoverDifferential::publish_invalid(std::uint64_t now_us,
     for (float &control : motors.control) {
         control = kUnavailable;
     }
-    return actuator_motors_publication_.publish(motors);
+    const rover_motion_request_s *request = active_request();
+    ControlCycleFeedback feedback{};
+    feedback.closed_loop = request != nullptr &&
+        (request->source == rover_motion_request_s::SOURCE_NAVIGATION ||
+         (request->source == rover_motion_request_s::SOURCE_CALIBRATION &&
+          calibration_sub_.get().closed_loop));
+    feedback.measurement_valid = control_measurement(
+        now_us, feedback.speed_m_s, feedback.yaw_rate_rad_s,
+        feedback.timestamp_sample);
+    const bool motors_published = actuator_motors_publication_.publish(motors);
+    const bool status_published = publish_control_status(now_us, request,
+                                                         feedback);
+    return motors_published && status_published;
 }
 
 void RoverDifferential::reset_runtime_state() noexcept
@@ -752,13 +945,27 @@ void RoverDifferential::reset_runtime_state() noexcept
     parameters_ = ParameterSnapshot{};
     manual_request_ = rover_motion_request_s{};
     navigation_request_ = rover_motion_request_s{};
+    calibration_request_ = rover_motion_request_s{};
     vehicle_local_position_ = vehicle_local_position_s{};
     vehicle_odometry_ = vehicle_odometry_s{};
+    sensor_gps_ = sensor_gps_s{};
     observed_actuator_armed_ = actuator_armed_s{};
     observed_control_mode_ = vehicle_control_mode_s{};
     observed_vehicle_status_ = vehicle_status_s{};
     safety_ = SafetySnapshot{};
     last_run_time_us_ = 0U;
+    pending_parameter_instance_ = 0U;
+    applied_parameter_instance_ = 0U;
+    applied_parameter_valid_ = false;
+    calibration_right_ = calibration_left_ = 0.0F;
+    calibration_fence_ = {};
+    calibration_fence_center_timestamp_ = 0U;
+    calibration_fence_session_id_ = 0U;
+    calibration_fence_device_id_ = 0U;
+    calibration_session_throttle_ceiling_ = 0.0F;
+    calibration_session_steering_ceiling_ = 0.0F;
+    calibration_session_motor_limit_ = calibration_entry_cruise_ = calibration_fallback_speed_ = 0.0F;
+    calibration_full_probe_enabled_ = false;
     have_manual_request_ = false;
     have_navigation_request_ = false;
     have_local_position_ = false;
@@ -767,6 +974,8 @@ void RoverDifferential::reset_runtime_state() noexcept
     navigation_parameters_valid_ = false;
     parameter_update_pending_ = false;
     safety_inhibit_observed_ = true;
+    calibration_fence_latched_ = false;
+    calibration_fence_valid_ = false;
     invalidate_parameter_bindings();
 }
 
@@ -810,10 +1019,17 @@ bool RoverDifferential::valid_parameter_snapshot(
 {
     // 此处复核参数元数据之外的运行时合同：timeout 单位 s，slew 单位 1/s，
     // reversal_delay/arm_ramp 单位 s，并保证 throttle_min <= throttle_max。
+    // STOP_D=0 是合法的“尚无停车证据”，只关闭校准输出，不能拖垮 Manual。
     const dima::lib::rover::DifferentialDriveConfig &drive = snapshot.drive;
     return finite(snapshot.command_timeout_s) &&
            snapshot.command_timeout_s >= 0.02F &&
            snapshot.command_timeout_s <= 1.0F &&
+           finite(snapshot.calibration_radius_m) &&
+           snapshot.calibration_radius_m >= 1.0F &&
+           snapshot.calibration_radius_m <= 100.0F &&
+           finite(snapshot.calibration_stop_distance_m) &&
+           snapshot.calibration_stop_distance_m >= 0.0F &&
+           snapshot.calibration_stop_distance_m <= 100.0F &&
            finite(drive.steering_throttle_mix) &&
            drive.steering_throttle_mix >= 0.0F &&
            drive.steering_throttle_mix <= 1.0F && finite(drive.throttle_min) &&
@@ -831,6 +1047,19 @@ bool RoverDifferential::valid_parameter_snapshot(
            drive.thrust_asymmetry >= 1.0F &&
            drive.thrust_asymmetry <= 10.0F && finite(drive.arm_ramp_s) &&
            drive.arm_ramp_s >= 0.0F && drive.arm_ramp_s <= 5.0F;
+}
+
+bool RoverDifferential::valid_calibration_ceiling_snapshot(
+    const ParameterSnapshot &snapshot) noexcept
+{
+    // RO_CAL_* 只约束自动校准，非法值必须关闭 Calibration，但不能连带关闭
+    // Manual。固定硬上限仍在最终电机层独立执行，不能由参数放宽。
+    return finite(snapshot.calibration_throttle_ceiling) &&
+        snapshot.calibration_throttle_ceiling >= 0.10F &&
+        snapshot.calibration_throttle_ceiling <= 0.40F &&
+        finite(snapshot.calibration_steering_ceiling) &&
+        snapshot.calibration_steering_ceiling >= 0.10F &&
+        snapshot.calibration_steering_ceiling <= 0.35F;
 }
 
 bool RoverDifferential::valid_navigation_parameter_snapshot(
@@ -885,7 +1114,8 @@ bool RoverDifferential::safety_negative(
     // Manual/AUTO 投影就立即锁止本层输出；不能依赖 MotorOutput 再兜底异常 flag。
     const bool manual = modes::manual_projection(control);
     const bool navigation = modes::navigation_projection(control);
-    return !control.flag_armed || (!manual && !navigation);
+    const bool calibration = modes::calibration_projection(control);
+    return !control.flag_armed || (!manual && !navigation && !calibration);
 }
 
 bool RoverDifferential::safety_negative(const vehicle_status_s &status) noexcept
@@ -896,7 +1126,8 @@ bool RoverDifferential::safety_negative(const vehicle_status_s &status) noexcept
     const bool supported =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
-        status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+        status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER ||
+        status.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1;
     return status.arming_state != vehicle_status_s::ARMING_STATE_ARMED ||
            !supported ||
            status.valid_nav_states_mask != kImplementedModeMask ||

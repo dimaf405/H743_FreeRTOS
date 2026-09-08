@@ -20,6 +20,11 @@ struct DifferentialDriveOutput {
     float right;
     float left;
     bool valid;
+    bool motor_slew_active{};
+    bool mixing_limited{};
+    bool shaping_active{};
+    bool arm_ramp_active{};
+    bool reversal_held{};
 };
 
 /**

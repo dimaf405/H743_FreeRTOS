@@ -218,6 +218,8 @@ DifferentialDriveOutput DifferentialDrive::update(
         limited_longitudinal_ = target;
     }
 
+    const bool motor_slew_active = std::fabs(limited_longitudinal_ - target) > kZeroThreshold;
+    const float before_projection = limited_longitudinal_;
     float adjusted_steering = clamp(steering, -1.0F, 1.0F);
     if (manual_source && config_.reverse_steering_in_manual &&
         limited_longitudinal_ < 0.0F) {
@@ -235,6 +237,7 @@ DifferentialDriveOutput DifferentialDrive::update(
     }
 
     float mixed_longitudinal = limited_longitudinal_;
+    const float before_mix_steering = adjusted_steering;
     const float lower_motor_limit = -1.0F / config_.thrust_asymmetry;
     // Manual 继续使用 RD_STR_THR_MIX；Navigation 固定 steering priority=1，
     // 因为 Heading/YawRate 闭环的抗扰稳定性不能被人工油门优先参数削弱。
@@ -246,6 +249,12 @@ DifferentialDriveOutput DifferentialDrive::update(
 
     float right = shape_motor(mixed_longitudinal - adjusted_steering);
     float left = shape_motor(mixed_longitudinal + adjusted_steering);
+    // 各原因单独观测：正常曲线不是饱和，不能用一个 input_limited 把待辨识
+    // 的 MIN/EXPO/ASYM 响应全部丢掉，也不能把安全 slew 冒充电机能力。
+    const bool mixing_limited = std::fabs(mixed_longitudinal - before_projection) > kZeroThreshold ||
+        std::fabs(adjusted_steering - before_mix_steering) > kZeroThreshold;
+    const bool shaping_active = std::fabs(right - (mixed_longitudinal - adjusted_steering)) > kZeroThreshold ||
+        std::fabs(left - (mixed_longitudinal + adjusted_steering)) > kZeroThreshold;
 
     float arm_scale = 1.0F;
     if (config_.arm_ramp_s > 0.0F) {
@@ -256,10 +265,13 @@ DifferentialDriveOutput DifferentialDrive::update(
     right *= arm_scale;
     left *= arm_scale;
 
+    const float before_delay_right = right, before_delay_left = left;
     right = apply_reversal_delay(right, right_reversal_, now_us);
     left = apply_reversal_delay(left, left_reversal_, now_us);
-
-    return DifferentialDriveOutput{right, left, true};
+    return DifferentialDriveOutput{right, left, true, motor_slew_active, mixing_limited,
+        shaping_active, arm_scale < 1.0F && (std::fabs(before_delay_right) > kZeroThreshold ||
+        std::fabs(before_delay_left) > kZeroThreshold),
+        right != before_delay_right || left != before_delay_left};
 }
 
 void DifferentialDrive::reset() noexcept
