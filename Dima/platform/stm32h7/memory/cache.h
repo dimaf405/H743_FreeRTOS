@@ -8,6 +8,8 @@ extern "C" {
 #endif
 
 void dima_stm32_cache_invalidate_range(const void *address, size_t length);
+void dima_stm32_cache_clean_range(const void *address, size_t length);
+void dima_stm32_cache_clean_invalidate_range(const void *address, size_t length);
 void dima_stm32_cache_disable_for_handoff(void);
 
 #ifdef __cplusplus

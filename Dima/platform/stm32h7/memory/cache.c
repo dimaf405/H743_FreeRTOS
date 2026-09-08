@@ -42,6 +42,32 @@ void dima_stm32_cache_invalidate_range(const void *address, size_t length)
     __ISB();
 }
 
+/* DMA 调用者先证明整条 cache line 的独占所有权，再请求维护；向外对齐本身
+ * 不能替代这个证明。D-cache 未启用时沿用统一保护，避免启动期缓存操作故障。 */
+void dima_stm32_cache_clean_range(const void *address, size_t length)
+{
+    uintptr_t aligned_address;
+    int32_t aligned_length;
+    if (!cache_range(address, length, &aligned_address, &aligned_length)) {
+        return;
+    }
+    SCB_CleanDCache_by_Addr((uint32_t *)aligned_address, aligned_length);
+    __DSB();
+    __ISB();
+}
+
+void dima_stm32_cache_clean_invalidate_range(const void *address, size_t length)
+{
+    uintptr_t aligned_address;
+    int32_t aligned_length;
+    if (!cache_range(address, length, &aligned_address, &aligned_length)) {
+        return;
+    }
+    SCB_CleanInvalidateDCache_by_Addr((uint32_t *)aligned_address, aligned_length);
+    __DSB();
+    __ISB();
+}
+
 void dima_stm32_cache_disable_for_handoff(void)
 {
     __DSB();
