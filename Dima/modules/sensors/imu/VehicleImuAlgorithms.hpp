@@ -70,6 +70,7 @@ struct Configuration {
                              0.0F, 1.0F, 0.0F,
                              0.0F, 0.0F, 1.0F};
     std::int32_t rotation{0};
+    Vector3 fine_rotation_degrees{};
     std::int32_t integration_rate_hz{200};
     bool clipping_notifications{true};
 };
@@ -146,6 +147,9 @@ constexpr bool configuration_equal(const Configuration &left,
                                    const Configuration &right) noexcept
 {
     return left.rotation == right.rotation &&
+           left.fine_rotation_degrees.x == right.fine_rotation_degrees.x &&
+           left.fine_rotation_degrees.y == right.fine_rotation_degrees.y &&
+           left.fine_rotation_degrees.z == right.fine_rotation_degrees.z &&
            left.integration_rate_hz == right.integration_rate_hz &&
            left.clipping_notifications == right.clipping_notifications &&
            calibration_equal(left.accel, right.accel) &&

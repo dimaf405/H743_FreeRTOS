@@ -327,9 +327,12 @@ bool VehicleImu::calibration_parameter_update_applied(
 }
 
 bool VehicleImu::accel_calibration_matches(
+    std::uint32_t required_instance,
     std::int32_t configured_device_id,
     const float (&values)[6]) const noexcept
 {
+    px4::AtomicTransaction transaction;
+    if (!calibration_parameter_update_applied(required_instance)) return false;
     const auto &active = active_configuration_.accel;
     if (active.configured_device_id != configured_device_id) return false;
     const bool saved_calibration_applied =
@@ -345,9 +348,12 @@ bool VehicleImu::accel_calibration_matches(
 }
 
 bool VehicleImu::gyro_calibration_matches(
+    std::uint32_t required_instance,
     std::int32_t configured_device_id,
     const float (&values)[3]) const noexcept
 {
+    px4::AtomicTransaction transaction;
+    if (!calibration_parameter_update_applied(required_instance)) return false;
     const auto &active = active_configuration_.gyro;
     if (active.configured_device_id != configured_device_id) return false;
     const bool saved_calibration_applied =
@@ -360,9 +366,28 @@ bool VehicleImu::gyro_calibration_matches(
            active.offset.y == values[1] && active.offset.z == values[2];
 }
 
+bool VehicleImu::calibration_snapshot(std::uint32_t accel_device, std::uint32_t gyro_device,
+    float (&accel_values)[6], float (&gyro_offsets)[3], float (&rotation)[9]) const noexcept
+{
+    px4::AtomicTransaction transaction;
+    if (accel_device == 0U || gyro_device == 0U || accel_device != accel_device_id_ || gyro_device != gyro_device_id_ ||
+        !active_configuration_.accel.enabled || !active_configuration_.gyro.enabled) return false;
+    const auto &accel = active_configuration_.accel;
+    const auto &gyro = active_configuration_.gyro;
+    // 旧 ID 不匹配/无效参数时前端实际使用 identity；偏置修正必须从这份
+    // 已生效快照计算，不能把另一设备留在参数存储中的 offset 绑定到新 ID。
+    accel_values[0] = accel.offset.x; accel_values[1] = accel.offset.y; accel_values[2] = accel.offset.z;
+    accel_values[3] = accel.scale.x; accel_values[4] = accel.scale.y; accel_values[5] = accel.scale.z;
+    gyro_offsets[0] = gyro.offset.x; gyro_offsets[1] = gyro.offset.y; gyro_offsets[2] = gyro.offset.z;
+    for (unsigned i = 0U; i < 9U; ++i) rotation[i] = active_configuration_.rotation_matrix[i];
+    return true;
+}
+
 bool VehicleImu::bind_parameters() noexcept
 {
-    return board_rotation_.bind() && integration_rate_.bind() &&
+    return board_rotation_.bind() && board_roll_offset_.bind() &&
+           board_pitch_offset_.bind() && board_yaw_offset_.bind() &&
+           integration_rate_.bind() &&
            imu_autocal_.bind() &&
            clipping_notifications_.bind() &&
            accel_id_.bind() &&
@@ -375,7 +400,12 @@ bool VehicleImu::bind_parameters() noexcept
 
 void VehicleImu::invalidate_parameters() noexcept
 {
+    px4::AtomicTransaction transaction;
+    __atomic_store_n(&applied_parameter_update_valid_, false, __ATOMIC_RELEASE);
     board_rotation_.invalidate();
+    board_roll_offset_.invalidate();
+    board_pitch_offset_.invalidate();
+    board_yaw_offset_.invalidate();
     integration_rate_.invalidate();
     imu_autocal_.invalidate();
     clipping_notifications_.invalidate();
@@ -396,7 +426,11 @@ void VehicleImu::invalidate_parameters() noexcept
 
 bool VehicleImu::refresh_parameter_cache() noexcept
 {
+    px4::AtomicTransaction transaction;
     bool refreshed = board_rotation_.update();
+    refreshed = board_roll_offset_.update() && refreshed;
+    refreshed = board_pitch_offset_.update() && refreshed;
+    refreshed = board_yaw_offset_.update() && refreshed;
     refreshed = integration_rate_.update() && refreshed;
     refreshed = imu_autocal_.update() && refreshed;
     refreshed = clipping_notifications_.update() && refreshed;
@@ -425,8 +459,11 @@ VehicleImu::ConfigurationReadResult VehicleImu::read_configuration(
     // 全部合法后才交给 staged/active 状态，避免逐参数半应用。
     Configuration candidate{};
     candidate.rotation = board_rotation_.get();
-    if (!algorithms::make_rotation_matrix(
-            candidate.rotation, candidate.rotation_matrix)) {
+    candidate.fine_rotation_degrees = {board_roll_offset_.get(),
+        board_pitch_offset_.get(), board_yaw_offset_.get()};
+    if (!dima::lib::sensors::make_board_rotation_matrix(
+            candidate.rotation, candidate.fine_rotation_degrees,
+            candidate.rotation_matrix)) {
         return ConfigurationReadResult::Invalid;
     }
     candidate.integration_rate_hz = integration_rate_.get();
@@ -503,14 +540,20 @@ VehicleImu::ConfigurationReadResult VehicleImu::read_configuration(
         candidate.accel, active_configuration_.accel);
     const bool gyro_changed = !algorithms::calibration_equal(
         candidate.gyro, active_configuration_.gyro);
-    if (accel_calibration_applied) {
-        candidate.accel.count = accel_changed
+    const bool rotation_changed = candidate.rotation != active_configuration_.rotation ||
+        candidate.fine_rotation_degrees.x != active_configuration_.fine_rotation_degrees.x ||
+        candidate.fine_rotation_degrees.y != active_configuration_.fine_rotation_degrees.y ||
+        candidate.fine_rotation_degrees.z != active_configuration_.fine_rotation_degrees.z;
+    // 板级旋转改变了两种传感器到 EKF 的坐标映射，即使 CAL_* 数值未变也必须
+    // 更新两份 calibration_count，让 EKF 清除基于旧坐标估计的 bias。
+    if (candidate.accel.enabled) {
+        candidate.accel.count = (accel_changed || rotation_changed)
                                     ? algorithms::next_calibration_count(
                                           active_configuration_.accel.count)
                                     : active_configuration_.accel.count;
     }
-    if (gyro_calibration_applied) {
-        candidate.gyro.count = gyro_changed
+    if (candidate.gyro.enabled) {
+        candidate.gyro.count = (gyro_changed || rotation_changed)
                                    ? algorithms::next_calibration_count(
                                          active_configuration_.gyro.count)
                                    : active_configuration_.gyro.count;
@@ -591,6 +634,7 @@ void VehicleImu::service_pending_configuration() noexcept
 void VehicleImu::apply_configuration(
     const Configuration &configuration) noexcept
 {
+    px4::AtomicTransaction transaction;
     // 校正或积分周期变化后清空所有积分/状态统计窗口，不能跨配置边界拼接 delta。
     const bool accel_calibration_changed =
         !algorithms::calibration_equal(active_configuration_.accel,
@@ -598,13 +642,12 @@ void VehicleImu::apply_configuration(
     const bool gyro_calibration_changed =
         !algorithms::calibration_equal(active_configuration_.gyro,
                                        configuration.gyro);
-    if (accel_calibration_changed) {
-        learned_accel_calibration_ = {};
+    const bool mapping_changed = !algorithms::configuration_equal(
+        active_configuration_, configuration);
+    if (mapping_changed) {
+        clear_learned_calibrations();
     }
-    if (gyro_calibration_changed) {
-        learned_gyro_calibration_ = {};
-    }
-    if ((accel_calibration_changed || gyro_calibration_changed) &&
+    if ((accel_calibration_changed || gyro_calibration_changed || mapping_changed) &&
         state_ == dima::middleware::lifecycle::ModuleState::Running) {
         const std::uint64_t now_us = hrt_absolute_time();
         autocal_quiet_until_us_ =
@@ -625,10 +668,25 @@ void VehicleImu::apply_configuration(
 void VehicleImu::mark_parameter_update_applied(
     std::uint32_t instance) noexcept
 {
+    px4::AtomicTransaction transaction;
     __atomic_store_n(&applied_parameter_update_instance_, instance,
                      __ATOMIC_RELEASE);
     __atomic_store_n(&applied_parameter_update_valid_, true,
                      __ATOMIC_RELEASE);
+    status_dirty_ = true;
+}
+
+bool VehicleImu::board_rotation_matches(
+    std::uint32_t required_instance, std::int32_t rotation, const float (&fine_degrees)[3]) const noexcept
+{
+    px4::AtomicTransaction transaction;
+    if (!calibration_parameter_update_applied(required_instance)) return false;
+    // 调用方先通过 acquire 读取 applied generation，再核对目标值；用于正式
+    // 校准事务的前端确认，不是测试专用接口。
+    return active_configuration_.rotation == rotation &&
+        active_configuration_.fine_rotation_degrees.x == fine_degrees[0] &&
+        active_configuration_.fine_rotation_degrees.y == fine_degrees[1] &&
+        active_configuration_.fine_rotation_degrees.z == fine_degrees[2];
 }
 
 void VehicleImu::clear_pending_configuration() noexcept
@@ -852,7 +910,10 @@ void VehicleImu::run_parameter_commit() noexcept
     // learned candidate 或 active configuration，参数更新并发到来不会撕裂事务。
     const CalibrationCommitRequest request{parameter_commit_request_};
     bool success = false;
-    if (request.kind == CalibrationCommitKind::Accel) {
+    uORB::SubscriptionData<auto_calibration_status_s> calibration_status{ORB_ID(auto_calibration_status)};
+    for (unsigned n = 0U; n < 8U && calibration_status.update(); ++n) {}
+    const bool lease = !calibration_status.get().active && !param_storage_paused() && armed_.begin_maintenance();
+    if (lease && request.kind == CalibrationCommitKind::Accel) {
         const param_t handles[6]{
             param_handle(dima::params::CAL_ACC0_XOFF),
             param_handle(dima::params::CAL_ACC0_YOFF),
@@ -870,7 +931,7 @@ void VehicleImu::run_parameter_commit() noexcept
                      static_cast<double>(request.values[1]),
                      static_cast<double>(request.values[2]));
         }
-    } else if (request.kind == CalibrationCommitKind::Gyro) {
+    } else if (lease && request.kind == CalibrationCommitKind::Gyro) {
         const param_t handles[3]{
             param_handle(dima::params::CAL_GYRO0_XOFF),
             param_handle(dima::params::CAL_GYRO0_YOFF),
@@ -892,6 +953,7 @@ void VehicleImu::run_parameter_commit() noexcept
     if (!success) {
         PX4_WARN("IMU autocal parameter transaction failed");
     }
+    if (lease) armed_.end_maintenance();
     __atomic_store_n(
         &parameter_commit_state_,
         static_cast<std::uint8_t>(
@@ -956,6 +1018,13 @@ void VehicleImu::service_estimator_bias(
     std::uint64_t now_us, bool parameters_updated) noexcept
 {
     consume_parameter_commit_result(now_us);
+    for (unsigned n = 0U; n < 8U && auto_calibration_sub_.update(); ++n) {}
+    if (auto_calibration_sub_.get().active) {
+        // 组合校准拥有参数快照时停用独立 IMU 自动写回，避免两个校准 owner
+        // 在阶段 Disarm 窗口相互覆盖；普通传感器发布/估计仍持续运行。
+        clear_learned_calibrations();
+        return;
+    }
     if (!parameter_commit_idle()) {
         return;
     }

@@ -137,9 +137,12 @@ bool VehicleMagnetometer::calibration_parameter_update_applied(
 }
 
 bool VehicleMagnetometer::mag_calibration_matches(
+    std::uint32_t required_instance,
     std::int32_t configured_device_id,
     const float (&values)[6]) const noexcept
 {
+    px4::AtomicTransaction transaction;
+    if (!calibration_parameter_update_applied(required_instance)) return false;
     const Calibration &configured = active_configuration_.calibration;
     if (configured.configured_device_id != configured_device_id) {
         return false;
@@ -161,12 +164,24 @@ bool VehicleMagnetometer::mag_calibration_matches(
         expected.saved = true;
         return same_correction(active_correction_, expected);
     }
-    return same_correction(active_correction_, Calibration{});
+    return same_correction(active_correction_,
+        correction_for_device(active_configuration_, active_device_id_));
+}
+
+bool VehicleMagnetometer::board_adjustment_matches(
+    std::uint32_t required_instance, const float (&fine_degrees)[3]) const noexcept
+{
+    px4::AtomicTransaction transaction;
+    if (!calibration_parameter_update_applied(required_instance)) return false;
+    return active_correction_.fine_degrees.x == fine_degrees[0] &&
+           active_correction_.fine_degrees.y == fine_degrees[1] &&
+           active_correction_.fine_degrees.z == fine_degrees[2];
 }
 
 bool VehicleMagnetometer::bind_parameters() noexcept
 {
-    return publication_rate_.bind() && calibration_id_.bind() &&
+    return publication_rate_.bind() && board_roll_offset_.bind() &&
+           board_pitch_offset_.bind() && board_yaw_offset_.bind() && calibration_id_.bind() &&
            calibration_rotation_.bind() && x_offset_.bind() &&
            y_offset_.bind() && z_offset_.bind() && x_scale_.bind() &&
            y_scale_.bind() && z_scale_.bind();
@@ -175,6 +190,9 @@ bool VehicleMagnetometer::bind_parameters() noexcept
 void VehicleMagnetometer::invalidate_parameters() noexcept
 {
     publication_rate_.invalidate();
+    board_roll_offset_.invalidate();
+    board_pitch_offset_.invalidate();
+    board_yaw_offset_.invalidate();
     calibration_id_.invalidate();
     calibration_rotation_.invalidate();
     x_offset_.invalidate();
@@ -187,7 +205,11 @@ void VehicleMagnetometer::invalidate_parameters() noexcept
 
 bool VehicleMagnetometer::refresh_parameter_cache() noexcept
 {
+    px4::AtomicTransaction transaction;
     bool refreshed = publication_rate_.update();
+    refreshed = board_roll_offset_.update() && refreshed;
+    refreshed = board_pitch_offset_.update() && refreshed;
+    refreshed = board_yaw_offset_.update() && refreshed;
     refreshed = calibration_id_.update() && refreshed;
     refreshed = calibration_rotation_.update() && refreshed;
     refreshed = x_offset_.update() && refreshed;
@@ -208,6 +230,8 @@ bool VehicleMagnetometer::read_configuration(
     candidate.publication_rate_hz = publication_rate_.get();
     candidate.calibration.configured_device_id = calibration_id_.get();
     candidate.calibration.rotation = calibration_rotation_.get();
+    candidate.calibration.fine_degrees = {board_roll_offset_.get(),
+        board_pitch_offset_.get(), board_yaw_offset_.get()};
     candidate.calibration.offset[0] = x_offset_.get();
     candidate.calibration.offset[1] = y_offset_.get();
     candidate.calibration.offset[2] = z_offset_.get();
@@ -223,6 +247,9 @@ bool VehicleMagnetometer::read_configuration(
         candidate.calibration.configured_device_id < 0) {
         return false;
     }
+    float checked_rotation[9]{};
+    if (!dima::lib::sensors::make_board_rotation_matrix(
+            0, candidate.calibration.fine_degrees, checked_rotation)) return false;
     configuration = candidate;
     return true;
 }
@@ -250,7 +277,10 @@ bool VehicleMagnetometer::same_correction(
     const Calibration &left, const Calibration &right) noexcept
 {
     if (left.configured_device_id != right.configured_device_id ||
-        left.rotation != right.rotation || left.saved != right.saved) {
+        left.rotation != right.rotation || left.saved != right.saved ||
+        left.fine_degrees.x != right.fine_degrees.x ||
+        left.fine_degrees.y != right.fine_degrees.y ||
+        left.fine_degrees.z != right.fine_degrees.z) {
         return false;
     }
     for (std::size_t axis = 0U; axis < 3U; ++axis) {
@@ -283,7 +313,11 @@ VehicleMagnetometer::correction_for_device(
         selected.saved = true;
         return selected;
     }
-    return Calibration{};
+    Calibration identity{};
+    // 即使未保存本设备 hard-iron 校准，板级细调也描述车体坐标系，仍需与 IMU
+    // 一致应用；不套用不匹配设备的 CAL_MAG offset/scale/离散旋转。
+    identity.fine_degrees = configuration.calibration.fine_degrees;
+    return identity;
 }
 
 void VehicleMagnetometer::process_parameter_update(
@@ -331,6 +365,7 @@ void VehicleMagnetometer::service_pending_configuration() noexcept
 void VehicleMagnetometer::apply_configuration(
     const Configuration &configuration) noexcept
 {
+    px4::AtomicTransaction transaction;
     active_configuration_ = configuration;
     // 输出间隔=floor(1e6/rate_hz) us；设备硬件采样率不受此参数影响。
     publication_interval_us_ = static_cast<std::uint32_t>(
@@ -341,6 +376,7 @@ void VehicleMagnetometer::apply_configuration(
 void VehicleMagnetometer::mark_parameter_update_applied(
     std::uint32_t instance) noexcept
 {
+    px4::AtomicTransaction transaction;
     __atomic_store_n(&applied_parameter_update_instance_, instance,
                      __ATOMIC_RELEASE);
     __atomic_store_n(&applied_parameter_update_valid_, true,
@@ -356,6 +392,7 @@ void VehicleMagnetometer::clear_pending_configuration() noexcept
 
 void VehicleMagnetometer::configure_device(std::uint32_t device_id) noexcept
 {
+    px4::AtomicTransaction transaction;
     // 设备或实际 correction 变化才重建旋转/清积分；相同配置不增加
     // calibration_count。新设备有保存校准时 count 从 1 开始。
     const bool device_changed = device_id != active_device_id_;
@@ -371,8 +408,8 @@ void VehicleMagnetometer::configure_device(std::uint32_t device_id) noexcept
     if (next.saved) {
         // 理论上 valid_saved_calibration 已验证 rotation；若矩阵构造仍失败，
         // fail-safe 回 identity 并把 count 清零，不能发布半校正磁场。
-        if (!dima::lib::sensors::make_rotation_matrix(
-                next.rotation, rotation_matrix_)) {
+        if (!dima::lib::sensors::make_board_rotation_matrix(
+                next.rotation, next.fine_degrees, rotation_matrix_)) {
             active_correction_ = Calibration{};
             (void)dima::lib::sensors::make_rotation_matrix(
                 0, rotation_matrix_);
@@ -382,8 +419,9 @@ void VehicleMagnetometer::configure_device(std::uint32_t device_id) noexcept
                 ? 1U : next_calibration_count(calibration_count_);
         }
     } else {
-        (void)dima::lib::sensors::make_rotation_matrix(0, rotation_matrix_);
-        calibration_count_ = 0U;
+        (void)dima::lib::sensors::make_board_rotation_matrix(
+            0, next.fine_degrees, rotation_matrix_);
+        calibration_count_ = device_changed ? 0U : next_calibration_count(calibration_count_);
         const Calibration &configured = active_configuration_.calibration;
         if (device_id != 0U && configured.configured_device_id > 0 &&
             static_cast<std::uint32_t>(configured.configured_device_id) ==

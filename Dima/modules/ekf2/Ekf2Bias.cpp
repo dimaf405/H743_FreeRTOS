@@ -1,6 +1,8 @@
 #include "Ekf2.hpp"
 
 #include "api/Time.hpp"
+#include "auto_calibration_status.hpp"
+#include "uORB/SubscriptionData.hpp"
 
 #include <cmath>
 
@@ -239,22 +241,28 @@ void Ekf2::run_mag_declination_commit() noexcept
     }
 
     const float declination_deg = mag_declination_commit_value_deg_;
-    bool success = std::isfinite(declination_deg);
+    uORB::SubscriptionData<auto_calibration_status_s> calibration_status{ORB_ID(auto_calibration_status)};
+    for (unsigned n = 0U; n < 8U && calibration_status.update(); ++n) {}
+    // 组合校准期间保持地磁模型估计，只延后独立 declination 参数写回，避免
+    // 把它的后台写入误当作操作者并发改参；主线程仍按既有退避机制重试。
+    const bool deferred = calibration_status.get().active || param_storage_paused();
+    bool success = !deferred && std::isfinite(declination_deg);
     bool changed = false;
     dima::ParamFloat<dima::params::EKF2_MAG_DECL> parameter{};
     success = success && parameter.bind();
     if (success &&
         std::fabs(declination_deg - parameter.get()) > 0.1F) {
         parameter.set(declination_deg);
-        // 与 PX4 一致只更新参数内存且不发送 parameter_update；物理持久化仍由
-        // 项目已有 autosave 路径负责，本模块绝不直接访问 Flash。
+        // 只更新参数内存且不发送 parameter_update；权威 YAML 将此参数标为
+        // volatile，autosave/显式保存均不持久化。本模块绝不直接访问 Flash。
         success = parameter.commit_no_notification();
         changed = success;
     }
     if (success && changed) {
-        PX4_INFO("EKF2 magnetic declination committed %.2f deg",
+        PX4_INFO("EKF2 magnetic declination RAM updated (volatile) %.2f deg",
                  static_cast<double>(declination_deg));
-    } else if (!success) {
+    } else if (!success && !deferred) {
+        // 组合事务的正常延后沿用现有退避，不每秒报告一次虚假的写回故障。
         PX4_WARN("EKF2 magnetic declination parameter commit failed");
     }
 

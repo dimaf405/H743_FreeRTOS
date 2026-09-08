@@ -12,6 +12,8 @@
 #include "validation/SensorValidityAlgorithms.hpp"
 #include "lifecycle/module_base.hpp"
 #include "estimator_sensor_bias.hpp"
+#include "auto_calibration_status.hpp"
+#include "uORB/SubscriptionData.hpp"
 #include "parameter_update.hpp"
 #include "parameters/param.h"
 #include "api/Flash.hpp"
@@ -62,11 +64,17 @@ public:
     bool calibration_parameter_update_applied(
         std::uint32_t required_instance) const noexcept;
     bool accel_calibration_matches(
+        std::uint32_t required_instance,
         std::int32_t configured_device_id,
         const float (&values)[6]) const noexcept;
     bool gyro_calibration_matches(
+        std::uint32_t required_instance,
         std::int32_t configured_device_id,
         const float (&values)[3]) const noexcept;
+    bool calibration_snapshot(std::uint32_t accel_device, std::uint32_t gyro_device,
+        float (&accel_values)[6], float (&gyro_offsets)[3], float (&rotation)[9]) const noexcept;
+    bool board_rotation_matches(std::uint32_t required_instance, std::int32_t rotation,
+                                const float (&fine_degrees)[3]) const noexcept;
 
 private:
     // gyro callback 是主触发，20 ms 备份调度覆盖丢回调/参数更新。每轮最多处理
@@ -192,11 +200,15 @@ private:
         ORB_ID(parameter_update), *this};
     uORB::Subscription estimator_sensor_bias_sub_{
         ORB_ID(estimator_sensor_bias)};
+    uORB::SubscriptionData<auto_calibration_status_s> auto_calibration_sub_{ORB_ID(auto_calibration_status)};
     uORB::Publication<vehicle_imu_s> vehicle_imu_pub_{ORB_ID(vehicle_imu)};
     uORB::Publication<vehicle_imu_status_s> vehicle_imu_status_pub_{
         ORB_ID(vehicle_imu_status)};
 
     dima::ParamInt<dima::params::SENS_BOARD_ROT> board_rotation_{};
+    dima::ParamFloat<dima::params::SENS_BOARD_X_OFF> board_roll_offset_{};
+    dima::ParamFloat<dima::params::SENS_BOARD_Y_OFF> board_pitch_offset_{};
+    dima::ParamFloat<dima::params::SENS_BOARD_Z_OFF> board_yaw_offset_{};
     dima::ParamInt<dima::params::IMU_INTEG_RATE> integration_rate_{};
     dima::ParamInt<dima::params::SENS_IMU_AUTOCAL> imu_autocal_{};
     dima::ParamInt<dima::params::SENS_IMU_CLPNOTI>

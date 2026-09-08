@@ -50,8 +50,10 @@ public:
     bool calibration_parameter_update_applied(
         std::uint32_t required_instance) const noexcept;
     bool mag_calibration_matches(
+        std::uint32_t required_instance,
         std::int32_t configured_device_id,
         const float (&values)[6]) const noexcept;
+    bool board_adjustment_matches(std::uint32_t required_instance, const float (&fine_degrees)[3]) const noexcept;
 
 private:
     // sensor_mag 回调主触发，50 ms 备份调度处理参数；每轮最多四个样本，避免
@@ -66,6 +68,7 @@ private:
         std::int32_t rotation{0};
         float offset[3]{};
         float scale[3]{1.0F, 1.0F, 1.0F};
+        dima::lib::sensors::Vector3 fine_degrees{};
         bool saved{false};
     };
 
@@ -109,6 +112,9 @@ private:
         vehicle_magnetometer_publication_{ORB_ID(vehicle_magnetometer)};
 
     dima::ParamFloat<dima::params::SENS_MAG_RATE> publication_rate_{};
+    dima::ParamFloat<dima::params::SENS_BOARD_X_OFF> board_roll_offset_{};
+    dima::ParamFloat<dima::params::SENS_BOARD_Y_OFF> board_pitch_offset_{};
+    dima::ParamFloat<dima::params::SENS_BOARD_Z_OFF> board_yaw_offset_{};
     dima::ParamInt<dima::params::CAL_MAG0_ID> calibration_id_{};
     dima::ParamInt<dima::params::CAL_MAG0_ROT> calibration_rotation_{};
     dima::ParamFloat<dima::params::CAL_MAG0_XOFF> x_offset_{};
