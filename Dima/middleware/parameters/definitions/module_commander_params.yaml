@@ -3,6 +3,7 @@ parameters:
 - group: Commander
   definitions:
     COM_ARM_STICK_DZ:
+      category: Developer
       description:
         short: "Rover \u89E3\u9501\u65F6 throttle/yaw \u76F8\u5BF9\u4E2D\u4F4D\u5141\
           \u8BB8\u7684\u6700\u5927\u5F52\u4E00\u5316\u504F\u5DEE\u3002"

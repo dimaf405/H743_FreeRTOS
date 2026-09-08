@@ -23,6 +23,7 @@ parameters:
         max: 3
         reboot_required: true
       SDLOG_PROFILE:
+        category: Developer
         description:
           short: SD ULog topic profiles
           long: |-

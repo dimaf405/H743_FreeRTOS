@@ -4,6 +4,7 @@ parameters:
   - group: System
     definitions:
       SYS_DM_BACKEND:
+        category: Developer
         description:
           short: Dataman storage backend
           long: |-
