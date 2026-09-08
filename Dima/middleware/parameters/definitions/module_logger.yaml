@@ -1,0 +1,54 @@
+module_name: Logger
+
+parameters:
+  - group: Logger
+    definitions:
+      SDLOG_MODE:
+        description:
+          short: SD ULog session mode
+          long: |-
+            Selects when this product creates SD-card ULog sessions. Mode 0
+            creates one session for every armed interval. Mode 1 starts at
+            boot and stops permanently at the first disarm edge observed
+            after arming. Mode 2 records from boot until shutdown. Mode 3
+            starts at the first arm edge and then records until shutdown.
+        type: enum
+        values:
+          0: Armed sessions
+          1: Boot until first post-arm disarm
+          2: Boot until shutdown
+          3: First arm until shutdown
+        default: 0
+        min: 0
+        max: 3
+        reboot_required: true
+      SDLOG_PROFILE:
+        description:
+          short: SD ULog topic profiles
+          long: |-
+            Selects the product logging data sets. Multiple bits may be
+            combined; source-rate recording takes priority, otherwise the
+            highest requested fixed rate is used. Zero keeps ULog headers,
+            parameters, hardware identity, text, sync markers and real
+            dropout records, but writes no ordinary uORB topic data.
+        type: bitmask
+        bit:
+          0: General Rover
+          1: Full EKF2 replay
+          2: Rover system identification
+        default: 1
+        min: 0
+        max: 7
+        reboot_required: true
+      SDLOG_DIRS_MAX:
+        description:
+          short: Maximum SD log session directories
+          long: |-
+            Maximum number of Logger-owned sessNNN directories retained on
+            the SD card, including the active session. The product always
+            enforces a finite limit; zero is not an unlimited mode.
+        type: int32
+        default: 50
+        min: 1
+        max: 999
+        reboot_required: true

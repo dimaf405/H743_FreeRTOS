@@ -1,0 +1,205 @@
+schema_version: 1
+product: h743_sd_ulog
+
+px4_ulog_wire:
+  project: PX4-Autopilot
+  commit: d6f12ad1c4f70ad3230afd7d86e971421e02fef4
+  source: src/modules/logger/messages.h
+  sha256: a6b3c9a52533785ff7a50960cb5f314dfdc6946ece2276a7da03ee2a8a46b4ee
+
+modes:
+  ArmedSessions: 0
+  BootUntilFirstPostArmDisarm: 1
+  BootUntilShutdown: 2
+  FirstArmUntilShutdown: 3
+
+profiles:
+  GeneralRover: 0
+  Ekf2Replay: 1
+  RoverSystemIdentification: 2
+
+sidecar:
+  magic: DLOG
+  version: 1
+  record_size: 64
+  maximum_records: 3
+  flags:
+    UtcValid: 0
+    Closed: 1
+    Recovered: 2
+    Corrupt: 3
+  fields:
+    - {name: magic, offset: 0, type: bytes4}
+    - {name: version, offset: 4, type: uint8}
+    - {name: record_length, offset: 5, type: uint8}
+    - {name: flags, offset: 6, type: uint8}
+    - {name: reserved, offset: 7, type: uint8}
+    - {name: record_generation, offset: 8, type: uint32}
+    - {name: session_sequence, offset: 12, type: uint64}
+    - {name: start_monotonic_us, offset: 20, type: uint64}
+    - {name: boot_utc_us, offset: 28, type: uint64}
+    - {name: start_utc_us, offset: 36, type: uint64}
+    - {name: hardware_uid, offset: 44, type: uint64}
+    - {name: file_size, offset: 52, type: uint32}
+    - {name: file_crc32, offset: 56, type: uint32}
+    - {name: record_crc32, offset: 60, type: uint32}
+
+# 每个生成的 uORB Topic 都必须在此恰好归类一次。record 的 profile 值为
+# source 或固定 Hz；生成器负责组合 Profile、Topic ID 和采样间隔，C++ 不再
+# 保存第二份 Topic/速率表。
+topics:
+  action_request:
+    disposition: record
+    profiles: {GeneralRover: source}
+  actuator_armed:
+    disposition: record
+    flush_on_stop: true
+    profiles: {GeneralRover: source}
+  actuator_motors:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 100}
+  actuator_output_status:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 100}
+  auto_calibration_request:
+    disposition: record
+    profiles: {GeneralRover: source}
+  auto_calibration_status:
+    disposition: record
+    profiles: {GeneralRover: source, RoverSystemIdentification: source}
+  ekf2_timestamps:
+    disposition: record
+    replay_callback: true
+    queue_length: 8
+    profiles: {Ekf2Replay: source}
+  estimator_aid_src_fake_hgt:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_aid_src_fake_pos:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_aid_src_gnss_hgt:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_aid_src_gnss_pos:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_aid_src_gnss_vel:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_aid_src_gnss_yaw:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_aid_src_gravity:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_aid_src_mag:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_event_flags:
+    disposition: record
+    profiles: {GeneralRover: source}
+  estimator_gps_status:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_sensor_bias:
+    disposition: record
+    profiles: {GeneralRover: 1}
+  estimator_status:
+    disposition: record
+    profiles: {GeneralRover: 5}
+  estimator_status_flags:
+    disposition: record
+    profiles: {GeneralRover: source}
+  input_rc:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 50}
+  manual_control_setpoint:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 50}
+  manual_control_switches:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 50}
+  mavlink_log:
+    disposition: text
+  parameter_update:
+    disposition: parameter_trigger
+  rc_channels:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 50}
+  rover_motion_request:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 50}
+  rover_control_status:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 100}
+  rover_navigation_status:
+    disposition: record
+    profiles: {GeneralRover: 10, RoverSystemIdentification: 50}
+  rtk_heading_status:
+    disposition: record
+    profiles: {GeneralRover: 10, RoverSystemIdentification: 10}
+  sensor_accel:
+    disposition: record
+    profiles: {GeneralRover: 5, RoverSystemIdentification: 100}
+  sensor_calibration_request:
+    disposition: record
+    profiles: {GeneralRover: source}
+  sensor_calibration_status:
+    disposition: record
+    profiles: {GeneralRover: source}
+  sensor_gps:
+    disposition: duplicate
+    duplicate_of: vehicle_gps_position
+  sensor_gyro:
+    disposition: record
+    profiles: {GeneralRover: 5, RoverSystemIdentification: 100}
+  sensor_mag:
+    disposition: record
+    profiles: {GeneralRover: 10}
+  vehicle_attitude:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 100}
+  vehicle_command:
+    disposition: record
+    profiles: {GeneralRover: source}
+  vehicle_command_ack:
+    disposition: record
+    profiles: {GeneralRover: source}
+  vehicle_control_mode:
+    disposition: record
+    flush_on_stop: true
+    profiles: {GeneralRover: source}
+  vehicle_global_position:
+    disposition: record
+    profiles: {GeneralRover: 10}
+  vehicle_gps_position:
+    disposition: record
+    utc_source: true
+    queue_length: 4
+    profiles: {GeneralRover: 10, Ekf2Replay: source}
+  vehicle_imu:
+    disposition: record
+    replay_callback: true
+    queue_length: 8
+    profiles: {GeneralRover: 20, Ekf2Replay: source, RoverSystemIdentification: 100}
+  vehicle_imu_status:
+    disposition: record
+    profiles: {GeneralRover: 1}
+  vehicle_local_position:
+    disposition: record
+    profiles: {GeneralRover: 10}
+  vehicle_magnetometer:
+    disposition: record
+    queue_length: 4
+    profiles: {GeneralRover: 10, Ekf2Replay: source}
+  vehicle_odometry:
+    disposition: record
+    profiles: {GeneralRover: 20, RoverSystemIdentification: 100}
+  vehicle_status:
+    disposition: record
+    flush_on_stop: true
+    profiles: {GeneralRover: source, Ekf2Replay: source}
+  yaw_estimator_status:
+    disposition: record
+    profiles: {GeneralRover: 5}
