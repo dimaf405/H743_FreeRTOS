@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 
 import yaml
 
-from architecture.common import ROOT, Violation, line_for, sources_under
+from architecture.common import BUILD_ROOT, ROOT, Violation, line_for, sources_under
 
 
 PINNED_MAVLINK_COMMIT = "33af200d25ec6f0925b49b1ba82bbf1294ea5f72"
@@ -141,7 +141,7 @@ def _scan_generated_closure(
     policy: dict,
     violations: list[Violation],
 ) -> None:
-    generated_root = ROOT / "build/generated/mavlink"
+    generated_root = BUILD_ROOT / "generated/mavlink"
     catalog_path = generated_root / ".generated.json"
     try:
         catalog = _load_json(catalog_path)

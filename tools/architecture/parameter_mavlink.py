@@ -8,7 +8,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from architecture.build_closure import BuildClosureError, load_build_closure
-from architecture.common import ROOT, Violation, line_for, sources_under
+from architecture.common import BUILD_ROOT, ROOT, Violation, line_for, sources_under
 from architecture.mavlink_protocol import scan_mavlink_protocol_contract
 from architecture.upstream import validate_source_manifest
 
@@ -121,7 +121,7 @@ def _scan_parameter_generation_contract(violations: list[Violation]) -> None:
                 "local parameter parser/renderer must be retired",
             ))
 
-    generated_dir = ROOT / "build/generated/parameters"
+    generated_dir = BUILD_ROOT / "generated/parameters"
     json_path = generated_dir / "parameters.json"
     catalogue = _read_generated_catalogue(json_path, violations)
     if catalogue is None:
@@ -148,7 +148,7 @@ def _scan_parameter_generation_contract(violations: list[Violation]) -> None:
 
     raw_header_path = generated_dir / "px4_parameters.hpp"
     public_header_path = (
-        ROOT / "build/generated_include/parameters/dima_parameters.hpp"
+        BUILD_ROOT / "generated_include/parameters/dima_parameters.hpp"
     )
     try:
         raw_header = raw_header_path.read_text(encoding="utf-8")
@@ -178,8 +178,8 @@ def _scan_parameter_generation_contract(violations: list[Violation]) -> None:
         raw_header_path,
         generated_dir / "parameter_contract.hpp",
         public_header_path,
-        ROOT / "build/generated_include/parameters/parameter_contract.hpp",
-        ROOT / "build/generated/component_metadata/parameters.json",
+        BUILD_ROOT / "generated_include/parameters/parameter_contract.hpp",
+        BUILD_ROOT / "generated/component_metadata/parameters.json",
     ]
     for path in generated_files:
         try:

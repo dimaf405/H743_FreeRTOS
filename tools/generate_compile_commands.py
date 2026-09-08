@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从真实 GNU Make recipes 生成 Windows 主机原生 compilation database。"""
+"""从真实 GNU Make recipes 生成当前主机原生 compilation database。"""
 
 from __future__ import annotations
 
@@ -88,7 +88,6 @@ def make_plan(
         "-n",
         "-f",
         "GNUmakefile",
-        "OS=Windows_NT",
         "DIMA_BUILD_INTERNAL=1",
         "DIMA_PROGRESS_STATE=",
         f"PYTHON={python}",

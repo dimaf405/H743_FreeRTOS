@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision the pinned Windows Arm GNU toolchain in the shared host cache."""
+"""在 Windows/Linux 本机缓存中准备固定版本的原生 Arm GNU 工具链。"""
 
 from __future__ import annotations
 
@@ -10,35 +10,59 @@ import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.error
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 
 
 TOOLCHAIN_VERSION = "10.3.1-2.3"
-TOOLCHAIN_ARCHIVE = (
-    "xpack-arm-none-eabi-gcc-10.3.1-2.3-win32-x64.zip"
-)
-TOOLCHAIN_ARCHIVE_SIZE = 194_580_962
-TOOLCHAIN_ARCHIVE_SHA256 = (
-    "169744f784fb04ae10c60bc6a2cd69cff93cff0bf5657e9333776036f347f9c4"
-)
-TOOLCHAIN_URLS = (
+TOOLCHAIN_URL_PREFIXES = (
     "https://ghfast.top/https://github.com/xpack-dev-tools/"
-    "arm-none-eabi-gcc-xpack/releases/download/v10.3.1-2.3/"
-    + TOOLCHAIN_ARCHIVE,
+    "arm-none-eabi-gcc-xpack/releases/download/v10.3.1-2.3/",
     "https://gh-proxy.com/https://github.com/xpack-dev-tools/"
-    "arm-none-eabi-gcc-xpack/releases/download/v10.3.1-2.3/"
-    + TOOLCHAIN_ARCHIVE,
+    "arm-none-eabi-gcc-xpack/releases/download/v10.3.1-2.3/",
     "https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/"
-    "releases/download/v10.3.1-2.3/"
-    + TOOLCHAIN_ARCHIVE,
+    "releases/download/v10.3.1-2.3/",
 )
 
 
 class BootstrapError(RuntimeError):
     """A reproducible host-toolchain provisioning failure."""
+
+
+@dataclass(frozen=True)
+class ToolchainPackage:
+    host: str
+    archive: str
+    size: int
+    sha256: str
+    compiler: str
+
+
+def host_package() -> ToolchainPackage:
+    """按 Python 实际主机选择发行包；WSL 的 Linux Python 不下载 Windows exe。"""
+    if platform.machine().casefold() not in ("amd64", "x86_64"):
+        raise BootstrapError("automatic Arm GNU provisioning currently supports x86_64 hosts")
+    system = platform.system().casefold()
+    if system == "windows":
+        return ToolchainPackage(
+            "windows-amd64", "xpack-arm-none-eabi-gcc-10.3.1-2.3-win32-x64.zip",
+            194_580_962,
+            "169744f784fb04ae10c60bc6a2cd69cff93cff0bf5657e9333776036f347f9c4",
+            "arm-none-eabi-gcc.exe",
+        )
+    if system == "linux":
+        # 大小与 SHA-256 对照 xPack 同一 v10.3.1-2.3 release 的 Linux x64 归档及 .sha。
+        return ToolchainPackage(
+            "linux-amd64", "xpack-arm-none-eabi-gcc-10.3.1-2.3-linux-x64.tar.gz",
+            175_646_740,
+            "559dcf1c2dfddac513110fe23da0ef254032c09967eaa901f075515d51818719",
+            "arm-none-eabi-gcc",
+        )
+    raise BootstrapError(f"unsupported Arm GNU host: {platform.system()}")
 
 
 def log(message: str) -> None:
@@ -68,9 +92,10 @@ def validate_compiler(executable: pathlib.Path) -> bool:
     )
 
 
-def download_archive(destination: pathlib.Path) -> None:
+def download_archive(destination: pathlib.Path, package: ToolchainPackage) -> None:
     errors: list[str] = []
-    for url in TOOLCHAIN_URLS:
+    for prefix in TOOLCHAIN_URL_PREFIXES:
+        url = prefix + package.archive
         digest = hashlib.sha256()
         downloaded = 0
         try:
@@ -95,13 +120,13 @@ def download_archive(destination: pathlib.Path) -> None:
 
         actual_digest = digest.hexdigest()
         if (
-            downloaded != TOOLCHAIN_ARCHIVE_SIZE
-            or actual_digest != TOOLCHAIN_ARCHIVE_SHA256
+            downloaded != package.size
+            or actual_digest != package.sha256
         ):
             destination.unlink(missing_ok=True)
             errors.append(
-                f"{url}: expected {TOOLCHAIN_ARCHIVE_SIZE} bytes and SHA-256 "
-                f"{TOOLCHAIN_ARCHIVE_SHA256}, got {downloaded} bytes and "
+                f"{url}: expected {package.size} bytes and SHA-256 "
+                f"{package.sha256}, got {downloaded} bytes and "
                 f"{actual_digest}"
             )
             continue
@@ -134,18 +159,34 @@ def validate_archive_members(
 
 
 def unpack_archive(
-    archive: pathlib.Path, destination: pathlib.Path
+    archive: pathlib.Path, destination: pathlib.Path, package: ToolchainPackage
 ) -> pathlib.Path:
     try:
-        with zipfile.ZipFile(archive) as package:
-            validate_archive_members(destination, package.namelist())
-            package.extractall(destination)
-    except (OSError, zipfile.BadZipFile) as error:
+        if package.archive.endswith(".zip"):
+            with zipfile.ZipFile(archive) as source:
+                validate_archive_members(destination, source.namelist())
+                source.extractall(destination)
+        else:
+            with tarfile.open(archive, "r:gz") as source:
+                members = source.getmembers()
+                validate_archive_members(destination, [member.name for member in members])
+                for member in members:
+                    # Linux 工具链需要保留执行权限和内部链接；链接目标必须仍在解包根内，
+                    # 设备/FIFO 等非工具链文件拒绝解包，不能借 tar 覆盖主机其他路径。
+                    if member.issym() or member.islnk():
+                        base = (destination / member.name).parent if member.issym() else destination
+                        target = (base / member.linkname).resolve()
+                        if target != destination.resolve() and destination.resolve() not in target.parents:
+                            raise BootstrapError(f"unsafe link in Arm GNU archive: {member.name}")
+                    elif not member.isfile() and not member.isdir():
+                        raise BootstrapError(f"unsupported entry in Arm GNU archive: {member.name}")
+                source.extractall(destination)
+    except (OSError, zipfile.BadZipFile, tarfile.TarError) as error:
         raise BootstrapError(f"unable to extract Arm GNU archive: {error}") from error
-    matches = list(destination.rglob("bin/arm-none-eabi-gcc.exe"))
+    matches = list(destination.rglob(f"bin/{package.compiler}"))
     if len(matches) != 1:
         raise BootstrapError(
-            "Arm GNU archive did not contain one bin/arm-none-eabi-gcc.exe"
+            f"Arm GNU archive did not contain one bin/{package.compiler}"
         )
     return matches[0].parent.parent
 
@@ -153,18 +194,15 @@ def unpack_archive(
 def install_toolchain(
     cache_root: pathlib.Path, announce_cache_hit: bool = True
 ) -> pathlib.Path:
-    if platform.system().casefold() != "windows":
-        raise BootstrapError(
-            "automatic Arm GNU provisioning must run in native Windows Python"
-        )
+    package = host_package()
 
     installation = (
         cache_root
         / "arm-none-eabi-gcc"
         / TOOLCHAIN_VERSION
-        / "windows-amd64"
+        / package.host
     )
-    executable = installation / "bin" / "arm-none-eabi-gcc.exe"
+    executable = installation / "bin" / package.compiler
     if validate_compiler(executable):
         if announce_cache_hit:
             log(f"Using cached Arm GNU toolchain: {installation}")
@@ -176,12 +214,12 @@ def install_toolchain(
         prefix=".gcc-", dir=cache_root
     ) as temporary_name:
         temporary = pathlib.Path(temporary_name)
-        archive = temporary / TOOLCHAIN_ARCHIVE
+        archive = temporary / package.archive
         unpacked = temporary / "unpacked"
         unpacked.mkdir()
-        download_archive(archive)
-        candidate = unpack_archive(archive, unpacked)
-        if not validate_compiler(candidate / "bin" / "arm-none-eabi-gcc.exe"):
+        download_archive(archive, package)
+        candidate = unpack_archive(archive, unpacked, package)
+        if not validate_compiler(candidate / "bin" / package.compiler):
             raise BootstrapError(
                 "the extracted Arm GNU compiler failed its version check"
             )

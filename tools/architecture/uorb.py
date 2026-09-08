@@ -7,15 +7,15 @@ import json
 import pathlib
 import re
 
-from architecture.common import ROOT, Violation, line_for
+from architecture.common import BUILD_ROOT, ROOT, Violation, line_for
 from architecture.upstream import validate_source_manifest
 
 
 PINNED_UORB_COMMIT = "d6f12ad1c4f70ad3230afd7d86e971421e02fef4"
 UPSTREAM_ROOT = ROOT / "tools/upstream/uorb_v1_17"
 SCHEMA_ROOT = ROOT / "Dima/messages/schemas"
-GENERATED_ROOT = ROOT / "build/generated/uORB"
-COMPAT_ROOT = ROOT / "build/generated/messages"
+GENERATED_ROOT = BUILD_ROOT / "generated/uORB"
+COMPAT_ROOT = BUILD_ROOT / "generated/messages"
 PASCAL_MESSAGE_NAME = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 LOCAL_EXTENSION_RE = re.compile(r"(?m)^\s*@[A-Za-z_]")
 ORB_DECLARE_RE = re.compile(r"\bORB_DECLARE\(([a-z][a-z0-9_]*)\);")
@@ -187,9 +187,9 @@ def _actual_outputs() -> dict[str, pathlib.Path]:
 
 def _catalog_output_path(relative: str) -> str | None:
     if relative.startswith("uORB/"):
-        return "build/generated/uORB/" + relative.removeprefix("uORB/")
+        return _repository_path(GENERATED_ROOT / relative.removeprefix("uORB/"))
     if relative.startswith("compat/"):
-        return "build/generated/messages/" + relative.removeprefix("compat/")
+        return _repository_path(COMPAT_ROOT / relative.removeprefix("compat/"))
     return None
 
 
@@ -327,16 +327,17 @@ def _scan_fragment(
         ))
 
     listed = set(re.findall(
-        r"\bbuild/generated/(?:uORB|messages)/[A-Za-z0-9_./-]+", text
+        r"\b" + re.escape(_repository_path(BUILD_ROOT / "generated"))
+        + r"/(?:uORB|messages)/[A-Za-z0-9_./-]+", text
     ))
     expected = {
         converted
         for relative in declared_outputs
         if (converted := _catalog_output_path(relative)) is not None
-        and converted != "build/generated/uORB/uorb_sources.mk"
+        and converted != _repository_path(fragment_path)
     }
     # stamp 不能递归记录自己的 hash，但 Make 必须把它列为完整生成事务的完成标记。
-    expected.add("build/generated/uORB/.generated.json")
+    expected.add(_repository_path(GENERATED_ROOT / ".generated.json"))
     if listed != expected:
         violations.append(Violation(
             fragment_path, 1, "R333",

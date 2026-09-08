@@ -1,4 +1,4 @@
-"""从 Windows 原生 GNU Make 数据库求值真实 Application/MCUboot 构建闭包。"""
+"""从当前主机原生 GNU Make 数据库求值真实 Application/MCUboot 构建闭包。"""
 
 from __future__ import annotations
 
@@ -118,10 +118,6 @@ def _parse_make_database(text: str) -> _MakeDatabase:
 
 
 def _make_program(explicit: str | None) -> str:
-    if os.name != "nt":
-        raise BuildClosureError(
-            "build closure evaluation requires Windows-native Python and Make"
-        )
     candidate = explicit or os.environ.get("MAKE") or "make"
     resolved = shutil.which(candidate)
     if resolved is None:
@@ -134,12 +130,11 @@ def _run_make_database(
     make_program: str,
     arguments: tuple[str, ...],
 ) -> _MakeDatabase:
-    """只读执行 ``make -pn``，固定 Windows 上下文并清除父 Make 递归环境。"""
+    """只读执行本机 ``make -pn``，清除父 Make 递归状态并复用本机 Python。"""
     command = [
         make_program,
         "--no-print-directory",
         "-pn",
-        "OS=Windows_NT",
         "DIMA_PROGRESS_STATE=",
         # Resolving a Windows Store execution alias can raise WinError 1920.
         # The already-running interpreter path is sufficient for Make's
@@ -331,18 +326,25 @@ def _bootloader_units(database: _MakeDatabase) -> tuple[CompileUnit, ...]:
 def _evaluate_build_closure(
     root: pathlib.Path,
     make_program: str,
+    build_dir: str | None,
 ) -> BuildClosure:
     """分别求值应用与 MCUboot 目标，再合并编译单元及参数生成器权威输入。"""
     application = _run_make_database(
         root,
         make_program,
-        ("-f", "GNUmakefile", "DIMA_BUILD_INTERNAL=1", "app-check"),
+        (
+            "-f", "GNUmakefile", "DIMA_BUILD_INTERNAL=1",
+            *((f"BUILD_DIR={build_dir}",) if build_dir else ()),
+            "app-check",
+        ),
     )
     bootloader = _run_make_database(
         root,
         make_program,
         (
             "-f", "Bootloader/Makefile",
+            # MCUboot 目录取自同一份 Application Make 数据库，不能继承其对象目录。
+            f"BUILD_DIR={application.words('MCUBOOT_BUILD_DIR')[0]}",
             "KEY_IDENTITY_CHECKED_BY_PARENT=1",
             "KEY_IDENTITY_WILL_CHANGE=0",
             "all",
@@ -362,9 +364,10 @@ def _evaluate_build_closure(
 def _cached_build_closure(
     root: pathlib.Path,
     make_program: str,
+    build_dir: str | None,
 ) -> tuple[BuildClosure | None, str | None]:
     try:
-        return _evaluate_build_closure(root, make_program), None
+        return _evaluate_build_closure(root, make_program, build_dir), None
     except BuildClosureError as error:
         return None, str(error)
 
@@ -376,7 +379,7 @@ def load_build_closure(
     """Return one cached, evaluated build closure for the repository."""
     resolved_root = root.resolve()
     closure, error = _cached_build_closure(
-        resolved_root, _make_program(make_program)
+        resolved_root, _make_program(make_program), os.environ.get("BUILD_DIR")
     )
     if closure is None:
         raise BuildClosureError(error or "unknown build closure failure")

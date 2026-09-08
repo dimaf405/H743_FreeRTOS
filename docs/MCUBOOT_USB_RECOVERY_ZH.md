@@ -23,8 +23,12 @@ ROM DFU 不依赖 MCUboot、FreeRTOS、应用固件或外部 HSE。要保证“�
 make dima_rover
 ```
 
-如果交叉编译器不在 PATH，可追加
-`GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin`，目标行为不变。
+默认自动准备当前主机对应的 xPack Arm GNU 10.3.1。已有工具链时可显式提供本机路径，
+例如 Linux 的 `GCC_PATH=/opt/gcc-arm-none-eabi-10-2020-q4-major/bin`。
+
+Windows 默认产物目录为 `build/`，WSL/Linux 为 `build-linux/`，避免混用主机相关的 `.d`、
+对象文件和生成物。下表及后文手工命令使用 Windows 路径示例；在 Linux 使用时把产物路径中的
+`build/` 换成 `build-linux/`。`make upload` 会自动选择当前构建目录的镜像。
 
 与烧写相关的产物为：
 
@@ -150,10 +154,10 @@ Recovery；日常升级应直接使用下一节的一键命令，由上传器自
 
 ### 3.2 一条命令完成构建与上传
 
-工程的正式构建和上传入口必须运行在 Windows 原生 GNU Make、Windows 路径和 Windows Python
-中；WSL 只可作为调用 Windows 进程的控制终端，不能直接执行本工程的 Make 构建。根 Makefile
-优先选择 `%USERPROFILE%\.platformio\penv\Scripts\python.exe`。主机只需预先具备 Windows GNU Make
-与 Python 3 + pip；如果没有显式提供 `GCC_PATH`、Go 或 `mcumgr`，脚本会自动准备固定版本的
+工程在当前主机环境原生构建：WSL/Linux 使用 Linux GNU Make、`python3` 和 Linux Arm GNU；
+Windows 使用 Windows GNU Make，并优先选择 `%USERPROFILE%\.platformio\penv\Scripts\python.exe`。
+统一主机选择位于 `make/host.mk`，WSL 不转交 Windows 编译。主机需要 GNU Make、Python 3.10+
+与 pip；如果没有显式提供 `GCC_PATH`、Go 或 `mcumgr`，脚本会自动准备固定版本的
 xPack Arm GNU 10.3.1、Go 和带 Dima USB CDC 修补的 Apache `mcumgr`，并按锁文件准备仅用于协议
 编解码的 pymavlink。
 
@@ -165,6 +169,20 @@ xPack Arm GNU 10.3.1、Go 和带 Dima USB CDC 修补的 Apache `mcumgr`，并按
 ```bash
 make dima_rover upload
 ```
+
+WSL/Linux 可直接执行同一条命令，无需 PowerShell 编译包装器。仅准备并验证镜像、不连接板卡
+时使用 `make upload-ready`；只检查上传命令展开可用 `make -n upload MCUMGR_PORT=COM5`。
+串口沿用现有平台选择：Windows 是 `COMx`，Linux 原生设备是 `/dev/ttyACM*`；WSL 使用 Windows
+侧 COM 时由现有上传器处理串口互操作，编译、生成和签名仍使用 Linux Python。
+
+2026-09-08 原生主机构建验收：Windows Python 3.11 与 WSL/Linux Python 3.10 分别使用本机
+xPack Arm GNU 10.3.1，完整 `dima_rover uorb-generated-verify mavlink-generated-verify
+parameter-metadata-verify logger-generated-verify` 最终均 exit 0，454 个自研源文件通过架构检查，
+两份 ELF 无未解析符号，应用向量均为 `0x08040400`。两种主机的未签名 Application BIN
+均为 620440 B，SHA-256 同为 `0dd26e443cc01e82cbfb71c5cb5eb836548a7a9544e2021355eb470927949bc7`。
+WSL 的 `make -j4 NO_COLOR=1 upload-ready` 与 `make -n upload MCUMGR_PORT=COM5 NO_COLOR=1`
+均成功，后者使用 `python3`、Linux 缓存及 `build-linux/H743_FreeRTOS_signed.bin`。
+这是当前共享工作区的生成/编译/签名/命令展开证据，本次未执行实际串口上传或板端复位。
 
 日常 OTA 会进入快速调度：只执行一次真实 Make 依赖图，不再为了构建进度条额外执行“生成物稳定化 +
 全量 dry-run 规划”。这不会跳过生成器、源码重编译、ELF 生命周期检查、签名或上传镜像验证；任何输入

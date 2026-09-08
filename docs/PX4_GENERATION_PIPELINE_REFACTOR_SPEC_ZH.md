@@ -121,9 +121,12 @@ Runtime 直接消费官方 `orb_get_topics()` 与 `orb_topics_count()`。本地 
 - 架构门禁拒绝源码参数 C 定义、本地参数/uORB parser/renderer、MAVLink codec/ID/CRC 表、手写 registry、五个删除参数和来源/派生 hash 漂移。
 - 不新增或修改任何测试文件、测试框架、runner、harness、fixture、mock 或 test-only API。
 
-## 8. Windows 正式验收
+## 8. 主机原生正式验收
 
-所有正式 Git、生成、编译和验收在 Windows PowerShell 的 `E:\freertos\H743_FreeRTOS` 中执行；WSL 只负责发起 Windows 进程。
+正式生成、编译和验收使用当前主机的原生 Make/Python：Windows 在 PowerShell 的
+`E:\freertos\H743_FreeRTOS` 中执行，产物位于 `build/`；WSL/Linux 使用本机 `python3`，
+产物位于 `build-linux/`。依赖缓存从本机 Python home 计算，架构门禁通过 Make 导出的
+`BUILD_DIR` 检查本次生成物，不跨主机读取旧目录。原有 Windows 验收记录仍只代表当时主机的证据。
 
 ```powershell
 make NO_COLOR=1 clean

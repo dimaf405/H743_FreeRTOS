@@ -1,14 +1,12 @@
 PROJECT_ROOT := .
-DIMA_USERPROFILE_POSIX := $(subst \,/,$(USERPROFILE))
-DIMA_PLATFORMIO_PYTHON := $(DIMA_USERPROFILE_POSIX)/.platformio/penv/Scripts/python.exe
+include make/host.mk
 
 TARGET ?= mcuboot
-BUILD_DIR ?= build/mcuboot
+BUILD_DIR ?= $(DIMA_DEFAULT_BUILD_DIR)/mcuboot
 KEY_FILE ?= .keys/development-ecdsa-p256.pem
 KEY_ID_STAMP ?= $(BUILD_DIR)/.key-identity
 KEY_ID_TOOL ?= tools/update_key_identity.py
-PYTHON ?= $(if $(wildcard $(DIMA_PLATFORMIO_PYTHON)),$(DIMA_PLATFORMIO_PYTHON),python.exe)
-IMGTOOL_PYTHONPATH ?= build/host-python
+IMGTOOL_PYTHONPATH ?= $(HOST_TOOLS_CACHE_ROOT)/host-python
 BUILD_PROGRESS_TOOL ?= tools/build_progress.py
 DIMA_PROGRESS_STATE ?=
 KEY_IDENTITY_CHECKED_BY_PARENT ?= 0

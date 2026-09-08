@@ -4,10 +4,14 @@
 # 这是用户维护的唯一构建入口：CubeMX 可重生成 Makefile，但项目源码闭包、
 # 生成合同与发布链分别固定在 project.mk/release.mk，避免生成器覆盖产品规则。
 
-DIMA_USERPROFILE_POSIX := $(subst \,/,$(USERPROFILE))
-DIMA_PLATFORMIO_PYTHON := $(DIMA_USERPROFILE_POSIX)/.platformio/penv/Scripts/python.exe
-PYTHON ?= $(if $(wildcard $(DIMA_PLATFORMIO_PYTHON)),$(DIMA_PLATFORMIO_PYTHON),python.exe)
-HOST_TOOLS_CACHE_ROOT ?= $(shell $(PYTHON) -c "import pathlib; print((pathlib.Path.home() / '.cache' / 'dima-rover' / 'host-tools').as_posix())")
+include make/host.mk
+
+# CubeMX 的 Makefile 会赋值 BUILD_DIR；只对未显式指定的目录覆盖默认值，
+# 使 Linux/Windows 的对象、依赖和生成物各自独立，同时保留用户的 BUILD_DIR 入口。
+ifneq ($(origin BUILD_DIR),command line)
+override BUILD_DIR := $(if $(strip $(BUILD_DIR)),$(BUILD_DIR),$(DIMA_DEFAULT_BUILD_DIR))
+endif
+export BUILD_DIR
 DIMA_ARM_GCC_BOOTSTRAP := tools/bootstrap_arm_gcc.py
 DIMA_DEFAULT_JOBS ?= 4
 ifeq ($(strip $(DIMA_DEFAULT_JOBS)),)

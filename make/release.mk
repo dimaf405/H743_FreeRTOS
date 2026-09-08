@@ -10,9 +10,6 @@ endif
 DEVELOPMENT_KEY = .keys/development-ecdsa-p256.pem
 KEY_FILE ?= $(DEVELOPMENT_KEY)
 MCUBOOT_ROOT = Middlewares/Third_Party/MCUboot
-HOST_TOOLS_CACHE_ROOT ?= $(shell $(PYTHON) -c "import pathlib; print((pathlib.Path.home() / '.cache' / 'dima-rover' / 'host-tools').as_posix())")
-HOST_PYTHON_DIR = $(HOST_TOOLS_CACHE_ROOT)/host-python
-HOST_TOOLS_STAMP = $(HOST_TOOLS_CACHE_ROOT)/.host-tools-installed
 IMGTOOL = $(MCUBOOT_ROOT)/scripts/imgtool.py
 MCUBOOT_BUILD_DIR = $(BUILD_DIR)/mcuboot
 SIGNED_BIN = $(BUILD_DIR)/$(TARGET)_signed.bin
@@ -139,11 +136,11 @@ __dima_clean_progress:
 	$(DIMA_PROGRESS_RUN) --label CLEAN --target "$(BUILD_DIR)" \
 		--display "$(BUILD_DIR)" -- rm -fR "$(BUILD_DIR)"
 
-GENERATION_HOST_REQUIREMENTS := tools/generation/requirements-windows.txt
+GENERATION_HOST_REQUIREMENTS := tools/generation/requirements-host.txt
 
 # 生成器依赖使用固定归档哈希并禁用隐式依赖解析，避免 PyPI 最新版本改变
-# 参数、uORB 或 Metadata 产物。二进制 wheel 与正式 PlatformIO Python 3.11 x64
-# 环境绑定，其他主机只负责发起 Windows 原生构建。
+# 参数、uORB 或 Metadata 产物。Windows/Linux 使用各自主机 Python 和缓存，
+# 依赖锁同时允许对应 wheel 与受校验的源码包，不能跨平台复用 C 扩展模块。
 $(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt \
 		$(GENERATION_HOST_REQUIREMENTS) make/release.mk
 	@set -eu; \
@@ -172,7 +169,6 @@ $(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt \
 			--target "$$tmp" -r "$<"; \
 		$(PYTHON) -m pip install --disable-pip-version-check \
 			--upgrade --no-deps --require-hashes \
-			--only-binary=PyYAML,MarkupSafe \
 			--target "$$tmp" -r "$(GENERATION_HOST_REQUIREMENTS)"; \
 		if test -e "$(HOST_PYTHON_DIR)"; then \
 			mv "$(HOST_PYTHON_DIR)" "$$old"; \

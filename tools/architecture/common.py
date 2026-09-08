@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import functools
+import os
 import pathlib
 import re
 from collections.abc import Iterable
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+# 正式 Make 导出本次 BUILD_DIR；所有生成闭包共用此目录，避免 Linux 门禁
+# 误读 Windows 的旧 build/generated。直接调用脚本时沿用本机默认目录。
+BUILD_ROOT = ROOT / os.environ.get("BUILD_DIR", "build" if os.name == "nt" else "build-linux")
 SOURCE_SUFFIXES = {".c", ".h", ".cpp", ".hpp"}
 C_COMMENT_RE = re.compile(
     r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')|'
