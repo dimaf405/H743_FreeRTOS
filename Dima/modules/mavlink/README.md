@@ -48,6 +48,8 @@
 
 ## TX 与连接边界
 
+参数精简后仍提供完整、单一的生成目录，不用虚拟参数或过滤名单伪装数量减少。QGC 直接依赖的五项固定 Fact 保留并移到 `System / Compatibility`；校准值、高级项和常用项用上游支持的 category/group 分类，标准 Parameter/Component Metadata 传输流程不变。升级后需让 QGC 获取新的完整参数目录及 Metadata CRC；分类不是自动隐藏或只读权限。锁定源码依赖和本轮验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
+
 优先级为 ACK、Heartbeat/Version、RC、Metadata FTP、传感器、Onboard Log、参数、STATUSTEXT。物理 USB ready 下降沿会丢弃旧 RX 半帧，重置 parser/channel/FTP/参数/日志传输会话，并恢复 PX4 USB 周期流默认节拍；`ETIMEDOUT/EIO/EPIPE` 保留 FTP 回复等待 QGC 同 sequence 重传。
 
 周期遥测各自保存 PX4 风格的默认值和 `SET_MESSAGE_INTERVAL` 配置，不存在跨 message ID 的统一 10 Hz 限流策略。`COMMAND_ACK`、参数传输、Mission、Metadata/FTP、TIMESYNC、PING、STATUSTEXT 和版本/组件信息属于事务或诊断传输，不套用周期流节拍。

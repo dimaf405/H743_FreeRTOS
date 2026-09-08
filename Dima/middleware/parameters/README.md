@@ -29,6 +29,17 @@ Dima module_*.yaml
 - `CAL_MAG1_ID`、`CAL_MAG1_ROT`、`CAL_MAG2_ID`、`CAL_MAG2_ROT`、`SENS_DPRES_OFF` 保持删除，不出现在 YAML、生成头、Metadata、参数协议目录、别名或虚拟参数中。当前产品在缺少这些参数时仍能正常进入并执行校准，这是本次重构必须保持的行为基线。
 - 现有 `CAL_ACC0_*`、`CAL_GYRO0_*`、`CAL_MAG0_*` 等实际校准参数的名称、默认值、持久化和算法语义保持不变。
 
+## 参数精简与展示分类
+
+第一批精简删除 `GPS_1_PROTOCOL` 和 `RO_CAL_DIST`：前者的 Auto/6 原本使用同一 NMEA/UM982 驱动，后者改为内部 12 m 期望尺度并继续受固定圆、停车余量和超时约束。`COM_LOW_BAT_ACT`、`NAV_DLL_ACT`、`COM_RC_IN_MODE`、`MAV_SYS_ID`、`SYS_AUTOCONFIG` 被官方 QGC 5.1.3 直接读取，保留固定合同，不因缺少可配置动作而删除，也不放开其原取值范围。
+
+- `Standard`：常用配置，权威 YAML 省略 category，由上游工具生成默认类别。
+- `Developer`：高级 EKF、控制策略和诊断配置。
+- `System`：校准/整定值及运行估计值；固定或单选合同集中到 `Compatibility` group。
+- `RO_CAL_*` 集中到 `Rover Auto Calibration` group。RC 校准仍是 `Radio Calibration`，可变映射仍是 `RC Mapping`，六个模式槽仍属于 `Commander`，保持现有生成器的结构识别。
+
+锁定的上游 YAML schema 只允许显式 `Developer/System`，不能因 QGC JSON 支持任意字符串就加入 `Advanced/Calibration` 并绕过校验。类别是标准 Metadata 展示字段，不改变权限、持久化、参数名或数值；QGC 仅特意将 Standard 置首，不会按类别名称自动隐藏、自动中文化或禁止修改。完整目录仍以生成 JSON 为准，决策和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
+
 ## Parameter Core 与持久化
 
 - 固件通过生成的 `dima::parameter_catalog::parameters`、`parameters_type` 与 `dima::Param<T>` 访问参数；`Param<T>` 构造不访问 Core，模块每次 start 显式 `bind()`。
