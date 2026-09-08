@@ -1,9 +1,14 @@
 #include "MotorOutput.hpp"
+#include "rover/RoverModeContract.hpp"
 
 #include <cmath>
 
 namespace dima::modules::motor {
 namespace {
+
+namespace modes = dima::middleware::rover::mode_contract;
+using modes::manual_projection;
+using modes::navigation_projection;
 
 constexpr std::uint16_t kRequiredReversibleMask = 0x0003U;
 constexpr std::uint32_t kManualModeMask =
@@ -17,45 +22,6 @@ constexpr std::uint32_t kTerminationModeMask =
 constexpr std::uint32_t kImplementedModeMask =
     kManualModeMask | kAutoMissionModeMask | kAutoLoiterModeMask |
     kTerminationModeMask;
-
-bool manual_projection(const vehicle_control_mode_s &control) noexcept
-{
-    return control.source_id == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
-        control.flag_control_manual_enabled &&
-        !control.flag_control_auto_enabled &&
-        !control.flag_control_offboard_enabled &&
-        !control.flag_control_position_enabled &&
-        !control.flag_control_velocity_enabled &&
-        !control.flag_control_altitude_enabled &&
-        !control.flag_control_climb_rate_enabled &&
-        !control.flag_control_acceleration_enabled &&
-        !control.flag_control_attitude_enabled &&
-        !control.flag_control_rates_enabled &&
-        !control.flag_control_allocation_enabled &&
-        !control.flag_control_termination_enabled &&
-        !control.flag_multicopter_position_control_enabled;
-}
-
-bool auto_projection(const vehicle_control_mode_s &control) noexcept
-{
-    const bool supported =
-        control.source_id ==
-            vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
-        control.source_id == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
-    return supported && !control.flag_control_manual_enabled &&
-        control.flag_control_auto_enabled &&
-        !control.flag_control_offboard_enabled &&
-        control.flag_control_position_enabled &&
-        control.flag_control_velocity_enabled &&
-        !control.flag_control_altitude_enabled &&
-        !control.flag_control_climb_rate_enabled &&
-        !control.flag_control_acceleration_enabled &&
-        control.flag_control_attitude_enabled &&
-        control.flag_control_rates_enabled &&
-        !control.flag_control_allocation_enabled &&
-        !control.flag_control_termination_enabled &&
-        !control.flag_multicopter_position_control_enabled;
-}
 
 bool termination_projection(const vehicle_control_mode_s &control) noexcept
 {
@@ -183,7 +149,7 @@ bool MotorOutput::safety_permits_output(std::uint64_t now_us) const noexcept
     const vehicle_status_s &status = safety_.vehicle_status;
     const bool manual = manual_projection(control) &&
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL;
-    const bool automatic = auto_projection(control) &&
+    const bool automatic = navigation_projection(control) &&
         control.source_id == status.nav_state &&
         (status.nav_state ==
              vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
@@ -287,7 +253,7 @@ bool MotorOutput::safety_negative(
 {
     return control.timestamp != 0U &&
            (!control.flag_armed ||
-            (!manual_projection(control) && !auto_projection(control)));
+            (!manual_projection(control) && !navigation_projection(control)));
 }
 
 bool MotorOutput::safety_negative(const vehicle_status_s &status) noexcept
@@ -318,7 +284,7 @@ bool MotorOutput::hard_safe_negative(
     // Termination 的精确投影和任何未识别组合都要求物理停波；只有精确 Manual
     // 或精确 AUTO 可以保留 ACTIVE/之后恢复 Disarmed Neutral 的资格。
     return termination_projection(control) ||
-           (!manual_projection(control) && !auto_projection(control));
+           (!manual_projection(control) && !navigation_projection(control));
 }
 
 bool MotorOutput::hard_safe_negative(

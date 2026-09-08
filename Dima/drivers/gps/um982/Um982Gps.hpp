@@ -206,7 +206,6 @@ private:
     std::uint64_t maintenance_retry_after_us_{0U};
     std::uint64_t last_validation_report_us_{0U};
     std::uint64_t diagnostic_window_started_us_{0U};
-    std::uint32_t rx_budget_yields_{0U};
     std::uint32_t maintenance_progress_{0U};
     GpsErrorCounter gps_error_counter_{};
     // 协议语法计数仅用于离线摘要；可恢复的校验和/结构/超长帧不会注入
@@ -215,7 +214,6 @@ private:
     std::uint32_t protocol_structure_errors_{0U};
     std::uint32_t protocol_overflow_errors_{0U};
     std::uint32_t timestamp_errors_{0U};
-    std::uint32_t sample_structure_errors_{0U};
     // 位号由生成合同索引决定；每个 10 s 窗口饱和计数，避免长期运行回绕。
     std::uint16_t diagnostic_frame_counts_[
         dima::protocols::um982::Um982Protocol::kMaximumTrackedLogs]{};

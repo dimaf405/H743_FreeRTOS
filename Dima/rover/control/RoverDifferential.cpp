@@ -1,4 +1,6 @@
 #include "RoverDifferential.hpp"
+#include "rover/RoverModeContract.hpp"
+#include "RoverControlValidation.hpp"
 
 #include "events/events.hpp"
 #include "api/Time.hpp"
@@ -8,6 +10,8 @@
 
 namespace dima::rover::control {
 namespace {
+
+namespace modes = dima::middleware::rover::mode_contract;
 
 constexpr std::uint32_t kEventParameterInvalid = 0x52444601U;
 constexpr std::uint32_t kEventPublishFailure = 0x52444602U;
@@ -31,47 +35,6 @@ float angular_parameter_to_radians(float value) noexcept
     // 参数层沿用 PX4 的 deg/s、deg/s^2 单位，控制核使用 SI rad/s、rad/s^2；
     // -1 禁用哨兵保持原值，避免被换算成一个看似有效的小负数。
     return value < 0.0F ? value : value * kDegreesToRadians;
-}
-
-bool exact_manual_control_projection(
-    const vehicle_control_mode_s &control) noexcept
-{
-    return control.source_id == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
-        control.flag_control_manual_enabled &&
-        !control.flag_control_auto_enabled &&
-        !control.flag_control_offboard_enabled &&
-        !control.flag_control_position_enabled &&
-        !control.flag_control_velocity_enabled &&
-        !control.flag_control_altitude_enabled &&
-        !control.flag_control_climb_rate_enabled &&
-        !control.flag_control_acceleration_enabled &&
-        !control.flag_control_attitude_enabled &&
-        !control.flag_control_rates_enabled &&
-        !control.flag_control_allocation_enabled &&
-        !control.flag_control_termination_enabled &&
-        !control.flag_multicopter_position_control_enabled;
-}
-
-bool exact_navigation_control_projection(
-    const vehicle_control_mode_s &control) noexcept
-{
-    const bool supported =
-        control.source_id ==
-            vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
-        control.source_id == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
-    return supported && !control.flag_control_manual_enabled &&
-        control.flag_control_auto_enabled &&
-        !control.flag_control_offboard_enabled &&
-        control.flag_control_position_enabled &&
-        control.flag_control_velocity_enabled &&
-        !control.flag_control_altitude_enabled &&
-        !control.flag_control_climb_rate_enabled &&
-        !control.flag_control_acceleration_enabled &&
-        control.flag_control_attitude_enabled &&
-        control.flag_control_rates_enabled &&
-        !control.flag_control_allocation_enabled &&
-        !control.flag_control_termination_enabled &&
-        !control.flag_multicopter_position_control_enabled;
 }
 
 } // namespace
@@ -878,36 +841,10 @@ bool RoverDifferential::valid_navigation_parameter_snapshot(
     // AUTO 使用的车辆专属量没有凭空默认值：最大速度、轮距、两组闭环增益与
     // 线/角加减速度必须完成实车标定后才允许 Navigation 请求进入混控；速度和
     // yaw-rate 测量死区还必须严格小于对应物理上限，防止整个闭环范围被判成零。
-    return finite(speed.proportional_gain) && speed.proportional_gain >= 0.0F &&
-        finite(speed.integral_gain) && speed.integral_gain >= 0.0F &&
-        speed.proportional_gain + speed.integral_gain > 0.0F &&
-        finite(speed.speed_at_full_throttle_m_s) &&
-        speed.speed_at_full_throttle_m_s > 0.0F &&
-        finite(speed.acceleration_limit_m_s2) &&
-        speed.acceleration_limit_m_s2 > 0.0F &&
-        finite(speed.deceleration_limit_m_s2) &&
-        speed.deceleration_limit_m_s2 > 0.0F &&
-        finite(speed.measurement_threshold_m_s) &&
-        speed.measurement_threshold_m_s >= 0.0F &&
+    return speed_control_parameters_valid(speed) &&
         speed.measurement_threshold_m_s <
             speed.speed_at_full_throttle_m_s &&
-        finite(yaw_rate.proportional_gain) &&
-        yaw_rate.proportional_gain >= 0.0F &&
-        finite(yaw_rate.integral_gain) && yaw_rate.integral_gain >= 0.0F &&
-        yaw_rate.proportional_gain + yaw_rate.integral_gain > 0.0F &&
-        finite(yaw_rate.yaw_rate_correction) &&
-        yaw_rate.yaw_rate_correction > 0.0F &&
-        finite(yaw_rate.wheel_track_m) && yaw_rate.wheel_track_m > 0.0F &&
-        finite(yaw_rate.speed_at_full_throttle_m_s) &&
-        yaw_rate.speed_at_full_throttle_m_s > 0.0F &&
-        finite(yaw_rate.yaw_rate_limit_rad_s) &&
-        yaw_rate.yaw_rate_limit_rad_s > 0.0F &&
-        finite(yaw_rate.yaw_acceleration_limit_rad_s2) &&
-        yaw_rate.yaw_acceleration_limit_rad_s2 > 0.0F &&
-        finite(yaw_rate.yaw_deceleration_limit_rad_s2) &&
-        yaw_rate.yaw_deceleration_limit_rad_s2 > 0.0F &&
-        finite(yaw_rate.measurement_threshold_rad_s) &&
-        yaw_rate.measurement_threshold_rad_s >= 0.0F &&
+        yaw_rate_control_parameters_valid(yaw_rate) &&
         yaw_rate.measurement_threshold_rad_s <
             yaw_rate.yaw_rate_limit_rad_s;
 }
@@ -917,7 +854,7 @@ bool RoverDifferential::manual_projection(
     const vehicle_status_s &status) noexcept
 {
     return status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
-        exact_manual_control_projection(control);
+        modes::manual_projection(control);
 }
 
 bool RoverDifferential::navigation_projection(
@@ -928,7 +865,7 @@ bool RoverDifferential::navigation_projection(
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
     return supported && control.source_id == status.nav_state &&
-        exact_navigation_control_projection(control);
+        modes::navigation_projection(control);
 }
 
 bool RoverDifferential::safety_negative(
@@ -946,8 +883,8 @@ bool RoverDifferential::safety_negative(
     }
     // 任一新 control Topic 即使尚未与另外两项组成同拍快照，只要不是精确
     // Manual/AUTO 投影就立即锁止本层输出；不能依赖 MotorOutput 再兜底异常 flag。
-    const bool manual = exact_manual_control_projection(control);
-    const bool navigation = exact_navigation_control_projection(control);
+    const bool manual = modes::manual_projection(control);
+    const bool navigation = modes::navigation_projection(control);
     return !control.flag_armed || (!manual && !navigation);
 }
 

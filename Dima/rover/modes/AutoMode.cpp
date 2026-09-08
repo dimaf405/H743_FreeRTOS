@@ -1,6 +1,7 @@
 #define MODULE_NAME "rover_auto_mode"
 
 #include "AutoMode.hpp"
+#include "control/RoverControlValidation.hpp"
 
 #include "api/Time.hpp"
 #include "events/events.hpp"
@@ -1324,34 +1325,8 @@ bool AutoMode::valid_config(const Config &config) noexcept
         // 停车死区必须严格小于实际巡航速度，否则正常移动会被误判为静止，
         // StoppingForTurn 可能在车辆仍前进时放行左右轮反转。
         driving.stopped_speed_threshold_m_s < config.cruise_speed_m_s &&
-        finite(speed.proportional_gain) && speed.proportional_gain >= 0.0F &&
-        finite(speed.integral_gain) && speed.integral_gain >= 0.0F &&
-        speed.proportional_gain + speed.integral_gain > 0.0F &&
-        finite(speed.speed_at_full_throttle_m_s) &&
-        speed.speed_at_full_throttle_m_s > 0.0F &&
-        finite(speed.acceleration_limit_m_s2) &&
-        speed.acceleration_limit_m_s2 > 0.0F &&
-        finite(speed.deceleration_limit_m_s2) &&
-        speed.deceleration_limit_m_s2 > 0.0F &&
-        finite(speed.measurement_threshold_m_s) &&
-        speed.measurement_threshold_m_s >= 0.0F &&
-        finite(yaw_rate.proportional_gain) &&
-        yaw_rate.proportional_gain >= 0.0F &&
-        finite(yaw_rate.integral_gain) && yaw_rate.integral_gain >= 0.0F &&
-        yaw_rate.proportional_gain + yaw_rate.integral_gain > 0.0F &&
-        finite(yaw_rate.yaw_rate_correction) &&
-        yaw_rate.yaw_rate_correction > 0.0F &&
-        finite(yaw_rate.wheel_track_m) && yaw_rate.wheel_track_m > 0.0F &&
-        finite(yaw_rate.speed_at_full_throttle_m_s) &&
-        yaw_rate.speed_at_full_throttle_m_s > 0.0F &&
-        finite(yaw_rate.yaw_rate_limit_rad_s) &&
-        yaw_rate.yaw_rate_limit_rad_s > 0.0F &&
-        finite(yaw_rate.yaw_acceleration_limit_rad_s2) &&
-        yaw_rate.yaw_acceleration_limit_rad_s2 > 0.0F &&
-        finite(yaw_rate.yaw_deceleration_limit_rad_s2) &&
-        yaw_rate.yaw_deceleration_limit_rad_s2 > 0.0F &&
-        finite(yaw_rate.measurement_threshold_rad_s) &&
-        yaw_rate.measurement_threshold_rad_s >= 0.0F &&
+        dima::rover::control::speed_control_parameters_valid(speed) &&
+        dima::rover::control::yaw_rate_control_parameters_valid(yaw_rate) &&
         // yaw-rate 死区覆盖整个可用范围时，Heading P 虽有输出，内环却永远
         // 解释为零；该配置不具备原地转向闭环能力，必须保持 AUTO 锁闭。
         yaw_rate.measurement_threshold_rad_s <

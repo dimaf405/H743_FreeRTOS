@@ -97,7 +97,6 @@ bool Um982Gps::start() noexcept
         module_state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
-    rx_budget_yields_ = 0U;
     last_validation_report_us_ = 0U;
     retry_backoff_us_ = kInitialBackoffUs;
     configuration_complete_ = false;
@@ -301,7 +300,6 @@ void Um982Gps::clear_measurement_cache() noexcept
     protocol_structure_errors_ = 0U;
     protocol_overflow_errors_ = 0U;
     timestamp_errors_ = 0U;
-    sample_structure_errors_ = 0U;
     gga_new_ = false;
     agrica_new_ = false;
     heading_new_ = false;
@@ -707,7 +705,6 @@ bool Um982Gps::publish_validated(sensor_gps_s &output,
     const validation::GpsStructureResult structure =
         validation::validate_gps_structure(sample);
     if (!structure.valid()) {
-        saturating_increment(sample_structure_errors_);
         gps_error_counter_.record();
         stream_validator_.reject(
             (structure.failure_mask & validation::GpsFailureTimestamp) != 0U
@@ -812,7 +809,6 @@ void Um982Gps::Run()
     // 屏蔽 ISR 重复唤醒并延后 1 ms，防止 ScheduleNow 风暴抵消主动让步。
     __atomic_store_n(&rx_schedule_suppressed_, false, __ATOMIC_RELEASE);
     if (drain_uart()) {
-        ++rx_budget_yields_;
         __atomic_store_n(&rx_schedule_suppressed_, true, __ATOMIC_RELEASE);
         schedule(kRxYieldUs);
         return;

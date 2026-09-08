@@ -12,6 +12,7 @@
 #include "lifecycle/module_base.hpp"
 #include "api/Flash.hpp"
 #include "parameter_update.hpp"
+#include "parameters/param.h"
 #include "sensor_calibration_request.hpp"
 #include "sensor_accel.hpp"
 #include "sensor_calibration_status.hpp"
@@ -167,6 +168,10 @@ private:
     bool commit_mag(const algorithms::Vector3d &offset,
                     const algorithms::Vector3d &scale,
                     std::uint32_t device_id) noexcept;
+    bool commit_offset_scale(
+        Type type, param_t id, const param_t (&values)[6],
+        const algorithms::Vector3d &offset, const algorithms::Vector3d &scale,
+        std::uint32_t device_id) noexcept;
     void begin_wait_for_apply(std::uint64_t now) noexcept;
     bool begin_rollback(RollbackOutcome outcome) noexcept;
     void finish_rollback() noexcept;

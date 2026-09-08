@@ -81,6 +81,19 @@ const char *parameter_type_name(param_type_t type) noexcept
     }
 }
 
+int format_parameter_key(char *key, std::size_t capacity,
+                         const char *type_name, const char *name) noexcept
+{
+    // 类型/名称来自参数目录，缓冲容量由生成的 P/Q 消息结构提供；两条写入路径
+    // 共用长度门禁，避免截断字符串或 uint8 key_len 回绕进入 ULog。
+    const int length = std::snprintf(key, capacity, "%s %s", type_name, name);
+    if (length <= 0 || length >= static_cast<int>(capacity) ||
+        length > std::numeric_limits<std::uint8_t>::max()) {
+        return -1;
+    }
+    return length;
+}
+
 bool read_parameter(param_t parameter, param_type_t type,
                     param_value_u &value) noexcept
 {
@@ -391,12 +404,9 @@ SdLogWriter::StepResult SdLogWriter::write_current_parameter(
     }
 
     ulog_message_parameter_s message{};
-    const int key_length = std::snprintf(
-        message.key_value_str, sizeof(message.key_value_str),
-        "%s %s", type_name, name);
-    if (key_length <= 0 ||
-        key_length >= static_cast<int>(sizeof(message.key_value_str)) ||
-        key_length > std::numeric_limits<std::uint8_t>::max()) {
+    const int key_length = format_parameter_key(
+        message.key_value_str, sizeof(message.key_value_str), type_name, name);
+    if (key_length < 0) {
         return StepResult::Failed;
     }
     message.key_len = static_cast<std::uint8_t>(key_length);
@@ -448,12 +458,9 @@ SdLogWriter::StepResult SdLogWriter::write_parameter_defaults(
     }
 
     ulog_message_parameter_default_s message{};
-    const int key_length = std::snprintf(
-        message.key_value_str, sizeof(message.key_value_str),
-        "%s %s", type_name, name);
-    if (key_length <= 0 ||
-        key_length >= static_cast<int>(sizeof(message.key_value_str)) ||
-        key_length > std::numeric_limits<std::uint8_t>::max()) {
+    const int key_length = format_parameter_key(
+        message.key_value_str, sizeof(message.key_value_str), type_name, name);
+    if (key_length < 0) {
         return StepResult::Failed;
     }
     message.key_len = static_cast<std::uint8_t>(key_length);
@@ -469,44 +476,33 @@ SdLogWriter::StepResult SdLogWriter::write_parameter_defaults(
 
     const bool same_defaults =
         std::memcmp(&setup_default, &system_default, value_size) == 0;
-    bool emitted = false;
-    if (same_defaults) {
-        if (std::memcmp(&current, &setup_default, value_size) != 0) {
-            std::memcpy(reinterpret_cast<std::uint8_t *>(&message) +
-                            value_offset,
-                        &setup_default, value_size);
-            message.default_types =
-                ulog_parameter_default_type_t::current_setup |
-                ulog_parameter_default_type_t::system;
-            if (!writer_.write_message(&message, message_size)) {
-                return StepResult::Blocked;
-            }
-            emitted = true;
+    // 相同默认值只写合并类型的一条 Q；不同默认值保持 setup -> system 顺序。
+    // 上面的双记录空间预留仍生效；任一次写入背压立即返回，不跳过未发送项。
+    const auto write_default = [&](const param_value_u &value,
+                                   ulog_parameter_default_type_t types) noexcept {
+        if (std::memcmp(&current, &value, value_size) == 0) {
+            return StepResult::Skipped;
         }
-    } else {
-        if (std::memcmp(&current, &setup_default, value_size) != 0) {
-            std::memcpy(reinterpret_cast<std::uint8_t *>(&message) +
-                            value_offset,
-                        &setup_default, value_size);
-            message.default_types =
-                ulog_parameter_default_type_t::current_setup;
-            if (!writer_.write_message(&message, message_size)) {
-                return StepResult::Blocked;
-            }
-            emitted = true;
-        }
-        if (std::memcmp(&current, &system_default, value_size) != 0) {
-            std::memcpy(reinterpret_cast<std::uint8_t *>(&message) +
-                            value_offset,
-                        &system_default, value_size);
-            message.default_types = ulog_parameter_default_type_t::system;
-            if (!writer_.write_message(&message, message_size)) {
-                return StepResult::Blocked;
-            }
-            emitted = true;
-        }
+        std::memcpy(reinterpret_cast<std::uint8_t *>(&message) + value_offset,
+                    &value, value_size);
+        message.default_types = types;
+        return writer_.write_message(&message, message_size)
+                   ? StepResult::Emitted : StepResult::Blocked;
+    };
+    const auto setup_types = same_defaults
+        ? ulog_parameter_default_type_t::current_setup | ulog_parameter_default_type_t::system
+        : ulog_parameter_default_type_t::current_setup;
+    const StepResult setup = write_default(setup_default, setup_types);
+    if (setup == StepResult::Blocked || same_defaults) {
+        return setup;
     }
-    return emitted ? StepResult::Emitted : StepResult::Skipped;
+    const StepResult system = write_default(
+        system_default, ulog_parameter_default_type_t::system);
+    if (system == StepResult::Blocked) {
+        return system;
+    }
+    return setup == StepResult::Emitted || system == StepResult::Emitted
+               ? StepResult::Emitted : StepResult::Skipped;
 }
 
 bool SdLogWriter::process_initial_parameters(bool defaults) noexcept

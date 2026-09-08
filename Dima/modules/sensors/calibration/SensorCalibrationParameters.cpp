@@ -381,22 +381,14 @@ bool SensorCalibration::commit_gyro(
     return true;
 }
 
-bool SensorCalibration::commit_accel(
-    const algorithms::Vector3d &offset,
-    const algorithms::Vector3d &scale,
+bool SensorCalibration::commit_offset_scale(
+    Type type, param_t id, const param_t (&values)[6],
+    const algorithms::Vector3d &offset, const algorithms::Vector3d &scale,
     std::uint32_t device_id) noexcept
 {
-    // 加速度事务固定为 ID + 三轴 offset + 三轴 diagonal scale，共七个参数。
-    clear_parameter_snapshot();
-    clear_parameter_expectation();
-    const param_t id = param_handle(dima::params::CAL_ACC0_ID);
-    const param_t values[6]{
-        param_handle(dima::params::CAL_ACC0_XOFF),
-        param_handle(dima::params::CAL_ACC0_YOFF),
-        param_handle(dima::params::CAL_ACC0_ZOFF),
-        param_handle(dima::params::CAL_ACC0_XSCALE),
-        param_handle(dima::params::CAL_ACC0_YSCALE),
-        param_handle(dima::params::CAL_ACC0_ZSCALE)};
+    // 两个入口保留各自生成参数的绑定与磁计数采样时机。这里仅统一 ID+offset/scale
+    // 的原子提交：完整读取旧值后才写入，失败恢复全部旧值，成功才发布一次通知。
+    // 前端应用确认和失败锁存仍由原有 WaitForApply/WaitForRollback 状态机负责。
     const double next[6]{offset.x, offset.y, offset.z,
                          scale.x, scale.y, scale.z};
     std::int32_t old_id{};
@@ -406,7 +398,7 @@ bool SensorCalibration::commit_accel(
     for (std::size_t index = 0U; index < 6U; ++index) {
         if (param_get(values[index], &old[index]) != 0) return false;
     }
-    parameter_snapshot_.type = Type::Accel;
+    parameter_snapshot_.type = type;
     parameter_snapshot_.id = old_id;
     parameter_snapshot_.value_count = 6U;
     for (std::size_t index = 0U; index < 6U; ++index) {
@@ -424,7 +416,7 @@ bool SensorCalibration::commit_accel(
         }
         return false;
     }
-    parameter_expectation_.type = Type::Accel;
+    parameter_expectation_.type = type;
     parameter_expectation_.id = static_cast<std::int32_t>(device_id);
     parameter_expectation_.value_count = 6U;
     for (std::size_t index = 0U; index < 6U; ++index) {
@@ -434,6 +426,25 @@ bool SensorCalibration::commit_accel(
     parameter_expectation_.valid = true;
     notify_parameter_changes();
     return true;
+}
+
+bool SensorCalibration::commit_accel(
+    const algorithms::Vector3d &offset,
+    const algorithms::Vector3d &scale,
+    std::uint32_t device_id) noexcept
+{
+    // 加速度事务固定为 ID + 三轴 offset + 三轴 diagonal scale，共七个参数。
+    clear_parameter_snapshot();
+    clear_parameter_expectation();
+    const param_t id = param_handle(dima::params::CAL_ACC0_ID);
+    const param_t values[6]{
+        param_handle(dima::params::CAL_ACC0_XOFF),
+        param_handle(dima::params::CAL_ACC0_YOFF),
+        param_handle(dima::params::CAL_ACC0_ZOFF),
+        param_handle(dima::params::CAL_ACC0_XSCALE),
+        param_handle(dima::params::CAL_ACC0_YSCALE),
+        param_handle(dima::params::CAL_ACC0_ZSCALE)};
+    return commit_offset_scale(Type::Accel, id, values, offset, scale, device_id);
 }
 
 bool SensorCalibration::commit_mag(
@@ -458,43 +469,7 @@ bool SensorCalibration::commit_mag(
         param_handle(dima::params::CAL_MAG0_XSCALE),
         param_handle(dima::params::CAL_MAG0_YSCALE),
         param_handle(dima::params::CAL_MAG0_ZSCALE)};
-    const double next[6]{offset.x, offset.y, offset.z,
-                         scale.x, scale.y, scale.z};
-    std::int32_t old_id{};
-    float old[6]{};
-    px4::AtomicTransaction transaction;
-    if (param_get(id, &old_id) != 0) return false;
-    for (std::size_t index = 0U; index < 6U; ++index) {
-        if (param_get(values[index], &old[index]) != 0) return false;
-    }
-    parameter_snapshot_.type = Type::Mag;
-    parameter_snapshot_.id = old_id;
-    parameter_snapshot_.value_count = 6U;
-    for (std::size_t index = 0U; index < 6U; ++index) {
-        parameter_snapshot_.values[index] = old[index];
-    }
-    parameter_snapshot_.valid = true;
-    bool written = set_int(id, device_id);
-    for (std::size_t index = 0U; index < 6U; ++index) {
-        written = written && set_float(values[index], next[index]);
-    }
-    if (!written) {
-        (void)param_set_no_notification(id, &old_id);
-        for (std::size_t index = 0U; index < 6U; ++index) {
-            (void)param_set_no_notification(values[index], &old[index]);
-        }
-        return false;
-    }
-    parameter_expectation_.type = Type::Mag;
-    parameter_expectation_.id = static_cast<std::int32_t>(device_id);
-    parameter_expectation_.value_count = 6U;
-    for (std::size_t index = 0U; index < 6U; ++index) {
-        parameter_expectation_.values[index] =
-            static_cast<float>(next[index]);
-    }
-    parameter_expectation_.valid = true;
-    notify_parameter_changes();
-    return true;
+    return commit_offset_scale(Type::Mag, id, values, offset, scale, device_id);
 }
 
 } // namespace dima::modules::sensors

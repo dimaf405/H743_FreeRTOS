@@ -44,8 +44,6 @@ private:
     static const FixedParameterConstraint *fixed_parameter_constraint(
         param_t param) noexcept;
 
-    static bool is_serial_baud_parameter(const char *name) noexcept;
-
     static bool supported_serial_baud(std::int32_t value) noexcept;
 
     static bool serial_function_write_allowed(

@@ -213,12 +213,6 @@ MavlinkParameters::fixed_parameter_constraint(param_t param) noexcept
     return nullptr;
 }
 
-bool MavlinkParameters::is_serial_baud_parameter(
-    const char *name) noexcept
-{
-    return dima::lib::serial::serial_baud_parameter(name);
-}
-
 bool MavlinkParameters::supported_serial_baud(std::int32_t value) noexcept
 {
     // 可选波特率由 module_serial.yaml 枚举并进入 QGC Metadata；运行时不再
@@ -425,7 +419,7 @@ bool MavlinkParameters::write_value_allowed(param_t param,
         std::memcpy(&protocol, &wire_value, sizeof(protocol));
         return protocol == 0 || protocol == 2;
     }
-    if (is_serial_baud_parameter(name)) {
+    if (dima::lib::serial::serial_baud_parameter(name)) {
         std::int32_t baudrate = 0;
         std::memcpy(&baudrate, &wire_value, sizeof(baudrate));
         return supported_serial_baud(baudrate);
@@ -450,14 +444,8 @@ bool MavlinkParameters::write_value_allowed(param_t param,
 
 bool MavlinkParameters::send_params() noexcept
 {
-    if (send_one()) {
-        return true;
-
-    } else if (send_untransmitted()) {
-        return true;
-    }
-
-    return false;
+    // 先推进完整参数流；本轮未发送时再处理增量回显，保持原有短路顺序。
+    return send_one() || send_untransmitted();
 }
 
 bool MavlinkParameters::send_untransmitted() noexcept
