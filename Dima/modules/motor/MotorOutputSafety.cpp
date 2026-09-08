@@ -9,19 +9,13 @@ namespace {
 namespace modes = dima::middleware::rover::mode_contract;
 using modes::manual_projection;
 using modes::navigation_projection;
+using modes::calibration_projection;
 
 constexpr std::uint16_t kRequiredReversibleMask = 0x0003U;
 constexpr std::uint32_t kManualModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
-constexpr std::uint32_t kAutoMissionModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION;
-constexpr std::uint32_t kAutoLoiterModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
-constexpr std::uint32_t kTerminationModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+    modes::kUserSettableMask;
 constexpr std::uint32_t kImplementedModeMask =
-    kManualModeMask | kAutoMissionModeMask | kAutoLoiterModeMask |
-    kTerminationModeMask;
+    modes::kImplementedMask;
 
 bool termination_projection(const vehicle_control_mode_s &control) noexcept
 {
@@ -160,7 +154,7 @@ bool MotorOutput::safety_permits_output(std::uint64_t now_us) const noexcept
            !armed.in_esc_calibration_mode && control.flag_armed &&
            status.arming_state == vehicle_status_s::ARMING_STATE_ARMED &&
            status_contract(status) && !status.failsafe &&
-           (manual || automatic);
+           (manual || automatic || (modes::auto_calibration(status.nav_state) && calibration_projection(control)));
 }
 
 bool MotorOutput::safety_permits_disarmed_neutral(
@@ -176,9 +170,9 @@ bool MotorOutput::safety_permits_disarmed_neutral(
     const vehicle_status_s &status = safety_.vehicle_status;
     return !armed.armed && !armed.prearmed && !armed.lockdown && !armed.kill &&
            !armed.termination && !armed.in_esc_calibration_mode &&
-           !control.flag_armed && manual_projection(control) &&
+           !control.flag_armed && (manual_projection(control) || calibration_projection(control)) &&
            status.arming_state == vehicle_status_s::ARMING_STATE_DISARMED &&
-           status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
+           (status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL || modes::auto_calibration(status.nav_state)) &&
            status_contract(status) && !status.failsafe;
 }
 
@@ -196,8 +190,11 @@ bool MotorOutput::motor_command_valid(std::uint64_t now_us) const noexcept
         !normalized(actuator_motors_.control[1])) {
         return false;
     }
-    const std::uint64_t timeout_us = static_cast<std::uint64_t>(
+    if (modes::auto_calibration(safety_.vehicle_status.nav_state) &&
+        (std::fabs(actuator_motors_.control[0]) > 0.40F || std::fabs(actuator_motors_.control[1]) > 0.40F)) return false;
+    std::uint64_t timeout_us = static_cast<std::uint64_t>(
         parameters_.command_timeout_s * 1000000.0F);
+    if (modes::auto_calibration(safety_.vehicle_status.nav_state) && timeout_us > 100000ULL) timeout_us = 100000ULL;
     return timeout_us > 0U &&
            now_us - actuator_motors_.timestamp <= timeout_us &&
            now_us - actuator_motors_.timestamp_sample <= timeout_us;
@@ -253,7 +250,7 @@ bool MotorOutput::safety_negative(
 {
     return control.timestamp != 0U &&
            (!control.flag_armed ||
-            (!manual_projection(control) && !navigation_projection(control)));
+            (!manual_projection(control) && !navigation_projection(control) && !calibration_projection(control)));
 }
 
 bool MotorOutput::safety_negative(const vehicle_status_s &status) noexcept
@@ -261,7 +258,7 @@ bool MotorOutput::safety_negative(const vehicle_status_s &status) noexcept
     const bool active_mode =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
-        status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+        status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER || modes::auto_calibration(status.nav_state);
     return status.timestamp != 0U &&
            (status.arming_state != vehicle_status_s::ARMING_STATE_ARMED ||
             !active_mode || !status_contract(status) || status.failsafe);
@@ -284,7 +281,7 @@ bool MotorOutput::hard_safe_negative(
     // Termination 的精确投影和任何未识别组合都要求物理停波；只有精确 Manual
     // 或精确 AUTO 可以保留 ACTIVE/之后恢复 Disarmed Neutral 的资格。
     return termination_projection(control) ||
-           (!manual_projection(control) && !navigation_projection(control));
+           (!manual_projection(control) && !navigation_projection(control) && !calibration_projection(control));
 }
 
 bool MotorOutput::hard_safe_negative(
@@ -293,7 +290,7 @@ bool MotorOutput::hard_safe_negative(
     const bool recoverable_mode =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
-        status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+        status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER || modes::auto_calibration(status.nav_state);
     return status.timestamp != 0U &&
            (!recoverable_mode || !status_contract(status) ||
             status.failsafe);

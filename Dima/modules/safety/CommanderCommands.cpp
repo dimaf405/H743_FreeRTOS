@@ -112,6 +112,11 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
             const calibration::PreflightCalibrationRequest request =
                 calibration::classify_preflight_calibration_request(
                     parameters);
+            if (auto_calibration_status_.active && request != calibration::PreflightCalibrationRequest::Cancel) {
+                result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
+                report_sensor_calibration_rejection(request, cmd.from_external);
+                break;
+            }
             const bool worker_status_fresh =
                 sensor_calibration_status_.timestamp != 0U &&
                 sensor_calibration_status_.timestamp <= now &&
@@ -137,6 +142,8 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
 
             if (request ==
                     calibration::PreflightCalibrationRequest::Cancel) {
+                if (auto_calibration_status_.active)
+                    state_changed = disarm(vehicle_status_s::ARM_DISARM_REASON_COMMAND_EXTERNAL, now) == TransitionResult::Changed || state_changed;
                 if (vehicle_status_.rc_calibration_in_progress) {
                     vehicle_status_.rc_calibration_in_progress = false;
                     state_changed = true;

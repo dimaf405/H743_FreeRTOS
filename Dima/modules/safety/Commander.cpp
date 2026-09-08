@@ -166,6 +166,7 @@ void Commander::Run()
     state_changed = refresh_navigation_status() || state_changed;
 
     std::uint64_t now = hrt_absolute_time();
+    state_changed = process_auto_calibration(now) || state_changed;
     state_changed = evaluate_safety(now) || state_changed;
     state_changed = evaluate_navigation(now) || state_changed;
     state_changed = update_public_projection(now) || state_changed;
@@ -204,6 +205,7 @@ void Commander::Run()
     now = hrt_absolute_time();
     state_changed = evaluate_safety(now);
     state_changed = evaluate_navigation(now) || state_changed;
+    state_changed = resume_auto_calibration(now) || state_changed;
     state_changed = update_public_projection(now) || state_changed;
     const bool heartbeat_due = now - last_publish_time_ >= kPublishIntervalUs;
     if ((state_changed || heartbeat_due) && !publish_state(now)) {
@@ -244,6 +246,7 @@ void Commander::handle_scheduling_failure(std::uint64_t now) noexcept
 
 void Commander::enter_error(const char *reason) noexcept
 {
+    revoke_auto_calibration();
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     armed_flash_.disarm();
     vehicle_command_subscription_.unregisterCallback();

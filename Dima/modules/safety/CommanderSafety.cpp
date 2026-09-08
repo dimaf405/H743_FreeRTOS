@@ -7,6 +7,7 @@
 #include "api/ActuatorPwm.hpp"
 
 #include "logging/logging.hpp"
+#include "rover/RoverModeContract.hpp"
 
 #include <cerrno>
 #include <cmath>
@@ -19,14 +20,6 @@ constexpr std::uint8_t kMavAutopilotSystemId = 1U;
 constexpr std::uint8_t kMavAutopilotComponentId = 1U;
 constexpr std::int32_t kRcLossActionDisarm = 6;
 constexpr std::int32_t kDataLinkLossActionDisabled = 0;
-constexpr std::uint32_t kManualModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
-constexpr std::uint32_t kAutoMissionModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION;
-constexpr std::uint32_t kAutoLoiterModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
-constexpr std::uint32_t kTerminationModeMask =
-    1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
 
 bool normalized_axis(float value) noexcept
 {
@@ -142,6 +135,13 @@ bool Commander::evaluate_safety(std::uint64_t now) noexcept
     }
 
     bool state_changed = false;
+    if (authorized_calibration_session_ != 0U && !actuator_armed_.armed &&
+        (!rc_valid || !parameters_valid_ || actuator_armed_.kill || termination_latched_ ||
+         !actuator_output_status_fresh(now) || actuator_output_status_.state == actuator_output_status_s::STATE_RETRY ||
+         actuator_output_status_.state == actuator_output_status_s::STATE_FAULT)) {
+        // 阶段 Disarm 不暂停失联监控：不能等 RC 恢复后沿用旧会话授权。
+        state_changed = disarm(vehicle_status_s::ARM_DISARM_REASON_FAILURE_DETECTOR, now) == TransitionResult::Changed;
+    }
     if (actuator_armed_.armed) {
         if (!rc_valid) {
             causes |= FailsafeRcLoss;
@@ -191,6 +191,7 @@ bool Commander::mission_start_ready(std::uint64_t now) noexcept
         actuator_armed_.termination || termination_latched_ ||
         vehicle_status_.failsafe ||
         vehicle_status_.calibration_enabled ||
+        auto_calibration_status_.active ||
         vehicle_status_.rc_calibration_in_progress ||
         !navigation_status_fresh(now) ||
         !navigation_status_.ready_for_auto ||
@@ -245,17 +246,14 @@ void Commander::suspend_active_mission() noexcept
 bool Commander::change_navigation_state(std::uint8_t nav_state,
                                         std::uint64_t now) noexcept
 {
-    const bool supported =
-        nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
-        nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
-        nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER ||
-        nav_state == vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+    const bool supported = dima::middleware::rover::mode_contract::supported(nav_state);
     if (!supported || (termination_latched_ &&
                        nav_state !=
                            vehicle_status_s::NAVIGATION_STATE_TERMINATION)) {
         return false;
     }
 
+    if (nav_state != vehicle_status_s::NAVIGATION_STATE_EXTERNAL1) revoke_auto_calibration();
     if (vehicle_status_.nav_state == nav_state) {
         if (nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
             suspend_active_mission();
@@ -281,6 +279,8 @@ bool Commander::change_navigation_state(std::uint8_t nav_state,
 
 bool Commander::evaluate_navigation(std::uint64_t now) noexcept
 {
+    if (vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1)
+        return evaluate_auto_calibration(now);
     if (vehicle_status_.nav_state !=
         vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
         suspend_active_mission();
@@ -380,13 +380,16 @@ bool Commander::update_public_projection(std::uint64_t now) noexcept
             vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
     const bool termination_mode = vehicle_status_.nav_state ==
                                    vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+    const bool calibration_mode = vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1;
+    const bool calibration_closed = calibration_mode && auto_calibration_fresh(now) &&
+        auto_calibration_status_.active && auto_calibration_status_.closed_loop;
     const bool mode_changed =
         vehicle_control_mode_.flag_control_manual_enabled != manual_mode ||
-        vehicle_control_mode_.flag_control_auto_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_auto_enabled != (auto_mode || calibration_mode) ||
         vehicle_control_mode_.flag_control_position_enabled != auto_mode ||
-        vehicle_control_mode_.flag_control_velocity_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_velocity_enabled != (auto_mode || calibration_closed) ||
         vehicle_control_mode_.flag_control_attitude_enabled != auto_mode ||
-        vehicle_control_mode_.flag_control_rates_enabled != auto_mode ||
+        vehicle_control_mode_.flag_control_rates_enabled != (auto_mode || calibration_closed) ||
         vehicle_control_mode_.flag_control_termination_enabled !=
             termination_mode ||
         vehicle_control_mode_.flag_armed != actuator_armed_.armed ||
@@ -398,19 +401,24 @@ bool Commander::update_public_projection(std::uint64_t now) noexcept
     vehicle_control_mode_.flag_control_manual_enabled = manual_mode;
     // Rover AUTO 的“姿态”只表示 yaw Heading P，“rates”只表示 yaw-rate PI；
     // roll/pitch/altitude/climb/allocation 始终关闭。五个正向标志必须成组出现。
-    vehicle_control_mode_.flag_control_auto_enabled = auto_mode;
+    vehicle_control_mode_.flag_control_auto_enabled = auto_mode || calibration_mode;
     vehicle_control_mode_.flag_control_position_enabled = auto_mode;
-    vehicle_control_mode_.flag_control_velocity_enabled = auto_mode;
+    // 闭环校准只接管速度/yaw-rate 接口；与开环激励的精确投影分开，不借用
+    // Mission 的位置/姿态标志。阶段只在 Disarmed 改变闭环类型。
+    vehicle_control_mode_.flag_control_velocity_enabled = auto_mode || calibration_closed;
     vehicle_control_mode_.flag_control_attitude_enabled = auto_mode;
-    vehicle_control_mode_.flag_control_rates_enabled = auto_mode;
+    vehicle_control_mode_.flag_control_rates_enabled = auto_mode || calibration_closed;
     vehicle_control_mode_.flag_control_termination_enabled = termination_mode;
     vehicle_control_mode_.source_id = vehicle_status_.nav_state;
     return changed;
 }
 
 Commander::TransitionResult Commander::arm(
-    std::uint8_t reason, std::uint64_t now) noexcept
+    std::uint8_t reason, std::uint64_t now, bool calibration_resume) noexcept
 {
+    const bool calibration = vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1;
+    if (calibration_resume && (!calibration || authorized_calibration_session_ == 0U ||
+        authorized_calibration_session_ != auto_calibration_status_.session_id)) return TransitionResult::Denied;
     if (actuator_armed_.armed) {
         return TransitionResult::NotChanged;
     }
@@ -432,15 +440,21 @@ Commander::TransitionResult Commander::arm(
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_ARMED;
     vehicle_status_.latest_arming_reason = reason;
     vehicle_status_.armed_time = now;
+    if (calibration && !calibration_resume) {
+        // 只有经正常输入路径接受的首次 Arm 建立授权，协调器的诊断标志不参与授予。
+        authorized_calibration_session_ = auto_calibration_status_.session_id;
+        pending_calibration_arm_ = {};
+    }
     PX4_INFO("Rover armed");
     return TransitionResult::Changed;
 }
 
 Commander::TransitionResult Commander::disarm(std::uint8_t reason,
-                                              std::uint64_t now) noexcept
+                                              std::uint64_t now, bool preserve_calibration) noexcept
 {
-    const bool mode_changed = change_navigation_state(
-        vehicle_status_s::NAVIGATION_STATE_MANUAL, now);
+    const bool keep = preserve_calibration && vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1;
+    if (!keep) revoke_auto_calibration();
+    const bool mode_changed = !keep && change_navigation_state(vehicle_status_s::NAVIGATION_STATE_MANUAL, now);
     if (!actuator_armed_.armed) {
         return mode_changed ? TransitionResult::Changed
                             : TransitionResult::NotChanged;
@@ -695,9 +709,16 @@ bool Commander::preflight_checks_pass(std::uint64_t now) const noexcept
 {
     // 这是唯一正向 Arm 合同：参数、人工模式、新鲜且居中的 RC、可接管的 Neutral
     // 输出、Kill/Termination 以及两类校准状态必须同时满足。
-    return parameters_valid_ &&
-           vehicle_status_.nav_state ==
-               vehicle_status_s::NAVIGATION_STATE_MANUAL &&
+    const bool manual = vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL && !auto_calibration_status_.active;
+    const bool calibration = vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1 &&
+        auto_calibration_fresh(now) && auto_calibration_status_.active && auto_calibration_status_.awaiting_arm &&
+        (auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_FIRST ||
+         auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_SECOND ||
+         auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_IDENTIFICATION ||
+         auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_VALIDATION ||
+         auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_PROFILE) &&
+        auto_calibration_status_.result == auto_calibration_status_s::RESULT_RUNNING;
+    return parameters_valid_ && (manual || calibration) &&
            rc_input_valid(now) && sticks_centered() &&
            actuator_output_ready_for_arming(now) &&
            !actuator_armed_.kill && !termination_latched_ &&
@@ -743,6 +764,9 @@ void Commander::reset_runtime_state() noexcept
     actuator_output_status_ = actuator_output_status_s{};
     sensor_calibration_status_ = sensor_calibration_status_s{};
     navigation_status_ = rover_navigation_status_s{};
+    auto_calibration_status_ = {};
+    revoke_auto_calibration();
+    auto_level_request_timestamp_ = 0U;
     sensor_calibration_dispatch_time_ = 0U;
     active_mission_generation_ = 0U;
     active_mission_count_ = 0U;
@@ -785,12 +809,11 @@ void Commander::initialize_public_state(std::uint64_t now) noexcept
                                     ? vehicle_status_s::NAVIGATION_STATE_TERMINATION
                                     : vehicle_status_s::NAVIGATION_STATE_MANUAL;
     vehicle_status_.valid_nav_states_mask =
-        kManualModeMask | kAutoMissionModeMask | kAutoLoiterModeMask |
-        kTerminationModeMask;
+        dima::middleware::rover::mode_contract::kImplementedMask;
     // AUTO_MISSION 只能经过完整 Mission Start readiness 事务进入；
     // QGC SET_MODE(AUTO_MISSION) 也只是该事务的兼容别名。AUTO_LOITER
     // 只由 Commander 安全降级进入，所以可直接设置的通用模式仍仅为 Manual。
-    vehicle_status_.can_set_nav_states_mask = kManualModeMask;
+    vehicle_status_.can_set_nav_states_mask = dima::middleware::rover::mode_contract::kUserSettableMask;
     vehicle_status_.failure_detector_status = vehicle_status_s::FAILURE_NONE;
     vehicle_status_.hil_state = vehicle_status_s::HIL_STATE_OFF;
     vehicle_status_.vehicle_type = vehicle_status_s::VEHICLE_TYPE_ROVER;
@@ -806,6 +829,7 @@ void Commander::initialize_public_state(std::uint64_t now) noexcept
 
 void Commander::initialize_disarmed_snapshot(std::uint64_t now) noexcept
 {
+    revoke_auto_calibration();
     // 发布/调度失败的保底快照保留 Kill 锁存，但清除 Armed 和 ready_to_arm；
     // 这样恢复通信不会隐式解除操作员已经触发的紧急停机。
     const bool kill_latched = actuator_armed_.kill;

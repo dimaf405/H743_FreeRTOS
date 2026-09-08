@@ -41,6 +41,8 @@
 #include "manual_control_setpoint.hpp"
 #include "parameter_update.hpp"
 #include "rover_navigation_status.hpp"
+#include "auto_calibration_status.hpp"
+#include "auto_calibration_request.hpp"
 #include "sensor_calibration_request.hpp"
 #include "sensor_calibration_status.hpp"
 #include "vehicle_command.hpp"
@@ -119,12 +121,19 @@ private:
     bool refresh_navigation_status() noexcept;
     bool evaluate_safety(std::uint64_t now) noexcept;
     bool evaluate_navigation(std::uint64_t now) noexcept;
+    bool process_auto_calibration(std::uint64_t now) noexcept;
+    bool evaluate_auto_calibration(std::uint64_t now) noexcept;
+    bool auto_calibration_fresh(std::uint64_t now) const noexcept;
+    bool start_auto_calibration(std::uint64_t now) noexcept;
+    bool resume_auto_calibration(std::uint64_t now) noexcept;
+    void revoke_auto_calibration() noexcept;
     bool update_public_projection(std::uint64_t now) noexcept;
     bool execute_action(const action_request_s &request,
                         std::uint64_t now) noexcept;
-    TransitionResult arm(std::uint8_t reason, std::uint64_t now) noexcept;
+    TransitionResult arm(std::uint8_t reason, std::uint64_t now,
+                         bool calibration_resume = false) noexcept;
     TransitionResult disarm(std::uint8_t reason,
-                            std::uint64_t now) noexcept;
+                            std::uint64_t now, bool preserve_calibration = false) noexcept;
     bool change_navigation_state(std::uint8_t nav_state,
                                  std::uint64_t now) noexcept;
     bool mission_start_ready(std::uint64_t now) noexcept;
@@ -175,6 +184,8 @@ private:
         ORB_ID(rover_navigation_status), *this};
     uORB::SubscriptionData<actuator_output_status_s>
         actuator_output_status_subscription_{ORB_ID(actuator_output_status)};
+    uORB::SubscriptionData<auto_calibration_status_s> auto_calibration_sub_{ORB_ID(auto_calibration_status)};
+    uORB::Subscription auto_calibration_request_sub_{ORB_ID(auto_calibration_request)};
     uORB::Publication<actuator_armed_s> actuator_armed_publication_{
         ORB_ID(actuator_armed)};
     uORB::Publication<vehicle_control_mode_s> vehicle_control_mode_publication_{
@@ -194,6 +205,10 @@ private:
     actuator_output_status_s actuator_output_status_{};
     sensor_calibration_status_s sensor_calibration_status_{};
     rover_navigation_status_s navigation_status_{};
+    auto_calibration_status_s auto_calibration_status_{};
+    std::uint64_t auto_level_request_timestamp_{};
+    std::uint32_t authorized_calibration_session_{};
+    auto_calibration_request_s pending_calibration_arm_{};
     param_t rc_loss_timeout_handle_{PARAM_INVALID};
     param_t arm_stick_deadzone_handle_{PARAM_INVALID};
     param_t rc_loss_action_handle_{PARAM_INVALID};

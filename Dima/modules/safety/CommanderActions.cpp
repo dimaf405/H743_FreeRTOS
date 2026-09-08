@@ -76,7 +76,8 @@ bool Commander::execute_action(const action_request_s &request,
             actuator_armed_.kill = true;
             changed = true;
         }
-        if (actuator_armed_.armed) {
+        if (actuator_armed_.armed || authorized_calibration_session_ != 0U ||
+            vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1) {
             changed = disarm(reason, now) == TransitionResult::Changed ||
                       changed;
         }
@@ -92,6 +93,8 @@ bool Commander::execute_action(const action_request_s &request,
             return false;
         }
         if (request.mode == vehicle_status_s::NAVIGATION_STATE_MANUAL) {
+            if (vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1)
+                return disarm(reason, now) == TransitionResult::Changed;
             if (rc_action_source(request.source) && !rc_input_valid(now)) {
                 PX4_WARN("Commander rejected Manual switch without RC");
                 return false;
@@ -99,13 +102,16 @@ bool Commander::execute_action(const action_request_s &request,
             return change_navigation_state(
                 vehicle_status_s::NAVIGATION_STATE_MANUAL, now);
         }
+        if (request.mode == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1 &&
+            request.source == action_request_s::SOURCE_RC_MODE_SLOT) return start_auto_calibration(now);
         if (request.mode ==
                 vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION &&
             request.source == action_request_s::SOURCE_RC_MODE_SLOT) {
+            if (auto_calibration_status_.active) return false;
             // QGC PX4 插件以 SET_MODE(AUTO_MISSION) 作为启动入口。
             // 这里不直接改 nav_state，而是调用与 MAV_CMD_MISSION_START
-            // 完全相同的事务：必须已 Armed，且任务、参数、AutoMode
-            // 和 EKF 全部就绪。Disarmed 请求会被拒绝，不会隐式 Arm。
+            // 完全相同的事务：必须已 Armed，且任务、AutoMode 状态和 EKF
+            // 就绪；控制器调参只影响切换后的输出。Disarmed 请求不会隐式 Arm。
             bool state_changed = false;
             const std::uint8_t result = start_mission(now, state_changed);
             if (result !=

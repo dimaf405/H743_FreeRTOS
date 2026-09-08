@@ -1,4 +1,5 @@
 #include "BootHealthService.hpp"
+#include "rover/RoverModeContract.hpp"
 
 #include "api/ActuatorPwm.hpp"
 
@@ -210,19 +211,17 @@ bool BootHealthService::safety_topics_consistent(
             vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
     const bool termination =
         status.nav_state == vehicle_status_s::NAVIGATION_STATE_TERMINATION;
-    // BootHealth 必须复核 Commander 的完整四模式产品投影；AUTO 仍只能由
-    // Mission Start/安全 Hold 进入，can_set 对用户继续只开放 Manual。
+    const bool calibration = dima::middleware::rover::mode_contract::auto_calibration(status.nav_state);
+    // 闭环校准只开启速度/角速度内环，复用执行器的精确投影检查；不能把合法的
+    // 阶段切换误判成安全快照损坏，也不能接受两个内环标志不一致的过渡帧。
+    const bool inner_loops = automatic ||
+        (calibration && dima::middleware::rover::mode_contract::
+            calibration_closed_loop_projection(control));
+    // 模式可用与用户可切换掩码都来自 Commander 共用合同。
     const std::uint32_t manual_mask =
-        1UL << vehicle_status_s::NAVIGATION_STATE_MANUAL;
-    const std::uint32_t auto_mission_mask =
-        1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION;
-    const std::uint32_t auto_loiter_mask =
-        1UL << vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
-    const std::uint32_t termination_mask =
-        1UL << vehicle_status_s::NAVIGATION_STATE_TERMINATION;
+        dima::middleware::rover::mode_contract::kUserSettableMask;
     const std::uint32_t implemented_mask =
-        manual_mask | auto_mission_mask | auto_loiter_mask |
-        termination_mask;
+        dima::middleware::rover::mode_contract::kImplementedMask;
 
     return (status_armed || status_disarmed) &&
            armed.armed == status_armed && control.flag_armed == armed.armed &&
@@ -233,13 +232,13 @@ bool BootHealthService::safety_topics_consistent(
            !armed.in_esc_calibration_mode &&
            armed.termination == termination &&
            (!termination || status.failsafe) &&
-           (manual || automatic || termination) &&
+           (manual || automatic || termination || calibration) &&
            control.flag_control_manual_enabled == manual &&
-           control.flag_control_auto_enabled == automatic &&
+           control.flag_control_auto_enabled == (automatic || calibration) &&
            control.flag_control_position_enabled == automatic &&
-           control.flag_control_velocity_enabled == automatic &&
+           control.flag_control_velocity_enabled == inner_loops &&
            control.flag_control_attitude_enabled == automatic &&
-           control.flag_control_rates_enabled == automatic &&
+           control.flag_control_rates_enabled == inner_loops &&
            control.flag_control_termination_enabled == termination &&
            control.source_id == status.nav_state &&
            !control.flag_multicopter_position_control_enabled &&
