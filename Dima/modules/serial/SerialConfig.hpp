@@ -45,7 +45,6 @@ private:
         std::int32_t rc_input_port{0};
         std::int32_t gps_port{0};
         std::uint32_t gps_target_baudrate{0U};
-        std::int32_t gps_protocol{0};
     };
 
     bool bind_parameters() noexcept;
@@ -56,7 +55,6 @@ private:
 
     dima::platform::SerialPorts &backend_;
 
-    dima::ParamInt<dima::params::GPS_1_PROTOCOL> gps1_protocol_{};
     ParameterBinding serial_parameters_[kPortCount]{};
 
     dima::middleware::lifecycle::ModuleState state_{

@@ -22,11 +22,6 @@ normal_line_configuration(std::uint32_t baudrate) noexcept
     return configuration;
 }
 
-bool gps_protocol_supported(std::int32_t protocol) noexcept
-{
-    return protocol == 0 || protocol == 6;
-}
-
 } // namespace
 
 SerialConfig::SerialConfig(dima::platform::SerialPorts &backend) noexcept
@@ -39,10 +34,6 @@ bool SerialConfig::bind_parameters() noexcept
     for (ParameterBinding &binding : serial_parameters_) {
         binding = {};
     }
-    if (!gps1_protocol_.bind()) {
-        return false;
-    }
-
     // Dima 生成参数目录是运行时唯一目录；按 SERIALx 命名规则发现参数，
     // 从而新增或删除 YAML 条目时无需同步修改 C++ 参数成员或名称数组。
     for (unsigned index = 0U; index < param_count(); ++index) {
@@ -86,7 +77,6 @@ bool SerialConfig::bind_parameters() noexcept
 
 void SerialConfig::invalidate_parameters() noexcept
 {
-    gps1_protocol_.invalidate();
     for (ParameterBinding &binding : serial_parameters_) {
         binding = {};
     }
@@ -132,10 +122,9 @@ bool SerialConfig::read_configuration(
         }
     }
 
-    // GPS 端口只由 SERIALx_FUNCTION=GPS 决定；唯一性校验避免两个驱动争用 UART。
-    std::int32_t configured_protocol = 0;
-    if (param_get(gps1_protocol_.handle(), &configured_protocol) != 0 ||
-        !gps_protocol_supported(configured_protocol) || gps_owner_count > 1U) {
+    // 本产品只有 NMEA/UM982 一个 GPS 实现；原 Auto/6 两项不选择不同驱动。
+    // 取消重复协议开关，仍由 SERIALx_FUNCTION=GPS 唯一选端口并拒绝所有权冲突。
+    if (gps_owner_count > 1U) {
         configuration_valid = false;
     }
     if (configuration.gps_port > 0) {
@@ -146,7 +135,6 @@ bool SerialConfig::read_configuration(
     }
     configuration.gps_target_baudrate = configuration.gps_port == 0
         ? 0U : dima::protocols::um982::generated::kTargetBaudrate;
-    configuration.gps_protocol = configured_protocol;
 
     if (!configuration_valid || sbus_owner_count > 1U) {
         return false;
@@ -224,11 +212,10 @@ bool SerialConfig::start() noexcept
 
     commit_configuration(configuration);
     state_ = dima::middleware::lifecycle::ModuleState::Running;
-    PX4_INFO("configured physical serial ports rc_port=%ld gps_port=%ld gps_baud=%lu protocol=%ld",
+    PX4_INFO("configured physical serial ports rc_port=%ld gps_port=%ld gps_baud=%lu GPS=NMEA/UM982",
              static_cast<long>(rc_input_port_),
              static_cast<long>(gps_port_),
-             static_cast<unsigned long>(gps_target_baudrate_),
-             static_cast<long>(configuration.gps_protocol));
+             static_cast<unsigned long>(gps_target_baudrate_));
     return true;
 }
 
@@ -251,11 +238,10 @@ bool SerialConfig::reconfigure() noexcept
         return false;
     }
     commit_configuration(configuration);
-    PX4_INFO("reconfigured physical serial ports rc_port=%ld gps_port=%ld gps_baud=%lu protocol=%ld",
+    PX4_INFO("reconfigured physical serial ports rc_port=%ld gps_port=%ld gps_baud=%lu GPS=NMEA/UM982",
              static_cast<long>(rc_input_port_),
              static_cast<long>(gps_port_),
-             static_cast<unsigned long>(gps_target_baudrate_),
-             static_cast<long>(configuration.gps_protocol));
+             static_cast<unsigned long>(gps_target_baudrate_));
     return true;
 }
 
@@ -339,11 +325,7 @@ std::uint64_t SerialConfig::configuration_signature() const noexcept
         append(baud);
         append(function);
     }
-    std::int32_t gps_protocol = 0;
-    if (param_get(gps1_protocol_.handle(), &gps_protocol) != 0) {
-        return 0U;
-    }
-    append(gps_protocol);
+    // 签名仅包含实际可变的端口配置；固定协议不再制造无意义的重配置代次。
     return hash;
 }
 

@@ -2,17 +2,6 @@ module_name: definitions
 parameters:
 - group: GPS
   definitions:
-    GPS_1_PROTOCOL:
-      description:
-        short: Primary GPS protocol
-        long: |-
-          Auto detect and NMEA both use the PX4-compatible NMEA frontend with the
-          CRC-validated Unicore AGRICA/UNIHEADINGA extension.
-      type: enum
-      values:
-        0: Auto detect
-        6: NMEA / Unicore UM982
-      default: 6
     GPS_YAW_OFFSET:
       description:
         short: Heading/Yaw offset for dual antenna GPS

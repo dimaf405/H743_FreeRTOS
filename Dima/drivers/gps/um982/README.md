@@ -11,7 +11,7 @@
 ## 参数合同
 
 - GPS 端口：唯一由 PX4 `module_serial.yaml` 定义并生成的 `SERIALx_FUNCTION` 指定；某一路设为 `GPS` 即启用该端口，全部为非 GPS 时禁用，禁止同时配置多个 GPS owner。
-- `GPS_1_PROTOCOL`：与 PX4 一致使用 `0=Auto detect`、`6=NMEA`；NMEA frontend 同时解析 UM982 的 CRC32 `AGRICA/UNIAGRICA/UNIHEADINGA` 扩展。
+- GPS 协议固定为 NMEA/UM982；NMEA frontend 同时解析 UM982 的 CRC32 `AGRICA/UNIAGRICA/UNIHEADINGA` 扩展，不提供重复的协议选择参数。
 - GPS 占用端口时固定使用由 `um982_messages.json` 生成的 `460800 bit/s` 产品合同；`SERIALx_BAUD` 仍是该物理端口脱离 GPS 所有权后的通用配置。驱动保留 UM982 官方八档扫描能力只用于找回已有配置，检测成功后通过受控配置链把接收机和飞控 UART 统一回 460800。
 - `GPS_YAW_OFFSET`：采用 PX4 双天线定义，0..360 deg、顺时针增加；UM982 heading 按 `raw + 180° - offset` 转成车体 yaw。
 
