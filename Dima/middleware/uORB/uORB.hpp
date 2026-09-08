@@ -54,11 +54,17 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance,
                  const void *data) noexcept;
 bool orb_copy(const orb_metadata *metadata, uint8_t instance,
               uint64_t &generation, void *destination) noexcept;
+bool orb_copy_latest(const orb_metadata *metadata, uint8_t instance,
+                     uint64_t &generation, void *destination) noexcept;
 bool orb_updated(const orb_metadata *metadata, uint8_t instance,
                  uint64_t generation) noexcept;
 bool orb_advertise(const orb_metadata *metadata, uint8_t instance) noexcept;
 void orb_unadvertise(const orb_metadata *metadata, uint8_t instance) noexcept;
 int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept;
+bool orb_register_callback(const orb_metadata *metadata, uint8_t instance,
+                           px4::WorkItem &work_item) noexcept;
+void orb_unregister_callback(const orb_metadata *metadata, uint8_t instance,
+                             px4::WorkItem &work_item) noexcept;
 
 class Subscription {
 public:

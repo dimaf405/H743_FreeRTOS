@@ -1,6 +1,10 @@
 # this message contains the (relative) timestamps of the sensor inputs used by EKF2.
 # It can be used for reproducible replay.
 
+# 与 vehicle_imu 使用相同的八槽队列，保证 400 Hz 回放关联在短时调度抖动
+# 下仍可逐 generation 排空；超过窗口的覆盖由 Logger 写真实 dropout。
+uint8 ORB_QUEUE_LENGTH = 8
+
 # the timestamp field is the ekf2 reference time and matches the timestamp of
 # the sensor_combined topic.
 

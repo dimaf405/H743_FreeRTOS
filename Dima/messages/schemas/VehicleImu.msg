@@ -1,5 +1,9 @@
 # IMU readings in SI-unit form.
 
+# EKF2 回放可在 IMU_INTEG_RATE=400 Hz 下运行；八槽给回调驱动的 Logger
+# 预留 20 ms 调度恢复窗口，不再用 200 Hz 软件上限掩盖队列覆盖。
+uint8 ORB_QUEUE_LENGTH = 8
+
 uint64 timestamp          # time since system start (microseconds)
 uint64 timestamp_sample
 

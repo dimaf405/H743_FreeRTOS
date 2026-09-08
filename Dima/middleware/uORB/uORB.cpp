@@ -222,8 +222,10 @@ bool orb_publish(const orb_metadata *metadata, uint8_t instance_index,
     return true;
 }
 
-bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
-              uint64_t &generation, void *destination) noexcept
+namespace {
+
+bool copy_sample(const orb_metadata *metadata, uint8_t instance_index,
+                 uint64_t &generation, void *destination, bool latest) noexcept
 {
     if (!g_initialized || destination == nullptr || in_isr()) {
         return false;
@@ -233,36 +235,53 @@ bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
         return false;
     }
 
-    bool copied = false;
+    // 两种读取共用同一临界区：选代、复制完整样本、推进订阅代次不可分开，
+    // 否则高优先级发布者可能在选槽后覆盖该槽。
     dima::platform::CriticalGuard guard;
     const uint64_t newest = instance->generation;
     if (newest == 0U) {
         generation = 0U;
         return false;
     }
-    if (newest != generation) {
-        uint64_t target = newest;
-        if (metadata->o_queue > 1U) {
-            /* 环形队列当前最老代：oldest=max(1,newest-queue+1)。订阅首次读取、
-             * generation 越界或落后超过保留窗口时从 oldest 恢复，否则逐代读取。 */
-            const uint64_t oldest = newest > metadata->o_queue
-                                        ? newest - metadata->o_queue + 1U
-                                        : 1U;
-            if (generation == 0U || generation > newest ||
-                generation < oldest - 1U) {
-                target = oldest;
-            } else {
-                target = generation + 1U;
-            }
-        }
-        const size_t slot = static_cast<size_t>((target - 1U) %
-                                                metadata->o_queue);
-        memcpy(destination, instance->buffer + slot * metadata->o_size,
-               metadata->o_size);
-        generation = target;
-        copied = true;
+    if (newest == generation) {
+        return false;
     }
-    return copied;
+
+    uint64_t target = newest;
+    if (!latest && metadata->o_queue > 1U) {
+        /* 普通订阅逐代读取；首次、越界或落后于保留窗口时，
+         * 从 oldest=max(1,newest-queue+1) 恢复，不能无意跳过队列事件。 */
+        const uint64_t oldest = newest > metadata->o_queue
+                                    ? newest - metadata->o_queue + 1U
+                                    : 1U;
+        if (generation == 0U || generation > newest ||
+            generation < oldest - 1U) {
+            target = oldest;
+        } else {
+            target = generation + 1U;
+        }
+    }
+    const size_t slot = static_cast<size_t>((target - 1U) % metadata->o_queue);
+    memcpy(destination, instance->buffer + slot * metadata->o_size,
+           metadata->o_size);
+    generation = target;
+    return true;
+}
+
+} // namespace
+
+bool orb_copy(const orb_metadata *metadata, uint8_t instance_index,
+              uint64_t &generation, void *destination) noexcept
+{
+    return copy_sample(metadata, instance_index, generation, destination, false);
+}
+
+bool orb_copy_latest(const orb_metadata *metadata, uint8_t instance_index,
+                     uint64_t &generation, void *destination) noexcept
+{
+    // 固定频率 Logger 主动降采样时直接取最新状态，避免追赶旧代产生突发；
+    // 被采样策略跳过的消息不计为系统 dropout。
+    return copy_sample(metadata, instance_index, generation, destination, true);
 }
 
 bool orb_updated(const orb_metadata *metadata, uint8_t instance_index,
@@ -335,6 +354,61 @@ int8_t orb_advertise_multi(const orb_metadata *metadata) noexcept
     return result;
 }
 
+bool orb_register_callback(const orb_metadata *metadata,
+                           uint8_t instance_index,
+                           px4::WorkItem &work_item) noexcept
+{
+    if (!g_initialized || in_isr()) {
+        return false;
+    }
+    orb_runtime_instance *const instance = runtime_for(
+        metadata, instance_index);
+    if (instance == nullptr) {
+        return false;
+    }
+
+    bool registered = false;
+    dima::platform::CriticalGuard guard;
+    /* 由生成策略批量注册时没有 Subscription 对象可保存 Topic；底层槽位仍按
+     * metadata+instance 唯一管理，同一 WorkItem 重复注册保持幂等。 */
+    for (auto *entry : instance->callbacks) {
+        if (entry == &work_item) {
+            registered = true;
+            break;
+        }
+    }
+    if (!registered) {
+        for (auto &entry : instance->callbacks) {
+            if (entry == nullptr) {
+                entry = &work_item;
+                registered = true;
+                break;
+            }
+        }
+    }
+    return registered;
+}
+
+void orb_unregister_callback(const orb_metadata *metadata,
+                             uint8_t instance_index,
+                             px4::WorkItem &work_item) noexcept
+{
+    if (!g_initialized || in_isr()) {
+        return;
+    }
+    orb_runtime_instance *const instance = runtime_for(
+        metadata, instance_index);
+    if (instance == nullptr) {
+        return;
+    }
+    dima::platform::CriticalGuard guard;
+    for (auto &entry : instance->callbacks) {
+        if (entry == &work_item) {
+            entry = nullptr;
+        }
+    }
+}
+
 bool Subscription::updated() const noexcept
 {
     (void)synchronize_epoch();
@@ -362,33 +436,10 @@ bool Subscription::synchronize_epoch() const noexcept
 bool Subscription::registerCallback(px4::WorkItem &work_item) noexcept
 {
     (void)synchronize_epoch();
-    if (!g_initialized || in_isr()) {
-        return false;
-    }
-    orb_runtime_instance *const instance = runtime_for(metadata_, instance_);
-    if (instance == nullptr) {
-        return false;
-    }
-
-    bool registered = false;
-    dima::platform::CriticalGuard guard;
-    /* 同一 WorkItem 注册保持幂等；否则占用首个空槽，满 8 个时明确失败。 */
-    for (auto *entry : instance->callbacks) {
-        if (entry == &work_item) {
-            callback_ = &work_item;
-            registered = true;
-            break;
-        }
-    }
-    if (!registered) {
-        for (auto &entry : instance->callbacks) {
-            if (entry == nullptr) {
-                entry = &work_item;
-                callback_ = &work_item;
-                registered = true;
-                break;
-            }
-        }
+    const bool registered = orb_register_callback(
+        metadata_, instance_, work_item);
+    if (registered) {
+        callback_ = &work_item;
     }
     return registered;
 }
@@ -401,17 +452,7 @@ void Subscription::unregisterCallback() noexcept
     if (callback_ == nullptr || in_isr()) {
         return;
     }
-    orb_runtime_instance *const instance = runtime_for(metadata_, instance_);
-    if (instance == nullptr) {
-        callback_ = nullptr;
-        return;
-    }
-    dima::platform::CriticalGuard guard;
-    for (auto &entry : instance->callbacks) {
-        if (entry == callback_) {
-            entry = nullptr;
-        }
-    }
+    orb_unregister_callback(metadata_, instance_, *callback_);
     callback_ = nullptr;
 }
 

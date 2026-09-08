@@ -1,5 +1,9 @@
 # GPS position in WGS84 coordinates.
 # the field 'timestamp' is for the position & velocity (microseconds)
+# 两个 alias 共享同一生成队列合同；四槽既容纳 GPS 短时突发，也给 UTC 连续
+# 候选确认和 EKF2 回放留出调度余量。
+uint8 ORB_QUEUE_LENGTH = 4
+
 uint64 timestamp		# time since system start (microseconds)
 uint64 timestamp_sample
 
