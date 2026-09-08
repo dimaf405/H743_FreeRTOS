@@ -34,12 +34,16 @@
 #pragma once
 
 #include "LogWriter.hpp"
-#include "messages.h"
+#include "logger_contract.hpp"
+#include "ulog_messages.hpp"
 
 #include "mavlink_log.hpp"
 #include "parameter_update.hpp"
+#include "sensor_gps.hpp"
+#include "vehicle_gps_position.hpp"
 #include "parameters/param.h"
 #include "uORB/SubscriptionData.hpp"
+#include "uORB/uORB.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
 #include <uORB/topics/uORBTopics.hpp>
@@ -62,9 +66,16 @@ namespace dima::modules::logging {
  */
 class SdLogWriter final : public px4::ScheduledWorkItem {
 public:
+    struct Configuration {
+        std::uint8_t profile{0U};
+        std::uint16_t maximum_directories{0U};
+        std::uint64_t hardware_uid{0U};
+    };
+
     explicit SdLogWriter(dima::platform::LogFileStore &store) noexcept;
 
-    bool start() noexcept;
+    bool start(const Configuration &configuration) noexcept;
+    void set_recording_intent(bool enabled) noexcept;
     void stop() noexcept;
 
 protected:
@@ -73,6 +84,7 @@ protected:
 private:
     enum class SessionPhase : std::uint8_t {
         Header,
+        Information,
         Formats,
         Parameters,
         ParameterDefaults,
@@ -100,7 +112,7 @@ private:
     static constexpr std::size_t kMaximumChangedParametersPerRun = 8U;
     static constexpr std::size_t kMaximumTextRecordsPerRun = 8U;
     static constexpr std::size_t kMaximumTopicMessagesPerRun = 48U;
-    static constexpr std::size_t kMaximumMessagesPerInstancePerRun = 4U;
+    static constexpr std::size_t kMaximumMessagesPerInstancePerRun = 8U;
     static constexpr std::uint16_t kInvalidMessageId = UINT16_MAX;
     static constexpr std::size_t kCatalogSlots =
         ORB_TOPICS_COUNT * uORB::kMaximumInstances;
@@ -109,13 +121,21 @@ private:
     static constexpr std::size_t kFormatReaderStorageSize = 512U;
 
     bool validate_catalog() const noexcept;
+    bool topic_enabled(std::size_t topic_index) const noexcept;
+    bool register_replay_callbacks() noexcept;
+    void unregister_replay_callbacks() noexcept;
     void reset_session(std::uint32_t generation,
-                       std::uint64_t now_us) noexcept;
+                       const dima::platform::LogSessionContext &context) noexcept;
     void reset_format_reader() noexcept;
     void destroy_format_reader() noexcept;
     void fail_stream(const char *reason) noexcept;
 
-    bool write_file_header(std::uint64_t now_us) noexcept;
+    bool write_file_header() noexcept;
+    StepResult write_info(const char *key, const void *value,
+                          std::size_t value_size) noexcept;
+    bool process_initial_information() noexcept;
+    bool write_late_boot_time() noexcept;
+    void advance_definition_phase() noexcept;
     StepResult write_format_group() noexcept;
     void process_formats() noexcept;
     StepResult write_current_parameter(param_t parameter,
@@ -131,14 +151,26 @@ private:
     bool append_sync_marker(std::uint64_t now_us) noexcept;
     TopicResult append_topic(std::size_t topic_index,
                              std::uint8_t instance,
-                             std::uint64_t now_us) noexcept;
+                             std::uint64_t now_us,
+                             generated::SamplingKind kind,
+                             bool newest_only = false) noexcept;
     bool drain_topics(std::uint64_t now_us) noexcept;
+    void initialize_active_generations() noexcept;
+    bool flush_stop_topics(std::uint64_t now_us) noexcept;
+    void process_gps_time(std::uint64_t now_us) noexcept;
+    bool gps_candidate(const sensor_gps_s &gps,
+                       std::uint64_t now_us,
+                       std::uint64_t &boot_utc_us) const noexcept;
+    void publish_time_reference(std::uint64_t boot_utc_us) noexcept;
 
     LogWriter writer_;
     uORB::SubscriptionData<mavlink_log_s> log_subscription_{
-        ORB_ID(mavlink_log)};
+        get_orb_meta(static_cast<ORB_ID>(generated::kTextTopicIndex))};
     uORB::SubscriptionData<parameter_update_s> parameter_subscription_{
-        ORB_ID(parameter_update)};
+        get_orb_meta(static_cast<ORB_ID>(
+            generated::kParameterTriggerTopicIndex))};
+    uORB::SubscriptionData<sensor_gps_s> gps_subscription_{
+        get_orb_meta(static_cast<ORB_ID>(generated::kUtcSourceTopicIndex))};
     /* MessageFormatReader 的 heatshrink 类型只在 .cpp 可见，避免第三方 ABI 沿
      * LogService.hpp 泄漏到组合根；cpp 中以 static_assert 核对尺寸和对齐。 */
     alignas(std::max_align_t)
@@ -147,17 +179,31 @@ private:
     ulog_message_format_s format_message_{};
     alignas(8) std::uint8_t message_buffer_[kMessageBufferSize]{};
     std::uint64_t topic_generations_[kCatalogSlots]{};
+    std::uint64_t last_topic_write_us_[kCatalogSlots]{};
     std::uint16_t message_ids_[kCatalogSlots]{};
     std::uint32_t writer_session_generation_{0U};
     std::uint16_t next_message_id_{0U};
     std::size_t parameter_index_{0U};
     std::size_t changed_parameter_index_{0U};
     std::size_t scan_cursor_{0U};
+    std::uint8_t information_step_{0U};
+    std::uint8_t profile_{0U};
     std::uint64_t last_sync_marker_us_{0U};
     std::uint64_t dropout_start_us_{0U};
-    std::uint32_t message_gaps_{0U};
+    std::uint64_t ulog_header_monotonic_us_{0U};
+    std::uint64_t hardware_uid_{0U};
+    std::uint64_t pending_boot_utc_us_{0U};
+    std::uint64_t confirmed_boot_utc_us_{0U};
+    std::uint64_t last_utc_jump_warning_us_{0U};
+    std::uint32_t boot_time_written_generation_{0U};
     SessionPhase phase_{SessionPhase::Header};
     bool changed_parameter_scan_pending_{false};
+    bool format_group_ready_{false};
+    bool pending_utc_candidate_{false};
+    bool utc_confirmed_{false};
+    bool recording_intent_{false};
+    bool replay_callbacks_registered_{false};
+    bool stream_failed_{false};
     bool running_{false};
 };
 

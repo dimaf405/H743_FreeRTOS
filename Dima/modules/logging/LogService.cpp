@@ -1,7 +1,9 @@
 #include "LogService.hpp"
 
-#include "events/events.hpp"
+#include "api/BoardIdentity.hpp"
 #include "api/Time.hpp"
+#include "events/events.hpp"
+#include "parameters/param.h"
 
 #include <algorithm>
 #include <cstring>
@@ -103,20 +105,144 @@ void LogService::shutdown() noexcept
     initialized_ = false;
 }
 
+std::int32_t LogService::load_integer_parameter(
+    const generated::IntegerParameterContract &contract) noexcept
+{
+    const param_t handle = param_handle(contract.parameter);
+    param_set_used(handle);
+    std::int32_t value = contract.default_value;
+    const bool loaded = param_get(handle, &value) == 0;
+    if (loaded && value >= contract.minimum && value <= contract.maximum) {
+        return value;
+    }
+
+    /* 参数存储损坏或越界时回退到由 module_logger.yaml 生成并由 Logger
+     * 合同交叉验证的编译默认值。Logger 是非关键能力，错误只告警，不能把
+     * Commander、控制或 MAVLink 服务拖入启动失败。 */
+    std::int32_t generated_default = contract.default_value;
+    if (param_get_system_default_value(handle, &generated_default) != 0 ||
+        generated_default < contract.minimum ||
+        generated_default > contract.maximum) {
+        generated_default = contract.default_value;
+    }
+    const char *name = param_name(handle);
+    PX4_WARN("Invalid %s; using generated default %ld",
+             name != nullptr ? name : "Logger parameter",
+             static_cast<long>(generated_default));
+    return generated_default;
+}
+
+void LogService::load_logger_configuration(
+    SdLogWriter::Configuration &configuration) noexcept
+{
+    const std::int32_t mode =
+        load_integer_parameter(generated::kModeParameter);
+    const std::int32_t profile =
+        load_integer_parameter(generated::kProfileParameter);
+    const std::int32_t directories =
+        load_integer_parameter(generated::kDirectoriesParameter);
+    log_mode_ = static_cast<generated::LogMode>(mode);
+    configuration.profile = static_cast<std::uint8_t>(profile);
+    configuration.maximum_directories =
+        static_cast<std::uint16_t>(directories);
+    configuration.hardware_uid = dima::platform::board_hardware_uid();
+    if (configuration.hardware_uid == 0U) {
+        PX4_WARN("Hardware UID is zero; ULog sys_uuid will be all zeros");
+    }
+}
+
+void LogService::set_sd_recording_intent(bool enabled) noexcept
+{
+    if (sd_recording_intent_ == enabled) {
+        return;
+    }
+    sd_recording_intent_ = enabled;
+    if (sd_writer_available_) {
+        sd_writer_.set_recording_intent(enabled);
+    }
+}
+
+void LogService::apply_initial_mode() noexcept
+{
+    armed_state_ = false;
+    sd_recording_intent_ = false;
+
+    /* Mode 1/2 的记录意图从启动即成立；Mode 0/3 等待真实 armed=true。
+     * 这里只设置 SD 会话意图，LogService 自身始终运行以继续转发结构化文本。 */
+    if (log_mode_ == generated::LogMode::BootUntilFirstPostArmDisarm ||
+        log_mode_ == generated::LogMode::BootUntilShutdown) {
+        set_sd_recording_intent(true);
+    }
+}
+
+void LogService::process_armed_state(bool armed) noexcept
+{
+    // 启动时 armed_state_=false，首个 Armed 样本自然形成上升沿；
+    // 下降沿本身就证明观察过 Armed，无需再保存一份历史标志。
+    const bool rising = !armed_state_ && armed;
+    const bool falling = armed_state_ && !armed;
+    armed_state_ = armed;
+
+    switch (log_mode_) {
+    case generated::LogMode::ArmedSessions:
+        if (rising) {
+            set_sd_recording_intent(true);
+        } else if (falling) {
+            set_sd_recording_intent(false);
+        }
+        break;
+
+    case generated::LogMode::BootUntilFirstPostArmDisarm:
+        /* 上电后即记录，首次下降沿停止；本模式没有重新开启入口，
+         * 后续下降沿由 set_sd_recording_intent 的幂等检查直接跳过。 */
+        if (falling) {
+            set_sd_recording_intent(false);
+        }
+        break;
+
+    case generated::LogMode::BootUntilShutdown:
+        break;
+
+    case generated::LogMode::FirstArmUntilShutdown:
+        if (rising) {
+            set_sd_recording_intent(true);
+        }
+        break;
+    }
+}
+
 bool LogService::start() noexcept
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (!initialized_ || !ScheduleEnable() || !sd_writer_.start()) {
+    if (!initialized_ || !ScheduleEnable()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
-        sd_writer_.stop();
         return false;
     }
+
+    SdLogWriter::Configuration configuration{};
+    load_logger_configuration(configuration);
+    sd_writer_available_ = sd_writer_.start(configuration);
+    if (!sd_writer_available_) {
+        /* SD ULog 初始化失败不能关闭 structured sink；QGC STATUSTEXT 和 Event
+         * 仍由本服务继续承载，故模块保持 Running 并给出明确降级告警。 */
+        PX4_WARN("SD ULog unavailable; structured logging remains active");
+    }
+    armed_callback_registered_ =
+        actuator_armed_subscription_.registerCallback();
+    if (!armed_callback_registered_) {
+        PX4_WARN("Logger armed callback unavailable; using 20 ms polling");
+    }
     reset_debug_state();
+    apply_initial_mode();
     if (!ScheduleOnInterval(kFlushIntervalUs, kFlushIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
+        if (armed_callback_registered_) {
+            actuator_armed_subscription_.unregisterCallback();
+            armed_callback_registered_ = false;
+        }
         ScheduleCancelAndDrain();
         sd_writer_.stop();
         return false;
@@ -129,8 +255,14 @@ bool LogService::start() noexcept
 void LogService::stop() noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    if (armed_callback_registered_) {
+        actuator_armed_subscription_.unregisterCallback();
+        armed_callback_registered_ = false;
+    }
     ScheduleCancelAndDrain();
     sd_writer_.stop();
+    sd_writer_available_ = false;
+    sd_recording_intent_ = false;
     reset_debug_state();
 }
 
@@ -237,7 +369,12 @@ void LogService::Run()
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
         return;
     }
-    // 先释放最多四个高价值事件，再处理可丢帧的 SBUS 调试样本。
+    actuator_armed_s armed{};
+    for (std::size_t count = 0U;
+         count < 4U && actuator_armed_subscription_.copy(&armed); ++count) {
+        process_armed_state(armed.armed);
+    }
+    // 先处理会话安全边沿，再释放高价值事件和可丢帧的 SBUS 调试样本。
     enqueue_structured_events();
     enqueue_sbus_data(hrt_absolute_time());
 }

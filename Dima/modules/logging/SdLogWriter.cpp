@@ -33,6 +33,9 @@
 
 #include "SdLogWriter.hpp"
 
+#include "api/BoardIdentity.hpp"
+#include "api/Services.hpp"
+#include "api/TaskRuntime.hpp"
 #include "api/Time.hpp"
 #include "parameters/param.h"
 #include "uORB/uORBMessageFields.hpp"
@@ -53,6 +56,15 @@ constexpr std::uint8_t kUlogMagic[]{
     'U', 'L', 'o', 'g', 0x01U, 0x12U, 0x35U, 0x01U};
 constexpr std::uint8_t kSyncMagic[]{
     0x2FU, 0x73U, 0x13U, 0x20U, 0x25U, 0x0CU, 0xBBU, 0x12U};
+constexpr std::uint64_t kUtc2020Us = 1577836800000000ULL;
+constexpr std::uint64_t kMavlinkMaximumUtcUs =
+    static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) *
+        1000000ULL +
+    999999ULL;
+constexpr std::uint64_t kUtcSampleMaximumAgeUs = 1000000ULL;
+constexpr std::uint64_t kUtcConfirmationToleranceUs = 1000000ULL;
+constexpr std::uint64_t kUtcJumpToleranceUs = 2000000ULL;
+constexpr std::uint64_t kUtcWarningIntervalUs = 60000000ULL;
 
 std::size_t bounded_length(const char *text, std::size_t capacity) noexcept
 {
@@ -155,16 +167,88 @@ bool SdLogWriter::validate_catalog() const noexcept
     return true;
 }
 
-bool SdLogWriter::start() noexcept
+bool SdLogWriter::topic_enabled(std::size_t topic_index) const noexcept
+{
+    return topic_index < ORB_TOPICS_COUNT &&
+           generated::sampling_policy(topic_index, profile_).kind !=
+               generated::SamplingKind::Excluded;
+}
+
+bool SdLogWriter::register_replay_callbacks() noexcept
+{
+    if (replay_callbacks_registered_ ||
+        (profile_ & generated::kEkf2ReplayProfile) == 0U) {
+        return true;
+    }
+    std::size_t registered = 0U;
+    for (const std::size_t topic_index :
+         generated::kReplayCallbackTopicIndices) {
+        if (topic_index >= orb_topics_count() ||
+            !uORB::orb_register_callback(
+                orb_get_topics()[topic_index], 0U, *this)) {
+            while (registered > 0U) {
+                --registered;
+                const std::size_t rollback_index =
+                    generated::kReplayCallbackTopicIndices[registered];
+                uORB::orb_unregister_callback(
+                    orb_get_topics()[rollback_index], 0U, *this);
+            }
+            return false;
+        }
+        ++registered;
+    }
+    replay_callbacks_registered_ = true;
+    return true;
+}
+
+void SdLogWriter::unregister_replay_callbacks() noexcept
+{
+    if (!replay_callbacks_registered_) {
+        return;
+    }
+    for (const std::size_t topic_index :
+         generated::kReplayCallbackTopicIndices) {
+        if (topic_index < orb_topics_count()) {
+            uORB::orb_unregister_callback(
+                orb_get_topics()[topic_index], 0U, *this);
+        }
+    }
+    replay_callbacks_registered_ = false;
+}
+
+bool SdLogWriter::start(const Configuration &configuration) noexcept
 {
     if (running_) {
         return true;
     }
-    if (!validate_catalog() || !writer_.start()) {
+    if (configuration.profile > generated::kProfileMask ||
+        configuration.maximum_directories == 0U ||
+        configuration.maximum_directories > 999U || !validate_catalog()) {
+        return false;
+    }
+
+    profile_ = configuration.profile;
+    hardware_uid_ = configuration.hardware_uid;
+    /* 模块可在同一次上电中 stop/start。Writer 的 session generation 会从 1
+     * 重新计数，因此 UTC 写入代际和两点确认状态也必须重新建立，不能误把上次
+     * 会话的 generation=1 当成新文件已经写过 boot_time_utc_us。 */
+    pending_boot_utc_us_ = 0U;
+    confirmed_boot_utc_us_ = 0U;
+    last_utc_jump_warning_us_ = 0U;
+    boot_time_written_generation_ = 0U;
+    pending_utc_candidate_ = false;
+    utc_confirmed_ = false;
+    writer_session_generation_ = 0U;
+    dima::platform::LogSessionContext context{};
+    context.maximum_directories = configuration.maximum_directories;
+    context.hardware_uid = configuration.hardware_uid;
+    if (!writer_.start(context)) {
         return false;
     }
 
     running_ = true;
+    recording_intent_ = false;
+    stream_failed_ = false;
     if (!ScheduleEnable() ||
         !ScheduleOnInterval(kRunIntervalUs, kRunIntervalUs)) {
         running_ = false;
@@ -175,8 +259,76 @@ bool SdLogWriter::start() noexcept
     return true;
 }
 
+void SdLogWriter::set_recording_intent(bool enabled) noexcept
+{
+    if (!running_ || stream_failed_ || enabled == recording_intent_) {
+        return;
+    }
+    if (enabled) {
+        recording_intent_ = true;
+        if (!register_replay_callbacks()) {
+            /* 5 ms 周期扫描仍能覆盖八槽/400 Hz 的 20 ms 保留窗口；回调注册失败
+             * 只降低唤醒及时性，不得让非关键 Logger 阻止整机启动。 */
+            PX4_WARN("ULog replay callback unavailable; using 5 ms scan");
+        }
+        writer_.set_recording_intent(true);
+        (void)ScheduleNow();
+        return;
+    }
+
+    /* 极短会话也必须先形成完整的 Definitions：否则一个已经带 ULog magic、会被
+     * QGC 列出的文件可能缺少 UID、F 或 P/Q。这里仍只写 RAM Ring，等待动作让
+     * storage worker 排空；任何 FatFs 调用都不会越过线程边界。 */
+    if (writer_.ready()) {
+        const std::uint32_t generation = writer_.session_generation();
+        if (generation != 0U && generation != writer_session_generation_) {
+            reset_session(generation, writer_.session_context());
+        }
+        while (writer_.ready() && !stream_failed_ &&
+               phase_ != SessionPhase::Active) {
+            const std::uint64_t now_us = hrt_absolute_time();
+            process_gps_time(now_us);
+            advance_definition_phase();
+            if (phase_ != SessionPhase::Active) {
+                dima::platform::services().tasks.delay(
+                    dima::platform::Timeout::from_ms(1U));
+            }
+        }
+    }
+
+    /* Mode 的停止边沿先补写已确认 UTC 和安全状态 Topic 的最新 generation，
+     * 再封住 producer。writer_.end_session() 后只由 storage worker 清空 Ring
+     * 并提交 CLOSED 侧车。 */
+    if (writer_.ready() && phase_ == SessionPhase::Active) {
+        process_gps_time(hrt_absolute_time());
+        while (writer_.ready() && !stream_failed_ &&
+               !write_late_boot_time()) {
+            dima::platform::services().tasks.delay(
+                dima::platform::Timeout::from_ms(1U));
+        }
+        /* Ring 满时 storage worker 仍在异步排空。保持 producer 权限并短暂让出
+         * CPU，直到三个生成标记的安全状态均推进到最新 generation；介质失败
+         * 会撤销 ready 并结束等待，绝不从本线程越界调用 FatFs。 */
+        while (writer_.ready() && !stream_failed_ &&
+               !flush_stop_topics(hrt_absolute_time())) {
+            dima::platform::services().tasks.delay(
+                dima::platform::Timeout::from_ms(1U));
+        }
+    }
+    recording_intent_ = false;
+    unregister_replay_callbacks();
+    writer_.end_session();
+    writer_session_generation_ = 0U;
+}
+
 void SdLogWriter::stop() noexcept
 {
+    if (!running_) {
+        ScheduleCancelAndDrain();
+        writer_.stop();
+        return;
+    }
+    set_recording_intent(false);
     running_ = false;
     ScheduleCancelAndDrain();
     /* producer 已完全退出后才请求 storage consumer 冲刷，保证 SPSC Ring 不会在
@@ -209,13 +361,16 @@ void SdLogWriter::reset_format_reader() noexcept
         format_message_.format, sizeof(format_message_.format));
 }
 
-void SdLogWriter::reset_session(std::uint32_t generation,
-                                std::uint64_t now_us) noexcept
+void SdLogWriter::reset_session(
+    std::uint32_t generation,
+    const dima::platform::LogSessionContext &context) noexcept
 {
     /* 每个新 FatFs 文件都是独立 ULog 流：Topic generation 从 0 重新取当前
      * retained 数据，A 的内部 msg_id 也从 0 重建。旧卡/旧文件的 ID 和格式状态
      * 绝不跨介质会话复用。 */
     std::fill(std::begin(topic_generations_), std::end(topic_generations_), 0U);
+    std::fill(std::begin(last_topic_write_us_),
+              std::end(last_topic_write_us_), 0U);
     std::fill(std::begin(message_ids_), std::end(message_ids_),
               kInvalidMessageId);
     std::memset(message_buffer_, 0, sizeof(message_buffer_));
@@ -225,10 +380,12 @@ void SdLogWriter::reset_session(std::uint32_t generation,
     parameter_index_ = 0U;
     changed_parameter_index_ = 0U;
     scan_cursor_ = 0U;
-    last_sync_marker_us_ = now_us;
+    information_step_ = 0U;
+    ulog_header_monotonic_us_ = context.start_monotonic_us;
+    last_sync_marker_us_ = ulog_header_monotonic_us_;
     dropout_start_us_ = 0U;
-    message_gaps_ = 0U;
     changed_parameter_scan_pending_ = false;
+    format_group_ready_ = false;
     phase_ = SessionPhase::Header;
 }
 
@@ -237,16 +394,18 @@ void SdLogWriter::fail_stream(const char *reason) noexcept
     /* 格式/目录合同错误是确定性软件错误，不能每 3 s 新建一个同样损坏的文件。
      * 仅停止 SD 副本；structured log、Event Ring 和 MAVLink STATUSTEXT 继续工作。 */
     PX4_ERR("ULog stream stopped: %s", reason == nullptr ? "error" : reason);
-    running_ = false;
+    stream_failed_ = true;
+    recording_intent_ = false;
+    unregister_replay_callbacks();
     ScheduleClear();
-    writer_.request_stop();
+    writer_.end_session();
 }
 
-bool SdLogWriter::write_file_header(std::uint64_t now_us) noexcept
+bool SdLogWriter::write_file_header() noexcept
 {
     ulog_file_header_s header{};
     std::memcpy(header.magic, kUlogMagic, sizeof(kUlogMagic));
-    header.timestamp = now_us;
+    header.timestamp = ulog_header_monotonic_us_;
 
     ulog_message_flag_bits_s flags{};
     flags.compat_flags[0] = ULOG_COMPAT_FLAG0_DEFAULT_PARAMETERS_MASK;
@@ -261,27 +420,155 @@ bool SdLogWriter::write_file_header(std::uint64_t now_us) noexcept
     return writer_.write_message(initial, sizeof(initial));
 }
 
+SdLogWriter::StepResult SdLogWriter::write_info(
+    const char *key, const void *value, std::size_t value_size) noexcept
+{
+    if (key == nullptr || value == nullptr || value_size == 0U) {
+        return StepResult::Failed;
+    }
+    const std::size_t key_length = std::strlen(key);
+    if (key_length == 0U ||
+        key_length > std::numeric_limits<std::uint8_t>::max() ||
+        key_length + value_size > sizeof(ulog_message_info_s::key_value_str)) {
+        return StepResult::Failed;
+    }
+    const std::size_t message_size =
+        sizeof(ulog_message_info_s) -
+        sizeof(ulog_message_info_s::key_value_str) + key_length + value_size;
+    if (writer_.available_bytes() < message_size) {
+        return StepResult::Blocked;
+    }
+
+    ulog_message_info_s message{};
+    message.key_len = static_cast<std::uint8_t>(key_length);
+    std::memcpy(message.key_value_str, key, key_length);
+    std::memcpy(message.key_value_str + key_length, value, value_size);
+    message.msg_size = static_cast<std::uint16_t>(
+        message_size - ULOG_MSG_HEADER_LEN);
+    message.msg_type = static_cast<std::uint8_t>(ULogMessageType::INFO);
+    return writer_.write_message(&message, message_size)
+               ? StepResult::Emitted
+               : StepResult::Blocked;
+}
+
+bool SdLogWriter::process_initial_information() noexcept
+{
+    /* ULog 信息值是 key 后紧接二进制 payload：sys_uuid 固定写与
+     * AUTOPILOT_VERSION.uid 相同的 64-bit 数值，格式化为 16 位大写十六进制；
+     * UID=0 仍写全零并由 LogService 告警，不让身份异常阻断日志。 */
+    while (information_step_ < 3U) {
+        StepResult result = StepResult::Skipped;
+        if (information_step_ == 0U) {
+            char uuid[17]{};
+            const int length = std::snprintf(
+                uuid, sizeof(uuid), "%016llX",
+                static_cast<unsigned long long>(hardware_uid_));
+            if (length != 16) {
+                fail_stream("hardware UID format");
+                return false;
+            }
+            result = write_info("char[16] sys_uuid", uuid, 16U);
+        } else if (information_step_ == 1U) {
+            const std::int32_t utc_offset_minutes = 0;
+            result = write_info("int32_t time_ref_utc", &utc_offset_minutes,
+                                sizeof(utc_offset_minutes));
+        } else if (utc_confirmed_) {
+            result = write_info("uint64_t boot_time_utc_us",
+                                &confirmed_boot_utc_us_,
+                                sizeof(confirmed_boot_utc_us_));
+            if (result == StepResult::Emitted) {
+                boot_time_written_generation_ = writer_session_generation_;
+            }
+        }
+
+        if (result == StepResult::Blocked) {
+            return false;
+        }
+        if (result == StepResult::Failed) {
+            fail_stream("ULog information");
+            return false;
+        }
+        ++information_step_;
+    }
+    phase_ = SessionPhase::Formats;
+    return true;
+}
+
+bool SdLogWriter::write_late_boot_time() noexcept
+{
+    if (!utc_confirmed_ ||
+        boot_time_written_generation_ == writer_session_generation_) {
+        return true;
+    }
+    const StepResult result = write_info(
+        "uint64_t boot_time_utc_us", &confirmed_boot_utc_us_,
+        sizeof(confirmed_boot_utc_us_));
+    if (result == StepResult::Emitted) {
+        /* ULog 允许 I 消息出现在 Data section；这使冷启动后才确认的 GPS UTC
+         * 无需伪造启动时间，也无需关闭正在写入的有效日志。 */
+        boot_time_written_generation_ = writer_session_generation_;
+        return true;
+    }
+    if (result == StepResult::Failed) {
+        fail_stream("late boot UTC information");
+    }
+    return false;
+}
+
+void SdLogWriter::advance_definition_phase() noexcept
+{
+    /* Definitions 的每一步都有固定上限；正常 Run 每次推进一段，极短会话的关闭
+     * 路径可复用同一状态机补齐合同，而不会维护第二套 UID/F/P/Q 写入顺序。 */
+    switch (phase_) {
+    case SessionPhase::Header:
+        if (write_file_header()) {
+            phase_ = SessionPhase::Information;
+        }
+        break;
+    case SessionPhase::Information:
+        (void)process_initial_information();
+        break;
+    case SessionPhase::Formats:
+        process_formats();
+        break;
+    case SessionPhase::Parameters:
+        (void)process_initial_parameters(false);
+        break;
+    case SessionPhase::ParameterDefaults:
+        (void)process_initial_parameters(true);
+        break;
+    case SessionPhase::Active:
+        break;
+    }
+}
+
 SdLogWriter::StepResult SdLogWriter::write_format_group() noexcept
 {
     if (format_reader_ == nullptr) {
         return StepResult::Failed;
     }
 
-    switch (format_reader_->readMore()) {
-    case uORB::MessageFormatReader::State::ReadOrbIDs:
-    case uORB::MessageFormatReader::State::ReadingFormat:
-        return StepResult::Skipped;
+    if (!format_group_ready_) {
+        switch (format_reader_->readMore()) {
+        case uORB::MessageFormatReader::State::ReadOrbIDs:
+        case uORB::MessageFormatReader::State::ReadingFormat:
+            return StepResult::Skipped;
 
-    case uORB::MessageFormatReader::State::Complete:
-        phase_ = SessionPhase::Parameters;
-        parameter_index_ = 0U;
-        return StepResult::Skipped;
+        case uORB::MessageFormatReader::State::Complete:
+            phase_ = SessionPhase::Parameters;
+            parameter_index_ = 0U;
+            return StepResult::Skipped;
 
-    case uORB::MessageFormatReader::State::Failure:
-        return StepResult::Failed;
+        case uORB::MessageFormatReader::State::Failure:
+            return StepResult::Failed;
 
-    case uORB::MessageFormatReader::State::FormatComplete:
-        break;
+        case uORB::MessageFormatReader::State::FormatComplete:
+            /* MessageFormatReader 要求 FormatComplete 后必须 clear；若 Ring
+             * 暂时不足，保留此标志并重试同一组，不能再次 readMore() 把正常
+             * 背压误判成 Invalid API calls。 */
+            format_group_ready_ = true;
+            break;
+        }
     }
 
     std::size_t output_aliases = 0U;
@@ -289,14 +576,15 @@ SdLogWriter::StepResult SdLogWriter::write_format_group() noexcept
         if (id >= orb_topics_count()) {
             return StepResult::Failed;
         }
-        if (get_orb_meta(static_cast<ORB_ID>(id)) != ORB_ID(mavlink_log)) {
+        if (topic_enabled(id)) {
             ++output_aliases;
         }
     }
     if (output_aliases == 0U) {
-        // 无日志输出的组直接消费完整格式，保留下组剩余字节；下一轮 readMore
-        // 继续解码，不为不会发送的字段执行展开和搬移。
+        // 当前 Profile 不输出此组时，直接消费完整压缩格式并保留下组剩余字节；
+        // 不展开或搬移字段字符串。清零 ready 后下一轮才可继续 readMore。
         format_reader_->clearFormatFromBuffer();
+        format_group_ready_ = false;
         return StepResult::Skipped;
     }
     /* 一份字段定义最多对应多个 Topic alias。先按 PX4 最大 F 结构保守预留整组
@@ -319,11 +607,12 @@ SdLogWriter::StepResult SdLogWriter::write_format_group() noexcept
 
     int last_name_length = 0;
     for (const orb_id_size_t id : format_reader_->orbIDs()) {
-        const orb_metadata *metadata = get_orb_meta(static_cast<ORB_ID>(id));
-        if (metadata == ORB_ID(mavlink_log)) {
-            /* mavlink_log 按 PX4 logger 映射为 L 文本，不重复声明/写入普通 D Topic。 */
+        if (!topic_enabled(id)) {
+            /* 同组中重复 payload 或当前 Profile 未选 Topic 不写 F/A/D；
+             * 保留项和采样策略都来自生成合同。 */
             continue;
         }
+        const orb_metadata *metadata = get_orb_meta(static_cast<ORB_ID>(id));
         if (metadata == nullptr) {
             return StepResult::Failed;
         }
@@ -363,6 +652,7 @@ SdLogWriter::StepResult SdLogWriter::write_format_group() noexcept
     }
 
     format_reader_->clearFormatAndRestoreLeftover();
+    format_group_ready_ = false;
     return StepResult::Emitted;
 }
 
@@ -388,8 +678,7 @@ void SdLogWriter::process_formats() noexcept
 SdLogWriter::StepResult SdLogWriter::write_current_parameter(
     param_t parameter, bool require_unsaved) noexcept
 {
-    if (!param_used(parameter) ||
-        (require_unsaved && !param_value_unsaved(parameter))) {
+    if (require_unsaved && !param_value_unsaved(parameter)) {
         return StepResult::Skipped;
     }
     if (writer_.available_bytes() < sizeof(ulog_message_parameter_s)) {
@@ -433,7 +722,7 @@ SdLogWriter::StepResult SdLogWriter::write_current_parameter(
 SdLogWriter::StepResult SdLogWriter::write_parameter_defaults(
     param_t parameter) noexcept
 {
-    if (!param_used(parameter) || param_is_volatile(parameter)) {
+    if (param_is_volatile(parameter)) {
         return StepResult::Skipped;
     }
     if (writer_.available_bytes() <
@@ -507,6 +796,9 @@ SdLogWriter::StepResult SdLogWriter::write_parameter_defaults(
 
 bool SdLogWriter::process_initial_parameters(bool defaults) noexcept
 {
+    /* Logger 早于多数业务模块启动，不能用瞬时 param_used 集合决定文件合同。
+     * 直接遍历生成参数目录可保证每个会话都有完整初值；Q 默认仍按 PX4 规则
+     * 只写与当前值不同的 setup/system 值，volatile 项不声明持久默认。 */
     std::size_t processed = 0U;
     const std::size_t count = param_count();
     while (parameter_index_ < count &&
@@ -531,6 +823,7 @@ bool SdLogWriter::process_initial_parameters(bool defaults) noexcept
     if (parameter_index_ >= count) {
         parameter_index_ = 0U;
         if (defaults) {
+            initialize_active_generations();
             phase_ = SessionPhase::Active;
             last_sync_marker_us_ = hrt_absolute_time();
         } else {
@@ -543,7 +836,7 @@ bool SdLogWriter::process_initial_parameters(bool defaults) noexcept
 bool SdLogWriter::process_changed_parameters() noexcept
 {
     if (parameter_subscription_.update()) {
-        /* 与 PX4 write_changed_parameters 一致，从权威参数目录扫描 used+unsaved；
+        /* 与 PX4 write_changed_parameters 一致，从权威参数目录扫描 unsaved；
          * 新通知到达时从 0 重扫，避免上一轮有界切片漏掉更低索引的新变化。 */
         changed_parameter_scan_pending_ = true;
         changed_parameter_index_ = 0U;
@@ -661,22 +954,34 @@ bool SdLogWriter::append_sync_marker(std::uint64_t now_us) noexcept
 
 SdLogWriter::TopicResult SdLogWriter::append_topic(
     std::size_t topic_index, std::uint8_t instance,
-    std::uint64_t now_us) noexcept
+    std::uint64_t now_us, generated::SamplingKind kind,
+    bool newest_only) noexcept
 {
     const orb_metadata *const metadata = orb_get_topics()[topic_index];
-    if (metadata == ORB_ID(mavlink_log)) {
+    if (kind == generated::SamplingKind::Excluded ||
+        generated::topic_policy(topic_index).disposition !=
+            generated::TopicDisposition::Record) {
         return TopicResult::NoData;
     }
     const std::size_t slot =
         topic_index * uORB::kMaximumInstances + instance;
+    if (!uORB::orb_updated(metadata, instance, topic_generations_[slot])) {
+        /* 先确认确有新 generation，再用最坏情况预留 A/D/O 空间。否则 Ring
+         * 接近满时，一个从未发布或没有更新的 Topic 会制造假 dropout，并
+         * 阻塞排在其后的真实数据与停止边沿状态。 */
+        return TopicResult::NoData;
+    }
     const std::size_t name_length = std::strlen(metadata->o_name);
     const std::size_t add_size =
         sizeof(ulog_message_add_logged_s) -
         sizeof(ulog_message_add_logged_s::message_name) + name_length;
     const std::size_t data_size =
         sizeof(ulog_message_data_s) + metadata->o_size_no_padding;
+    const bool source_rate = kind == generated::SamplingKind::SourceRate;
     const std::size_t dropout_size =
-        dropout_start_us_ == 0U ? 0U : sizeof(ulog_message_dropout_s);
+        dropout_start_us_ == 0U && !source_rate
+            ? 0U
+            : sizeof(ulog_message_dropout_s);
     const std::size_t required = data_size + dropout_size +
         (message_ids_[slot] == kInvalidMessageId ? add_size : 0U);
     if (writer_.available_bytes() < required) {
@@ -685,20 +990,31 @@ SdLogWriter::TopicResult SdLogWriter::append_topic(
     }
 
     const std::uint64_t previous_generation = topic_generations_[slot];
-    if (!uORB::orb_copy(metadata, instance, topic_generations_[slot],
-                        message_buffer_ + sizeof(ulog_message_data_s))) {
+    const bool copied = newest_only
+                            ? uORB::orb_copy_latest(
+                                  metadata, instance, topic_generations_[slot],
+                                  message_buffer_ + sizeof(ulog_message_data_s))
+                            : source_rate
+                            ? uORB::orb_copy(
+                                  metadata, instance, topic_generations_[slot],
+                                  message_buffer_ + sizeof(ulog_message_data_s))
+                            : uORB::orb_copy_latest(
+                                  metadata, instance, topic_generations_[slot],
+                                  message_buffer_ + sizeof(ulog_message_data_s));
+    if (!copied) {
         return TopicResult::NoData;
     }
 
-    if (previous_generation != 0U &&
-        topic_generations_[slot] > previous_generation + 1U) {
-        const std::uint64_t gap = topic_generations_[slot] -
-                                  previous_generation - 1U;
-        const std::uint64_t total =
-            static_cast<std::uint64_t>(message_gaps_) + gap;
-        message_gaps_ = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(
-                total, std::numeric_limits<std::uint32_t>::max()));
+    const bool source_generation_gap = source_rate &&
+        ((previous_generation == 0U && topic_generations_[slot] > 1U) ||
+         (topic_generations_[slot] > previous_generation &&
+          topic_generations_[slot] - previous_generation > 1U));
+    if (source_generation_gap) {
+        /* source-rate generation 被队列覆盖才是真实丢失。用该 Topic 上次成功写入
+         * 的单调时刻作为 dropout 起点；固定频率主动跳过的 generation 永不走
+         * 此分支，因而不会把产品降采样伪装成 SD 性能故障。 */
+        const std::uint64_t lost_since = last_topic_write_us_[slot];
+        note_dropout(lost_since != 0U ? lost_since : now_us);
     }
 
     if (message_ids_[slot] == kInvalidMessageId) {
@@ -727,6 +1043,7 @@ SdLogWriter::TopicResult SdLogWriter::append_topic(
     if (!write_active_message(message_buffer_, data_size, now_us)) {
         return TopicResult::Blocked;
     }
+    last_topic_write_us_[slot] = now_us;
     return TopicResult::Written;
 }
 
@@ -746,8 +1063,30 @@ bool SdLogWriter::drain_topics(std::uint64_t now_us) noexcept
         const std::uint8_t instance = static_cast<std::uint8_t>(
             slot % uORB::kMaximumInstances);
         const orb_metadata *metadata = orb_get_topics()[topic_index];
-        if (metadata == ORB_ID(mavlink_log) ||
+        const generated::SamplingPolicy sampling =
+            generated::sampling_policy(topic_index, profile_);
+        if (sampling.kind == generated::SamplingKind::Excluded ||
             instance >= metadata->max_instances) {
+            continue;
+        }
+
+        if (sampling.kind == generated::SamplingKind::FixedRate) {
+            const std::uint64_t last = last_topic_write_us_[slot];
+            if (last != 0U && now_us >= last &&
+                now_us - last < sampling.interval_us) {
+                continue;
+            }
+            const TopicResult result = append_topic(
+                topic_index, instance, now_us, sampling.kind);
+            if (result == TopicResult::Written) {
+                ++written;
+            } else if (result == TopicResult::Blocked) {
+                scan_cursor_ = slot;
+                return false;
+            } else if (result == TopicResult::Failed) {
+                fail_stream("Topic message ID or size");
+                return false;
+            }
             continue;
         }
 
@@ -755,9 +1094,9 @@ bool SdLogWriter::drain_topics(std::uint64_t now_us) noexcept
             metadata->o_queue, kMaximumMessagesPerInstancePerRun);
         for (std::size_t index = 0U;
              index < burst && written < kMaximumTopicMessagesPerRun;
-             ++index) {
+            ++index) {
             const TopicResult result = append_topic(
-                topic_index, instance, now_us);
+                topic_index, instance, now_us, sampling.kind);
             if (result == TopicResult::Written) {
                 ++written;
             } else if (result == TopicResult::NoData) {
@@ -774,44 +1113,222 @@ bool SdLogWriter::drain_topics(std::uint64_t now_us) noexcept
     return true;
 }
 
+void SdLogWriter::initialize_active_generations() noexcept
+{
+    /* Definitions 期间发布的数据不在“完整回放”保证范围内。进入 Active 的
+     * 瞬间把所有 source-rate 订阅游标对齐到当前 newest，之后每个 generation
+     * 才逐项排空；这样不会把仅存于八槽历史窗口的启动旧样本冒充 Active 数据。 */
+    for (std::size_t topic_index = 0U; topic_index < ORB_TOPICS_COUNT;
+         ++topic_index) {
+        const generated::SamplingPolicy sampling =
+            generated::sampling_policy(topic_index, profile_);
+        if (sampling.kind != generated::SamplingKind::SourceRate) {
+            continue;
+        }
+        const orb_metadata *metadata = orb_get_topics()[topic_index];
+        for (std::uint8_t instance = 0U; instance < metadata->max_instances;
+             ++instance) {
+            const std::size_t slot =
+                topic_index * uORB::kMaximumInstances + instance;
+            (void)uORB::orb_copy_latest(
+                metadata, instance, topic_generations_[slot],
+                message_buffer_ + sizeof(ulog_message_data_s));
+        }
+    }
+}
+
+bool SdLogWriter::flush_stop_topics(std::uint64_t now_us) noexcept
+{
+    /* actuator_armed/vehicle_control_mode/vehicle_status 的 flush 标志来自生成
+     * Topic 合同。先逐 generation 写这些锁定边沿状态，再处理参数、文本和普通
+     * 扫描；若 Ring 已满，write_active_message 会留下真实 dropout，而不会在
+     * producer 停止后从非 storage 线程直接操作 FatFs。 */
+    for (std::size_t topic_index = 0U; topic_index < ORB_TOPICS_COUNT;
+         ++topic_index) {
+        const auto &policy = generated::topic_policy(topic_index);
+        const generated::SamplingPolicy sampling =
+            generated::sampling_policy(topic_index, profile_);
+        if (!policy.flush_on_stop ||
+            sampling.kind == generated::SamplingKind::Excluded) {
+            continue;
+        }
+        const orb_metadata *metadata = orb_get_topics()[topic_index];
+        for (std::uint8_t instance = 0U; instance < metadata->max_instances;
+             ++instance) {
+            /* 停止合同要求的是“尚未记录的最新状态”，不是在关文件前追赶整段
+             * 历史队列。保留 source-rate 的 generation gap 检测，但直接复制
+             * newest，确保 disarm/status 边沿优先于普通 Topic 落盘。 */
+            const TopicResult result = append_topic(
+                topic_index, instance, now_us,
+                generated::SamplingKind::SourceRate, true);
+            if (result == TopicResult::Blocked) {
+                return false;
+            }
+            if (result == TopicResult::Failed) {
+                fail_stream("stop-edge Topic");
+                return false;
+            }
+        }
+    }
+    (void)process_changed_parameters();
+    (void)append_text_records(now_us);
+    return true;
+}
+
+bool SdLogWriter::gps_candidate(const sensor_gps_s &gps,
+                                std::uint64_t now_us,
+                                std::uint64_t &boot_utc_us) const noexcept
+{
+    boot_utc_us = 0U;
+    if (gps.timestamp == 0U || gps.time_utc_usec < kUtc2020Us ||
+        gps.time_utc_usec > kMavlinkMaximumUtcUs) {
+        return false;
+    }
+
+    std::uint64_t measurement_monotonic_us = gps.timestamp;
+    if (gps.timestamp_time_relative >= 0) {
+        const std::uint64_t relative = static_cast<std::uint64_t>(
+            gps.timestamp_time_relative);
+        if (measurement_monotonic_us >
+            std::numeric_limits<std::uint64_t>::max() - relative) {
+            return false;
+        }
+        measurement_monotonic_us += relative;
+    } else {
+        const std::uint64_t relative = static_cast<std::uint64_t>(
+            -static_cast<std::int64_t>(gps.timestamp_time_relative));
+        if (measurement_monotonic_us < relative) {
+            return false;
+        }
+        measurement_monotonic_us -= relative;
+    }
+    if (measurement_monotonic_us > now_us ||
+        now_us - measurement_monotonic_us > kUtcSampleMaximumAgeUs ||
+        gps.time_utc_usec < measurement_monotonic_us) {
+        return false;
+    }
+
+    /* GPS 给出的 UTC 对应 measurement_monotonic_us，因此启动映射公式为
+     * boot_utc_us = time_utc_usec - (timestamp + timestamp_time_relative)。
+     * 全程使用 us；任何加减溢出、2020 年前值或 MAVLink uint32 秒上限外值
+     * 都只丢弃候选，不停止 ULog。 */
+    boot_utc_us = gps.time_utc_usec - measurement_monotonic_us;
+    if (boot_utc_us > std::numeric_limits<std::uint64_t>::max() - now_us) {
+        return false;
+    }
+    const std::uint64_t current_utc_us = boot_utc_us + now_us;
+    if (current_utc_us < kUtc2020Us ||
+        current_utc_us > kMavlinkMaximumUtcUs) {
+        return false;
+    }
+
+    if (writer_.ready()) {
+        const dima::platform::LogSessionContext context =
+            writer_.session_context();
+        if (context.start_monotonic_us == 0U ||
+            context.start_monotonic_us > now_us ||
+            boot_utc_us > std::numeric_limits<std::uint64_t>::max() -
+                              context.start_monotonic_us) {
+            return false;
+        }
+        const std::uint64_t start_utc_us =
+            boot_utc_us + context.start_monotonic_us;
+        if (start_utc_us < kUtc2020Us ||
+            start_utc_us > kMavlinkMaximumUtcUs) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void SdLogWriter::publish_time_reference(std::uint64_t boot_utc_us) noexcept
+{
+    confirmed_boot_utc_us_ = boot_utc_us;
+    utc_confirmed_ = true;
+    pending_utc_candidate_ = false;
+    dima::platform::LogTimeReference reference{};
+    reference.boot_utc_us = boot_utc_us;
+    reference.valid = true;
+    /* 这里只向 SPSC writer 发布 RAM 快照；真正的 meta.bin 追加固定由
+     * wq:storage 调用 LogFileStore::update_log_time()。 */
+    writer_.update_time_reference(reference);
+}
+
+void SdLogWriter::process_gps_time(std::uint64_t now_us) noexcept
+{
+    for (std::size_t count = 0U; count < 4U && gps_subscription_.update();
+         ++count) {
+        std::uint64_t candidate = 0U;
+        if (!gps_candidate(gps_subscription_.get(), now_us, candidate)) {
+            continue;
+        }
+
+        if (utc_confirmed_) {
+            const std::uint64_t difference =
+                candidate >= confirmed_boot_utc_us_
+                    ? candidate - confirmed_boot_utc_us_
+                    : confirmed_boot_utc_us_ - candidate;
+            if (difference > kUtcJumpToleranceUs &&
+                (last_utc_jump_warning_us_ == 0U ||
+                 now_us < last_utc_jump_warning_us_ ||
+                 now_us - last_utc_jump_warning_us_ >=
+                     kUtcWarningIntervalUs)) {
+                /* 已确认后超过 2 s 的 GPS 跳变不能改写既有文件日期，否则同一
+                 * 会话会出现两套 UTC；仅限频告警，日志继续使用首次确认映射。 */
+                PX4_WARN("ULog ignored GPS UTC jump (%llu us)",
+                         static_cast<unsigned long long>(difference));
+                last_utc_jump_warning_us_ = now_us;
+            }
+            continue;
+        }
+
+        if (!pending_utc_candidate_) {
+            pending_boot_utc_us_ = candidate;
+            pending_utc_candidate_ = true;
+            continue;
+        }
+        const std::uint64_t difference =
+            candidate >= pending_boot_utc_us_
+                ? candidate - pending_boot_utc_us_
+                : pending_boot_utc_us_ - candidate;
+        if (difference <= kUtcConfirmationToleranceUs) {
+            publish_time_reference(candidate);
+        } else {
+            /* 不连续候选重新作为第一点；必须再有下一份一致样本才能确认。 */
+            pending_boot_utc_us_ = candidate;
+        }
+    }
+}
+
 void SdLogWriter::Run()
 {
-    if (!running_ || !writer_.ready()) {
+    if (!running_ || stream_failed_ || !recording_intent_) {
         return;
     }
 
     const std::uint64_t now = hrt_absolute_time();
+    process_gps_time(now);
+    if (!writer_.ready()) {
+        return;
+    }
+
     const std::uint32_t generation = writer_.session_generation();
     if (generation == 0U) {
         return;
     }
     if (generation != writer_session_generation_) {
-        reset_session(generation, now);
+        reset_session(generation, writer_.session_context());
     }
 
-    switch (phase_) {
-    case SessionPhase::Header:
-        if (write_file_header(now)) {
-            phase_ = SessionPhase::Formats;
-        }
+    if (phase_ != SessionPhase::Active) {
+        advance_definition_phase();
         return;
-
-    case SessionPhase::Formats:
-        process_formats();
-        return;
-
-    case SessionPhase::Parameters:
-        (void)process_initial_parameters(false);
-        return;
-
-    case SessionPhase::ParameterDefaults:
-        (void)process_initial_parameters(true);
-        return;
-
-    case SessionPhase::Active:
-        break;
     }
 
+    if (!write_late_boot_time()) {
+        note_dropout(now);
+        return;
+    }
     if (!process_changed_parameters()) {
         note_dropout(now);
         return;
