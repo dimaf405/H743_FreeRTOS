@@ -49,6 +49,24 @@ bool is_fixed_parameter(const char *name) noexcept
     return false;
 }
 
+bool is_flight_mode_slot_parameter(const char *name) noexcept
+{
+    if (name == nullptr) {
+        return false;
+    }
+    const param_t handle = param_find_no_notification(name);
+    if (handle == PARAM_INVALID) {
+        return false;
+    }
+    for (const auto &slot :
+         dima::generated::parameters::kFlightModeSlotParameters) {
+        if (param_handle(slot.parameter) == handle) {
+            return true;
+        }
+    }
+    return false;
+}
+
 int load_mutable_parameter(const char *name, param_type_t type,
                            const void *value, void *context) noexcept
 {
@@ -63,6 +81,20 @@ int load_mutable_parameter(const char *name, param_type_t type,
     auto &filtered = *static_cast<FilteredLoadContext *>(context);
     if (is_fixed_parameter(name)) {
         return 0;
+    }
+    if (is_flight_mode_slot_parameter(name)) {
+        if (type != PARAM_TYPE_INT32) {
+            return -EINVAL;
+        }
+        std::int32_t decoded_value = 0;
+        std::memcpy(&decoded_value, value, sizeof(decoded_value));
+        if (!dima::generated::parameters::
+                flight_mode_slot_value_allowed(decoded_value)) {
+            // 旧固件可能保存 Hold/Return/Offboard 等同名槽值。只跳过这一项，
+            // 让参数核心保留生成默认的预留值，同时继续恢复快照内其余配置；
+            // 禁止因一个退役模式丢弃整份 RC、传感器或导航参数。
+            return 0;
+        }
     }
 
     return filtered.visitor(name, type, value, filtered.visitor_context);

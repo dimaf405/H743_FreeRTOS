@@ -213,6 +213,19 @@ MavlinkParameters::fixed_parameter_constraint(param_t param) noexcept
     return nullptr;
 }
 
+const MavlinkParameters::FlightModeSlotParameter *
+MavlinkParameters::flight_mode_slot_parameter(param_t param) noexcept
+{
+    namespace contract = dima::generated::parameters;
+    for (const FlightModeSlotParameter &slot :
+         contract::kFlightModeSlotParameters) {
+        if (param_handle(slot.parameter) == param) {
+            return &slot;
+        }
+    }
+    return nullptr;
+}
+
 bool MavlinkParameters::supported_serial_baud(std::int32_t value) noexcept
 {
     // 可选波特率由 module_serial.yaml 枚举并进入 QGC Metadata；运行时不再
@@ -408,11 +421,21 @@ bool MavlinkParameters::write_value_allowed(param_t param,
                                             float wire_value) noexcept
 {
     const char *const name = param_name(param);
-    // PX4/APM 把 min/max/enum metadata 作为 GCS 指引，不作为通用协议写门；这里拒绝
-    // 非有限 float、生成合同的固定值及串口结构约束，输出专属校验与禁武装仍归消费者。
+    // PX4/APM 把普通 min/max/enum metadata 作为 GCS 指引，不作为通用协议写门；
+    // 这里额外闭锁生成合同中的固定值、模式槽离散集合及串口结构约束，避免旧版
+    // QGC 或手工 PARAM_SET 重新写入板端从未实现的模式。
     if (param_type(param) == PARAM_TYPE_FLOAT &&
         !std::isfinite(wire_value)) {
         return false;
+    }
+    if (flight_mode_slot_parameter(param) != nullptr) {
+        if (param_type(param) != PARAM_TYPE_INT32) {
+            return false;
+        }
+        std::int32_t value = 0;
+        std::memcpy(&value, &wire_value, sizeof(value));
+        return dima::generated::parameters::
+            flight_mode_slot_value_allowed(value);
     }
     if (name != nullptr && std::strcmp(name, "RC_INPUT_PROTO") == 0) {
         std::int32_t protocol = 0;

@@ -40,8 +40,13 @@ public:
 private:
     using FixedParameterConstraint =
         dima::generated::parameters::FixedParameterConstraint;
+    using FlightModeSlotParameter =
+        dima::generated::parameters::FlightModeSlotParameter;
 
     static const FixedParameterConstraint *fixed_parameter_constraint(
+        param_t param) noexcept;
+
+    static const FlightModeSlotParameter *flight_mode_slot_parameter(
         param_t param) noexcept;
 
     static bool supported_serial_baud(std::int32_t value) noexcept;
