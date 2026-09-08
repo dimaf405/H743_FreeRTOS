@@ -60,7 +60,7 @@ Linker/、make/、tools/        链接、构建、签名和升级工具（projec
 docs/                         计划、架构、ADR、来源和维护文档
 ```
 
-已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/system/Clock.cpp`。Parameter/Mission 共用的原子 FileStorage 与 FatFs file backend、FatFs disk ABI 与 H743 SDMMC、`flash/` raw Flash、USB Console 与 `usb/` transport 均已拆分。SBUS、UM982、ICM-42688-P 和 DroneCAN 的协议/设备策略位于 `lib/protocols` 与 `drivers`，`platform/stm32h7` 只保留通用总线配置、读写、中断和统计。PX4 v1.17.0 EKF2 已按 N1 单实例闭包落入 `Dima/modules/ekf2` 与 `Dima/lib/{ekf2,matrix,mathlib,geo,lat_lon_alt,world_magnetic_model}`；Pure Pursuit、Speed PI、Heading P、YawRate PI、停车确认和原地转向已有正式运行消费者，Commander 只在任务、参数、EKF、AutoMode 与 Armed 条件同时成立时接受 `MAV_CMD_MISSION_START`。源码和 Windows 构建通过不代表 QGC/SD/目标板/实车动态验收通过。
+已退役的顶层 `App/` 已迁入 `Dima/`。C/C++ Runtime 位于 `Dima/platform/freertos/libc`；公共时间契约位于 `Dima/platform/api/Time.hpp`，TIM2 实现位于 `Dima/platform/stm32h7/system/Clock.cpp`。Parameter/Mission 共用的原子 FileStorage 与 FatFs file backend、FatFs disk ABI 与 H743 SDMMC、`flash/` raw Flash、USB Console 与 `usb/` transport 均已拆分。SBUS、UM982、ICM-42688-P 和 DroneCAN 的协议/设备策略位于 `lib/protocols` 与 `drivers`，`platform/stm32h7` 只保留通用总线配置、读写、中断和统计。PX4 v1.17.0 EKF2 已按 N1 单实例闭包落入 `Dima/modules/ekf2` 与 `Dima/lib/{ekf2,matrix,mathlib,geo,lat_lon_alt,world_magnetic_model}`；Pure Pursuit、Speed PI、Heading P、YawRate PI、停车确认和原地转向已有正式运行消费者。Commander 只在任务、EKF、AutoMode 状态与 Armed 条件同时成立时接受 `MAV_CMD_MISSION_START`；控制器调参不参与模式切换，配置无效时由运行链停波。源码和 Windows 构建通过不代表 QGC/SD/目标板/实车动态验收通过。
 
 ## 3. 依赖规则
 
@@ -167,11 +167,11 @@ AUTO: Mission + vehicle_local_position + vehicle_odometry health
 
 - Manual 只允许 `SOURCE_MANUAL + MODE_NORMALIZED_AXES`，AUTO/Hold 只允许 `SOURCE_NAVIGATION + MODE_SPEED_YAW_RATE`；非当前模式的无效帧只更新自己的来源缓存。模式切换后请求必须晚于 `nav_state_timestamp`，任何来源都不得绕过差速混控直接访问 `actuator_motors` 或 PWM。
 - Commander 的 `AUTO_MISSION` 固定投影 auto/position/velocity/attitude/rates，`AUTO_LOITER` 保持同一控制标志并在估计健康时发布物理量零请求；Manual、AUTO、Termination 三套逐字段投影在 Commander、RoverDifferential 和 MotorOutput 中精确匹配。MotorOutput 只有在同代安全快照、有效 Motor 命令和无 Kill/Termination/Failsafe 时允许 `ACTIVE`。
-- AUTO 外环同时要求 `vehicle_local_position` 的 xy/vxy/heading/global/fresh/non-dead-reckoning 闭包，以及 `vehicle_odometry.angular_velocity[2]` 的有限值、新鲜度和 reset 代际；导航请求的 `timestamp_sample` 取两路估计输入中最旧样本。Pure Pursuit 的动态前视距离使用 NED 水平地速模长 `hypot(v_body_x,v_body_y)`，Speed PI 才使用带车体前向符号的 `sign(v_body_x)×hypot(v_body_x,v_body_y)`；这两个量的物理语义不同，纯横向运动不得把前视距离错误压到最小值。四环原子参数快照还要求 `RO_YAW_RATE_TH(rad/s) < RO_YAW_P × RD_TRANS_TRN_DRV(rad)`，确保 SpotTurning 在进入退出滞回前仍能生成未被死区归零的 yaw-rate 目标；不满足时保持 AUTO 锁闭。任一路 reset、失鲜、样本时间回退或输出无效都先清控制状态，AutoMode 固定先发布同代故障状态、再发布全 NaN 请求，由 Commander 降级 Hold。100 Hz 内环再次复核同一位置/速度/航向/yaw-rate 健康闭包，先计算 steering，再限制 `|longitudinal|≤1-|steering|`；原地转向保持 longitudinal 为零，左右轮换向继续经过 `MOT_REV_DELAY`。
+- AUTO 外环同时要求 `vehicle_local_position` 的 xy/vxy/heading/global/fresh/non-dead-reckoning 闭包，以及 `vehicle_odometry.angular_velocity[2]` 的有限值、新鲜度和 reset 代际；导航请求的 `timestamp_sample` 取两路估计输入中最旧样本。Pure Pursuit 的动态前视距离使用 NED 水平地速模长 `hypot(v_body_x,v_body_y)`，Speed PI 才使用带车体前向符号的 `sign(v_body_x)×hypot(v_body_x,v_body_y)`；这两个量的物理语义不同，纯横向运动不得把前视距离错误压到最小值。四环原子参数快照还要求 `RO_YAW_RATE_TH(rad/s) < RO_YAW_P × RD_TRANS_TRN_DRV(rad)`，确保 SpotTurning 在进入退出滞回前仍能生成未被死区归零的 yaw-rate 目标；不满足时保持 `AUTO_MISSION` 状态但发布全 NaN 请求并物理停波，不参与模式切换。估计器 reset、失鲜、样本时间回退或输出无效会先清控制状态，再由 Commander 降级 Hold。100 Hz 内环再次复核同一位置/速度/航向/yaw-rate 健康闭包，先计算 steering，再限制 `|longitudinal|≤1-|steering|`；原地转向保持 longitudinal 为零，左右轮换向继续经过 `MOT_REV_DELAY`。
 - S1～S6 只允许 Disabled、MotorRight、MotorLeft；默认全部 Disabled，普通 PWM 产品包络统一为 500～2500 us，默认 `MIN/CENT/MAX` 仍为 1000/1500/2000 us。参数协议保留普通有限原值，MotorOutput 在完整 Disarmed 快照中消费校验：未知 `FUNC` 或无效脉宽配置只禁用对应通道，`MIN/MAX` 反序只交换运行时有效端点。普通 Disarmed 在其余有效通道输出各自 `CENT`；至少一右一左仍有效时允许解锁，映射不完整时仅拒绝解锁。无任何有效通道、Kill、Termination、Failsafe、Armed 命令超时、发布失败、后端 Retry/Fault、关闭和 watchdog 复位路径进入 `HARD_SAFE_OFF`，停止 TIM5/TIM8、CCR 清零并拉低六路 GPIO。
-- MotorOutput 分离“禁止 ACTIVE”和“必须 HARD_SAFE_OFF”观察锁存：普通 Disarm 的任一新 Topic 立即阻断 ACTIVE，完整一致快照后才允许 neutral；任一 Kill/Termination/Failsafe Topic 先到即同时禁止 neutral。只有当前 Commander 代际之后仍新鲜到达、12 路精确全 NaN 的 `actuator_motors` 帧，在物理停波成功后标记为 `CONTROL_INHIBITED`；旧有限命令、生产者超时、结构错误仍是普通 `HARD_SAFE_OFF`，Retry/Fault 保持独立故障态。Commander 只在 `AUTO_MISSION` 正准备因同代导航故障切 Hold，或 `AUTO_LOITER` 持续收到同 mission_id/count 的参数、EKF、reset、时间回退、非有限输出故障报告时接受该状态并保持 Armed；报告停更、任务/模式错误、后端/映射故障、非零 PWM 和普通 Hard Safe Off 仍强制 Disarm。RC Loss 继续固定 Disarm，Kill 保持 Kill→Disarm，Unkill 不自动重新 Arm，Termination 的不可恢复停波优先级不变。
+- MotorOutput 分离“禁止 ACTIVE”和“必须 HARD_SAFE_OFF”观察锁存：普通 Disarm 的任一新 Topic 立即阻断 ACTIVE，完整一致快照后才允许 neutral；任一 Kill/Termination/Failsafe Topic 先到即同时禁止 neutral。只有当前 Commander 代际之后仍新鲜到达、12 路精确全 NaN 的 `actuator_motors` 帧，在物理停波成功后标记为 `CONTROL_INHIBITED`；旧有限命令、生产者超时、结构错误仍是普通 `HARD_SAFE_OFF`，Retry/Fault 保持独立故障态。Commander 在 `AUTO_MISSION` 参数未就绪时保持该模式并接受同代停波；其他导航故障等待切 Hold，或 `AUTO_LOITER` 持续收到同 mission_id/count 的故障报告时，也可接受该状态并保持 Armed。报告停更、任务/模式错误、后端/映射故障、非零 PWM 和普通 Hard Safe Off 仍强制 Disarm。RC Loss 继续固定 Disarm，Kill 保持 Kill→Disarm，Unkill 不自动重新 Arm，Termination 的不可恢复停波优先级不变。
 - `board_init()` 在调度器和产品 Runtime 之前确认 TIM5/TIM8 已停止、CCR 为 0、六路 GPIO 为低；Application shutdown 只有在 MotorOutput 停止且 `safe_off_confirmed()` 成功后才能释放 Runtime 资源。
-- BootHealth 除 Commander 三 Topic 外还要求 `actuator_output_status` sequence 严格前进、新鲜且与当前安全状态一致：健康 Disarmed 为合法 `DISARMED_NEUTRAL` 帧，Armed 通常为命令有效的 `ACTIVE` 帧，`AUTO_LOITER` 可接受映射完整、控制失效流仍新鲜且六路全零的 `CONTROL_INHIBITED`，Kill/Termination/Failsafe 只能是六路全零的 `HARD_SAFE_OFF`。镜像确认仍只允许健康 Disarmed、无 Kill/Termination/Failsafe 且输出为 neutral 或 hard-off 的完整 5 秒窗口；确认完成后 BootHealth 继续推进运行期健康 generation。
+- BootHealth 除 Commander 三 Topic 外还要求 `actuator_output_status` sequence 严格前进、新鲜且与当前安全状态一致：健康 Disarmed 为合法 `DISARMED_NEUTRAL` 帧，Armed 通常为命令有效的 `ACTIVE` 帧；`AUTO_MISSION` 参数停波或 `AUTO_LOITER` 导航降级可接受映射完整、控制失效流仍新鲜且六路全零的 `CONTROL_INHIBITED`，具体原因由 Commander 同代复核。Kill/Termination/Failsafe 只能是六路全零的 `HARD_SAFE_OFF`。镜像确认仍只允许健康 Disarmed、无 Kill/Termination/Failsafe 且输出为 neutral 或 hard-off 的完整 5 秒窗口；确认完成后 BootHealth 继续推进运行期健康 generation。
 
 ## 5. 内存与实时边界
 
@@ -181,7 +181,9 @@ AUTO: Mission + vehicle_local_position + vehicle_odometry health
 - ISR、控制循环、EKF2 更新、Arming/Failsafe、Mixer 和 PWM 输出禁止分配。
 - 通用 Heap 已固定为 D1 AXI SRAM 中 256 KiB 的 `.dima_heap`。
 - D2 普通内存与 SRAM3 固定 32 KiB `.dima_dma` 分离；MPU 将 `0x30040000～0x30047FFF` 配置为 Normal、Shareable、Non-cacheable、XN，DMA 只接受 `DmaBufferView` 或平台 bounce buffer。
-- 48 KiB 固定任务栈池位于 D1 的 `.dima_task_pool`，与 256 KiB `.dima_heap` 分离；DTCM 用于普通 data/bss 与同 Bank Flash 编程例程，不加入通用 Heap。
+- 48 KiB 固定任务栈池位于 D1 的 `.dima_task_pool`，与 256 KiB `.dima_heap` 分离；普通 `.data/.bss` 位于 D2 SRAM1/2，DTCM 保留同 Bank Flash 编程例程和 MSP 空间，不加入通用 Heap。
+- `LogService` 及其 64 KiB ULog Ring 使用独立 `.dima_sram_bss`，放在 D1 固定 heap/task pool 之后；组合根持有唯一静态实例引用，启动汇编先按链接边界清零，再允许构造。Application 与 MCUboot 共用该清零流程，后者当前提供空区间。
+- D1 日志与 D2 普通数据沿用相同的默认 SRAM 缓存属性；日志生产、Ring 容量、原子发布、写块上限与 work queue 调度不随存储位置改变。SD 块端口使用 IDMA：D1 对齐缓冲可以直接传输，其他来源经独立 8 KiB D1 双缓冲；UART/SPI DMA 仍位于 SRAM3。缓存或总线争用对 deadline/dropout 的影响需要板端数据验证。
 - D3 `0x38000000～0x3800FFFF` 为 non-cacheable 跨复位诊断区。
 - 已启用 malloc failed hook、Heap 统计和内存故障 Event；任务栈高水位待目标板采集。
 - C++ exceptions 和 RTTI 继续关闭。
@@ -201,7 +203,7 @@ AUTO: Mission + vehicle_local_position + vehicle_odometry health
 - 每次 load 都重新验证有效 payload 长度、条目 CRC 和最终 commit；最新记录损坏时回退到更早有效记录。FlashFS 物理格式不兼容 ParameterJournal v1，首次部署必须执行参数导出/迁移，初始化失败不得自动擦除旧扇区。BusFault 仅在活动安全读窗口、分区地址和 Bank 2 DBECC 三条件同时成立时恢复。
 - Estimator 固定为 PX4 v1.17.0 单实例 EKF2，绑定 IMU/Mag/GNSS instance 0，永久运行于 `wq:estimator`；不保留 Selector、多实例、`EKF2_EN` 或运行时装卸。编译闭包只启用 GNSS position/height/velocity/yaw、Mag Automatic、Gravity、GSF yaw、bias 和 predictor，排除 Wind、Airspeed、Barometer、Flow、Range/Terrain fusion、EV、Sideslip、Drag、Aux 与 Wheel。AUTO 只消费公开的 `vehicle_local_position` 与 `vehicle_odometry`，不访问 EKF 内部对象；EKF 故障只使 AUTO 降级 Hold/失效请求，不反向门控 Manual、BootHealth、IWDG 或 PWM 安全链。
 - Arming 状态与 PWM 外设是否启动分离；RoverDifferential 只发布两路双向 Motor 命令，最终六路输出必须再经过 MotorOutput 的独立 Failsafe、命令新鲜度和板级 safe-off Gate。
-- 控制来源包括 RC Manual 与持久任务 AUTO；`COM_RC_IN_MODE` 仍只接受 `0=RC only`，AUTO 不是第二种 RC 输入。`SET_MODE` 只接受 PX4 Manual 与 AUTO Mission 两种 custom mode；其中 AUTO Mission 只是 QGC 兼容入口，与显式 `MAV_CMD_MISSION_START` 共用同一个 Commander 事务，必须先 Armed，再通过任务持久化、参数、EKF 与 AutoMode 门控，绝不隐式 Arm。Armed 期间收到的新控制参数冻结为 pending，不改变正在执行任务的已验证配置；pending 尚未在 Disarmed 状态原子应用和校验时，拒绝新的 Mission Start。`AUTO_LOITER` 只由完成或导航故障进入。首版不含倒车航段、`DO_CHANGE_SPEED`、RTL、避障或地理围栏。RC 丢失策略固定 `NAV_RCL_ACT=6`（Disarm），GCS 丢失策略固定 `NAV_DLL_ACT=0`（Disabled），因此 QGC 断链不终止已冻结任务。
+- 控制来源包括 RC Manual 与持久任务 AUTO；`COM_RC_IN_MODE` 仍只接受 `0=RC only`，AUTO 不是第二种 RC 输入。`SET_MODE` 只接受 PX4 Manual 与 AUTO Mission 两种 custom mode；其中 AUTO Mission 只是 QGC 兼容入口，与显式 `MAV_CMD_MISSION_START` 共用同一个 Commander 事务，必须先 Armed，再通过任务持久化、EKF 与 AutoMode 状态门控，绝不隐式 Arm。对齐 PX4 v1.17，`RO_*`、`RD_*`、`PP_*` 参数及其 pending 状态不参与 Mission 切换；Armed 期间的新控制参数仍冻结到 Disarmed 原子应用，不扰动当前控制代。配置不可用时保持 `AUTO_MISSION` 但停波，估计器或其他导航故障才进入 `AUTO_LOITER`。首版不含倒车航段、`DO_CHANGE_SPEED`、RTL、避障或地理围栏。RC 丢失策略固定 `NAV_RCL_ACT=6`（Disarm），GCS 丢失策略固定 `NAV_DLL_ACT=0`（Disabled），因此 QGC 断链不终止已冻结任务。
 - MAVLink HEARTBEAT 从 Commander 的 `vehicle_status`/`vehicle_control_mode` 投影 PX4 custom mode，准确区分 Manual、AUTO Mission、AUTO Loiter 与 Termination；AUTO 同时设置 `MAV_MODE_FLAG_AUTO_ENABLED`。Mission 协议只接收 `MAV_MISSION_TYPE_MISSION` 与 `MAV_CMD_NAV_WAYPOINT`；`MISSION_ITEM_INT` 上传兼容 QGC 使用的 `GLOBAL/GLOBAL_RELATIVE_ALT` 及对应 `_INT` frame，x/y 始终按消息定义解释为 `1e-7 deg`，进入任务仓库前统一规范化为两种 `_INT` frame。协议支持上传/回读/清空/设置当前、`MISSION_CURRENT` 与一次性 `MISSION_ITEM_REACHED`；到达事件只允许由执行态保持 `Active → Active` 的索引推进产生，Disarm/Manual 后的人工前移不得伪造到达。QGC 对设置当前项先尝试 `MAV_CMD_DO_SET_MISSION_CURRENT(224)`，产品明确返回 unsupported 后由 QGC 回退到 `MISSION_SET_CURRENT`；PX4 同名 `VehicleCommand.msg` 保持与 pinned upstream 逐字一致，不为兼容入口手写命令常量。参数、消息和路由只从权威 YAML/`.msg` 生成。
 
 ## 7. Flash、构建与恢复边界
@@ -243,3 +245,11 @@ make verify
 ```
 
 操作和恢复要求见 [MCUboot USB 升级与恢复手册](MCUBOOT_USB_RECOVERY_ZH.md)。完整迁移路线见 [Dima Rover 移植计划](DIMA_ROVER_PORTING_PLAN_ZH.md)，阶段 0 实测资源见 [Dima Rover 资源基线](DIMA_RESOURCE_BASELINE_ZH.md)，当前执行器链资源和板测边界见 [阶段 5 资源与验收基线](DIMA_PHASE5_RESOURCE_BASELINE_ZH.md)。
+
+## SDMMC IDMA 与 CPU 可观测性
+
+板级 disk_* 保持 FatFs C ABI，CPP 端口独占 SDMMC1 命令、IDMA、缓冲和强 IRQ。IRQ 优先级为 7，只锁存事件并唤醒平台 Signal；CMD12/CMD13 的响应解析与卡忙等待位于任务。运行期读写/CTRL_SYNC 的分块共用 500 ms 截止；失败先停止/复位外设再撤销会话，禁止旧 DMA 在缓冲释放后继续访问。识卡与电气初始化沿用 HAL，不把其总时长称为 500 ms。
+
+两个 4 KiB 半区组成 8 KiB、8 KiB 对齐、NOLOAD 的 .dima_sd_dma，MPU Region 5 为 Normal/Shareable/Non-cacheable/XN。每次硬件事务最多两半区，半区 0 结束后硬件不会回绕重用；CPU 可以处理已释放半区，延迟调度只降低流水重叠。直接路径仅接收独占 cache line 的 D1 扇区数据，TX clean，RX 先 clean-invalidate、完成或硬件终止后 invalidate。内存余量按最终地址跨度计入 MPU 对齐空隙。
+
+TaskRuntime 提供 CPU 总览和任务明细快照，复用 TIM2 1 MHz 时钟与 FreeRTOS 原生运行时间统计；保持格式化统计关闭且不动态分配。SYS_STATUS.load 使用现有字段上报 0–1000 千分比，无效窗口保留上次有效值。任务 CPU 归账与板级 SD IRQ 累计/峰值耗时分开，不能用包含阻塞的 WorkQueue Run 墙钟时间宣称 CPU 消耗下降。新代码与 Windows 构建证据不替代板端读回、拔卡和 CPU 对比。

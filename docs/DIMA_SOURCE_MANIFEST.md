@@ -116,15 +116,15 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `src/lib/parameters/flashparams/` | `Dima/middleware/parameters/flashparams/` | 改为 Parameter enumerator/visitor 与 TinyBSON Buffer 之间的适配，不直接访问文件系统 | ADAPTED |
 | PX4 Parameter Autosave 与 Runtime cache | `Dima/middleware/parameters/` | 300 ms 合并、保存间隔至少 2 s、失败最多重试 3 次；ParameterService/Autosave 位于独立 `wq:storage`，不得以 SD 同步 I/O 阻塞 MAVLink；`Param<T>` 构造无 Core 副作用，每次 start bind，每次 shutdown 清 ready/used/unsaved/value cache、callback 和动态 Layer | ADAPTED / RUNTIME LIFECYCLE |
 | PX4 参数协议与 USB 接入 | `Dima/modules/mavlink/`、Parameter Service | MavlinkService 独占 CDC RX/TX；ParameterService 只负责 Core、FlashFS/FileStorage、Autosave 和 Flash。Classic/Ext 按官方连续 handle 遍历完整参数目录，LIST、按 index 补读、READ/SET 与 ACK 复用同一 count/index，不维护 QGC/public 参数名单；旧快照中的退役名称跳过，其余有效配置继续恢复 | ADAPTED / SINGLE OFFICIAL CATALOG |
-| PX4 flashparams/flashfs 与 Dataman 行为参考 | `Dima/middleware/parameters/flashfs.*`、`FileStorage.*`、`Dima/platform/api/AtomicFileStore.hpp`、`Dima/platform/freertos/storage/`、`Boards/H743/Src/fatfs_diskio.c` | Parameter 保持 FlashFS 主存储与 SD generation 镜像；Mission 不经过 FatFs，按 PX4 `SYS_DM_BACKEND` 选择 Disabled、板载 FlashFS 或固定 RAM。默认后端逐项写 inactive waypoint bank，最后写 Mission State 才切 active；FlashFS 每项 CRC 和最终 commit marker 保证 state 写入中掉电仍恢复旧 bank。Parameter、DroneCAN 与 Mission 复用组合根唯一 FlashFS，任一 owner 只有在 `begin_write_entry()` 成功后才推进或取消自己的操作 | ADAPTED / PX4 DATAMAN BACKENDS / WINDOWS BUILD VERIFIED / BOARD PENDING |
+| PX4 flashparams/flashfs 与 Dataman 行为参考 | `Dima/middleware/parameters/flashfs.*`、`FileStorage.*`、`Dima/platform/api/AtomicFileStore.hpp`、`Dima/platform/freertos/storage/`、`Boards/H743/Src/fatfs_diskio.cpp` | Parameter 保持 FlashFS 主存储与 SD generation 镜像；Mission 不经过 FatFs，按 PX4 `SYS_DM_BACKEND` 选择 Disabled、板载 FlashFS 或固定 RAM。默认后端逐项写 inactive waypoint bank，最后写 Mission State 才切 active；FlashFS 每项 CRC 和最终 commit marker 保证 state 写入中掉电仍恢复旧 bank。Parameter、DroneCAN 与 Mission 复用组合根唯一 FlashFS，任一 owner 只有在 `begin_write_entry()` 成功后才推进或取消自己的操作 | ADAPTED / PX4 DATAMAN BACKENDS / WINDOWS BUILD VERIFIED / BOARD PENDING |
 | Rover 与 Dataman Parameter 定义 | `Dima/middleware/parameters/definitions/` | `RO_*`、`RD_*`、`PP_LOOKAHD_*`、`NAV_ACC_RAD` 与 PX4 `SYS_DM_BACKEND` 全部只由权威 YAML 进入正式 Parameter/Metadata 生成链，不维护平行参数或手写生成结果 | AUTHORITATIVE YAML / GENERATED + WINDOWS VERIFIED |
-| `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp`、`src/modules/logger/{logger,log_writer_file,messages}.*`、`platforms/common/uORB/uORBMessageFields.*` | `Dima/middleware/logging/`、`Dima/middleware/uORB/uORBMessageFields.*`、`Dima/modules/logging/{LogService,SdLogWriter,LogWriter}.*` | 保留 PX4 日志宏和 SourcePolicy；`messages.h` 与 `uORBMessageFields.*` 逐字同步。普通/RAW 日志进入深度 8 的 `mavlink_log` 并有界转为 STATUSTEXT；Topic producer 自动遍历生成 catalog，按 PX4 写 header/Flag Bits、`F/P/Q/A/D/L/S/O`，固定 64 KiB SPSC consumer 在 `wq:storage` 以最大 4096-byte 分片写入并每 1 s 同步。新介质/文件 generation 从 header 重建；无卡/介质错误只停止 SD 副本，Event Ring 与实时文本继续。产品不引入无消费者的 PX4 Mission/MAVLink ULog backend、profile/rate 参数或 console/perf/events metadata | ADAPTED / PRODUCT TOPIC ULOG / WINDOWS BUILD VERIFIED / BOARD PENDING |
+| `platforms/common/include/px4_platform_common/log.h`、`platforms/common/px4_log.cpp`、`src/modules/logger/{logger,log_writer_file,messages}.*`、`platforms/common/uORB/uORBMessageFields.*` | `Dima/middleware/logging/`、`Dima/middleware/uORB/uORBMessageFields.*`、`Dima/modules/logging/{LogService,SdLogWriter,LogWriter}.*` | 保留 PX4 日志宏和 SourcePolicy；`messages.h` 与 `uORBMessageFields.*` 逐字同步。普通/RAW 日志进入深度 8 的 `mavlink_log` 并有界转为 STATUSTEXT；Topic producer 自动遍历生成 catalog，按 PX4 写 header/Flag Bits、`F/P/Q/A/D/L/S/O`，固定 64 KiB SPSC consumer 在 `wq:storage` 以最大 8192-byte 分片写入并每 1 s 同步。新介质/文件 generation 从 header 重建；无卡/介质错误只停止 SD 副本，Event Ring 与实时文本继续。产品不引入无消费者的 PX4 Mission/MAVLink ULog backend、profile/rate 参数或 console/perf/events metadata | ADAPTED / PRODUCT TOPIC ULOG / WINDOWS BUILD VERIFIED / BOARD PENDING |
 | `src/lib/rc/sbus.h`、`src/lib/rc/sbus.cpp` | `Dima/lib/protocols/sbus/SbusProtocol.*` | 保留 25-byte 帧、16 路 11-bit 通道、数字 17/18、4 ms 重同步、Failsafe/Frame-Lost 与 PX4 数值映射；移除 POSIX 串口和 SBUS 输出 | ADAPTED |
 | `src/drivers/rc/sbus_rc/SbusRc.hpp`、`SbusRc.cpp`；ArduPilot `AP_RCProtocol::requires_3_frames()` 行为 | `Dima/drivers/rc/sbus/SbusRc.*` | 保留 WorkItem 接收、锁定、重试和 `input_rc` 发布流程；无强 CRC 的 SBUS 冷启动/Failsafe/UART 恢复后要求连续 3 个健康帧，锁定前仍发布原始通道但标记 lost；驱动显式申请 100000 8E2/RXINV/RX-only 通用串口 capability，任务上下文输出锁定/失联/恢复/Failsafe 和单次后端故障日志；ArduPilot 仅作行为参考，未复制 GPL 实现 | ADAPTED / PLATFORM ISOLATED |
 | PX4 串口参数与板级 SBUS/GPS 输入行为 | `Dima/middleware/parameters/definitions/module_serial.yaml`、`Dima/modules/serial/SerialConfig.*`、`Dima/platform/stm32h7/serial/` | 标准 `module_serial.yaml` 是 SERIAL 参数唯一源，既有包装器只调用锁定上游 validator/generator，不含串口特化，也不生成串口专用合同。SerialConfig 从 `dima::parameter_catalog` 按命名规则发现生成参数；STM32 句柄、DMA、IRQ 与 GPIO token 留在板级实现。SERIAL5 因无 UART5 留空，Disabled/SBUS/GPS 均按单 owner fail-closed | DIMA BACKEND / TARGET VERIFY PASS / BOARD PENDING |
-| `src/modules/rc_update/rc_update.h`、`rc_update.cpp` | `Dima/modules/rc/RCUpdate.*` | 保留 18 通道校准、主控制与 Arm/Kill 功能映射、开关离散化、失联与 `parameter_update` 语义；退役无消费者的 Flaps/Aux 参数及后端 uORB 字段；协议锁定后再要求连续健康 100 ms 才解除控制 lost，frame-lost 只计数；差速 Rover 默认 Throttle/Yaw=通道 1/2，Roll/Pitch 默认未映射且不进入车辆输出；`COM_RC_IN_MODE` 非 0 时 fail-closed；裁剪 `PARAM_MAP_RC` 任意参数调节及非 Rover 功能 | ADAPTED |
-| `src/modules/manual_control/ManualControl.hpp`、`ManualControl.cpp`；ArduPilot RC switch debounce 行为 | `Dima/modules/rc/RcManualInput.*` | 保留 RC setpoint 和二段开关边沿 Action Request；Arm/Kill 必须至少两份严格前进的一致样本并稳定 200 ms，启动、RC 恢复及映射/阈值变化后首个稳定状态只建立无动作基线；本地名称明确其只拥有 RC 来源转换，ArduPilot 仅作行为参考 | ADAPTED |
-| `src/modules/commander/Commander.hpp`、`Commander.cpp`、`ModeUtil/control_mode.*`；ArduPilot Rover 左右电机 pre-arm 行为 | `Dima/modules/safety/Commander.*` | 保留 Action Request、Arming/Kill/Termination、QGC RC calibration 与状态发布顺序；Manual、AUTO_MISSION、AUTO_LOITER 和 Termination 使用精确控制标志投影。Mission Start 要求已 Armed、任务已原子提交、活动导航参数有效且无待应用参数、AutoMode 正常并且 EKF 新鲜健康；Armed 参数更新保持 pending，不扰动正在执行任务，但在 Disarmed 原子应用和校验前拒绝下一次 Start。QGC `SET_MODE(AUTO_MISSION)` 只是调用同一 `start_mission()` 事务的兼容入口，Disarmed 仍拒绝且不隐式 Arm。完成或导航故障进入 AUTO_LOITER。Kill 固定为 Disarm，RC Loss 继续强制 Disarm，Unkill 不自动 Arm；ArduPilot 仅作行为参考 | ADAPTED / WINDOWS BUILD VERIFIED / BOARD PENDING |
+| `src/modules/rc_update/rc_update.h`、`rc_update.cpp` | `Dima/modules/rc/RCUpdate.*` | 保留 18 通道校准、Throttle/Yaw、Arm/Kill 与 PX4 六槽主模式映射、失联及 `parameter_update` 语义；模式通道按 PX4 v1.17/QGC 公式把 `[-1,1]` 分到槽 1..6，三段低/中/高对应 1/4/6。协议锁定后再要求连续健康 100 ms 才解除控制 lost，frame-lost 只计数；Roll/Pitch 仅是 QGC 完成标记且运行时保持 NaN，真实通道数不伪造；Gear/Loiter/Offboard/Return、Flaps/Aux 和 `PARAM_MAP_RC` 不实现 | ADAPTED / WINDOWS BUILD VERIFIED / BOARD PENDING |
+| `src/modules/manual_control/ManualControl.hpp`、`ManualControl.cpp`；ArduPilot RC switch debounce 行为 | `Dima/modules/rc/RcManualInput.*` | 保留 RC setpoint、二段开关边沿和模式槽 Action Request；模式/Arm/Kill 必须至少两份严格前进的一致样本并稳定 200 ms，启动、RC 恢复及相关参数变化后首个稳定状态只建立无动作基线；同帧安全动作抑制模式。槽值只接受生成的 Reserved/Manual/Mission 合同，Mission 复用 Commander 完整启动事务；本地名称明确其只拥有 RC 来源转换，ArduPilot 仅作行为参考 | ADAPTED / WINDOWS BUILD VERIFIED / BOARD PENDING |
+| `src/modules/commander/Commander.hpp`、`Commander.cpp`、`ModeUtil/control_mode.*`；ArduPilot Rover 左右电机 pre-arm 行为 | `Dima/modules/safety/Commander.*` | 保留 Action Request、Arming/Kill/Termination、QGC RC calibration 与状态发布顺序；Manual、AUTO_MISSION、AUTO_LOITER 和 Termination 使用精确控制标志投影。Mission Start 要求已 Armed、任务已原子提交、AutoMode 状态正常并且 EKF 新鲜健康；对齐 PX4 v1.17，活动导航参数及 pending 状态不参与模式切换，配置无效只令运行链保持全 NaN 停波。QGC `SET_MODE(AUTO_MISSION)` 只是调用同一 `start_mission()` 事务的兼容入口，Disarmed 仍拒绝且不隐式 Arm。完成或非参数导航故障进入 AUTO_LOITER。Kill 固定为 Disarm，RC Loss 继续强制 Disarm，Unkill 不自动 Arm；ArduPilot 仅作行为参考 | ADAPTED / WINDOWS BUILD VERIFIED / BOARD PENDING |
 | `msg/InputRc.msg`、`RcChannels.msg`、`ManualControlSetpoint.msg`、`ManualControlSwitches.msg`、`ActionRequest.msg` | `Dima/messages/schemas/` | 保留 PX4 字段、枚举和 Topic 契约；头、metadata、Topic 定义与 catalog 由工具直接生成，队列深度来自 schema 的原生 `ORB_QUEUE_LENGTH` | ADAPTED |
 | `msg/versioned/VehicleStatus.msg`、`VehicleControlMode.msg`、`ActuatorArmed.msg` | `Dima/messages/schemas/` | 完整保留三个公开消息的字段、枚举和版本号；本地三个 Topic 均为单深度，派生 C++ 合同不进入源码树 | ADAPTED |
 | `msg/versioned/ActuatorMotors.msg` | `Dima/messages/schemas/ActuatorMotors.msg` | 完整保留 version 0、12 路 control、reversible flags 和采样时间；Topic 单深度，阶段 5 仅使用前两路 | ADAPTED / TARGET VERIFY PASS / BOARD PENDING |
@@ -149,7 +149,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `src/modules/mavlink/mavlink_receiver.cpp`（命令处理子集） | `Dima/modules/mavlink/MavlinkCommands.hpp/.cpp` | COMMAND_LONG/COMMAND_INT 接收、target 过滤、source system/component 保留、`vehicle_command` 发布及带 param2..7 的 `MAV_CMD_REQUEST_MESSAGE`；Commander ACK 定向回命令 source；保留 PX4 `MAV_CMD_REQUEST_STORAGE_INFORMATION`、`MAV_CMD_SET_MESSAGE_INTERVAL`、`MAV_CMD_GET_MESSAGE_INTERVAL` 和 `MESSAGE_INTERVAL` 回复，裁剪 Autotune。`SET_MODE` 只识别 PX4 Manual 与 AUTO_MISSION custom mode；AUTO 请求交由 Commander 执行完整 Mission Start 门控，不在 MAVLink 解析层改安全状态 | ADAPTED / WINDOWS BUILD VERIFIED / BOARD PENDING |
 | `src/modules/dataman/dataman.cpp`、`parameters.c`；`src/modules/mavlink/mavlink_mission.cpp` | `Dima/modules/mavlink/MavlinkMission.hpp/.cpp`、`Dima/modules/mission/`、`module_dataman_params.yaml` | 事务状态机处理上传、顺序请求、回读、清空、设置当前与最终 ACK；正式生成 `SYS_DM_BACKEND`，默认后端映射到板载 FlashFS，RAM 后端不持久，Disabled 拒绝修改。对照 PX4 v1.17.0 与 QGC `4a2c0358115a16bafe290af259c29e5b6cb4e26c`，允许 int 消息携带非 `_INT` 全球 frame，并在 staging 前规范化；Dataman item 成功后才请求下一项，Mission State 是唯一 active bank 切换点 | ADAPTED / MISSION_INT + DATAMAN RUNTIME INTEGRATED / WINDOWS BUILD VERIFIED / BOARD PENDING |
 | `src/modules/mavlink/mavlink_log_handler.{h,cpp}`、`streams/STORAGE_INFORMATION.hpp` | `Dima/modules/mavlink/MavlinkLogHandler.*`、`Dima/platform/api/LogFileStore.hpp`、`Dima/platform/freertos/storage/FatFsAtomicFileStore.cpp` | 保留 LIST/DATA/END/ERASE、0 起始 ID、稳定列表、PX4 session/file 布局与分片语义；POSIX 文件调用薄适配为共享 FatFs capability，并用固定命令/响应 Ring 把所有 I/O 隔离到 `wq:storage`。`STORAGE_INFORMATION` 按 PX4 的 0/1 索引、`storage_id=1`、READY/EMPTY 和 MiB 容量语义回复；无日志按 common.xml 补发 `num_logs=0`，无 RTC 时 UTC 为 0；擦除只触及 `/log`，不触及参数或 Dataman Flash | ADAPTED / STORAGE INFO + ONBOARD LOG DOWNLOAD / WINDOWS BUILD VERIFIED / BOARD PENDING |
-| `src/modules/mavlink/mavlink_parameters.cpp` | `Dima/modules/mavlink/MavlinkParameters.hpp/.cpp`、`MavlinkParameterExt.cpp` | Classic/Ext 直接遍历官方完整 handle 目录并发送统一 count/index；SERIAL Function 写入只允许 Disabled/SBUS/GPS，选择新 owner 时在单个参数事务内禁用旧 owner并回传受影响参数。公开分组来自同一官方生成源，不维护第二份参数名单 | ADAPTED |
+| `src/modules/mavlink/mavlink_parameters.cpp` | `Dima/modules/mavlink/MavlinkParameters.hpp/.cpp`、`MavlinkParameterExt.cpp` | Classic/Ext 直接遍历官方完整 handle 目录并发送统一 count/index；SERIAL Function 写入只允许 Disabled/SBUS/GPS，选择新 owner 时在单个参数事务内禁用旧 owner并回传受影响参数。六个 `COM_FLTMODE` handle、默认值和合法值由参数 JSON 自动生成合同，MAVLink 拒绝其他值，旧快照只跳过非法槽而保留其余配置；不维护第二份参数名单 | ADAPTED / WINDOWS BUILD VERIFIED / BOARD PENDING |
 | `src/modules/mavlink/mavlink_timesync.cpp` | `Dima/modules/mavlink/MavlinkTimesync.hpp/.cpp`、`Dima/lib/timesync/Timesync.hpp/.cpp` | TIMESYNC 处理——远端回传、本地喂入收敛滤波器；省略 SYSTEM_TIME 时钟设置 | ADAPTED |
 | PX4 `src/modules/mavlink/mavlink_ftp.*` 与 Component Metadata | `Dima/modules/mavlink/MavlinkMetadataFtp.hpp/.cpp`、`tools/mavlink/generate_parameter_metadata.py`、`build/generated/component_metadata/` | 397 现代发现与 395 deprecated 回退共用 URI/CRC；General 声明 type 1 Parameter 与 type 5 Actuator Metadata。FTP 只允许 General/Parameter/Actuator 三个 Flash 虚拟文件和 Open/Burst/Read/Reset/Terminate，不含目录、写入或 Event Metadata；Actuator Metadata 开放六路 PWM 分配和参数编辑，但 MotorRight/MotorLeft 排除执行器测试，固件不实现 `MAV_CMD_ACTUATOR_TEST` | ADAPTED / READ-ONLY / TARGET VERIFY PASS / BOARD PENDING |
 | `src/lib/mavlink/`（mavlink commit `33af200d`，pymavlink submodule `fcaa2c7d`） | `tools/mavlink/message_definitions/dima.xml`、`mavlink_runtime.yaml`、`build/generated/mavlink/` | `dima.xml` 只 include 固定 common，Make 直接执行原始 mavgen 生成当前 230-message wire 闭包；独立权威 runtime YAML 生成实际 15 outbound/21 inbound 路由合同并引用 `MAVLINK_MSG_ID_*`，不参与 ID/CRC/payload/codec | UNMODIFIED MAVGEN / NATIVE DIALECT / REPRODUCIBLE PIPELINE |
@@ -162,7 +162,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 |---|---|
 | 来源 | STM32Cube Firmware Package for STM32H7 `STM32Cube_FW_H7_V1.10.0` |
 | 用途 | FatFs FAT 文件系统中间件，用于 SD 卡文件存储 |
-| 本地目录 | 核心与配置位于 `Middlewares/Third_Party/FatFs/src/`；文件后端位于 `Dima/platform/freertos/storage/`；H743 disk port 位于 `Boards/H743/Src/fatfs_diskio.c` |
+| 本地目录 | 核心与配置位于 `Middlewares/Third_Party/FatFs/src/`；文件后端位于 `Dima/platform/freertos/storage/`；H743 disk port 位于 `Boards/H743/Src/fatfs_diskio.cpp` |
 | 许可证状态 | `PENDING`；FatFs 原始 BSD 条款，ST 包装部分 BSD-3-Clause |
 
 | 上游原始路径 | 本地映射 | 适配方式 | 状态 |
@@ -171,7 +171,7 @@ ArduPilot 当前仅用于功能需求、状态机和验收行为参考；其他�
 | `Middlewares/Third_Party/FatFs/src/ff.h` | 同路径 | 原样复制 | UNMODIFIED |
 | `Middlewares/Third_Party/FatFs/src/integer.h` | 同路径 | 原样复制 | UNMODIFIED |
 | `Middlewares/Third_Party/FatFs/src/ffconf_template.h` | `ffconf.h` | 定制配置：`_FS_REENTRANT=0`（Parameter/Log 所有物理调用由共享 FatFs backend mutex 串行化）、`_USE_LFN=0`、`_CODE_PAGE=1`（ASCII 8.3）、`_USE_MKFS=0`、`_USE_FASTSEEK=0`、`_FS_LOCK=0`、`_VOLUMES=1`、`_FS_NORTC=1` | ADAPTED |
-| `Middlewares/Third_Party/FatFs/src/diskio.c`；PX4 v1.17.0 `boards/matek/h743/src/sdio.c` | `Boards/H743/Src/fatfs_diskio.c` | 重写为直接调用 HAL_SD（`hsd1`），不使用 `ff_gen_drv` 抽象层；增加 32 字节对齐 scratch buffer 位于 `.dima_dma` 区；块读写和 ready 等待统一使用 500 ms 产品上限。本板无 card-detect GPIO，与 PX4 H743 无 NCD 分支一致不把 CMD13 瞬时非 TRANSFER 状态解释为拔卡；`disk_status==0` 只代表旧会话未被判错，FatFs backend 复用挂载前额外执行受同一上限保护的 `CTRL_SYNC` 主动命令。成功仅表示最近一次探测可用，不能宣称物理卡在位 | REWRITTEN / BOARD OWNED / PX4 NO-NCD SEMANTICS |
+| `Middlewares/Third_Party/FatFs/src/diskio.c`；PX4 v1.17.0 `boards/matek/h743/src/sdio.c` | `Boards/H743/Src/fatfs_diskio.cpp` | 保留 FatFs C ABI 的板级 C++ SDMMC1 owner；HAL 负责识卡，运行期 LL 命令/IDMA 使用任务等待与强 IRQ。D1 对齐数据支持直接 DMA，其余使用两个 4 KiB 非缓存半区；DMA/卡忙共用 500 ms 截止，先停止硬件再让缓冲复用。无 NCD 会话探测、FlashFS 主存储及 SD 恢复边界保持 | REWRITTEN / BOARD OWNED / PX4 NO-NCD SEMANTICS |
 | `Middlewares/Third_Party/FatFs/src/diskio.h` | 同路径 | 重写，移除 `ff_gen_drv` 依赖 | REWRITTEN |
 
 2026-08-19 使用 Windows 原生 GNU Make 4.4.1 与项目缓存的 Arm GCC 10.3.1 执行 `make clean` 后 `make -j4 NO_COLOR=1 dima_rover`，完整通过 `[212/212]`。Application 为 `text=233772/data=12284/bss=356176`、未签名 BIN `246096` bytes，MCUboot 为 `text=47712/data=380/bss=10192`、BIN `48100` bytes，向量 `0x08040400`。Application/MCUboot 未解析符号均为空，ELF 已确认 SBUS/Commander/MotorOutput/IWDG 健康链及 MCUboot watchdog prepare/feed 符号实际链接。同一 image digest `601c65353ffebce20cea8f040d975000e3c4caa2b27aaa15dd409529740e26ce` 的两次有效 ECDSA P-256 重签分别生成 `247271/247270`-byte Signed BIN 与 `710861/710859`-byte Factory HEX；imgtool 的 DER 签名长度可变，因此这两个容器的文件长度和文件 SHA-256 不属于确定性构建合同。SBUS 电气、PWM 波形、电调握手、IWDG 实际时限和车辆行为仍为 `BOARD PENDING`。
@@ -304,3 +304,65 @@ Application `text/data/bss=454184/12316/431296`，总计 `897796` bytes；Flash 
 | `build/mcuboot/mcuboot.bin` | 48,236 | `e582de10b628a069478a070e3eb00de881b77d7cce4e0348901e8d9c8e2f7a83` |
 
 验收时分支为 `feature/dima-phase3`，保留共享工作树的 45 个 tracked modified/deleted 和 16 个 untracked 文件；测试、Host Test、SITL 或仿真路径变化为 0。本轮没有执行 commit、push、upload、烧录或访问板卡/QGC 串口。结论只是 `SOURCE/STATIC/WINDOWS BUILD VERIFIED`；QGC 三航点上传/回读/清空/断电恢复、SD 拔出与 primary/backup/temporary 故障恢复、单航点停车、侧后方 SpotTurning、多航点 90°/近 180°、EKF 失鲜/reset 与持续失效 Hold、QGC 断链续航、RC Loss、Manual/Disarm/Kill/Termination 中止仍全部为 `BOARD/QGC/SD/VEHICLE PENDING`。
+
+## 15. 2026-09-04 PX4 AUTO 参数与模式切换语义对齐
+
+本轮重新核对 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`：`DifferentialAutoMode::updateParams()` 只刷新参数；Commander 的 `AUTO_MISSION` mode requirements 要求姿态、位置、高度和有效 Mission，不读取 `RO_*`、`RD_*`、`PP_*` 或 `NAV_ACC_RAD`；`RoverDifferential` 在模式已经切换、控制标志变化后才执行活动控制器 `runSanityChecks()`，失败只令 `_sanity_checks_passed=false` 并停止控制输出。由此取消 Dima 自定义的“整组 Rover 控制参数有效且无 pending 更新才能切换 Mission”门禁，同时保留参数 Metadata 范围、运行期有限值/交叉约束、控制器配置校验和全 NaN 停波。
+
+`MAV_CMD_MISSION_START`、QGC `SET_MODE(AUTO_MISSION)` 与 RC Mission 槽仍共用 `Commander::start_mission()`，继续要求已 Armed、任务原子提交、AutoMode 状态新鲜以及 EKF 健康，但不再读取导航控制参数有效位。参数未就绪时保持 `AUTO_MISSION`，AutoMode 和 RoverDifferential 持续发布无效请求，MotorOutput 确认六路 PWM 停波并标记 `CONTROL_INHIBITED`；Commander 复核同 mission generation 的 `FAILURE_PARAMETER_INVALID`，BootHealth 只在输出新鲜、映射完整、active mask 为零且脉宽全零时继续推进 watchdog。估计器、任务、时间回退或非有限输出等非参数故障仍按原合同降级 `AUTO_LOITER`，RC Loss、Kill、Termination、输出后端和映射故障的优先级不变。
+
+这里对齐的是 PX4 的高层职责边界；持续全 NaN、`CONTROL_INHIBITED` 和六路物理停波属于 Dima 的本地安全适配，并非 PX4 逐帧输出行为的原样复制。
+
+Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make -j4 NO_COLOR=1 dima_rover` 和 `make -j4 NO_COLOR=1 verify`。架构门禁为 `PASS - 419 first-party source files`，Component Metadata 与 Logger 生成合同通过，应用向量为 `0x08040400`，Application/MCUboot 未解析符号为空，签名镜像 digest 为 `08530772e380401d0e82d3856b472b6f5aa875049ef14c5b05ceb8e10c1a617b`。本轮没有新增或修改测试、参数/消息权威定义或生成列表，没有 commit、push、upload、烧录或访问板卡/QGC 串口；Mission 模式 ACK、Heartbeat 保持、参数无效时六路停波和 watchdog 连续性仍为 `BOARD/QGC/VEHICLE PENDING`。
+
+## 16. 2026-09-07 基础自动校准来源与适配边界（历史阶段）
+
+本节记录 R1–R5 增量之前的 Level/RTK/前馈/磁版本；其中未引入辨识库、未自动写 PID、缺少模式名称发现的边界已由第 17 节更新，不是当前功能限制。
+
+组合校准沿用 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`（BSD-3-Clause）的传感器校准及估计器语义，GPSDrivers 对照 commit 为 `0b9695881bd1e8f830ab4538ab3acc0050019eba`。本次未导入新的第三方运行库，以下是既有实现扩展及本地协调逻辑，不是 PX4 现成的自动车辆标定功能。
+
+| 依据 | 本地实现及适配 |
+|---|---|
+| Commander `level_calibration.cpp` | `SensorCalibrationLevel.cpp` 复用单一 worker/互锁和提交回滚，`SensorCalibrationAlgorithms.cpp` 按旧修正旋转与当前姿态的组合求水平候选；QGC `param5=2` 与组合模式共用入口 |
+| `src/lib/sensor_calibration/{Accelerometer,Gyroscope,Magnetometer}.cpp` | `SensorRotation`、IMU/磁前端采用 `R_fine * R_discrete`；目标值和应用代次在同一参数锁内核对，旋转变化清除旧 IMU 积分/bias 并更新实际消费的校准计数 |
+| `src/modules/commander/px4_custom_mode.h` | 内部 External1 为 23；MAVLink AUTO main 4 / External1 sub 11 由 runtime YAML 生成收发常量。默认 RC 槽 -1 仍无动作，不假定 Stock QGC 提供新名称或校准向导 |
+| GPSDrivers UNIHEADINGA 与既有 UM982 parser | `Um982Gps/Um982Protocol` 发布原始阵列航向、基线、解类型及 heading/velocity 各自测量历元；`SOL_COMPUTED + NARROW_INT`、位置 RTK FIX、历元对齐和基线一致性是本地更严格门禁，不虚构接收机配置命令 |
+| EKF2 GNSS yaw 约束下的磁状态估计及仓库既有 WMM | `AutoCalibrationMag` 仅在 GNSS yaw 实际融合、磁场不参与姿态更新时学习有界 hard-iron offset；额外要求本会话连续窗口和双方向覆盖，保留 scale/rotation。bootstrap 仅应用 RAM，最终 refine 保留最初快照，失败或掉电不保留临时偏置 |
+| 本地 Rover 请求、参数存储和安全 capability | `AutoCalibrationMode/Rtk/Parameters`、`CalibrationParameters`、`CommanderAutoCalibration` 实现有界运动、显式 Arm、分组提交/保存/回滚；`CalibrationMath` 实现基线稳健统计、圆均值和有限样本前馈辨识。不得自动修改 PID、物理 wheel track、GNSS lever arm 或 PWM 端点 |
+
+参数、uORB payload/枚举名、日志 Topic 目录、MAVLink custom-mode 映射均由权威 YAML/msg/manifest 经过正式工具生成；未手写派生列表，未新增或修改测试、框架或仿真。计划进度、最新 Windows 构建/制品证据以及尚未执行的 `BOARD/QGC/VEHICLE` 验收统一记录在 `docs/AUTO_CALIBRATION_PLAN_ZH.md`，不将上文历史镜像哈希当作本次结果。
+
+## 17. 2026-09-07 固定圆边界、自动增益与官方 QGC 模式发现
+
+当前实现复用 PX4 的固定容量数学能力和既有 Rover 控制器；组合状态机、PI 设计、围栏及工程验收阈值属于本地产品实现，不宣称 PX4 自带 Rover Autotune，也不照搬多旋翼/固定翼的激励、PID 上限或判据。
+
+| 来源/合同 | 本地映射与适配边界 |
+|---|---|
+| PX4 v1.17.0 `src/lib/system_identification/arx_rls.hpp`，commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`，BSD-3-Clause | `Dima/lib/rover/ArxRls.hpp` 保留版权和算法；仅将 matrix include 改为本仓库路径并包入 `dima::lib::rover::calibration` namespace。未导入上游测试或其他机型 Autotune 模块 |
+| 本地 Rover 并联 PI 设计 | `CalibrationIdentification` 在固定六个一阶 ARX 延迟模型上检查稳定性、噪声、激励、残差及系数协方差，按时间常数/延迟和可用输出余量设计正 P/I；不从 PID 候选丢弃 D。真实闭环验收失败整组恢复原值 |
+| 既有 PurePursuit/HeadingController/DrivingStateMachine/速度规划 | `SegmentGuidance` 只提取必要的共享组合顺序，`AutoMode` 与校准 RAM 路径共用；未复制另一套导航控制器或修改用户 Mission 存储 |
+| 本地校准定位点安全合同 | `CalibrationFence` 使用 WGS84 椭球局部尺度和固定全球圆心；`AutoCalibrationFence` 负责空间分配，`RoverDifferentialCalibration` 独立检查新鲜定位、同设备、冻结配置及停车余量。停车距离来自配置，不从命令 deceleration 推导实际制动能力 |
+| 既有原子参数/maintenance/autosave 暂停 | `CalibrationParameters::replace_provisional/finalize_provisional` 泛化同组浮点候选更新与最终提交；保留最初快照、消费者代次确认和跨 Arm 保存暂停。旧零增益回滚确认不要求导航重新就绪 |
+| 标准 MAVLink `AVAILABLE_MODES/CURRENT_MODE` | `MavlinkModes` 与 runtime YAML 生成器扩展固定模式目录、Commander 状态映射和发送调度；wire ID/CRC/字段/codec 继续完全来自锁定 `common.xml` 与原始 mavgen。不新增私有 wire 消息，未修改锁定 XML |
+| 官方 QGC 5.1.3，commit `7fe5b11b18a4c2eec17beb1b2a3ef45ac0c4e32e` | 源码核对 Standard Modes 发现/切换与 STATUSTEXT 重组；修正长文本整片结束语义。SensorCalibration 的 QGC/AUTO 反馈 owner 从 schema 生成，内部 Level 不发外部 Sensors 的 `[cal]` 终态；不修改地面站，不声称已有专用围栏或增益向导 |
+
+锁定的上游 `arx_rls.hpp` SHA-256 为 `a92e43146a76fce3b12711ff93f393b537b68796f130497d80a375d32c63064e`，这是上游原文标识，不是含薄适配的本地文件哈希。`/home/lh/PX4-Autopilot` 的 dirty v1.16 预研目录不作为本轮正式版本来源。
+
+本节 R1–R5 原来不写运行限制；第 18 节 U1–U5 扩展后，明确可观的运行值可在关联闭环验收后保存。物理轮距、GNSS 杆臂、PWM 端点、完整磁软铁矩阵及 EKF noise/delay/gate 仍保留。空间、激励或时间不足报告不可完成，不扩大圆、不放松估计器门限。生成/架构/Windows 发布目标以及制品大小/哈希只在 `AUTO_CALIBRATION_PLAN_ZH.md` 的当前验收节维护，实板、QGC 和车辆性能仍为待验收。
+
+## 18. 2026-09-08 一次 Arm、冻结策略与关联响应整定
+
+该扩展不新增第三方依赖；继续复用第 17 节锁定 PX4 ARX、生产 Rover 四控制器和参数事务。会话授权、固定圆内低速反转/渐进输出探测、等效响应及关联验收均是本地产品逻辑，不宣称源自上游现成的 Rover Autotune。
+
+| 依据/入口 | 本地扩展与边界 |
+|---|---|
+| Commander 正常 preflight 与 ArmedFlashCoordinator | 只有首次正常人工 Arm 创建 session grant；内部 Disarm 保留授权，消费者确认与正常检查后续行。外部 Disarm 在内部提交窗口也清授权，RC/Kill/退出/故障/重启不能恢复旧 grant |
+| 权威 Rover 参数 YAML 与 CalibrationFence | `RO_SPEED_LIM` 新默认 0，兼容旧 -1；新增 `RO_CAL_VMAX`，分别锁存入场 V_session/驱动上限。原固定圆余量改用冻结速度，不由后续运行参数写回改变；停车距离仍是外部真实安全配置 |
+| DifferentialDrive/RoverDifferential 生产控制链 | 指定阶段负向请求与真实 PI，保留换向延时；只在前进 FULL 段允许冻结驱动上限，最后 0.15/s slew 始终保留。原始未零区速度和真实限制原因从本地 schema 生成，不用请求端点冒充 RPM |
+| 既有 EKF stable bias、VehicleImu 实际校正快照 | `AutoCalibrationImu` 按 `Rᵀ*bias/scale` 回传感器坐标，统一提交 ID/offset，保持 scale；前端/EKF/新鲜稳定残差确认后保存，不绑定另一设备的旧比例 |
+| 本地固定容量响应数学 | `CalibrationResponse` 使用 Welford、双向六平台、非零阶跃 20%–80% 斜率置信下界和生产逆整形模型 `v=a*r+b*r²`；保留测量噪声及共同 MIN/EXPO 不确定性。全局整形不能由局部低速数据授权 |
+| 原参数事务泛化 | 32 槽固定容量及独立 staged revision，不改变最初 old；关联整形/FF/运行/PI/Heading/导航值只在 RAM，整形变化后重采 FF，最终保存或整组回滚；旧零配置按安全抑制确认恢复 |
+| SegmentGuidance 与有限 RAM 路径 | 使用固定圆内闭合瘦三角、真实 EKF 位置和同入口/同航向比较，候选经过生产限制器后的真实差异才算可观；用户 Mission、NAV_ACC_RAD 和前视上下限不变 |
+| 标准 QGC 接口 | 只扩展必要本地 uORB request/status；对外仍是标准模式/参数/STATUSTEXT，AUTO Level 不发送 QGC Sensors 的 `[cal]` 终态，没有私有 wire 消息或参数确认按钮 |
+
+对应源码完成度、不可观项目和最终静态验收只在 `AUTO_CALIBRATION_PLAN_ZH.md` 当前 U1–U5 节记录。本轮未增加/执行测试、框架、仿真、刷机或车辆动作；共享工作区的 SD/RC/启动/链接布局变化不归因于本功能，静态 D2 余量不代替实际调度与栈证据。
