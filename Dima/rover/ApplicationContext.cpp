@@ -81,7 +81,8 @@ ApplicationContext::ApplicationContext(
       motor_output_(services.actuator_pwm),
       commander_(services.armed_flash, maintenance_, mission_service_),
       sbus_rc_(services.timestamped_serial_input, serial_config_),
-      auto_mode_(mission_service_)
+      auto_mode_(mission_service_),
+      auto_calibration_(services.armed_flash, vehicle_magnetometer_, vehicle_imu_, rover_differential_, auto_mode_)
 {
 }
 
@@ -108,7 +109,7 @@ bool ApplicationContext::register_modules() noexcept
             sensor_calibration_, dronecan_mag2_, ekf2_, motor_output_,
             commander_, mavlink_service_,
             sbus_rc_, rc_update_, rc_manual_input_, manual_mode_,
-            auto_mode_, rover_differential_, boot_health_)) {
+            auto_mode_, rover_differential_, auto_calibration_, boot_health_)) {
         module_manager_.reset();
         return false;
     }
@@ -389,6 +390,9 @@ bool ApplicationContext::start() noexcept
     if (!sensor_calibration_started_) {
         PX4_ERR("Sensor calibration unavailable; Manual control remains enabled");
     }
+    if (sensor_calibration_started_ && ekf2_started_ && rover_differential_started_)
+        auto_calibration_started_ = module_manager_.start(auto_calibration_);
+    if (!auto_calibration_started_) PX4_WARN("Auto calibration unavailable");
 
     runtime_state_ = RuntimeState::Running;
     active_serial_signature_ = serial_config_.configuration_signature();
@@ -600,6 +604,11 @@ bool ApplicationContext::stop_started_modules() noexcept
     // 停止按消费者到生产者、执行器到基础设施逆序推进；每个 started 标志只在
     // stop 确认成功后清除，因此部分失败可准确保留未释放所有权。
     bool stopped = true;
+    if (auto_calibration_started_) {
+        const bool result = module_manager_.stop(auto_calibration_);
+        auto_calibration_started_ = !result;
+        stopped = result && stopped;
+    }
     if (serial_maintenance_ticket_ != 0U) {
         maintenance_.cancel(serial_maintenance_ticket_);
         serial_maintenance_ticket_ = 0U;
