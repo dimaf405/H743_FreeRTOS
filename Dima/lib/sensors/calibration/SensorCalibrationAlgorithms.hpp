@@ -22,12 +22,19 @@ enum class PreflightCalibrationRequest : std::uint8_t {
     Magnetometer,
     Radio,
     Accelerometer,
+    Level,
 };
 
 /** 解码 MAV_CMD_PREFLIGHT_CALIBRATION 的 7 个参数：仅允许一个受支持 selector
- * 精确为 1 且其余为 0；七个 0 表示标准取消，NaN/组合请求均拒绝。 */
+ * 精确为 1（水平校准仅 param5=2）且其余为 0；七个 0 表示标准取消。 */
 PreflightCalibrationRequest classify_preflight_calibration_request(
     const float (&values)[7]) noexcept;
+
+// PX4 Level Horizon 的单样本变换：移除当前 X/Y fine correction 后，返回
+// 将要统计的板级 roll/pitch。输入四元数为 wxyz，角度参数/输出单位 deg。
+bool level_sample(const float (&quaternion)[4], float old_roll_deg,
+                  float old_pitch_deg, double &roll_deg,
+                  double &pitch_deg) noexcept;
 
 class RunningStats3 final {
 public:

@@ -85,9 +85,10 @@ PreflightCalibrationRequest classify_preflight_calibration_request(
     }
     if (all_zero) return PreflightCalibrationRequest::Cancel;
 
-    const auto single_selector = [&values](std::size_t selected) noexcept {
+    const auto single_selector = [&values](std::size_t selected,
+                                           float selector = 1.0F) noexcept {
         for (std::size_t index = 0U; index < 7U; ++index) {
-            const float expected = index == selected ? 1.0F : 0.0F;
+            const float expected = index == selected ? selector : 0.0F;
             if (values[index] != expected) return false;
         }
         return true;
@@ -100,7 +101,42 @@ PreflightCalibrationRequest classify_preflight_calibration_request(
     if (single_selector(4U)) {
         return PreflightCalibrationRequest::Accelerometer;
     }
+    if (single_selector(4U, 2.0F)) return PreflightCalibrationRequest::Level;
     return PreflightCalibrationRequest::Unsupported;
+}
+
+bool level_sample(const float (&q)[4], float old_roll_deg,
+                  float old_pitch_deg, double &roll_deg,
+                  double &pitch_deg) noexcept
+{
+    constexpr double radians = 0.01745329251994329577;
+    double length_squared = 0.0;
+    for (float value : q) {
+        if (!std::isfinite(value)) return false;
+        length_squared += static_cast<double>(value) * value;
+    }
+    if (std::fabs(length_squared - 1.0) > 0.01 ||
+        !std::isfinite(old_roll_deg) || !std::isfinite(old_pitch_deg)) return false;
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    const double roll = std::atan2(2.0 * (w * x + y * z),
+                                  1.0 - 2.0 * (x * x + y * y));
+    const double pitch = std::asin(std::clamp(2.0 * (w * y - z * x), -1.0, 1.0));
+    // PX4 level_calibration.cpp @ d6f12ad1：去掉姿态 yaw 后计算
+    // R_uncorrected=R(old_x,old_y,0)*R(att_roll,att_pitch,0)。取其 Euler
+    // roll/pitch 为新 offset，不能改成取负或 old+mean 的欧拉角近似。
+    const double sr = std::sin(roll), cr = std::cos(roll);
+    const double sp = std::sin(pitch), cp = std::cos(pitch);
+    const double sx = std::sin(old_roll_deg * radians);
+    const double cx = std::cos(old_roll_deg * radians);
+    const double sy = std::sin(old_pitch_deg * radians);
+    const double cy = std::cos(old_pitch_deg * radians);
+    const double r20 = -sy * cp - cx * cy * sp;
+    const double r21 = -sy * sp * sr + sx * cy * cr + cx * cy * cp * sr;
+    const double r22 = -sy * sp * cr - sx * cy * sr + cx * cy * cp * cr;
+    roll_deg = std::atan2(r21, r22) / radians;
+    pitch_deg = std::asin(std::clamp(-r20, -1.0, 1.0)) / radians;
+    return std::isfinite(roll_deg) && std::isfinite(pitch_deg) &&
+           std::fabs(roll_deg) <= 45.0 && std::fabs(pitch_deg) <= 45.0;
 }
 
 void RunningStats3::reset() noexcept

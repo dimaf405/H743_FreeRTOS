@@ -6,6 +6,8 @@
  ****************************************************************************/
 #include "SensorRotation.hpp"
 
+#include <cmath>
+
 namespace dima::lib::sensors {
 namespace {
 
@@ -111,6 +113,43 @@ bool make_rotation_matrix(std::int32_t rotation,
         cr * cp,
     };
     copy_matrix(next, matrix);
+    return true;
+}
+
+bool make_board_rotation_matrix(std::int32_t rotation,
+                                const Vector3 &fine_degrees,
+                                float (&matrix)[9]) noexcept
+{
+    // PX4 sensor_calibration/{Accelerometer,Gyroscope}.cpp @ d6f12ad1：
+    // R_total=R_fine*R_discrete。右侧离散安装旋转先作用于原始传感器向量，
+    // 左侧细调再把板系转到车体系；将两者颠倒会在非零安装旋转下校准错误。
+    constexpr float radians = 0.01745329251994329577F;
+    if (!std::isfinite(fine_degrees.x) || !std::isfinite(fine_degrees.y) ||
+        !std::isfinite(fine_degrees.z) || std::fabs(fine_degrees.x) > 45.0F ||
+        std::fabs(fine_degrees.y) > 45.0F || std::fabs(fine_degrees.z) > 45.0F) {
+        return false;
+    }
+    float discrete[9]{};
+    if (!make_rotation_matrix(rotation, discrete)) return false;
+    const float sr = std::sin(fine_degrees.x * radians);
+    const float cr = std::cos(fine_degrees.x * radians);
+    const float sp = std::sin(fine_degrees.y * radians);
+    const float cp = std::cos(fine_degrees.y * radians);
+    const float sy = std::sin(fine_degrees.z * radians);
+    const float cy = std::cos(fine_degrees.z * radians);
+    const float fine[9]{
+        cp * cy, sr * sp * cy - cr * sy, cr * sp * cy + sr * sy,
+        cp * sy, sr * sp * sy + cr * cy, cr * sp * sy - sr * cy,
+        -sp, sr * cp, cr * cp};
+    for (std::size_t row = 0U; row < 3U; ++row) {
+        for (std::size_t column = 0U; column < 3U; ++column) {
+            float value = 0.0F;
+            for (std::size_t inner = 0U; inner < 3U; ++inner) {
+                value += fine[3U * row + inner] * discrete[3U * inner + column];
+            }
+            matrix[3U * row + column] = value;
+        }
+    }
     return true;
 }
 

@@ -24,6 +24,9 @@ struct Vector3 {
 bool valid_rotation(std::int32_t rotation) noexcept;
 bool make_rotation_matrix(std::int32_t rotation,
                           float (&matrix)[9]) noexcept;
+bool make_board_rotation_matrix(std::int32_t rotation,
+                                const Vector3 &fine_degrees,
+                                float (&matrix)[9]) noexcept;
 Vector3 rotate(const float (&matrix)[9], const Vector3 &value) noexcept;
 
 } // namespace dima::lib::sensors
