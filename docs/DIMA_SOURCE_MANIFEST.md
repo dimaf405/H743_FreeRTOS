@@ -366,3 +366,11 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 | 标准 QGC 接口 | 只扩展必要本地 uORB request/status；对外仍是标准模式/参数/STATUSTEXT，AUTO Level 不发送 QGC Sensors 的 `[cal]` 终态，没有私有 wire 消息或参数确认按钮 |
 
 对应源码完成度、不可观项目和最终静态验收只在 `AUTO_CALIBRATION_PLAN_ZH.md` 当前 U1–U5 节记录。本轮未增加/执行测试、框架、仿真、刷机或车辆动作；共享工作区的 SD/RC/启动/链接布局变化不归因于本功能，静态 D2 余量不代替实际调度与栈证据。
+
+## 19. 2026-09-08 第一批参数精简与分类
+
+参数目录由 303 项减为 301 项，仅退役 `GPS_1_PROTOCOL` 和 `RO_CAL_DIST`：固定 NMEA/UM982 仍使用既有驱动，直线规划保留内部 12 m 期望尺度和固定圆安全边界。没有裁剪 18 路 RC、6 路 PWM、串口功能或校准能力，没有引入新第三方运行库或私有协议。
+
+官方 QGC 5.1.3 commit `7fe5b11b18a4c2eec17beb1b2a3ef45ac0c4e32e` 的 Radio/Flight Modes、Airframe 和状态/安全界面直接读取第一批另外五项参数，因此保留它们并归到 Compatibility 分组。缺少 Fact 会产生缺参告警/空显示，SYS_AUTOCONFIG 缺失还使 AirframeController 提前结束初始化；不将这些结果夸大为必然崩溃或 Sensors 必然不可用。
+
+分类只修改权威 YAML 的标准 category/group：未指定 category 为 Standard，高级项用 Developer，校准值和固定合同用 System。锁定上游 YAML schema 原样保留，Metadata 生产检查仅同步诊断项的新 Developer 分类；未手写派生目录。完整决策、301 项非展示属性等价核对、旧生产快照容量边界和最新 Windows 制品证据见 `PARAMETER_SIMPLIFICATION_ZH.md`；前面的 U1–U5 303 项镜像是历史快照。
