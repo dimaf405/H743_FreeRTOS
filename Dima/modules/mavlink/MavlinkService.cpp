@@ -735,9 +735,15 @@ void MavlinkService::stream_statustext() noexcept
         mavlink_statustext_t msg{};
         const char *text = mavlink_log.text;
         constexpr unsigned max_chunk_size = sizeof(msg.text);
+        const std::size_t total_text_size = std::strlen(text);
         msg.severity = mavlink_log.severity;
         msg.chunk_seq = 0;
-        msg.id = statustext_id_++;
+        // common.xml：id=0 明确表示单片，可直接发送恰好 50 字符的短文本。
+        // 长文本必须使用非零 id，计数回绕也不能把首片误报为独立消息。
+        if (total_text_size > max_chunk_size) {
+            msg.id = statustext_id_++;
+            if (msg.id == 0U) msg.id = statustext_id_++;
+        }
         unsigned text_size;
         bool send_ok = true;
 
@@ -772,6 +778,21 @@ void MavlinkService::stream_statustext() noexcept
             }
 
             msg.chunk_seq += 1;
+        }
+
+        if (send_ok && total_text_size > max_chunk_size &&
+            total_text_size % max_chunk_size == 0U) {
+            // 长文本整 50 倍数时追加同 id 的 NUL 终止片。QGC 5.1.3 会把
+            // 完全空片误判为缺片，因此仅在传输末尾添加一个无害空格再 NUL；
+            // 不修改原日志、不掩盖发送失败，也不增加本轮日志记录预算。
+            std::memset(msg.text, 0, sizeof(msg.text));
+            msg.text[0] = ' ';
+            msg.chunk_seq += 1;
+            mavlink_message_t frame{};
+            mavlink_msg_statustext_encode(MAVLINK_SYSTEM_ID,
+                                          MAVLINK_COMPONENT_ID,
+                                          &frame, &msg);
+            send_ok = send_message(frame);
         }
 
         if (!send_ok) {
