@@ -252,20 +252,6 @@ parameters:
       max: 0.35
       increment: 0.01
       decimal: 2
-    RO_CAL_DIST:
-      description:
-        short: Auto calibration straight distance
-        long: |-
-          Requested length of each reciprocal straight segment, shortened when
-          necessary to fit inside the fixed RO_CAL_RADIUS minus safety margins.
-          This is not the safety radius. Insufficient space rejects the stage.
-      type: float
-      default: 12.0
-      unit: m
-      min: 5
-      max: 30
-      increment: 0.5
-      decimal: 1
     RO_MAX_THR_SPEED:
       description:
         short: Speed the rover drives at maximum throttle

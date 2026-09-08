@@ -64,8 +64,11 @@ private:
     static constexpr std::uint32_t kIntervalUs = 20000U;
     static constexpr float kPi = 3.14159265358979323846F;
     static constexpr float kRadians = kPi / 180.0F;
+    // 直线期望长度改为内部规划尺度，保持原默认 12 m；实际长度仍按固定圆的
+    // 剩余工作空间缩短，不能将它当作安全半径或绕过各阶段/会话时间预算。
+    static constexpr float kPreferredStraightDistanceM = 12.0F;
     struct Config {
-        float throttle{}, steering{}, distance{}, track{}, radius{}, stop_distance{};
+        float throttle{}, steering{}, track{}, radius{}, stop_distance{};
         float entry_cruise{}, fallback_speed{}, motor_maximum{};
         float board_offset[3]{};
         std::int32_t mag_rotation{}, mag_id{}, gps_control{};

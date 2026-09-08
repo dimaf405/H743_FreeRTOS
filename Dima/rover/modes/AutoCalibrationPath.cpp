@@ -42,7 +42,9 @@ bool AutoCalibrationMode::prepare_path(std::uint64_t now) noexcept
         2.0F * c.speed_limit * c.deceleration / c.jerk + 2.0F * c.speed_limit;
     const float length = std::max({3.0F, dynamic_distance,
         sensitive ? 4.0F * c.pursuit.lookahead_min_m + 2.0F * c.acceptance : 0.0F});
-    if (!std::isfinite(length) || length > config_.distance || !std::isfinite(lever_bound)) return false;
+    // RAM 路径沿用内部期望直线尺度；空间/响应所需长度超出时拒绝，不以取消
+    // 一个公开参数为由扩大验证路径或改变用户固定的圆形边界。
+    if (!std::isfinite(length) || length > kPreferredStraightDistanceM || !std::isfinite(lever_bound)) return false;
     const auto &position = position_sub_.get();
     MapProjection projection(position.ref_lat, position.ref_lon, position.ref_timestamp);
     float center_x{}, center_y{};

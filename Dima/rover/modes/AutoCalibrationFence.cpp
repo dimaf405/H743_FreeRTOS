@@ -13,7 +13,6 @@ bool AutoCalibrationMode::motion_configuration_valid() const noexcept
 {
     return config_valid_ && std::isfinite(config_.throttle) && config_.throttle >= 0.10F && config_.throttle <= 0.40F &&
         std::isfinite(config_.steering) && config_.steering >= 0.10F && config_.steering <= 0.35F &&
-        std::isfinite(config_.distance) && config_.distance >= 5.0F && config_.distance <= 30.0F &&
         std::isfinite(config_.track) && config_.track > 0.0F && config_.track <= 5.0F &&
         std::isfinite(config_.radius) && config_.radius >= 1.0F && config_.radius <= 100.0F &&
         std::isfinite(config_.stop_distance) && config_.stop_distance > 0.0F && config_.stop_distance <= 100.0F &&
@@ -75,7 +74,7 @@ bool AutoCalibrationMode::prepare_straight(std::uint64_t now) noexcept
     const auto result = fence_result(now);
     // 初始 yaw 安装偏置未知，按任意方向最坏长度分配空间，不拿阵列 heading
     // 冒充车头方向做射线预测。整段再留 0.5 m 跟踪/掉头余量；不足五米拒绝。
-    leg_distance_ = std::min(config_.distance, result.working_radius_m - result.distance_m - 0.5F);
+    leg_distance_ = std::min(kPreferredStraightDistanceM, result.working_radius_m - result.distance_m - 0.5F);
     return result.can_stop && std::isfinite(leg_distance_) && leg_distance_ >= 5.0F;
 }
 

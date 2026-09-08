@@ -98,7 +98,7 @@ bool AutoCalibrationMode::read_config() noexcept
         read(dima::params::RO_CAL_RADIUS, next.radius) && read(dima::params::RO_CAL_STOP_D, next.stop_distance) &&
         read(dima::params::RO_SPEED_LIM, next.entry_cruise) && read(dima::params::RO_CAL_VMAX, next.fallback_speed) &&
         read(dima::params::MOT_THR_MAX, next.motor_maximum) &&
-        read(dima::params::RO_CAL_DIST, next.distance) && read(dima::params::RD_WHEEL_TRACK, next.track) &&
+        read(dima::params::RD_WHEEL_TRACK, next.track) &&
         read(dima::params::SENS_BOARD_X_OFF, next.board_offset[0]) &&
         read(dima::params::SENS_BOARD_Y_OFF, next.board_offset[1]) &&
         read(dima::params::SENS_BOARD_Z_OFF, next.board_offset[2]) &&
