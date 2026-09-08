@@ -114,6 +114,7 @@ public:
         std::uint32_t gps_milliseconds{0U};
         std::uint16_t gps_week{0U};
         bool solution_computed{false};
+        bool integer_fixed{false};
     };
 
     struct Frame {

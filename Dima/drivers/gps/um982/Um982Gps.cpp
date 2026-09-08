@@ -92,8 +92,13 @@ bool Um982Gps::start() noexcept
     }
     // 参数句柄只在启动时解析；运行期 parameter_update 仅刷新已生成参数的值。
     yaw_offset_handle_ = param_handle(dima::params::GPS_YAW_OFFSET);
+    yaw_baseline_handle_ = param_handle(dima::params::GPS_YAW_BASELINE);
     param_set_used(yaw_offset_handle_);
-    if (!refresh_yaw_offset() || !ScheduleEnable()) {
+    param_set_used(yaw_baseline_handle_);
+    // 启动时先取得最新参数事件，再读取同一快照；applied instance 仅在真正读取
+    // 成功后赋值，非法候选不得通过状态 Topic 冒充已应用。
+    (void)parameter_subscription_.update();
+    if (!refresh_heading_parameters() || !ScheduleEnable()) {
         module_state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
@@ -111,7 +116,8 @@ bool Um982Gps::start() noexcept
     unilog_entry_progress_pending_ = false;
     __atomic_store_n(&rx_schedule_suppressed_, false, __ATOMIC_RELEASE);
     clear_measurement_cache();
-    (void)parameter_subscription_.update();
+    parameter_update_instance_ = parameter_subscription_.get().instance;
+    heading_parameters_pending_ = false;
     module_state_ = dima::middleware::lifecycle::ModuleState::Running;
     receiver_status_ = ReceiverStatus::Unassigned;
     transition(Phase::WaitAssignment);
@@ -185,9 +191,45 @@ bool Um982Gps::read_yaw_offset(float &radians) const noexcept
     return true;
 }
 
-bool Um982Gps::refresh_yaw_offset() noexcept
+bool Um982Gps::read_heading_parameters(float &yaw_offset_radians,
+                                       float &baseline_m) const noexcept
 {
-    return read_yaw_offset(yaw_offset_rad_);
+    // 航向偏置和期望基线属于同一安装几何快照，必须在同一参数事务中读取，
+    // 禁止一个 UNIHEADINGA 样本混用两代配置。
+    px4::AtomicTransaction transaction;
+    return read_yaw_offset(yaw_offset_radians) &&
+           yaw_baseline_handle_ != PARAM_INVALID &&
+           param_get(yaw_baseline_handle_, &baseline_m) == 0 &&
+           std::isfinite(baseline_m) && baseline_m >= 0.0F &&
+           baseline_m <= 10.0F;
+}
+
+bool Um982Gps::refresh_heading_parameters() noexcept
+{
+    float yaw_offset = 0.0F;
+    float baseline = 0.0F;
+    if (!read_heading_parameters(yaw_offset, baseline)) {
+        return false;
+    }
+    yaw_offset_rad_ = yaw_offset;
+    yaw_baseline_m_ = baseline;
+    return true;
+}
+
+bool Um982Gps::baseline_consistent(float measured_baseline_m) const noexcept
+{
+    if (!std::isfinite(measured_baseline_m) || measured_baseline_m <= 0.0F) {
+        return false;
+    }
+    if (yaw_baseline_m_ == 0.0F) {
+        // 0 表示尚未标定；此时允许 GNSS yaw 参与首次标定，但状态 Topic 会明确
+        // 暴露 configured_baseline_m=0，校准协调器仍需执行更严格的稳健统计。
+        return true;
+    }
+    // 运行期门禁容许 max(2 cm, 5%) 的接收机测量抖动；自动标定提交前使用
+    // 中位数/MAD 的更严格判据，二者职责不能混为一个可调阈值。
+    const float tolerance = std::fmax(0.02F, yaw_baseline_m_ * 0.05F);
+    return std::fabs(measured_baseline_m - yaw_baseline_m_) <= tolerance;
 }
 
 void Um982Gps::transition(Phase phase, std::uint32_t delay_us) noexcept
@@ -492,6 +534,7 @@ void Um982Gps::handle_frame(
         last_valid_data_arrival_us_ = arrival_us;
         heading_new_ = true;
         receiver_measurement = true;
+        publish_heading_status(arrival_us);
         break;
     default:
         break;
@@ -502,6 +545,52 @@ void Um982Gps::handle_frame(
                          kAuxiliaryFreshnessUs)) {
         publish_receiver_status(arrival_us);
     }
+}
+
+void Um982Gps::publish_heading_status(std::uint64_t now_us) noexcept
+{
+    const float unavailable = std::numeric_limits<float>::quiet_NaN();
+    const bool solution = heading_.solution_computed &&
+        std::isfinite(heading_.baseline_m) && heading_.baseline_m > 0.0F &&
+        std::isfinite(heading_.heading_deg) &&
+        std::isfinite(heading_.heading_stddev_deg) &&
+        heading_.heading_stddev_deg > 0.0F;
+
+    rtk_heading_status_s status{};
+    status.timestamp = now_us;
+    status.timestamp_sample = now_us;
+    status.device_id = kGpsDeviceBase |
+        static_cast<std::uint32_t>(active_port_ & 0xFF);
+    status.parameter_update_instance = parameter_update_instance_;
+    status.gps_milliseconds = heading_.gps_milliseconds;
+    status.gps_week = heading_.gps_week;
+    status.velocity_gps_milliseconds = agrica_.gps_milliseconds;
+    status.velocity_gps_week = agrica_.gps_week;
+    // UM982 报告从主天线到从天线的方向，而本产品安装约定与车头相反；这里只
+    // 加 pi 得到“阵列前向”，故意不扣 GPS_YAW_OFFSET，供标定器独立估计偏置。
+    status.array_heading_rad = solution
+        ? wrap_pi(heading_.heading_deg * kDegreesToRadians + kPi)
+        : unavailable;
+    status.heading_accuracy_rad = solution
+        ? heading_.heading_stddev_deg * kDegreesToRadians
+        : unavailable;
+    status.baseline_m = solution ? heading_.baseline_m : unavailable;
+    status.configured_baseline_m = yaw_baseline_m_;
+    status.configured_yaw_offset_rad = yaw_offset_rad_;
+    const auto epoch_difference = static_cast<std::int64_t>(heading_.gps_milliseconds) -
+        static_cast<std::int64_t>(agrica_.gps_milliseconds);
+    status.velocity_aligned = heading_.gps_week == agrica_.gps_week &&
+        std::abs(epoch_difference) <= 100 &&
+        sample_is_fresh(now_us, last_agrica_arrival_us_, 200000ULL);
+    status.velocity_north_m_s = status.velocity_aligned ? agrica_.velocity_north_m_s : unavailable;
+    status.velocity_east_m_s = status.velocity_aligned ? agrica_.velocity_east_m_s : unavailable;
+    status.speed_accuracy_m_s = status.velocity_aligned ? std::hypot(
+        agrica_.velocity_north_stddev_m_s, agrica_.velocity_east_stddev_m_s) : unavailable;
+    status.solution_computed = solution;
+    status.integer_fixed = solution && heading_.integer_fixed;
+    status.baseline_consistent =
+        solution && baseline_consistent(heading_.baseline_m);
+    (void)heading_status_publication_.publish(status);
 }
 
 void Um982Gps::publish_receiver_status(std::uint64_t now_us) noexcept
@@ -654,7 +743,8 @@ void Um982Gps::publish_if_ready(std::uint64_t now_us) noexcept
                         kAuxiliaryFreshnessUs) &&
         heading_new_ && heading_.solution_computed &&
         heading_.baseline_m > 0.0F &&
-        heading_.heading_stddev_deg > 0.0F) {
+        heading_.heading_stddev_deg > 0.0F &&
+        baseline_consistent(heading_.baseline_m)) {
         output.heading = wrap_pi(
             heading_.heading_deg * kDegreesToRadians + kPi -
             yaw_offset_rad_);
@@ -814,11 +904,14 @@ void Um982Gps::Run()
         return;
     }
     if (parameter_subscription_.update()) {
-        float next_yaw_offset = 0.0F;
-        if (read_yaw_offset(next_yaw_offset) &&
-            next_yaw_offset != yaw_offset_rad_) {
-            yaw_offset_rad_ = next_yaw_offset;
-        }
+        heading_parameters_pending_ = true;
+    }
+    // Armed 期间冻结安装几何；更新事件保留为 pending，Disarmed 后整组应用。
+    // 只有应用成功才推进确认代次；确认不能因收到一次事件而提前成立。
+    if (heading_parameters_pending_ && !armed_.armed() &&
+        refresh_heading_parameters()) {
+        parameter_update_instance_ = parameter_subscription_.get().instance;
+        heading_parameters_pending_ = false;
     }
     const std::uint64_t now_us = clock_.now_us();
     // 串口分配是运行期可变资源合同；变化时必须先释放 maintenance/UART，清除

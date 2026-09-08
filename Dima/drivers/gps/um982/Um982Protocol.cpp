@@ -331,6 +331,10 @@ bool parse_heading(char *header, char *data,
     // 合法状态仍作为在线帧接收，但数值显式改为 NaN，防止旧值被误用。
     frame.heading.solution_computed =
         std::strcmp(fields[0], "SOL_COMPUTED") == 0;
+    // 位置 GGA 的 RTK FIX 与双天线整数固定解是独立状态；仅明确的窄巷整数解
+    // 可用于安装几何标定，浮点/未知解仍保留为原始观测供上层报告原因。
+    frame.heading.integer_fixed = frame.heading.solution_computed &&
+        std::strcmp(fields[1], "NARROW_INT") == 0;
     if (frame.heading.solution_computed) {
         if (frame.heading.baseline_m <= 0.0F ||
             frame.heading.heading_deg < 0.0F ||

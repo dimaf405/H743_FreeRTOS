@@ -11,6 +11,7 @@
 #include "api/Flash.hpp"
 #include "api/Serial.hpp"
 #include "maintenance/RuntimeMaintenanceCoordinator.hpp"
+#include "rtk_heading_status.hpp"
 #include "sensor_gps.hpp"
 #include "serial/SerialPortAssignments.hpp"
 #include "uORB/Publication.hpp"
@@ -112,6 +113,7 @@ private:
     void handle_frame(const dima::protocols::um982::Um982Protocol::Frame &frame,
                       std::uint64_t arrival_us) noexcept;
     void publish_receiver_status(std::uint64_t now_us) noexcept;
+    void publish_heading_status(std::uint64_t now_us) noexcept;
     void publish_if_ready(std::uint64_t now_us) noexcept;
     bool publish_validated(sensor_gps_s &output,
                            std::uint64_t now_us) noexcept;
@@ -121,7 +123,10 @@ private:
     void report_validation_failure(std::uint32_t structure_mask,
                                    std::uint32_t stream_mask) noexcept;
     bool read_yaw_offset(float &radians) const noexcept;
-    bool refresh_yaw_offset() noexcept;
+    bool read_heading_parameters(float &yaw_offset_radians,
+                                 float &baseline_m) const noexcept;
+    bool refresh_heading_parameters() noexcept;
+    bool baseline_consistent(float measured_baseline_m) const noexcept;
     bool assignment_changed() const noexcept;
     void transition(Phase phase, std::uint32_t delay_us = 0U) noexcept;
     void fail() noexcept;
@@ -163,6 +168,8 @@ private:
         ORB_ID(parameter_update)};
     uORB::Publication<sensor_gps_s> sensor_gps_publication_{
         ORB_ID(sensor_gps)};
+    uORB::Publication<rtk_heading_status_s> heading_status_publication_{
+        ORB_ID(rtk_heading_status)};
     /* vehicle_gps_position 是 SensorGps.msg 声明的 Topic alias，官方布局
      * 仍然是 sensor_gps_s，不为 alias 复制第二个消息结构。 */
     uORB::Publication<sensor_gps_s> vehicle_gps_publication_{
@@ -219,7 +226,11 @@ private:
         dima::protocols::um982::Um982Protocol::kMaximumTrackedLogs]{};
     std::uint16_t diagnostic_other_frames_{0U};
     param_t yaw_offset_handle_{PARAM_INVALID};
+    param_t yaw_baseline_handle_{PARAM_INVALID};
     float yaw_offset_rad_{0.0F};
+    float yaw_baseline_m_{0.0F};
+    std::uint32_t parameter_update_instance_{0U};
+    bool heading_parameters_pending_{false};
     std::int32_t active_port_{0};
     // SAVECONFIG 会写接收机非易失存储，必须同时持有全局 maintenance ticket
     // 和 ArmedFlashCoordinator 排他锁；武装状态下绝不进入写配置阶段。
