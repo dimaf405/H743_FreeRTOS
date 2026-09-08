@@ -1,8 +1,9 @@
 module_name: definitions
 parameters:
-- group: Commander
+- group: Compatibility
   definitions:
     COM_RC_IN_MODE:
+      category: System
       description:
         short: Manual control input source policy
         long: |-
@@ -15,6 +16,8 @@ parameters:
       default: 0
       min: 0
       max: 0
+- group: Commander
+  definitions:
     COM_RC_LOSS_T:
       description:
         short: COM_RC_LOSS_T
@@ -40,9 +43,10 @@ parameters:
       instance_start: 1
       num_instances: 6
       default: -1
-- group: RC Mapping
+- group: Compatibility
   definitions:
     RC_MAP_ROLL:
+      category: System
       description:
         short: QGC roll completion marker
         long: |-
@@ -55,6 +59,7 @@ parameters:
       min: 2
       max: 2
     RC_MAP_PITCH:
+      category: System
       description:
         short: QGC pitch completion marker
         long: |-
@@ -66,6 +71,8 @@ parameters:
       default: 1
       min: 1
       max: 1
+- group: RC Mapping
+  definitions:
     RC_MAP_THROTTLE:
       description:
         short: RC_MAP_THROTTLE
@@ -203,6 +210,7 @@ parameters:
 - group: Radio Calibration
   definitions:
     RC_CHAN_CNT:
+      category: System
       description:
         short: RC_CHAN_CNT
       type: int32
