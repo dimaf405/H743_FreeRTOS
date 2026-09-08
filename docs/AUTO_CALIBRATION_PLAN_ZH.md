@@ -1,5 +1,7 @@
 # Rover 自动校准：一次 Arm、自动写回与固定圆形边界
 
+2026-09-08 参数精简更新：`RO_CAL_DIST` 已改为内部 12 m 期望尺度，`GPS_1_PROTOCOL` 已删除；全目录由 303 项减为 301 项，并完成分类。当前精简后的生成/制品证据见 [参数精简与分类记录](PARAMETER_SIMPLIFICATION_ZH.md)；本文第 7 节保留 U1–U5 精简前的 303 项制品快照，不作为精简后镜像证明。
+
 ## 当前实施状态（2026-09-08，U1–U5）
 
 本节取代 R1–R5 的逐段人工 Arm 和固定 1.5 m/s 操作说明。旧记录折叠保留，只作历史证据。
@@ -50,7 +52,7 @@ Disarmed 显式进入并固定圆心
 
 参数权威源为 `module_rover_control_params.yaml`，目录/ID/Metadata 经正式工具生成。
 
-直线期望长度由 `AutoCalibrationMode::kPreferredStraightDistanceM` 内部常量给出；实际路径仍按固定圆的剩余空间缩短，空间不足时拒绝对应阶段。
+直线期望长度由 `AutoCalibrationMode::kPreferredStraightDistanceM` 内部常量给出，保持原默认 12 m；实际路径仍按固定圆的剩余空间缩短，空间不足时拒绝对应阶段。旧 `RO_CAL_DIST` 自定义长度不再生效，内部尺度不代替半径、停车距离或时间预算。
 
 | 参数 | 默认/范围 | 当前语义 |
 |---|---|---|
