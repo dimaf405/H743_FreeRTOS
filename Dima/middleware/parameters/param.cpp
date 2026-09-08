@@ -47,6 +47,7 @@ static param_lock_callback_t g_unlock{};
 static void *g_lock_context{};
 const param_storage_backend_s *g_storage{};
 void *g_storage_context{};
+const void *g_storage_pause_owner{};
 
 /* 参数值分层：ConstLayer 固件默认值；runtime_defaults 保存运行期自定义默认；
  * user_config 保存用户覆盖。g_unsaved 与 user_config 分离：值可等于默认而仍需
@@ -251,7 +252,7 @@ bool param_shutdown(void) noexcept
     // Holding the registered recursive mutex excludes all other parameter
     // transactions. A non-zero depth here would mean the caller attempted to
     // tear the core down from inside a parameter callback.
-    if (g_transaction_depth != 0U) {
+    if (g_transaction_depth != 0U || g_storage_pause_owner != nullptr) {
         if (unlock != nullptr) {
             unlock(lock_context);
         }
@@ -300,6 +301,39 @@ bool param_is_ready(void)
     }
     px4::AtomicTransaction transaction;
     return g_initialized;
+}
+
+bool param_storage_pause(const void *owner) noexcept
+{
+    if (!service_write_allowed() || owner == nullptr) return false;
+    px4::AtomicTransaction transaction;
+    if (!g_initialized || g_storage_pause_owner != nullptr) return false;
+    g_storage_pause_owner = owner;
+    return true;
+}
+
+bool param_storage_resume(const void *owner) noexcept
+{
+    if (!service_write_allowed() || owner == nullptr) return false;
+    px4::AtomicTransaction transaction;
+    if (g_storage_pause_owner != owner) return false;
+    g_storage_pause_owner = nullptr;
+    // 恢复后统一唤醒 autosave；失败回滚也需要将旧的完整值保存为最新快照。
+    request_notification();
+    return true;
+}
+
+bool param_storage_paused(void) noexcept
+{
+    if (!task_read_allowed()) return true;
+    px4::AtomicTransaction transaction;
+    return g_storage_pause_owner != nullptr;
+}
+
+uint32_t param_set_count(void) noexcept
+{
+    px4::AtomicTransaction transaction;
+    return g_set_count;
 }
 
 param_t param_find_no_notification(const char *name)

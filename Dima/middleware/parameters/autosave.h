@@ -33,6 +33,8 @@
 
 #pragma once
 
+#include "param.h"
+
 #include "containers/atomic.h"
 #include "api/Flash.hpp"
 #include "api/Time.hpp"
@@ -68,7 +70,7 @@ private:
     };
 
     void Run() override;
-    bool writeAllowed() const noexcept { return !_armed_flash.armed(); }
+    bool writeAllowed() const noexcept { return !_armed_flash.armed() && !param_storage_paused(); }
 
     dima::platform::ArmedFlashCoordinator &_armed_flash;
     CancelSaveFn _cancel_save;

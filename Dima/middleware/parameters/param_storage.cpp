@@ -25,6 +25,9 @@ int enumerate_changed(param_storage_visitor_t visitor, void *visitor_context,
     }
 
     px4::AtomicTransaction transaction;
+    // 此检查与遍历同处参数锁内：进入校准之前开始的保存最多序列化旧的完整
+    // 快照；进入校准之后的保存无法读到候选，关闭检查/使用间隙。
+    if (g_storage_pause_owner != nullptr) return -EBUSY;
     if (!g_initialized) {
         return -EINVAL;
     }
@@ -89,6 +92,7 @@ int param_save_default(bool)
     uint32_t set_count_snapshot{};
     {
         px4::AtomicTransaction transaction;
+        if (g_storage_pause_owner != nullptr) return -EBUSY;
         if (!g_storage || !g_storage->save) { return -ENOSYS; }
         backend = g_storage;
         backend_context = g_storage_context;
@@ -116,6 +120,7 @@ int param_load_default(void)
     uint32_t default_generation_snapshot{};
     {
         px4::AtomicTransaction transaction;
+        if (g_storage_pause_owner != nullptr) return -EBUSY;
         if (!g_initialized || !g_storage || !g_storage->load) { return -ENOSYS; }
         backend = g_storage;
         backend_context = g_storage_context;
@@ -131,7 +136,7 @@ int param_load_default(void)
     {
         px4::AtomicTransaction transaction;
         // 运行期加载期间若已有新设置，拒绝覆盖，调用方可稍后重试。
-        if (g_set_count != set_count_snapshot
+        if (g_storage_pause_owner != nullptr || g_set_count != set_count_snapshot
             || g_default_generation != default_generation_snapshot) {
             return -EAGAIN;
         }

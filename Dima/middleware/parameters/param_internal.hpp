@@ -31,6 +31,7 @@ extern uint32_t g_default_generation;
 extern bool g_initialized;
 extern const param_storage_backend_s *g_storage;
 extern void *g_storage_context;
+extern const void *g_storage_pause_owner;
 
 bool valid(param_t param) noexcept;
 bool task_read_allowed() noexcept;

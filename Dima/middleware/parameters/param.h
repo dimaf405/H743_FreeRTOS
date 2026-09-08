@@ -113,6 +113,12 @@ void param_reset_all(void);
 void param_foreach(param_foreach_func_t callback, void *context, bool only_changed, bool only_used);
 int param_save_default(bool blocking);
 int param_load_default(void);
+/* 暂存校准结果期间阻止任何保存/加载路径跨越未验证参数代次。owner 必须非空，
+ * 同一时刻仅一个 owner；恢复时核对 owner，不能误释放其他事务。 */
+bool param_storage_pause(const void *owner) PARAM_NOEXCEPT;
+bool param_storage_resume(const void *owner) PARAM_NOEXCEPT;
+bool param_storage_paused(void) PARAM_NOEXCEPT;
+uint32_t param_set_count(void) PARAM_NOEXCEPT;
 void param_print_status(void);
 void param_notify_changes(void) PARAM_NOEXCEPT;
 
