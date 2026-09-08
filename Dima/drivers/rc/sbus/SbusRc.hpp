@@ -24,24 +24,12 @@ namespace dima::drivers::rc {
 class SbusRc final : public dima::middleware::lifecycle::ModuleBase,
                      public px4::ScheduledWorkItem {
 public:
-    struct Stats {
-        std::uint32_t start_failures{0U};
-        std::uint32_t service_failures{0U};
-        std::uint32_t publications{0U};
-        std::uint32_t read_wakeups{0U};
-    };
-
     SbusRc(dima::platform::TimestampedSerialInput &backend,
            dima::lib::serial::SerialPortAssignments
                &serial_assignments) noexcept;
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
-    const Stats &stats() const noexcept { return stats_; }
-    const dima::protocols::sbus::SbusParser::Stats &parser_stats() const noexcept
-    {
-        return parser_.stats();
-    }
 
 private:
     // 硬故障 100 ms 重试；严格限定的 PE/NE/FE 瞬态线路错误 1 ms 重启 DMA。
@@ -91,7 +79,6 @@ private:
     perf_counter_t lost_frame_count_{nullptr};
     perf_counter_t uart_error_count_{nullptr};
     perf_counter_t publish_interval_{nullptr};
-    Stats stats_{};
 };
 
 } // namespace dima::drivers::rc

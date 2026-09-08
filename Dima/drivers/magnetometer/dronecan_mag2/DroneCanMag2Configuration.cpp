@@ -155,10 +155,8 @@ bool DroneCanMag2::apply_configuration_transaction(
     const Configuration previous = configuration_;
     if (apply_configuration(configuration, now)) return true;
 
-    ++stats_.parameter_failures;
     stop_protocol();
     if (!apply_configuration(previous, now)) {
-        ++stats_.transport_failures;
         PX4_ERR("DroneCAN rollback failed; retrying previous configuration");
     }
     return false;
@@ -187,7 +185,6 @@ void DroneCanMag2::process_reconfiguration(std::uint64_t now) noexcept
             startup_configuration_pending_ = false;
             configuration_pending_ = false;
         } else {
-            ++stats_.parameter_failures;
             next_reconfigure_retry_us_ = now + kTransportRetryUs;
         }
         return;
@@ -331,9 +328,7 @@ bool DroneCanMag2::start_protocol(std::uint64_t now) noexcept
         if (self != nullptr) self->handle_allocation_event(event);
     };
 
-    protocol_stats_snapshot_ = {};
     if (!protocol_node_.start(node_configuration, callbacks, now)) {
-        synchronize_protocol_stats();
         next_transport_retry_us_ = now + kTransportRetryUs;
         return false;
     }
@@ -358,8 +353,7 @@ bool DroneCanMag2::start_protocol(std::uint64_t now) noexcept
 
 void DroneCanMag2::stop_protocol() noexcept
 {
-    // 关闭前先同步最后一批节点统计，再释放 transport 和所有源/transfer-ID 状态。
-    synchronize_protocol_stats();
+    // 节点负责释放 transport；随后清除本驱动的源绑定与 transfer-ID 会话。
     protocol_node_.stop();
     magnetic_transfer_ids_.reset();
     protocol_started_ = false;

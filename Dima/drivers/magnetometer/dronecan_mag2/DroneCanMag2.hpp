@@ -27,28 +27,6 @@ namespace dima::drivers::magnetometer {
 class DroneCanMag2 final : public dima::middleware::lifecycle::ModuleBase,
                            public px4::ScheduledWorkItem {
 public:
-    struct Stats {
-        std::uint32_t accepted_transfers{0U};
-        std::uint32_t rejected_sources{0U};
-        std::uint32_t duplicate_transfers{0U};
-        std::uint32_t stale_transfers{0U};
-        std::uint32_t decode_errors{0U};
-        std::uint32_t protocol_errors{0U};
-        std::uint32_t publications{0U};
-        std::uint32_t publication_failures{0U};
-        std::uint32_t source_timeouts{0U};
-        std::uint32_t node_status_transfers{0U};
-        std::uint32_t node_info_responses{0U};
-        std::uint32_t transport_failures{0U};
-        std::uint32_t parameter_failures{0U};
-        std::uint32_t allocation_requests{0U};
-        std::uint32_t allocation_successes{0U};
-        std::uint32_t allocation_malformed{0U};
-        std::uint32_t allocation_timeouts{0U};
-        std::uint32_t allocation_storage_failures{0U};
-        std::uint32_t discovered_nodes{0U};
-    };
-
     DroneCanMag2(dima::platform::CanTransport &transport,
                  dima::platform::ArmedFlashCoordinator &armed,
                  dima::middleware::maintenance::
@@ -58,7 +36,6 @@ public:
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
-    const Stats &stats() const noexcept { return stats_; }
 
     static constexpr std::uint32_t make_device_id(
         std::uint8_t source_node_id) noexcept
@@ -70,6 +47,14 @@ public:
     }
 
 private:
+    // 只保存在线/失联日志实际消费的磁场统计；节点协议统计仍归 DroneCanNode，
+    // 不在驱动中镜像累加另一套无人读取的节点计数。
+    struct Stats {
+        std::uint32_t accepted_transfers{0U};
+        std::uint32_t rejected_sources{0U};
+        std::uint32_t decode_errors{0U};
+    };
+
     struct Configuration {
         // 参数层只保存业务值；允许值域来自统一 YAML 元数据，驱动只实现真正
         // 影响 CAN 生命周期的 Disabled/Manual/Automatic 运行语义。
@@ -118,7 +103,6 @@ private:
     bool should_accept_broadcast(std::uint64_t &signature,
                                  std::uint16_t data_type_id,
                                  std::uint8_t source_node_id) const noexcept;
-    void synchronize_protocol_stats() noexcept;
     static bool same_transport_configuration(
         const Configuration &lhs, const Configuration &rhs) noexcept;
     static bool same_configuration(
@@ -144,7 +128,6 @@ private:
     Configuration configuration_{};
     Configuration pending_configuration_{};
     dima::protocols::dronecan::TransferIdTracker magnetic_transfer_ids_{};
-    dima::protocols::dronecan::DroneCanNode::Stats protocol_stats_snapshot_{};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
     std::uint64_t start_time_us_{0U};

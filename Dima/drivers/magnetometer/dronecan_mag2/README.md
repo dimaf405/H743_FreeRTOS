@@ -17,10 +17,12 @@
 - DroneCAN 驱动只发布未套用 `CAL_MAG0_*` 的 `sensor_mag`，设备 ID 为 0、旧 ID 失配或校准无效都不能阻断原始数据。
 - `Dima/modules/sensors/magnetometer/VehicleMagnetometer.*` 独立订阅 `sensor_mag`，按检测到的 device ID 选择匹配校准或 PX4 identity correction，再按 `SENS_MAG_RATE` 的 1..200 Hz 上限平均并发布 `vehicle_magnetometer`。该参数不改变远端 RM3100 的硬件采样率。
 - 首个有效样本、恢复和 500 ms timeout 均产生日志。`HIGHRES_IMU` 提供校准后的实时磁场，`SYS_STATUS` 提供 MAG present/health。
-- 未检测/超时日志同时报告 configured/active node、CAN RX、accepted/reject/duplicate/stale/decode/protocol、overrun、RX error、bus-off 和最后错误标志，可区分“总线没有任何帧”和“有帧但没有有效 Mag2 传输”。
+- 未检测/超时日志报告配置或活动 node、CAN RX 以及 accepted/reject/decode 三项磁场累计计数；CAN 出错时另报 overrun、RX/TX error、bus-off、恢复失败和最后错误标志。节点协议与动态分配统计由 `DroneCanNode` 自己维护，本驱动不镜像累计。重复/过期 transfer-ID 的拒绝规则和原始 `sensor_mag.error_count` 保持独立有效。
 
 ## QGC 磁力计校准
 
 `MAV_CMD_PREFLIGHT_CALIBRATION param2=1` 启动 Disarmed-only、PX4/QGC v2 六面校准。协调器运行在非实时 `wq:lp_default`，先用新鲜 accel/gyro 稳定识别 `back/front/left/right/up/down`，通过原样且不受普通日志等级过滤的 `[cal] <side> orientation detected` 驱动 QGC；随后要求陀螺仪有符号积分得到至少 0.5 rad 的实际净旋转。每面在 7 s 窗口内收集 40 个通过 PX4 空间间距去重的原始 `sensor_mag` 点，共固定 240 点，并用 `[cal] <side> side done, rotate to a different side` 完成界面状态转换。六面覆盖通过后使用固定内存最小二乘球拟合计算 hard-iron offset，并由三轴跨度求 diagonal scale；scale 接受范围与 PX4 `CAL_MAG0_*SCALE` 元数据及本地前端统一为 0.1..3.0。拟合范围、设备 ID 和样本新鲜度均通过后，原子写入 `CAL_MAG0_ID/XOFF/YOFF/ZOFF/XSCALE/YSCALE/ZSCALE`；只有独立 `VehicleMagnetometer` 前端确认同一 `parameter_update.instance`、逐项匹配 active correction，并发布新的 calibration count 后才报告完成。取消或失败后的参数回滚使用同一握手，完成前保持 arming interlock。
+
+加速度与磁校准的 ID、offset、scale 写入共用 `SensorCalibration::commit_offset_scale`：完整快照、写入失败恢复和成功通知在原参数锁内完成。两入口的生成参数绑定、磁提交前计数采样以及后续前端确认仍各按原合同执行。
 
 当前产品只支持 diagonal scale，不声称实现 PX4 完整的非对角 soft-iron 拟合。FDCAN 位时序、收发器 silent 控制、RM3100 节点绑定、热插拔、实际磁场方向、带载干扰与 QGC 实物校准仍为 `BOARD PENDING`。

@@ -183,7 +183,6 @@ bool SbusRc::start()
         !std::isfinite(loss_timeout_s) || loss_timeout_s < 0.1F ||
         loss_timeout_s > 35.0F ||
         !backend_.configure(port, sbus_line_configuration())) {
-        ++stats_.start_failures;
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
         PX4_ERR("SBUS configuration invalid protocol=%ld port=%ld",
@@ -248,7 +247,6 @@ void SbusRc::Run()
         const dima::platform::IsrCallback notification{
             &SbusRc::notify_from_isr, this};
         if (!backend_.start(notification)) {
-            ++stats_.start_failures;
             if (!backend_fault_reported_) {
                 PX4_ERR("SBUS UART/DMA start failed");
                 report_backend_failure(backend_.stats());
@@ -265,7 +263,6 @@ void SbusRc::Run()
     // service/running 失败先抓取统计、清协议半帧、停止并恢复普通 UART，然后按
     // 故障等级决定是否立即发布 rc_lost 以及使用 1 ms/100 ms 退避。
     if (!backend_.service() || !backend_.running()) {
-        ++stats_.service_failures;
         const auto fault_stats = backend_.stats();
         count_delta(uart_error_count_,
                     fault_stats.receive_errors +
@@ -326,7 +323,6 @@ void SbusRc::Run()
 
     std::uint8_t buffer[kReadBufferSize]{};
     std::uint64_t arrival_timestamps_us[kReadBufferSize]{};
-    bool received = false;
     // 每次最多从后端取 64 个带时间戳字节，但循环排空 CPU ring。空时先安排
     // 精确的信号超时唤醒，再二次读取以关闭 ISR 与 ScheduleAt 的竞态窗口。
     for (;;) {
@@ -357,7 +353,6 @@ void SbusRc::Run()
                 break;
             }
         }
-        received = true;
         for (std::size_t index = 0U; index < count; ++index) {
             perf_count(byte_count_);
             dima::protocols::sbus::SbusParser::Frame frame{};
@@ -411,7 +406,6 @@ void SbusRc::Run()
                     parser_stats.invalid_headers + parser_stats.invalid_footers,
                     last_invalid_frames_);
     }
-    if (received) ++stats_.read_wakeups;
 }
 
 void SbusRc::reset_runtime_state() noexcept
@@ -428,11 +422,11 @@ void SbusRc::reset_runtime_state() noexcept
     last_invalid_frames_ = 0U;
     last_backend_faults_ = 0U;
     signal_loss_timeout_us_ = 500000U;
-    stats_ = Stats{};
 }
 
 void SbusRc::allocate_perf_counters() noexcept
 {
+    // 运行诊断由 perf 与 input_rc 的协议计数承载，避免再维护无人读取的模块副本。
     // perf 句柄来自全局固定池，只在启用 SBUS 时分配；分配失败得到 nullptr，
     // perf API 按空句柄安全降级，不影响控制链启动。
     if (byte_count_ == nullptr) byte_count_ = perf_alloc(PC_COUNT, "sbus:bytes");
@@ -522,7 +516,6 @@ bool SbusRc::publish_backend_loss(std::uint64_t now) noexcept
     message.rssi_dbm = NAN;
 
     if (input_rc_pub_.publish(message)) {
-        ++stats_.publications;
         return true;
     }
     (void)dima::events::report(kEventPublishFailure,
@@ -567,9 +560,7 @@ void SbusRc::publish(const dima::protocols::sbus::SbusParser::Frame &frame,
                                    &active, 1U);
         failsafe_active_ = frame.failsafe;
     }
-    if (input_rc_pub_.publish(message)) {
-        ++stats_.publications;
-    } else {
+    if (!input_rc_pub_.publish(message)) {
         (void)dima::events::report(kEventPublishFailure,
                                    dima::events::Severity::Warning);
     }
