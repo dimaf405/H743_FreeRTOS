@@ -944,91 +944,41 @@ AutoMode::GuidanceOutput AutoMode::run_guidance(
         }
     }
 
-    const auto measured_speed = dima::lib::rover::measure_body_speed(
-        local_position_.vx, local_position_.vy, local_position_.heading,
-        config_.driving.stopped_speed_threshold_m_s);
-    if (!measured_speed.valid) {
-        return output;
-    }
-
-    const dima::lib::rover::Position2f vehicle_position{
-        local_position_.x, local_position_.y};
-    // Pure Pursuit 的 L=clamp(k*|ground_speed|, Lmin, Lmax) 使用 NED
-    // 水平地速模长；它与 Speed PI 的 sign(v_body_x)*hypot(v_body_x,v_body_y)
-    // 不是同一个量。若复用带前向符号的测量，车辆纯横向滑动时 sign 为 0，
-    // 会把实际非零地速误报为零并错误缩短前视距离。
-    const float ground_speed_m_s = std::hypot(
-        measured_speed.forward_m_s, measured_speed.lateral_m_s);
-    if (!finite(ground_speed_m_s)) {
-        return output;
-    }
-    const auto pursuit = pure_pursuit_.update(
-        segment_start_, segment_target_, vehicle_position,
-        ground_speed_m_s);
-    if (!pursuit.valid) {
-        return output;
-    }
-
-    const float guidance_heading_error = wrap_pi(
-        pursuit.target_bearing_rad - local_position_.heading);
-    if (!finite(guidance_heading_error)) {
-        return output;
-    }
-
-    const auto heading = heading_controller_.update(
-        pursuit.target_bearing_rad, local_position_.heading, dt_s);
-    if (!heading.valid) {
-        return output;
-    }
-
-    const auto speed_plan = dima::lib::rover::plan_waypoint_speed(
-        pursuit.distance_to_waypoint_m, segment_acceptance_radius_m_,
-        config_.cruise_speed_m_s, segment_arrival_speed_m_s_,
-        config_.cruise_speed_m_s, config_.jerk_limit_m_s3,
-        config_.deceleration_limit_m_s2);
-    if (!speed_plan.valid) {
-        return output;
-    }
-
-    float requested_speed = dima::lib::rover::
-        reduce_speed_for_heading_error(
-            speed_plan.speed_setpoint_m_s, guidance_heading_error,
-            config_.speed_inner.speed_at_full_throttle_m_s,
-            config_.speed_reduction_gain);
-    const float state_speed_setpoint =
-        driving_state_.state() == dima::lib::rover::DrivingState::Driving
-            ? requested_speed
-            : 0.0F;
-    const auto driving = driving_state_.update(
-        guidance_heading_error, state_speed_setpoint,
-        measured_speed.speed_m_s);
-    if (!driving.valid) {
-        return output;
-    }
-
-    output.distance_to_waypoint_m = pursuit.distance_to_waypoint_m;
-    output.crosstrack_error_m = pursuit.crosstrack_error_m;
-    output.lookahead_distance_m = pursuit.lookahead_distance_m;
-    // 状态迁移和 QGC 状态显示使用未经过 slew 的路径航向误差，保证侧后方
-    // 航点在第一周期就进入停车确认；Heading P 内部仍用受限误差平滑 yaw-rate。
-    output.heading_error_rad = guidance_heading_error;
-    output.speed_setpoint_m_s =
-        driving.translation_enabled ? requested_speed : 0.0F;
-    output.yaw_rate_setpoint_rad_s =
-        driving.heading_control_enabled
-            ? heading.yaw_rate_setpoint_rad_s
-            : 0.0F;
-    output.control_state = control_state(driving.state);
+    dima::lib::rover::SegmentGuidanceInput input{};
+    input.start = segment_start_;
+    input.target = segment_target_;
+    input.position = {local_position_.x, local_position_.y};
+    input.velocity_north = local_position_.vx;
+    input.velocity_east = local_position_.vy;
+    input.yaw = local_position_.heading;
+    input.dt_s = dt_s;
+    input.acceptance_radius = segment_acceptance_radius_m_;
+    input.cruise_speed = config_.cruise_speed_m_s;
+    input.arrival_speed = segment_arrival_speed_m_s_;
+    input.jerk = config_.jerk_limit_m_s3;
+    input.deceleration = config_.deceleration_limit_m_s2;
+    input.maximum_speed = config_.speed_inner.speed_at_full_throttle_m_s;
+    input.speed_reduction = config_.speed_reduction_gain;
+    input.speed_threshold = config_.driving.stopped_speed_threshold_m_s;
+    // Mission 与自动校准只共享无 I/O 的算法组合；到点锁存、任务推进和完成
+    // 仍由下面的 Mission owner 执行，纯库不会接触任务或发布控制请求。
+    const auto segment = dima::lib::rover::update_segment(
+        pure_pursuit_, heading_controller_, driving_state_, input);
+    if (!segment.valid) return output;
+    const auto &measured_speed = segment.measured_speed;
+    const auto &speed_plan = segment.speed_plan;
+    output.distance_to_waypoint_m = segment.pursuit.distance_to_waypoint_m;
+    output.crosstrack_error_m = segment.pursuit.crosstrack_error_m;
+    output.lookahead_distance_m = segment.pursuit.lookahead_distance_m;
+    output.heading_error_rad = segment.heading_error;
+    output.speed_setpoint_m_s = segment.speed_setpoint;
+    output.yaw_rate_setpoint_rad_s = segment.yaw_rate_setpoint;
+    output.control_state = control_state(segment.driving.state);
     output.waypoint_state = speed_plan.waypoint_inside_acceptance
                                 ? rover_navigation_status_s::
                                       WAYPOINT_INSIDE_ACCEPTANCE
                                 : rover_navigation_status_s::WAYPOINT_ACTIVE;
-    output.valid = finite(output.speed_setpoint_m_s) &&
-        finite(output.yaw_rate_setpoint_rad_s) &&
-        finite(output.heading_error_rad);
-    if (!output.valid) {
-        return output;
-    }
+    output.valid = segment.valid;
 
     const bool stopped = std::fabs(measured_speed.speed_m_s) <=
                          config_.driving.stopped_speed_threshold_m_s;

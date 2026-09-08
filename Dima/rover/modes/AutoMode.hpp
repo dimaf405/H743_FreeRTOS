@@ -3,6 +3,7 @@
 #include "mission/MissionService.hpp"
 #include "rover/PurePursuit.hpp"
 #include "rover/RoverControl.hpp"
+#include "rover/SegmentGuidance.hpp"
 
 #include "parameter_update.hpp"
 #include "rover_motion_request.hpp"
