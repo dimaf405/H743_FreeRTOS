@@ -11,6 +11,10 @@ Commander 只维护安全状态和 uORB 投影，不直接拥有传感器、串�
   gyro/mag/accel worker 只发布 `[cal]` 进度/终态，不再解析命令或发送第二个 ACK。
 - `sensor_calibration_status.active` 投影为 `vehicle_status.calibration_enabled`。RC 或传感器校准期间，预检拒绝 Arm，RC 正向 Arm/Unkill 动作被屏蔽；Disarm、Kill、Termination 始终保留。
 - 传感器校准还持有 `ArmedFlashCoordinator` maintenance interlock，防止 Commander 在状态消息传播窗口中抢先解锁。
+- Auto Calibration 在 Disarmed 显式进入后可以先运行静态 Level，不提前依赖 RC/PWM/双天线；首次正常人工 Arm 授予当前 session，协调器无授予权。内部阶段 Disarm 保留授权；继续请求在本轮外部 RC/命令与安全检查之后才走正常 preflight/maintenance/try_arm，不使用强制 Arm。Arm 不是增益确认。
+- 外部 Disarm 在内部已 Disarmed 的提交窗口也撤销整场授权；Kill、RC loss、模式切出、超时、安全/调度故障及重启均撤销。恢复 RC 或重连不会重建授权。只允许明确等待状态、匹配 session/参数代次且消费者已确认的正常续行，不从失败或回滚窗口自动 Arm。
+- 开/闭环校准使用共享 `RoverModeContract` 的精确安全投影，闭环仅开启 Velocity/Rates。参数 provisional 期间暂缓持久化，回滚无法确认会锁存 FAILED 与禁 Arm，不能重新进入运动。
+- worker 反馈归属在接受请求时锁定；外部 QGC 保持标准 `[cal]` 协议，AUTO-owned Level/Cancel 不发送 `[cal]` start/progress/terminal，避免错误推进另一个 Sensors 界面事务。
 
 ## 既有安全合同
 

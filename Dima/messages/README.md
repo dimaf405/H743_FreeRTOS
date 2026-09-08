@@ -11,6 +11,9 @@
 - `actuator_motors` 完整采用 PX4 v1.17.0 version 0 契约，保持 12 路公开数组；阶段 5 仅使用 Motor1/右侧和 Motor2/左侧，其余项必须为 NaN。
 - `rover_motion_request` 是 Manual 与 Navigation 共用的两轴产品边界：Manual 只允许 `SOURCE_MANUAL + MODE_NORMALIZED_AXES` 且物理量字段为 NaN；AUTO/Hold 只允许 `SOURCE_NAVIGATION + MODE_SPEED_YAW_RATE` 且归一化字段为 NaN。
 - `rover_navigation_status` 由 `AutoMode` 发布任务 generation/current/count、控制状态、故障原因、到点状态、路径误差与物理量 setpoint；其 schema、Topic ID、布局和注册表全部由同一 uORB 权威生成链产生。
+- `SOURCE_CALIBRATION` 通过 `rover_motion_request` 支持受限开环与 speed/yaw-rate 闭环，仍严格 one-of；`auto_calibration_request/status`、`rtk_heading_status` 和 `rover_control_status` 都是本地 uORB 合同，不是私有 MAVLink wire 消息。固定圆、事务/验证状态及真实控制反馈供内部安全消费者和 ULog 使用，QGC 不直接解码它们。
+- `sensor_calibration_request.feedback_owner` 的 NONE/QGC/AUTO 枚举从 schema 生成；内部 Level/Cancel 不接管 QGC Sensors 的 `[cal]` 终态。QGC 看到的是标准命令/ACK、STATUSTEXT、参数和 Standard Modes 服务，而不是本地 msg 布局。
+- 一次 Arm 扩展仍是本地合同：`auto_calibration_request` 增加阶段继续请求及参数计数，`auto_calibration_status` 记录授权诊断镜像、冻结速度/输出策略、RAM 已验证阶段和路径字段观测；`rover_control_status` 增加原始反馈与限制器原因。Level 请求/状态记录起始计数与自身写入增量，避免把外部并发改参吞成内部成功；这些字段均由权威 schema 生成，不扩展 MAVLink wire。
 - `actuator_output_status` 记录六路 PWM 的 configured/right/left mask、应用脉宽以及 `HARD_SAFE_OFF / DISARMED_NEUTRAL / ACTIVE / RETRY / FAULT` 状态；Commander 只通过该内部 uORB 契约做输出就绪 pre-arm 与故障恢复，不直接依赖 MotorOutput 类，也不新增 MAVLink 线协议。
 - `estimator_gps_status` 固定采用 PX4 v1.17.0 字段合同，并由唯一 EKF2 实例发布完整 GnssChecks 结果；UM982 只发布 `sensor_gps`/`vehicle_gps_position`，不得再维护同 Topic 的简化发布者。
 - `vehicle_imu_status` 固定采用 PX4 v1.17.0 字段合同，承载单 IMU 的 identity、rate/error/clipping、振动、coning、均值/方差和温度；它不声称实现 `SensorsStatusImu` 多实例一致性投票。

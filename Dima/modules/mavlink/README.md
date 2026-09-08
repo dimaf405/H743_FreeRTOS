@@ -29,7 +29,16 @@
 
 - Commander 保留 QGC Radio `param4=1` 事务。
 - `SensorCalibration` 独占 gyro `param1=1`、mag `param2=1`、accel `param5=1` 及非 RC 的全零取消。
+- Level 使用同一 worker 的 `param5=2`；只有 QGC-owned 请求发送 `[cal]` Sensors 反馈。Auto Calibration 内部 Level/Cancel 通过生成的 owner 字段隔离，组合阶段和自动增益改用 `[autocal]` RAW STATUSTEXT，不增加私有命令或确认按钮。
 - 接受后立即发送 `COMMAND_ACK ACCEPTED`；长事务严格使用 PX4 v2 `[cal] ...` STATUSTEXT 驱动 QGC。`SensorCalibration` 与 PX4 Commander worker 一样运行在非实时 `wq:lp_default`，协议文本使用不受普通日志等级过滤的 RAW 路径；放入实时 `wq:sensors` 会被项目日志层拒绝格式化。Armed、另一校准进行中或传感器无新鲜样本时返回拒绝结果，并以 `[cal] calibration failed: <type>` 终止 QGC 等待。
+
+## Standard Modes 与自动校准显示
+
+- `AVAILABLE_MODES` 按标准 `MAV_CMD_REQUEST_MESSAGE` 参数 2 的索引响应，0 为全目录、1..N 为单项；拒绝非有限、小数和越界值。一次最多排队一份固定目录，每轮最多发一项，不覆盖未完成的回复。
+- 模式名称、PX4 main/sub、Commander nav-state、standard-mode 和 selectable properties 同源于 `mavlink_runtime.yaml` 并生成。Manual/Mission/Auto Calibration 可选择；Hold/Termination 仅报告状态，不开放手选。
+- `CURRENT_MODE` 默认 0.5 Hz，支持变化触发、one-shot 与标准周期设置；实际与意图来自同一份 Commander 快照。目录固定，因此没有新增 `AVAILABLE_MODES_MONITOR` 或私有 XML 消息。
+- 源码审查对照官方 QGC 5.1.3 commit `7fe5b11b18a4c2eec17beb1b2a3ef45ac0c4e32e`。它可以通过标准目录发现 `Auto Calibration`，但没有本项目的专用校准向导、圆形围栏覆盖层或结构化增益验收页；参数页和消息面板分别承载配置/结果与操作提示。实际发现、切换和重连仍需板端验证，未修改 QGC。
+- STATUSTEXT 短文本保持 `id=0`；长文本采用非零 ID 分片，整 50 字节倍数另发带 NUL 的结束片，使 QGC 5.1.3 正确结束重组。`[autocal]` 在阶段切换及每 5 s 重报当前边界、Arm 等待和临时/最终状态，重连不依赖已经丢失的一次性提示。
 
 ## Onboard Log
 
@@ -44,3 +53,5 @@
 周期遥测各自保存 PX4 风格的默认值和 `SET_MESSAGE_INTERVAL` 配置，不存在跨 message ID 的统一 10 Hz 限流策略。`COMMAND_ACK`、参数传输、Mission、Metadata/FTP、TIMESYNC、PING、STATUSTEXT 和版本/组件信息属于事务或诊断传输，不套用周期流节拍。
 
 Windows 构建只证明生成、编译和链接。QGC Inspector 实时值、USB 长连接、带宽、丢包和板端传感器 health 转换均需实机验证。
+
+- **CPU 负载：** SYS_STATUS.load 复用平台 CpuUsage 的有效窗口千分比；不新增消息或参数。无效/回绕窗口保留上次有效值，原有 SYS_STATUS 发送节奏不变。任务明细与 SD IRQ 开销分别用于诊断，不能把 I/O 等待墙钟时间当作 CPU 运行时间。
