@@ -3,6 +3,7 @@ parameters:
 - group: Pure Pursuit
   definitions:
     PP_LOOKAHD_GAIN:
+      category: System
       description:
         short: Tuning parameter for the pure pursuit controller
         long: Lower values make path tracking more aggressive and can increase overshoot or oscillation.
@@ -13,6 +14,7 @@ parameters:
       increment: 0.01
       decimal: 2
     PP_LOOKAHD_MIN:
+      category: Developer
       description:
         short: Minimum lookahead distance for the pure pursuit controller
       type: float
@@ -23,6 +25,7 @@ parameters:
       increment: 0.01
       decimal: 2
     PP_LOOKAHD_MAX:
+      category: Developer
       description:
         short: Maximum lookahead distance for the pure pursuit controller
       type: float
@@ -48,6 +51,7 @@ parameters:
 - group: Rover Attitude Control
   definitions:
     RO_YAW_P:
+      category: System
       description:
         short: Proportional gain for closed loop yaw controller
       type: float
@@ -59,6 +63,7 @@ parameters:
 - group: Rover Rate Control
   definitions:
     RO_YAW_STICK_DZ:
+      category: Developer
       description:
         short: Yaw stick deadzone
         long: Percentage of stick input range that will be interpreted as zero around
@@ -70,6 +75,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_YAW_EXPO:
+      category: Developer
       description:
         short: Yaw rate expo factor
         long: |-
@@ -83,6 +89,7 @@ parameters:
       max: 1
       decimal: 2
     RO_YAW_SUPEXPO:
+      category: Developer
       description:
         short: Yaw rate super expo factor
         long: |-
@@ -97,6 +104,7 @@ parameters:
       max: 0.95
       decimal: 2
     RO_YAW_RATE_TH:
+      category: System
       description:
         short: Yaw rate measurement threshold
         long: The minimum threshold for the yaw rate measurement not to be interpreted
@@ -109,6 +117,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_YAW_RATE_P:
+      category: System
       description:
         short: Proportional gain for closed loop yaw rate controller
       type: float
@@ -118,6 +127,7 @@ parameters:
       increment: 0.01
       decimal: 3
     RO_YAW_RATE_I:
+      category: System
       description:
         short: Integral gain for closed loop yaw rate controller
       type: float
@@ -166,6 +176,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_YAW_RATE_CORR:
+      category: System
       description:
         short: Yaw rate correction factor
         long: |-
@@ -179,7 +190,7 @@ parameters:
       max: 10000
       increment: 0.01
       decimal: 2
-- group: Rover Velocity Control
+- group: Rover Auto Calibration
   definitions:
     RO_CAL_RADIUS:
       description:
@@ -226,6 +237,7 @@ parameters:
       increment: 0.1
       decimal: 2
     RO_CAL_THR_MAX:
+      category: Developer
       description:
         short: Auto calibration throttle ceiling
         long: |-
@@ -241,6 +253,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_CAL_TURN_MAX:
+      category: Developer
       description:
         short: Auto calibration steering ceiling
         long: |-
@@ -252,7 +265,10 @@ parameters:
       max: 0.35
       increment: 0.01
       decimal: 2
+- group: Rover Velocity Control
+  definitions:
     RO_MAX_THR_SPEED:
+      category: System
       description:
         short: Speed the rover drives at maximum throttle
         long: Used to linearly map speeds [m/s] to throttle values [-1. 1].
@@ -264,6 +280,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_SPEED_P:
+      category: System
       description:
         short: Proportional gain for ground speed controller
       type: float
@@ -273,6 +290,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_SPEED_I:
+      category: System
       description:
         short: Integral gain for ground speed controller
       type: float
@@ -323,6 +341,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_JERK_LIM:
+      category: Developer
       description:
         short: Jerk limit
         long: |-
@@ -337,6 +356,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_SPEED_TH:
+      category: System
       description:
         short: Speed measurement threshold
         long: |-
@@ -350,6 +370,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RO_SPEED_RED:
+      category: Developer
       description:
         short: Tuning parameter for the speed reduction based on the course error
         long: |-

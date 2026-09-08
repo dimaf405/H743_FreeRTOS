@@ -15,6 +15,7 @@ parameters:
       increment: 0.001
       decimal: 3
     RD_TRANS_TRN_DRV:
+      category: Developer
       description:
         short: Yaw error threshold to switch from spot turning to driving
       type: float
@@ -25,6 +26,7 @@ parameters:
       increment: 0.01
       decimal: 3
     RD_TRANS_DRV_TRN:
+      category: Developer
       description:
         short: Yaw error threshold to switch from driving to spot turning
       type: float
@@ -35,6 +37,7 @@ parameters:
       increment: 0.01
       decimal: 3
     RD_YAW_STK_GAIN:
+      category: Developer
       description:
         short: Yaw stick gain for Manual mode
         long: Assign value below 1.0 to decrease stick response for yaw control.

@@ -12,6 +12,7 @@ parameters:
         102: Motor left
       default: 0
     PWM_S1_MIN:
+      category: System
       description:
         short: PWM S1 minimum pulse
       type: int32
@@ -21,6 +22,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S1_CENT:
+      category: System
       description:
         short: PWM S1 center pulse
       type: int32
@@ -30,6 +32,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S1_MAX:
+      category: System
       description:
         short: PWM S1 maximum pulse
       type: int32
@@ -58,6 +61,7 @@ parameters:
         102: Motor left
       default: 0
     PWM_S2_MIN:
+      category: System
       description:
         short: PWM S2 minimum pulse
       type: int32
@@ -67,6 +71,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S2_CENT:
+      category: System
       description:
         short: PWM S2 center pulse
       type: int32
@@ -76,6 +81,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S2_MAX:
+      category: System
       description:
         short: PWM S2 maximum pulse
       type: int32
@@ -104,6 +110,7 @@ parameters:
         102: Motor left
       default: 0
     PWM_S3_MIN:
+      category: System
       description:
         short: PWM S3 minimum pulse
       type: int32
@@ -113,6 +120,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S3_CENT:
+      category: System
       description:
         short: PWM S3 center pulse
       type: int32
@@ -122,6 +130,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S3_MAX:
+      category: System
       description:
         short: PWM S3 maximum pulse
       type: int32
@@ -150,6 +159,7 @@ parameters:
         102: Motor left
       default: 0
     PWM_S4_MIN:
+      category: System
       description:
         short: PWM S4 minimum pulse
       type: int32
@@ -159,6 +169,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S4_CENT:
+      category: System
       description:
         short: PWM S4 center pulse
       type: int32
@@ -168,6 +179,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S4_MAX:
+      category: System
       description:
         short: PWM S4 maximum pulse
       type: int32
@@ -196,6 +208,7 @@ parameters:
         102: Motor left
       default: 0
     PWM_S5_MIN:
+      category: System
       description:
         short: PWM S5 minimum pulse
       type: int32
@@ -205,6 +218,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S5_CENT:
+      category: System
       description:
         short: PWM S5 center pulse
       type: int32
@@ -214,6 +228,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S5_MAX:
+      category: System
       description:
         short: PWM S5 maximum pulse
       type: int32
@@ -242,6 +257,7 @@ parameters:
         102: Motor left
       default: 0
     PWM_S6_MIN:
+      category: System
       description:
         short: PWM S6 minimum pulse
       type: int32
@@ -251,6 +267,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S6_CENT:
+      category: System
       description:
         short: PWM S6 center pulse
       type: int32
@@ -260,6 +277,7 @@ parameters:
       max: 2500
       increment: 1
     PWM_S6_MAX:
+      category: System
       description:
         short: PWM S6 maximum pulse
       type: int32
@@ -292,6 +310,7 @@ parameters:
       increment: 0.01
       decimal: 2
     RD_REV_STEER:
+      category: Developer
       description:
         short: Reverse steering in Manual mode
         long: Keeps the commanded vehicle nose direction intuitive while reversing.
@@ -300,6 +319,7 @@ parameters:
       min: 0
       max: 1
     RD_STR_THR_MIX:
+      category: Developer
       description:
         short: Steering versus throttle saturation priority
         long: |-
@@ -314,6 +334,7 @@ parameters:
 - group: Rover Motors
   definitions:
     MOT_THR_MIN:
+      category: System
       description:
         short: Minimum nonzero motor output
         long: |-
@@ -335,6 +356,7 @@ parameters:
       increment: 0.01
       decimal: 2
     MOT_SLEW_RATE:
+      category: System
       description:
         short: Longitudinal command slew rate
         long: A value of zero disables slew limiting.
@@ -357,6 +379,7 @@ parameters:
       increment: 0.01
       decimal: 2
     MOT_THR_EXPO:
+      category: System
       description:
         short: Motor thrust curve expo
         long: |-
@@ -369,6 +392,7 @@ parameters:
       increment: 0.01
       decimal: 2
     MOT_THR_ASYM:
+      category: System
       description:
         short: Forward to reverse thrust asymmetry
         long: Values above one increase negative motor commands before final limiting.
