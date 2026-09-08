@@ -3,6 +3,7 @@ parameters:
 - group: EKF2
   definitions:
     EKF2_GRAV_NOISE:
+      category: Developer
       description:
         short: Accelerometer measurement noise for gravity based observations
       type: float

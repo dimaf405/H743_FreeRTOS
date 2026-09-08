@@ -3,6 +3,7 @@ parameters:
 - group: EKF2
   definitions:
     EKF2_GBIAS_INIT:
+      category: Developer
       description:
         short: 1-sigma IMU gyro switch-on bias
       type: float
@@ -13,6 +14,7 @@ parameters:
       reboot_required: true
       decimal: 2
     EKF2_GYR_B_NOISE:
+      category: Developer
       description:
         short: Process noise for IMU rate gyro bias prediction
       type: float
@@ -22,6 +24,7 @@ parameters:
       unit: rad/s^2
       decimal: 6
     EKF2_GYR_B_LIM:
+      category: Developer
       description:
         short: Gyro bias learning limit
         long: The ekf gyro bias states will be limited to within a range equivalent

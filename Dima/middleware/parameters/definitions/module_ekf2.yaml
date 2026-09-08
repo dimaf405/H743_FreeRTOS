@@ -3,6 +3,7 @@ parameters:
 - group: EKF2
   definitions:
     EKF2_PREDICT_US:
+      category: Developer
       description:
         short: EKF prediction period
         long: EKF prediction period in microseconds. This should ideally be an integer
@@ -15,6 +16,7 @@ parameters:
       unit: us
       reboot_required: true
     EKF2_DELAY_MAX:
+      category: Developer
       description:
         short: Maximum delay of all the aiding sensors
         long: Defines the delay between the current time and the delayed-time horizon.
@@ -27,6 +29,7 @@ parameters:
       reboot_required: true
       decimal: 1
     EKF2_ANGERR_INIT:
+      category: Developer
       description:
         short: 1-sigma tilt angle uncertainty after gravity vector alignment
       type: float
@@ -37,6 +40,7 @@ parameters:
       reboot_required: true
       decimal: 3
     EKF2_HDG_GATE:
+      category: Developer
       description:
         short: Gate size for heading fusion
         long: Sets the number of standard deviations used by the innovation consistency
@@ -47,6 +51,7 @@ parameters:
       unit: SD
       decimal: 1
     EKF2_HEAD_NOISE:
+      category: Developer
       description:
         short: Measurement noise for magnetic heading fusion
       type: float
@@ -56,6 +61,7 @@ parameters:
       unit: rad
       decimal: 2
     EKF2_NOAID_NOISE:
+      category: Developer
       description:
         short: Measurement noise for non-aiding position hold
       type: float
@@ -65,6 +71,7 @@ parameters:
       unit: m
       decimal: 1
     EKF2_NOAID_TOUT:
+      category: Developer
       description:
         short: Maximum inertial dead-reckoning time
         long: Maximum lapsed time from last fusion of measurements that constrain
@@ -75,9 +82,12 @@ parameters:
       min: 500000
       max: 10000000
       unit: us
+- group: Compatibility
+  definitions:
     # N1 只编译 GNSS 高度源；枚举不得暴露未接入的 Baro、Range 或 EV，
     # 避免 QGC 接受与实际 EKF2 编译闭包冲突的高度参考配置。
     EKF2_HGT_REF:
+      category: System
       description:
         short: GNSS height reference used by the EKF
         long: |-
@@ -89,7 +99,10 @@ parameters:
         1: GPS
       default: 1
       reboot_required: true
+- group: EKF2
+  definitions:
     EKF2_IMU_CTRL:
+      category: Developer
       description:
         short: IMU control
       type: bitmask
@@ -101,6 +114,7 @@ parameters:
       min: 0
       max: 7
     EKF2_GYR_NOISE:
+      category: Developer
       description:
         short: Rate gyro noise for covariance prediction
       type: float
@@ -110,6 +124,7 @@ parameters:
       unit: rad/s
       decimal: 4
     EKF2_ACC_NOISE:
+      category: Developer
       description:
         short: Accelerometer noise for covariance prediction
       type: float
@@ -144,6 +159,7 @@ parameters:
       decimal: 3
 
     EKF2_TAU_VEL:
+      category: Developer
       description:
         short: Time constant of the velocity output prediction and smoothing filter
       type: float
@@ -152,6 +168,7 @@ parameters:
       unit: s
       decimal: 2
     EKF2_TAU_POS:
+      category: Developer
       description:
         short: Output predictor position time constant
         long: Controls how tightly the output track the EKF states
@@ -163,6 +180,7 @@ parameters:
       decimal: 2
 
     EKF2_VEL_LIM:
+      category: Developer
       description:
         short: Velocity limit
       type: float

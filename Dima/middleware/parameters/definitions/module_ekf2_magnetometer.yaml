@@ -3,6 +3,7 @@ parameters:
 - group: EKF2
   definitions:
     EKF2_MAG_TYPE:
+      category: Developer
       description:
         short: Type of magnetometer fusion
         long: Integer controlling the type of magnetometer fusion used - magnetic
@@ -24,6 +25,7 @@ parameters:
       default: 0
       reboot_required: true
     EKF2_MAG_DELAY:
+      category: Developer
       description:
         short: Magnetometer measurement delay relative to IMU measurements
       type: float
@@ -34,6 +36,7 @@ parameters:
       reboot_required: true
       decimal: 1
     EKF2_MAG_GATE:
+      category: Developer
       description:
         short: Gate size for magnetometer XYZ component fusion
         long: Sets the number of standard deviations used by the innovation consistency
@@ -44,6 +47,7 @@ parameters:
       unit: SD
       decimal: 1
     EKF2_MAG_NOISE:
+      category: Developer
       description:
         short: Measurement noise for magnetometer 3-axis fusion
       type: float
@@ -53,6 +57,7 @@ parameters:
       unit: gauss
       decimal: 3
     EKF2_MAG_B_NOISE:
+      category: Developer
       description:
         short: Process noise for body magnetic field prediction
       type: float
@@ -62,6 +67,7 @@ parameters:
       unit: gauss/s
       decimal: 6
     EKF2_MAG_E_NOISE:
+      category: Developer
       description:
         short: Process noise for earth magnetic field prediction
       type: float
@@ -71,6 +77,7 @@ parameters:
       unit: gauss/s
       decimal: 6
     EKF2_DECL_TYPE:
+      category: Developer
       description:
         short: Integer bitmask controlling handling of magnetic declination
         long: 'Set bits in the following positions to enable functions. 0 : Set to
@@ -87,6 +94,7 @@ parameters:
       max: 3
       reboot_required: true
     EKF2_MAG_ACCLIM:
+      category: Developer
       description:
         short: Horizontal acceleration threshold used for heading observability check
         long: The heading is assumed to be observable when the body acceleration is
@@ -99,6 +107,7 @@ parameters:
       unit: m/s^2
       decimal: 2
     EKF2_MAG_CHECK:
+      category: Developer
       description:
         short: Magnetic field strength test selection
         long: 'Bitmask to set which check is used to decide whether the magnetometer
@@ -118,6 +127,7 @@ parameters:
       min: 0
       max: 7
     EKF2_MAG_CHK_STR:
+      category: Developer
       description:
         short: Magnetic field strength check tolerance
         long: Maximum allowed deviation from the expected magnetic field strength
@@ -129,6 +139,7 @@ parameters:
       unit: gauss
       decimal: 2
     EKF2_MAG_CHK_INC:
+      category: Developer
       description:
         short: Magnetic field inclination check tolerance
         long: Maximum allowed deviation from the expected magnetic field inclination
@@ -140,6 +151,7 @@ parameters:
       unit: deg
       decimal: 1
     EKF2_SYNT_MAG_Z:
+      category: Developer
       description:
         short: Enable synthetic magnetometer Z component measurement
         long: Use for vehicles where the measured body Z magnetic field is subject
