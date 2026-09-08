@@ -588,6 +588,8 @@ DIMA_ROVER_LIB_CXX_SOURCES := \
 # 增加实现文件，禁止再维护一份容易漏项的手写文件列表。
 DIMA_ROVER_MODE_CXX_SOURCES := \
 	$(sort $(wildcard Dima/rover/modes/*.cpp))
+DIMA_ROVER_CONTROL_CXX_SOURCES := \
+	$(sort $(wildcard Dima/rover/control/*.cpp))
 
 DIMA_COMMON_CXX_SOURCES := \
 	Dima/platform/common/Execution.cpp \
@@ -598,7 +600,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/adapters/usb_console/UsbConsole.cpp \
 	Dima/application/app_bootstrap.cpp \
 	Dima/rover/ApplicationContext.cpp \
-	Dima/rover/control/RoverDifferential.cpp \
+	$(DIMA_ROVER_CONTROL_CXX_SOURCES) \
 	$(DIMA_ROVER_MODE_CXX_SOURCES) \
 	Dima/lib/timesync/Timesync.cpp \
 	Dima/lib/sensors/SensorRotation.cpp \
@@ -615,11 +617,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/modules/sensors/imu/VehicleImu.cpp \
 	Dima/lib/sensors/calibration/SensorCalibrationAlgorithms.cpp \
 	Dima/modules/sensors/magnetometer/VehicleMagnetometer.cpp \
-	Dima/modules/sensors/calibration/SensorCalibration.cpp \
-	Dima/modules/sensors/calibration/SensorCalibrationGyro.cpp \
-	Dima/modules/sensors/calibration/SensorCalibrationAccel.cpp \
-	Dima/modules/sensors/calibration/SensorCalibrationMag.cpp \
-	Dima/modules/sensors/calibration/SensorCalibrationParameters.cpp \
+	$(sort $(wildcard Dima/modules/sensors/calibration/*.cpp)) \
 	$(DIMA_LOGGING_MODULE_CXX_SOURCES) \
 	Dima/adapters/mavlink/MavlinkChannelState.cpp \
 	$(DIMA_MAVLINK_MODULE_CXX_SOURCES) \
@@ -638,10 +636,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/drivers/rc/sbus/SbusProtocol.cpp \
 	Dima/drivers/rc/sbus/SbusRc.cpp \
 	Dima/modules/rc/RCUpdate.cpp \
-	Dima/modules/safety/Commander.cpp \
-	Dima/modules/safety/CommanderActions.cpp \
-	Dima/modules/safety/CommanderCommands.cpp \
-	Dima/modules/safety/CommanderSafety.cpp \
+	$(sort $(wildcard Dima/modules/safety/Commander*.cpp)) \
 	Dima/modules/boot_health/BootHealthService.cpp \
 	Dima/middleware/maintenance/RuntimeMaintenanceCoordinator.cpp \
 	Dima/middleware/lifecycle/module_manager.cpp \
@@ -857,7 +852,8 @@ $(DIMA_ROVER_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 # AutoMode 通过 MissionService 的短临界区 API 读取冻结任务快照；只给模式对象
 # 开放 modules include 根，不把该依赖扩散到纯差速控制或其他 Rover 对象。
 $(DIMA_ROVER_MODE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
-	$(DIMA_MODULE_INCLUDES) $(DIMA_MATRIX_INCLUDES)
+	$(DIMA_MODULE_INCLUDES) $(DIMA_MATRIX_INCLUDES) \
+	$(DIMA_LIB_SENSOR_INCLUDES) $(DIMA_SENSOR_MODULE_INCLUDES)
 $(DIMA_COMPOSITION_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_ROVER_INCLUDES) $(DIMA_LIB_INCLUDES) \
 	$(DIMA_MIDDLEWARE_INCLUDES) \
@@ -879,6 +875,9 @@ $(DIMA_LIB_OBJECTS): DIMA_PRIVATE_INCLUDES += $(DIMA_LIB_INCLUDES)
 # 翻译单元开放 middleware include 根；控制核仍不得引用 uORB、参数、队列或 RTOS。
 $(DIMA_ROVER_CONTROL_LIB_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_MIDDLEWARE_INCLUDES)
+# 固定容量 RLS 仅需已有 Matrix/平台无关 defines；不引入参数、uORB 或 RTOS。
+$(filter $(BUILD_DIR)/Dima/lib/rover/CalibrationIdentification.o,$(DIMA_LIB_OBJECTS)): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_MATRIX_INCLUDES) $(DIMA_MIDDLEWARE_INCLUDES)
 $(DIMA_EKF2_ABI_OBJECTS): DIMA_PRIVATE_DEFS += \
 	-DCONFIG_EKF2_GNSS -DCONFIG_EKF2_GNSS_YAW \
 	-DCONFIG_EKF2_GRAVITY_FUSION -DCONFIG_EKF2_MAGNETOMETER
