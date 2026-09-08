@@ -26,6 +26,21 @@ parameters:
       max: 360
       increment: 0.1
       decimal: 3
+    GPS_YAW_BASELINE:
+      description:
+        short: Dual antenna measured baseline
+        long: |-
+          Robustly measured distance between the two GNSS antennas. Zero means
+          unlearned and disables the runtime baseline-consistency gate. The
+          receiver still measures the baseline; this value is not an invented
+          UM982 configuration command.
+      type: float
+      default: 0.0
+      unit: m
+      min: 0
+      max: 10
+      increment: 0.001
+      decimal: 3
 - group: Sensor Calibration
   definitions:
     CAL_ACC0_ID:
@@ -286,6 +301,41 @@ parameters:
       default: 0
       min: 0
       max: 40
+    SENS_BOARD_X_OFF:
+      description:
+        short: Board roll fine adjustment
+        long: Fine roll correction applied after SENS_BOARD_ROT.
+      type: float
+      default: 0.0
+      unit: deg
+      min: -45
+      max: 45
+      increment: 0.1
+      decimal: 2
+    SENS_BOARD_Y_OFF:
+      description:
+        short: Board pitch fine adjustment
+        long: Fine pitch correction applied after SENS_BOARD_ROT.
+      type: float
+      default: 0.0
+      unit: deg
+      min: -45
+      max: 45
+      increment: 0.1
+      decimal: 2
+    SENS_BOARD_Z_OFF:
+      description:
+        short: Board yaw fine adjustment
+        long: |-
+          Fine yaw correction applied after SENS_BOARD_ROT. Automatic level
+          calibration preserves this value because gravity cannot observe yaw.
+      type: float
+      default: 0.0
+      unit: deg
+      min: -45
+      max: 45
+      increment: 0.1
+      decimal: 2
     IMU_INTEG_RATE:
       description:
         short: IMU integration rate

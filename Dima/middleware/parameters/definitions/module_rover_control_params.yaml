@@ -181,6 +181,91 @@ parameters:
       decimal: 2
 - group: Rover Velocity Control
   definitions:
+    RO_CAL_RADIUS:
+      description:
+        short: Auto calibration position radius
+        long: |-
+          Horizontal radius about the GNSS position captured at calibration entry.
+          The center remains fixed for the entire session. Only the positioning
+          reference point is constrained, not the complete vehicle footprint.
+          Position uncertainty, latency and stopping distance reduce usable space.
+      type: float
+      default: 20.0
+      min: 1
+      max: 100
+      unit: m
+      increment: 0.5
+      decimal: 1
+    RO_CAL_VMAX:
+      description:
+        short: Calibration fallback speed limit
+        long: |-
+          Frozen ground-speed limit when entry RO_SPEED_LIM is zero or legacy -1.
+          An unset cruise requests a gradual full-output probe, not unlimited speed.
+          Stopping distance must cover this speed and the allowed drive output.
+      type: float
+      default: 1.5
+      min: 0.1
+      max: 100
+      unit: m/s
+      decimal: 2
+    RO_CAL_STOP_D:
+      description:
+        short: Proven calibration stopping distance
+        long: |-
+          Conservative maximum distance traveled by the positioning reference
+          point after a stop request, including actuator response and inertia,
+          for the current load, ground and permitted calibration motion.
+          Zero means unknown and inhibits all automatic calibration motion.
+          This is a safety input, not the commanded RO_DECEL_LIM.
+      type: float
+      default: 0.0
+      min: 0
+      max: 100
+      unit: m
+      increment: 0.1
+      decimal: 2
+    RO_CAL_THR_MAX:
+      description:
+        short: Auto calibration throttle ceiling
+        long: |-
+          Maximum normalized longitudinal request used by Auto Calibration.
+          A separately gated full-output probe for unset cruise uses MOT_THR_MAX
+          instead. All other phases continue to respect this ceiling.
+          Runtime safety also applies a non-bypassable hard ceiling and a
+          measured ground-speed limit.
+      type: float
+      default: 0.30
+      min: 0.10
+      max: 0.40
+      increment: 0.01
+      decimal: 2
+    RO_CAL_TURN_MAX:
+      description:
+        short: Auto calibration steering ceiling
+        long: |-
+          Maximum absolute normalized steering request used by calibration
+          turns and closed-loop gain validation. Frozen for each session.
+      type: float
+      default: 0.25
+      min: 0.10
+      max: 0.35
+      increment: 0.01
+      decimal: 2
+    RO_CAL_DIST:
+      description:
+        short: Auto calibration straight distance
+        long: |-
+          Requested length of each reciprocal straight segment, shortened when
+          necessary to fit inside the fixed RO_CAL_RADIUS minus safety margins.
+          This is not the safety radius. Insufficient space rejects the stage.
+      type: float
+      default: 12.0
+      unit: m
+      min: 5
+      max: 30
+      increment: 0.5
+      decimal: 1
     RO_MAX_THR_SPEED:
       description:
         short: Speed the rover drives at maximum throttle
@@ -213,10 +298,12 @@ parameters:
     RO_SPEED_LIM:
       description:
         short: Speed limit
-        long: Used to cap speed setpoints and map controller inputs to speed setpoints
-          in Position mode.
+        long: |-
+          Cruise speed used by navigation. Zero is unconfigured; legacy -1 is
+          accepted as unconfigured for calibration entry. Auto calibration freezes
+          a positive entry value as its speed limit, otherwise uses RO_CAL_VMAX.
       type: float
-      default: -1.0
+      default: 0.0
       unit: m/s
       min: -1
       max: 100
