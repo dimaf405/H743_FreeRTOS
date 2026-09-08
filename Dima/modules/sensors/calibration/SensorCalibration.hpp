@@ -21,6 +21,8 @@
 #include "uORB/Publication.hpp"
 #include "uORB/SubscriptionData.hpp"
 #include "vehicle_magnetometer.hpp"
+#include "vehicle_attitude.hpp"
+#include "vehicle_imu.hpp"
 #include "vehicle_status.hpp"
 #include "work_queue/WorkQueue.hpp"
 
@@ -57,6 +59,7 @@ private:
         Gyro = sensor_calibration_status_s::TYPE_GYRO,
         Accel = sensor_calibration_status_s::TYPE_ACCEL,
         Mag = sensor_calibration_status_s::TYPE_MAG,
+        Level = sensor_calibration_status_s::TYPE_LEVEL,
     };
 
     enum class Phase : std::uint8_t {
@@ -66,6 +69,7 @@ private:
         CollectGyro,
         CollectAccel,
         CollectMag,
+        CollectLevel,
         WaitForApply,
         WaitForRollback,
     };
@@ -137,13 +141,16 @@ private:
     void reset_runtime_state() noexcept;
     void update_inputs() noexcept;
     void process_requests(std::uint64_t now) noexcept;
-    bool begin(Type type, std::uint64_t now,
-               const char *&failure_reason) noexcept;
+    bool begin(Type type, std::uint8_t feedback_owner, std::uint64_t now,
+               const char *&failure_reason, std::uint32_t expected_set_count) noexcept;
     void cancel() noexcept;
     void fail(const char *reason) noexcept;
     void finish_success() noexcept;
     void release_interlock() noexcept;
-    void report_start_failure(Type type, const char *reason) noexcept;
+    void report_start_failure(Type type, const char *reason,
+                              std::uint8_t feedback_owner) noexcept;
+    static void report_terminal(std::uint8_t feedback_owner, Type type,
+                                std::uint8_t result) noexcept;
     bool publish_status(std::uint64_t now, bool force) noexcept;
     void update_progress(std::uint8_t progress, std::uint64_t now) noexcept;
     static const char *type_name(Type type) noexcept;
@@ -153,6 +160,10 @@ private:
     void process_gyro(std::uint64_t now) noexcept;
     void process_accel(std::uint64_t now) noexcept;
     void process_mag(std::uint64_t now) noexcept;
+    void process_level(std::uint64_t now) noexcept;
+    bool commit_level(float roll_deg, float pitch_deg) noexcept;
+    bool level_parameters_unchanged() const noexcept;
+    bool level_applied(std::uint64_t now) const noexcept;
     void process_wait_for_apply(std::uint64_t now) noexcept;
     void process_wait_for_rollback(std::uint64_t now) noexcept;
     int classify_accel_side(const sensor_accel_s &sample) const noexcept;
@@ -203,6 +214,9 @@ private:
         ORB_ID(sensor_mag)};
     uORB::SubscriptionData<vehicle_magnetometer_s>
         vehicle_magnetometer_subscription_{ORB_ID(vehicle_magnetometer)};
+    uORB::SubscriptionData<vehicle_attitude_s> attitude_subscription_{
+        ORB_ID(vehicle_attitude)};
+    uORB::SubscriptionData<vehicle_imu_s> imu_subscription_{ORB_ID(vehicle_imu)};
     uORB::Publication<sensor_calibration_status_s> status_publication_{
         ORB_ID(sensor_calibration_status)};
 
@@ -213,6 +227,15 @@ private:
     sensor_gyro_s sensor_gyro_{};
     sensor_mag_s sensor_mag_{};
     vehicle_magnetometer_s vehicle_magnetometer_{};
+    vehicle_attitude_s attitude_{};
+    vehicle_imu_s imu_{};
+    algorithms::RunningStats3 level_stats_{};
+    std::uint64_t level_window_started_us_{0U};
+    std::int32_t level_board_rotation_{0};
+    float level_old_offsets_[3]{};
+    double level_min_[2]{};
+    double level_max_[2]{};
+    bool level_mag_present_{false};
     algorithms::RunningStats3 gyro_stats_{};
     AccelSide accel_sides_[6]{};
     algorithms::RunningStats3 accel_candidate_stats_{};
@@ -259,6 +282,14 @@ private:
     int mag_active_side_{-1};
     int mag_reported_completed_side_{-1};
     bool interlock_held_{false};
+    bool storage_paused_{false};
+    std::uint64_t request_timestamp_{0U};
+    std::uint32_t committed_set_count_{0U};
+    std::uint32_t level_start_set_count_{};
+    std::uint8_t level_owned_changes_{};
+    std::uint8_t result_{sensor_calibration_status_s::RESULT_NONE};
+    // 反馈归属随被接受的事务固定，直到终态发布；Cancel/拒绝不能接管它。
+    std::uint8_t feedback_owner_{sensor_calibration_request_s::FEEDBACK_NONE};
     bool mag_rotation_detected_{false};
     bool required_parameter_update_valid_{false};
     bool rollback_terminal_sent_{false};

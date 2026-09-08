@@ -25,6 +25,19 @@ bool default_command_parameter(double value) noexcept
            (std::isfinite(value) && std::fabs(value) <= 1.0e-6);
 }
 
+void report_sensor_calibration_rejection(
+    calibration::PreflightCalibrationRequest request, bool from_external) noexcept
+{
+    // QGC Sensors 的启动命令不等待 ACK，而是等待 [cal] 终态。拒绝有效单项
+    // 请求时补齐其失败文本；Radio/取消/未知选择器不冒充某个传感器事务。
+    const char *type = request == calibration::PreflightCalibrationRequest::Gyro ? "gyro"
+        : request == calibration::PreflightCalibrationRequest::Magnetometer ? "mag"
+        : request == calibration::PreflightCalibrationRequest::Accelerometer ? "accel"
+        : request == calibration::PreflightCalibrationRequest::Level ? "level" : nullptr;
+    if (from_external && type != nullptr)
+        px4_log_raw(_PX4_LOG_LEVEL_ERROR, "[cal] calibration failed: %s", type);
+}
+
 } // namespace
 
 bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
@@ -138,6 +151,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                         worker_request.timestamp = now;
                         worker_request.request =
                             sensor_calibration_request_s::REQUEST_CANCEL;
+                        worker_request.feedback_owner = sensor_calibration_request_s::FEEDBACK_QGC;
                         result =
                             sensor_calibration_request_publication_.publish(
                                 worker_request)
@@ -166,6 +180,8 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                            PreflightCalibrationRequest::Accelerometer) {
                 worker_request_type =
                     sensor_calibration_request_s::REQUEST_ACCEL;
+            } else if (request == calibration::PreflightCalibrationRequest::Level) {
+                worker_request_type = sensor_calibration_request_s::REQUEST_LEVEL;
             }
 
             if (worker_request_type ==
@@ -180,12 +196,14 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                 !worker_status_fresh) {
                 result = vehicle_command_ack_s::
                     VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
+                report_sensor_calibration_rejection(request, cmd.from_external);
                 break;
             }
 
             sensor_calibration_request_s worker_request{};
             worker_request.timestamp = now;
             worker_request.request = worker_request_type;
+            worker_request.feedback_owner = sensor_calibration_request_s::FEEDBACK_QGC;
 
             // PX4 Commander reserves the calibration state before starting
             // its low-priority worker. Keep the same ordering across Dima's
@@ -198,6 +216,7 @@ bool Commander::handle_vehicle_command(std::uint64_t now) noexcept
                 vehicle_status_.calibration_enabled = false;
                 sensor_calibration_dispatch_time_ = 0U;
                 result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
+                report_sensor_calibration_rejection(request, cmd.from_external);
                 break;
             }
 

@@ -50,6 +50,7 @@ void SensorCalibration::clear_parameter_expectation() noexcept
 
 void SensorCalibration::notify_parameter_changes() noexcept
 {
+    committed_set_count_ = param_set_count();
     // 先记录通知前的 timestamp/instance 基线和本地通知时刻，再广播；后续必须
     // 捕获“更新于本次通知之后”的 generation，不能误认历史 parameter_update。
     parameter_update_baseline_timestamp_us_ = parameter_update_.timestamp;
@@ -109,13 +110,17 @@ bool SensorCalibration::restore_parameters() noexcept
         values[3] = param_handle(dima::params::CAL_MAG0_XSCALE);
         values[4] = param_handle(dima::params::CAL_MAG0_YSCALE);
         values[5] = param_handle(dima::params::CAL_MAG0_ZSCALE);
+    } else if (parameter_snapshot_.type == Type::Level) {
+        values[0] = param_handle(dima::params::SENS_BOARD_X_OFF);
+        values[1] = param_handle(dima::params::SENS_BOARD_Y_OFF);
     } else {
         return false;
     }
 
     bool restored = true;
     px4::AtomicTransaction transaction;
-    if (param_set_no_notification(id, &parameter_snapshot_.id) != 0) {
+    if (parameter_snapshot_.type != Type::Level &&
+        param_set_no_notification(id, &parameter_snapshot_.id) != 0) {
         restored = false;
     }
     for (std::size_t index = 0U;
@@ -153,6 +158,11 @@ void SensorCalibration::begin_wait_for_apply(std::uint64_t now) noexcept
 
 void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
 {
+    if (apply_type_ == Type::Level && feedback_owner_ == sensor_calibration_request_s::FEEDBACK_AUTO &&
+        param_set_count() != committed_set_count_) {
+        fail("parameters changed while applying automatic level");
+        return;
+    }
     // 成功条件同时包含：捕获本次 parameter_update generation、对应前端标记已
     // 应用、device_id/校正值精确匹配、新鲜输出可见；不能仅以 param_set 成功结束。
     bool applied = false;
@@ -160,7 +170,9 @@ void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
     const bool imu_update_applied = update_captured &&
         vehicle_imu_frontend_.calibration_parameter_update_applied(
             required_parameter_update_instance_);
-    if (apply_type_ == Type::Gyro) {
+    if (apply_type_ == Type::Level) {
+        applied = level_applied(now);
+    } else if (apply_type_ == Type::Gyro) {
         const float values[3]{parameter_expectation_.values[0],
                               parameter_expectation_.values[1],
                               parameter_expectation_.values[2]};
@@ -170,7 +182,7 @@ void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
             parameter_expectation_.type == Type::Gyro &&
             imu_update_applied &&
             vehicle_imu_frontend_.gyro_calibration_matches(
-                parameter_expectation_.id, values);
+                required_parameter_update_instance_, parameter_expectation_.id, values);
     } else if (apply_type_ == Type::Accel) {
         applied = sensor_accel_.device_id == device_id_ &&
             fresh(now, sensor_accel_.timestamp, kSensorFreshnessUs) &&
@@ -178,7 +190,7 @@ void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
             parameter_expectation_.type == Type::Accel &&
             imu_update_applied &&
             vehicle_imu_frontend_.accel_calibration_matches(
-                parameter_expectation_.id,
+                required_parameter_update_instance_, parameter_expectation_.id,
                 parameter_expectation_.values);
     } else if (apply_type_ == Type::Mag) {
         const bool mag_update_applied = update_captured &&
@@ -194,7 +206,7 @@ void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
             parameter_expectation_.type == Type::Mag &&
             mag_update_applied &&
             vehicle_magnetometer_frontend_.mag_calibration_matches(
-                parameter_expectation_.id,
+                required_parameter_update_instance_, parameter_expectation_.id,
                 parameter_expectation_.values) &&
             (vehicle_magnetometer_.calibration_count !=
                  previous_mag_calibration_count_ ||
@@ -217,7 +229,8 @@ bool SensorCalibration::begin_rollback(RollbackOutcome outcome) noexcept
     const bool wait_for_frontend = parameter_snapshot_.valid &&
         (parameter_snapshot_.type == Type::Gyro ||
          parameter_snapshot_.type == Type::Accel ||
-         parameter_snapshot_.type == Type::Mag);
+         parameter_snapshot_.type == Type::Mag ||
+         parameter_snapshot_.type == Type::Level);
     if (!restore_parameters()) {
         latch_rollback_failure();
         return true;
@@ -239,15 +252,11 @@ bool SensorCalibration::begin_rollback(RollbackOutcome outcome) noexcept
 void SensorCalibration::finish_rollback() noexcept
 {
     if (type_ == Type::None) return;
+    result_ = rollback_outcome_ == RollbackOutcome::Cancelled
+        ? sensor_calibration_status_s::RESULT_CANCELLED
+        : sensor_calibration_status_s::RESULT_FAILED;
     if (!rollback_terminal_sent_) {
-        if (rollback_outcome_ == RollbackOutcome::Cancelled) {
-            px4_log_raw(_PX4_LOG_LEVEL_ERROR,
-                        "[cal] calibration cancelled");
-        } else {
-            /* QGC disconnects its calibration listener on this token. */
-            px4_log_raw(_PX4_LOG_LEVEL_ERROR,
-                        "[cal] calibration failed: %s", type_name(type_));
-        }
+        report_terminal(feedback_owner_, type_, result_);
     }
     clear_parameter_snapshot();
     clear_parameter_expectation();
@@ -260,16 +269,17 @@ void SensorCalibration::finish_rollback() noexcept
     apply_deadline_us_ = 0U;
     rollback_terminal_sent_ = false;
     (void)publish_status(hrt_absolute_time(), true);
+    feedback_owner_ = sensor_calibration_request_s::FEEDBACK_NONE;
 }
 
 void SensorCalibration::latch_rollback_failure() noexcept
 {
+    result_ = sensor_calibration_status_s::RESULT_FAILED;
     // 参数无法恢复时故意停留在 WaitForRollback 且不释放 interlock；这是一种
     // fail-closed 安全锁存，需要外部修复参数/重启，而不是继续允许武装。
     PX4_ERR("%s calibration parameter rollback failed; arming remains "
             "inhibited", type_name(type_));
-    px4_log_raw(_PX4_LOG_LEVEL_ERROR,
-                "[cal] calibration failed: %s", type_name(type_));
+    report_terminal(feedback_owner_, type_, result_);
     rollback_outcome_ = RollbackOutcome::Failed;
     rollback_terminal_sent_ = true;
     apply_type_ = type_;
@@ -289,17 +299,19 @@ void SensorCalibration::process_wait_for_rollback(
     const bool imu_update_applied = update_captured &&
         vehicle_imu_frontend_.calibration_parameter_update_applied(
             required_parameter_update_instance_);
-    if (apply_type_ == Type::Gyro) {
+    if (apply_type_ == Type::Level) {
+        applied = level_applied(now);
+    } else if (apply_type_ == Type::Gyro) {
         const float values[3]{parameter_expectation_.values[0],
                               parameter_expectation_.values[1],
                               parameter_expectation_.values[2]};
         applied = parameter_expectation_.valid && imu_update_applied &&
             vehicle_imu_frontend_.gyro_calibration_matches(
-                parameter_expectation_.id, values);
+                required_parameter_update_instance_, parameter_expectation_.id, values);
     } else if (apply_type_ == Type::Accel) {
         applied = parameter_expectation_.valid && imu_update_applied &&
             vehicle_imu_frontend_.accel_calibration_matches(
-                parameter_expectation_.id,
+                required_parameter_update_instance_, parameter_expectation_.id,
                 parameter_expectation_.values);
     } else if (apply_type_ == Type::Mag) {
         const bool mag_update_applied = update_captured &&
@@ -313,7 +325,7 @@ void SensorCalibration::process_wait_for_rollback(
             parameter_expectation_.type == Type::Mag &&
             mag_update_applied &&
             vehicle_magnetometer_frontend_.mag_calibration_matches(
-                parameter_expectation_.id,
+                required_parameter_update_instance_, parameter_expectation_.id,
                 parameter_expectation_.values);
     }
 
@@ -326,8 +338,8 @@ void SensorCalibration::process_wait_for_rollback(
         !rollback_terminal_sent_) {
         PX4_ERR("%s calibration rollback was not applied; arming remains "
                 "inhibited", type_name(type_));
-        px4_log_raw(_PX4_LOG_LEVEL_ERROR,
-                    "[cal] calibration failed: %s", type_name(type_));
+        result_ = sensor_calibration_status_s::RESULT_FAILED;
+        report_terminal(feedback_owner_, type_, result_);
         rollback_outcome_ = RollbackOutcome::Failed;
         rollback_terminal_sent_ = true;
         apply_deadline_us_ = 0U;
@@ -394,6 +406,7 @@ bool SensorCalibration::commit_offset_scale(
     std::int32_t old_id{};
     float old[6]{};
     px4::AtomicTransaction transaction;
+    if (!level_parameters_unchanged()) return false;
     if (param_get(id, &old_id) != 0) return false;
     for (std::size_t index = 0U; index < 6U; ++index) {
         if (param_get(values[index], &old[index]) != 0) return false;
