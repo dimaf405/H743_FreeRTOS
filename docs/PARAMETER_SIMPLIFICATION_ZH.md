@@ -8,7 +8,7 @@
 
 ## 2. 七项候选的实际处理
 
-QGC 对照为官方 5.1.3 commit `7fe5b11b18a4c2eec17beb1b2a3ef45ac0c4e32e`。以下 QGC 路径相对该锁定源码；没有修改地面站。
+QGC 对照为官方 5.1.3 commit `7fe5b11b18a4c2eec17beb1b2a3ef45ac0c4e32e`。以下 QGC 路径相对该锁定源码；表中省略目录的 PX4 页面/控制器位于 `src/AutoPilotPlugins/PX4/`。没有修改地面站。
 
 | 参数 | 处理 | 依据、影响与重要性 |
 |---|---|---|
@@ -82,18 +82,29 @@ git -c core.safecrlf=false diff --check
 - 官方参数生成和 Component Metadata 校验通过：301 项；XML/JSON/生成头、连续参数协议和 Logger 计数一致。
 - 与本轮开始的 303 项生成 JSON 按名称逐项比较：只少 GPS_1_PROTOCOL/RO_CAL_DIST，无新增；其余 301 项除 category/group 外的全部属性一致，214 项展示分类或分组变化。类型、默认值、范围、单位、枚举、volatile/reboot 属性没有漂移。
 - 架构 `PASS - 454 first-party source files`，43 个 uORB schema、49 个 Logger Topic、8 种 Profile 组合；MAVLink 仍为锁定 230 条官方 wire 定义，无私有消息变化。
-- 首次发布构建因共享 HEAD/固件身份生成收敛触发 `unplanned action MavlinkIdentity.cpp`。保留 build、同命令重跑后 `[49/49]` exit 0；不是 clean build，没有绕过架构或进度门禁。
+- 发布构建在共享 HEAD/固件身份更新后触发 `unplanned action MavlinkIdentity.cpp`。每次保留 build、在该身份生成后用同一命令重跑，先完成 `[49/49]`，再对最终 `a6d046d` 身份完成 `[16/16]`，均 exit 0；不是 clean build，没有绕过架构或进度门禁。
 - Application/MCUboot 未解析符号为空，向量 `0x08040400`，ELF、签名/Factory 布局及 watchdog prepare/feed 链通过。
 
 最新资源为 Application `text/data/bss=625096/12688/571136` bytes；Flash `637824/782336`（81.5%）、SRAM `590752/884736`（66.8%）、D2 `182912/262144`（69.8%）。这是当前工作树总占用，不是本功能独立性能或实板峰值证明。
 
 ### 制品记录
 
-image digest：`39ce21db5fcc31248148033f5c688291982c0e3ffeb2bbffdefc201d95255d49`。最终文件哈希在交付检查后填入。
+制品对应 Git 身份 `a6d046d2cc8c96a0b0314c9f41c462eb627d6263`；image digest：`0aaabc2c00a006bafa5303d425bd3fa5c06ee9a542f4c768e22e357f64f8c05d`。
+
+| 制品 | 大小（bytes） | SHA-256 |
+|---|---:|---|
+| `build/H743_FreeRTOS.elf` | 11128856 | `f1caec369a3f368e2536c68075325fb7ef80feee49621b7dc154c885f7e40998` |
+| `build/H743_FreeRTOS.bin` | 637824 | `ce9db20107df1c89f7f240df746aacb4f17e326c6e349c121cfc366ba174ce4e` |
+| `build/H743_FreeRTOS_signed.bin` | 638998 | `4f3d3e3efad6e3c3fa465d2799b9ae7ce192ee0aafc95e35a5cb87b67c5e2129` |
+| `build/H743_FreeRTOS_factory.hex` | 1654044 | `2d3d8ae0c5f6b845605141aba51a83de94a352d4b475a448b6504997d693a849` |
+| `build/mcuboot/mcuboot.elf` | 2684396 | `14e52c94c4e68c91e679a748f0ad8ad9e03d341134175722a653d6447565f54d` |
+| `build/mcuboot/mcuboot.bin` | 48308 | `84b49887296b34822cefff28e9fc8b6b1d7b9251e1d44c3640f1ad4e8c073dcc` |
+
+签名容器哈希仅标识这一份 ECDSA 签名样本，不要求重签字节相同。tracked `git diff --check` 为 0；新增本文的 `git diff --no-index --check` 无空白诊断（exit 1 仅表示新文件存在差异），变更中测试/框架/runner/fixture/mock/Host Test/SITL/仿真路径为 0。
 
 ## 6. 工作区与待实板项目
 
-本轮开始 HEAD 为 `3ac342f808e847fe5b9c223ccb9457fec33f29e8`；期间其他工作流提交使 HEAD 移至 `6dd7182e2084cc79519ba75eacb8272158a9f109`，部分已有/本轮改动也被纳入该共享提交。本代理没有执行 commit、push、reset 或 clean，不能把当前 git diff 当作本轮完整增量。
+本轮开始 HEAD 为 `3ac342f808e847fe5b9c223ccb9457fec33f29e8`；期间其他工作流提交使 HEAD 先移至 `6dd7182e2084cc79519ba75eacb8272158a9f109`，并在 `a6d046d2cc8c96a0b0314c9f41c462eb627d6263` 身份完成本次制品验证。之后至 `7d19695` 的共享提交只修改 README/文档，不改变本次已验证的生产代码或参数定义。部分已有/本轮改动被纳入这些共享提交；本代理没有执行 commit、push、reset 或 clean，不能把当前 git diff 当作本轮完整增量。
 
 观察到其他会话的 upload/build，未操作其进程或串口；正式构建在没有观察到并发 make 时启动。并发文档更新按最新内容保留，不整体回退日志、存储、RC 或其他工作。
 
