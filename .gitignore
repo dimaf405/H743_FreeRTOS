@@ -86,3 +86,6 @@ tools/analyze_flash.py
 
 # Qoder tool output
 .qoder/
+
+# 独立许可证文件不再入库；需保留的声明统一归入 docs/DIMA_SOURCE_MANIFEST.md。
+*[Ll][Ii][Cc][Ee][Nn][SsCc][Ee]*

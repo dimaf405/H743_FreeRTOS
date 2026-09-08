@@ -3,7 +3,7 @@
 - Upstream: https://github.com/DroneCAN/libcanard
 - Commit: `601ed35467e0ac38819df17cd7c918de19f62d58`
 - Vendored files: `canard.c`, `canard.h`, `canard_internals.h`
-- License: MIT; see `LICENSE`.
+- License: MIT; see [the retained notice](../../../docs/DIMA_SOURCE_MANIFEST.md#third-party-notices).
 
 The vendored core is used in Classic CAN mode. No upstream source changes are
 carried in this directory.

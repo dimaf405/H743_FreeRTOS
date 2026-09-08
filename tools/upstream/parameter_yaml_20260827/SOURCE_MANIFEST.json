@@ -1,7 +1,6 @@
 {
   "commit": "1f6b6f61f8f42eaab0269c16a442cb580f954d7c",
   "files": {
-    "LICENSE": "0e31cba0e521c572e59a350286c6d1272abff7a7b6ebecb0e7d9eee6547a2106",
     "Tools/migrate_c_params.py": "e9097869af2463bbcc35f8f147270399023166d9db3fb3738d1d00c3e673bc20",
     "Tools/module_config/generate_params.py": "ab80b874cee5f8e72beefd3e56fa603a15e2a25a63d4ade76c84f72e996d7ad8",
     "Tools/module_config/output_groups_from_timer_config.py": "efe52a1b6354613e305d2d7285cb3bd0e4f29d85857344e5a05c66aa22057984",

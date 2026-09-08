@@ -4,7 +4,7 @@
 - DSDL commit: `993be80a62ec957c01fb41115b83663959a49f46`
 - Generator: https://github.com/DroneCAN/dronecan_dsdlc
 - Generator commit: `431170fa4bfe2212b516b8f33bdc796267907f1c`
-- License: MIT; see `LICENSE`.
+- License: MIT; see [the retained notice](../../../docs/DIMA_SOURCE_MANIFEST.md#third-party-notices).
 
 Only the pinned canonical DSDL source closure required by the H743 product is
 vendored under `dsdl/uavcan`. The build discovers every `.uavcan` file in that

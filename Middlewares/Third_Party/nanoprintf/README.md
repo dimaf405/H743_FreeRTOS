@@ -9,5 +9,7 @@ Application formatting adapter.
 - `nanoprintf.h` SHA-256:
   `c7e445450ce496e61f15c1cbdaa5a93e741f8ac4718f4ab6bcfedae1dc81c47c`
 
-The upstream header and license are kept unmodified. Project-specific feature
+The upstream header is kept unmodified. The original notices are retained in
+[the source manifest](../../../docs/DIMA_SOURCE_MANIFEST.md#third-party-notices).
+Project-specific feature
 configuration is isolated in `Dima/lib/format/Format.cpp`.

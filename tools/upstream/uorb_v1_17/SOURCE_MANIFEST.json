@@ -1,7 +1,6 @@
 {
   "commit": "d6f12ad1c4f70ad3230afd7d86e971421e02fef4",
   "files": {
-    "LICENSE": "4f486239f62804b2190ff52b3005f087cf1033342012152e6383bdad6b891cc4",
     "Tools/msg/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "Tools/msg/generate_msg_docs.py": "a185072d1aed16b26d8157cbd84d80094a00fb15f905b436f60cce28f8276763",
     "Tools/msg/px_generate_uorb_compressed_fields.py": "8b69208914e69b68b56648878a81a5125ca974a438c3bc11ad9e1d0112a895f0",
