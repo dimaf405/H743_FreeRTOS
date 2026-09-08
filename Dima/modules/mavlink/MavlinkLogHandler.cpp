@@ -39,6 +39,7 @@
 #include "api/Time.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <limits>
 
 namespace dima::modules::mavlink {
@@ -302,6 +303,8 @@ bool MavlinkLogHandler::work_pending() noexcept
     dima::platform::CriticalGuard guard;
     return running_ &&
            (reset_requested_ || request_count_ != 0U ||
+            worker_state_ == WorkerState::PreparingList ||
+            worker_state_ == WorkerState::Erasing ||
             ((worker_state_ == WorkerState::Listing ||
               worker_state_ == WorkerState::SendingData) &&
              response_count_ < kResponseQueueCapacity));
@@ -319,6 +322,7 @@ void MavlinkLogHandler::reset_worker_state() noexcept
     data_offset_ = 0U;
     data_end_offset_ = 0U;
     logs_listed_ = false;
+    storage_initialized_ = false;
 }
 
 void MavlinkLogHandler::set_worker_state(WorkerState state) noexcept
@@ -354,33 +358,26 @@ void MavlinkLogHandler::process_request(const Request &request) noexcept
     case RequestType::Erase:
         clear_responses();
         store_.close_log_transfer();
-        (void)store_.erase_logs();
         reset_worker_state();
+        storage_initialized_ = store_.initialize() == 0;
+        if (storage_initialized_) {
+            const int erased = store_.erase_logs();
+            if (erased == -EAGAIN) {
+                set_worker_state(WorkerState::Erasing);
+            }
+        }
         return;
 
     case RequestType::List: {
         clear_responses();
         store_.close_log_transfer();
         number_of_logs_ = 0U;
-        const int initialized = store_.initialize();
-        const int listed = initialized == 0
-                               ? store_.create_log_list(number_of_logs_)
-                               : initialized;
-        if (listed != 0 || number_of_logs_ == 0U) {
-            /* common.xml 明确要求无日志也返回一条 id=0/num_logs=0；否则 QGC 会
-             * 一直保持 requestingList，界面只剩 Cancel 可用。 */
-            logs_listed_ = listed == 0;
-            set_worker_state(WorkerState::Idle);
-            enqueue_empty_list();
-            return;
-        }
         list_first_id_ = request.first_id;
-        list_last_id_ = request.last_id == 0xffffU
-                            ? number_of_logs_
-                            : request.last_id;
+        list_last_id_ = request.last_id;
         list_current_id_ = 0U;
-        logs_listed_ = true;
-        set_worker_state(WorkerState::Listing);
+        storage_initialized_ = false;
+        set_worker_state(WorkerState::PreparingList);
+        process_list_preparation();
         return;
     }
 
@@ -419,6 +416,45 @@ void MavlinkLogHandler::process_request(const Request &request) noexcept
         process_storage_information(request);
         return;
     }
+}
+
+void MavlinkLogHandler::process_list_preparation() noexcept
+{
+    if (!storage_initialized_) {
+        if (store_.initialize() != 0) {
+            set_worker_state(WorkerState::Idle);
+            enqueue_empty_list();
+            return;
+        }
+        storage_initialized_ = true;
+    }
+    const int listed = store_.create_log_list(number_of_logs_);
+    if (listed == -EAGAIN) {
+        /* 恢复、CRC 或 delNNN 清理每轮只推进有限 FatFs 操作；保持本状态并
+         * 立即重调度，避免一次 LOG_REQUEST_LIST 长时间独占 storage worker。 */
+        return;
+    }
+    if (listed != 0 || number_of_logs_ == 0U) {
+        /* common.xml 要求无日志也返回 id=0/num_logs=0，否则 QGC 会一直等待。 */
+        logs_listed_ = listed == 0;
+        set_worker_state(WorkerState::Idle);
+        enqueue_empty_list();
+        return;
+    }
+    list_last_id_ = list_last_id_ == 0xffffU
+                        ? static_cast<std::uint16_t>(number_of_logs_ - 1U)
+                        : list_last_id_;
+    logs_listed_ = true;
+    set_worker_state(WorkerState::Listing);
+}
+
+void MavlinkLogHandler::process_erase() noexcept
+{
+    const int maintained = store_.service_log_maintenance();
+    if (maintained == -EAGAIN) {
+        return;
+    }
+    set_worker_state(WorkerState::Idle);
 }
 
 void MavlinkLogHandler::process_storage_information(
@@ -587,6 +623,10 @@ void MavlinkLogHandler::Run()
         process_listing();
     } else if (worker_state_ == WorkerState::SendingData) {
         process_data();
+    } else if (worker_state_ == WorkerState::PreparingList) {
+        process_list_preparation();
+    } else if (worker_state_ == WorkerState::Erasing) {
+        process_erase();
     }
     if (work_pending()) {
         (void)ScheduleNow();

@@ -101,8 +101,10 @@ private:
 
     enum class WorkerState : std::uint8_t {
         Idle,
+        PreparingList,
         Listing,
         SendingData,
+        Erasing,
     };
 
     bool enqueue_request(const Request &request) noexcept;
@@ -118,6 +120,8 @@ private:
     void reset_worker_state() noexcept;
     void set_worker_state(WorkerState state) noexcept;
     void process_request(const Request &request) noexcept;
+    void process_list_preparation() noexcept;
+    void process_erase() noexcept;
     void process_listing() noexcept;
     void process_data() noexcept;
     void process_storage_information(const Request &request) noexcept;
@@ -154,6 +158,7 @@ private:
     std::uint32_t data_offset_{0U};
     std::uint32_t data_end_offset_{0U};
     bool logs_listed_{false};
+    bool storage_initialized_{false};
 };
 
 } // namespace dima::modules::mavlink
