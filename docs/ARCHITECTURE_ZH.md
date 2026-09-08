@@ -48,7 +48,10 @@ Dima/                         唯一自研应用根、兼容层和产品装配
 ├── messages/                 uORB schema 权威定义，Topic 与 catalog 由工具生成
 └── rover/                    唯一 Rover 产品域
     ├── control/              RoverDifferential 消息/参数/安全运行适配
-    └── modes/                ManualMode 与 50 Hz AutoMode
+    └── modes/                Rover 模式，统一按职责分目录
+        ├── manual/           ManualMode 人工控制
+        ├── auto/             50 Hz AutoMode Mission 导航
+        └── auto_calibration/ 自动校准协调器、阶段实现及私有参数事务
 
 Boards/H743/                  板级初始化、Flash 布局、外设和 FatFs SDMMC 适配
 Core/                         CubeMX/HAL 应用生成层

@@ -3,7 +3,7 @@
 - **职责：** `drivers/rc/sbus/SbusRc` 接收原始帧；本目录的 `RCUpdate` 完成校准和通道映射，`RcManualInput` 再把规范化通道及开关边沿发布为 `manual_control_setpoint` 与 `action_request`。
 - **诊断统计：** SBUS 的丢帧/总帧数据直接来自解析器，运行计数使用现有 perf，发布失败与后端故障仍报告 Event；驱动不另存无消费者的启动/服务/发布/唤醒统计副本。
 - **禁止事项：** 不从协议解析器直接驱动 PWM，不绕过 Arming、Failsafe 和控制模块链。
-- **命名边界：** `RcManualInput` 是 RC 来源转换器，不是 Rover Manual 模式，也不拥有未来 MAVLink 输入；Rover 模式入口明确位于 `Dima/rover/modes/ManualMode.*`。
+- **命名边界：** `RcManualInput` 是 RC 来源转换器，不是 Rover Manual 模式，也不拥有未来 MAVLink 输入；Rover 模式入口明确位于 `Dima/rover/modes/manual/ManualMode.*`。
 - **上游 API 保留：** 保留上游 SBUS、RCUpdate、ManualControl 的 Topic、参数名和公开状态语义，仅对本地类名和 UART/DMA 平台外壳做适配。
 
 ## 板级串口编号与 SBUS 配置

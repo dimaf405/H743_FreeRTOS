@@ -1,6 +1,6 @@
 #define MODULE_NAME "auto_cal"
 #include "AutoCalibrationMode.hpp"
-#include "AutoMode.hpp"
+#include "auto/AutoMode.hpp"
 #include "control/RoverDifferential.hpp"
 #include "logging/logging.hpp"
 

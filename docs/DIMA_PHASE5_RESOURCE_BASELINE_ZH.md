@@ -29,7 +29,7 @@ manual_control_setpoint
 阶段 5 的直接代码和消息契约来源固定为 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`：
 
 - `msg/versioned/ActuatorMotors.msg` 对应本地 `actuator_motors` 完整公开契约。
-- `src/modules/rover_differential/RoverDifferential.cpp`、`DifferentialDriveModes/DifferentialManualMode/` 和 `DifferentialActControl/` 分别映射到本地 `Dima/rover/control/RoverDifferential.*` 运行适配、`Dima/rover/modes/ManualMode.*` 产品模式和 `Dima/lib/rover/DifferentialDrive.*` 纯差速算法；Motor 命令边界仍由消息隔离。
+- `src/modules/rover_differential/RoverDifferential.cpp`、`DifferentialDriveModes/DifferentialManualMode/` 和 `DifferentialActControl/` 分别映射到本地 `Dima/rover/control/RoverDifferential.*` 运行适配、`Dima/rover/modes/manual/ManualMode.*` 产品模式和 `Dima/lib/rover/DifferentialDrive.*` 纯差速算法；Motor 命令边界仍由消息隔离。
 - PX4 actuator function/output 只保留本项目需要的 MotorRight/MotorLeft 到六路 PWM 的固定存储子集。
 
 ArduPilot commit `3f2e4763accb` 的 `libraries/AR_Motors/AP_MotorsUGV.cpp` 仅作为 Rover 行为参考，用于倒车时车头方向、转向与油门饱和优先级、slew、`MOT_THR_MIN` 静摩擦补偿、反向推力不对称和左右独立换向延时；没有把 GPL 源码复制进本目录。

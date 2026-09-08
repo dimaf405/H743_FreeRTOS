@@ -1,5 +1,24 @@
 # Rover 产品模式
 
+## 目录布局
+
+```text
+modes/
+├── manual/
+│   └── ManualMode.cpp / ManualMode.hpp
+├── auto/
+│   └── AutoMode.cpp / AutoMode.hpp
+├── auto_calibration/
+│   ├── AutoCalibrationMode.cpp / AutoCalibrationMode.hpp
+│   ├── AutoCalibration*.cpp
+│   └── CalibrationParameters.cpp / CalibrationParameters.hpp
+└── README.md
+```
+
+所有模式采用一致的目录层级：人工控制位于 `manual/`，Mission 导航位于 `auto/`，自动校准的协调器、阶段及私有参数事务位于 `auto_calibration/`。平台无关的拟合、围栏与响应算法由 `Dima/lib/rover/` 提供。构建自动发现一级子目录中的实现文件；同目录 include 只写文件名，对外和跨模式引用统一使用 `manual/ManualMode.hpp`、`auto/AutoMode.hpp` 或 `auto_calibration/AutoCalibrationMode.hpp`。
+
+## 运行契约
+
 - **当前模式：** `ManualMode` 把 `manual_control_setpoint.throttle/yaw` 转换为 `rover_motion_request` 的前后、左右两轴；它是 Rover Manual 的运行入口，不是传输或 RC 适配器。
 - **边界：** 模式不解析 RC、SBUS 或 MAVLink，不实现差速算法，不发布 `actuator_motors`，也不访问 MotorOutput/PWM。
 - **AUTO 参数语义：** 对齐 PX4 v1.17，Mission 切换只检查任务、估计器和安全状态；`RO_*`、`RD_*`、`PP_*` 控制参数只决定切换后的 Navigation 请求是否有效。配置未就绪时保持 Mission 状态并发布全 NaN 请求，由下游确认物理停波，不把调参状态伪装成模式切换失败。
@@ -11,4 +30,4 @@
 - **速度与反转：** 入场正 `RO_SPEED_LIM` 是冻结巡航上限；0/旧 -1 使用 `RO_CAL_VMAX`（默认 1.5 m/s）并申请独立前进满输出探测。其余非法值拒绝运动；本事务后续写回巡航不改变本会话围栏预算。只在指定段允许低速倒车，保留 `MOT_REV_DELAY`；满输出指允许命令端点，不是测得 RPM。
 - **有限路径与降级：** `AutoCalibrationPath` 在同一圆内用闭合瘦三角 RAM 路径和共享 `SegmentGuidance`，所有候选先回固定入口、对齐同一首边，不覆盖用户 Mission。缺 RC/PWM/双天线不提前阻止 Level；缺磁力计可以跳过磁阶段。运动依赖、激励、空间或时间不足报告未完成项，不猜测参数、不扩大圆或放松 EKF 门限。全局整形必须覆盖实际使用范围；局部低速数据不授权修改 Manual 共用整形。
 - **统一 IMU 零偏：** 复用 EKF 稳定偏置和 VehicleImu 实际校正快照，提交合格 ID/offset，保留 scale；重新确认前端、EKF 与残差后保存。组合会话暂停独立 IMU 后台写回，`EKF2_MAG_DECL` 仍只更新 volatile RAM。
-- **扩展：** Navigation、Offboard 等后续模式直接作为本目录中的同级模式加入；模式较大时再建立同名子目录，禁止为单个源文件增加一层目录。
+- **扩展：** Navigation、Offboard 等后续模式统一建立各自的一级职责子目录；`modes/` 根目录只保留组织说明，不再混放模式实现文件。

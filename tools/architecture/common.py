@@ -54,6 +54,7 @@ STM32_ROOT = "Dima/platform/stm32h7"
 COMMON_INCLUDE_ROOTS = (
     "Dima/application",
     "Dima/rover",
+    "Dima/rover/modes",  # 解析产品组合根的模式私有 include，与 Make 可见性保持一致。
     "Dima/drivers/gps",
     "Dima/drivers/imu",
     "Dima/drivers/magnetometer",

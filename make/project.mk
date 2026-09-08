@@ -72,6 +72,7 @@ DIMA_PROTOCOL_INCLUDES := -IDima/lib/protocols
 DIMA_LIB_SENSOR_INCLUDES := -IDima/lib/sensors
 DIMA_ADAPTER_INCLUDES := -IDima/adapters
 DIMA_ROVER_INCLUDES := -IDima/rover
+DIMA_ROVER_MODE_INCLUDES := -IDima/rover/modes
 DIMA_APPLICATION_INCLUDES := -IDima/application
 DIMA_GPS_DRIVER_INCLUDES := -IDima/drivers/gps
 DIMA_IMU_DRIVER_INCLUDES := -IDima/drivers/imu
@@ -642,10 +643,10 @@ DIMA_MAVLINK_MODULE_CXX_SOURCES := \
 DIMA_ROVER_LIB_CXX_SOURCES := \
 	$(sort $(wildcard Dima/lib/rover/*.cpp))
 
-# Rover 模式目录是运行模式的权威来源闭包；新增 AutoMode 等正式消费者时只需
-# 增加实现文件，禁止再维护一份容易漏项的手写文件列表。
+# 所有 Rover 模式统一放入各自的一级职责子目录，由 Make 自动发现实现。
+# 根目录只保留组织说明，目录调整和新增阶段不需要手写源文件列表。
 DIMA_ROVER_MODE_CXX_SOURCES := \
-	$(sort $(wildcard Dima/rover/modes/*.cpp))
+	$(sort $(wildcard Dima/rover/modes/*/*.cpp))
 DIMA_ROVER_CONTROL_CXX_SOURCES := \
 	$(sort $(wildcard Dima/rover/control/*.cpp))
 
@@ -913,10 +914,12 @@ $(DIMA_ROVER_OBJECTS): DIMA_PRIVATE_INCLUDES += \
 # AutoMode 通过 MissionService 的短临界区 API 读取冻结任务快照；只给模式对象
 # 开放 modules include 根，不把该依赖扩散到纯差速控制或其他 Rover 对象。
 $(DIMA_ROVER_MODE_OBJECTS): DIMA_PRIVATE_INCLUDES += \
-	$(DIMA_MODULE_INCLUDES) $(DIMA_MATRIX_INCLUDES) \
+	$(DIMA_ROVER_MODE_INCLUDES) $(DIMA_MODULE_INCLUDES) \
+	$(DIMA_MATRIX_INCLUDES) \
 	$(DIMA_LIB_SENSOR_INCLUDES) $(DIMA_SENSOR_MODULE_INCLUDES)
 $(DIMA_COMPOSITION_OBJECTS): DIMA_PRIVATE_INCLUDES += \
-	$(DIMA_ROVER_INCLUDES) $(DIMA_LIB_INCLUDES) \
+	$(DIMA_ROVER_INCLUDES) $(DIMA_ROVER_MODE_INCLUDES) \
+	$(DIMA_LIB_INCLUDES) \
 	$(DIMA_MIDDLEWARE_INCLUDES) \
 	$(DIMA_DRONECAN_CONTRACT_INCLUDES) \
 	$(DIMA_MESSAGE_GENERATED_INCLUDES) \
