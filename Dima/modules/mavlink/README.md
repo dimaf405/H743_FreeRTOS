@@ -66,3 +66,7 @@ Windows 构建只证明生成、编译和链接。QGC Inspector 实时值、USB 
 ## 头文件实现边界
 
 MavlinkBridge 的非模板 channel getter 由独立 C ABI 实现提供，MavlinkIdentity 的普通访问器位于原源文件。生成 codec、消息列表、缓冲所有权和序号合同保持。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。
+
+## 传感器缓存所有权
+
+13 路传感器/估计器订阅使用普通 `uORB::Subscription`，直接通过已有 `copy()` 更新 `latest_*`，每路只保存一份消息载荷。没有新代次或读取失败时保留最近值；有队列的 Topic 仍按原 `orb_copy` 逐代消费，不切换成 latest 读取。Runtime start/stop 继续清缓存，USB 物理断开只重置发送节拍；代次检查和完整样本复制仍由 uORB 保护。RC、参数更新和模式订阅维持各自原有缓存合同。

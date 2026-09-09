@@ -173,32 +173,32 @@ private:
         input_rc_subscription_{ORB_ID(input_rc)};
     uORB::SubscriptionData<parameter_update_s>
         parameter_update_subscription_{ORB_ID(parameter_update)};
-    uORB::SubscriptionData<sensor_accel_s>
+    uORB::Subscription
         sensor_accel_subscription_{ORB_ID(sensor_accel)};
-    uORB::SubscriptionData<sensor_gyro_s>
+    uORB::Subscription
         sensor_gyro_subscription_{ORB_ID(sensor_gyro)};
-    uORB::SubscriptionData<sensor_mag_s>
+    uORB::Subscription
         sensor_mag_subscription_{ORB_ID(sensor_mag)};
-    uORB::SubscriptionData<vehicle_imu_s>
+    uORB::Subscription
         vehicle_imu_subscription_{ORB_ID(vehicle_imu)};
-    uORB::SubscriptionData<vehicle_imu_status_s>
+    uORB::Subscription
         vehicle_imu_status_subscription_{ORB_ID(vehicle_imu_status)};
-    uORB::SubscriptionData<vehicle_magnetometer_s>
+    uORB::Subscription
         vehicle_magnetometer_subscription_{ORB_ID(vehicle_magnetometer)};
     // vehicle_gps_position 只是 Topic alias，payload 类型遵循官方 sensor_gps_s。
-    uORB::SubscriptionData<sensor_gps_s>
+    uORB::Subscription
         vehicle_gps_subscription_{ORB_ID(vehicle_gps_position)};
-    uORB::SubscriptionData<estimator_gps_status_s>
+    uORB::Subscription
         estimator_gps_status_subscription_{ORB_ID(estimator_gps_status)};
-    uORB::SubscriptionData<vehicle_attitude_s>
+    uORB::Subscription
         vehicle_attitude_subscription_{ORB_ID(vehicle_attitude)};
-    uORB::SubscriptionData<vehicle_local_position_s>
+    uORB::Subscription
         vehicle_local_position_subscription_{ORB_ID(vehicle_local_position)};
-    uORB::SubscriptionData<vehicle_global_position_s>
+    uORB::Subscription
         vehicle_global_position_subscription_{ORB_ID(vehicle_global_position)};
-    uORB::SubscriptionData<vehicle_odometry_s>
+    uORB::Subscription
         vehicle_odometry_subscription_{ORB_ID(vehicle_odometry)};
-    uORB::SubscriptionData<estimator_status_s>
+    uORB::Subscription
         estimator_status_subscription_{ORB_ID(estimator_status)};
     uORB::SubscriptionData<vehicle_status_s>
         vehicle_status_subscription_{ORB_ID(vehicle_status)};

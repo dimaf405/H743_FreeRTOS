@@ -186,50 +186,22 @@ void MavlinkService::reset_sensor_link_state() noexcept
 
 void MavlinkService::update_sensor_topics() noexcept
 {
-    if (sensor_accel_subscription_.update()) {
-        latest_sensor_accel_ = sensor_accel_subscription_.get();
-    }
-    if (sensor_gyro_subscription_.update()) {
-        latest_sensor_gyro_ = sensor_gyro_subscription_.get();
-    }
-    if (sensor_mag_subscription_.update()) {
-        latest_sensor_mag_ = sensor_mag_subscription_.get();
-    }
-    if (vehicle_imu_subscription_.update()) {
-        latest_vehicle_imu_ = vehicle_imu_subscription_.get();
-    }
-    if (vehicle_imu_status_subscription_.update()) {
-        latest_vehicle_imu_status_ =
-            vehicle_imu_status_subscription_.get();
-    }
-    if (vehicle_magnetometer_subscription_.update()) {
-        latest_vehicle_magnetometer_ =
-            vehicle_magnetometer_subscription_.get();
-    }
-    if (vehicle_gps_subscription_.update()) {
-        latest_vehicle_gps_ = vehicle_gps_subscription_.get();
-    }
-    if (estimator_gps_status_subscription_.update()) {
-        latest_estimator_gps_status_ =
-            estimator_gps_status_subscription_.get();
-    }
-    if (vehicle_attitude_subscription_.update()) {
-        latest_vehicle_attitude_ = vehicle_attitude_subscription_.get();
-    }
-    if (vehicle_local_position_subscription_.update()) {
-        latest_vehicle_local_position_ =
-            vehicle_local_position_subscription_.get();
-    }
-    if (vehicle_global_position_subscription_.update()) {
-        latest_vehicle_global_position_ =
-            vehicle_global_position_subscription_.get();
-    }
-    if (vehicle_odometry_subscription_.update()) {
-        latest_vehicle_odometry_ = vehicle_odometry_subscription_.get();
-    }
-    if (estimator_status_subscription_.update()) {
-        latest_estimator_status_ = estimator_status_subscription_.get();
-    }
+    // 每路只保留 latest_* 一份缓存，复用 Subscription::copy 的 epoch 和逐代
+    // 读取合同。无新消息/读取失败不改缓存；Runtime start/stop 仍统一清零，
+    // USB 断开只重置发送节拍，不能清掉仍合法的最近传感器样本。
+    (void)sensor_accel_subscription_.copy(&latest_sensor_accel_);
+    (void)sensor_gyro_subscription_.copy(&latest_sensor_gyro_);
+    (void)sensor_mag_subscription_.copy(&latest_sensor_mag_);
+    (void)vehicle_imu_subscription_.copy(&latest_vehicle_imu_);
+    (void)vehicle_imu_status_subscription_.copy(&latest_vehicle_imu_status_);
+    (void)vehicle_magnetometer_subscription_.copy(&latest_vehicle_magnetometer_);
+    (void)vehicle_gps_subscription_.copy(&latest_vehicle_gps_);
+    (void)estimator_gps_status_subscription_.copy(&latest_estimator_gps_status_);
+    (void)vehicle_attitude_subscription_.copy(&latest_vehicle_attitude_);
+    (void)vehicle_local_position_subscription_.copy(&latest_vehicle_local_position_);
+    (void)vehicle_global_position_subscription_.copy(&latest_vehicle_global_position_);
+    (void)vehicle_odometry_subscription_.copy(&latest_vehicle_odometry_);
+    (void)estimator_status_subscription_.copy(&latest_estimator_status_);
 
     const bool accel_sample_present = latest_sensor_accel_.device_id != 0U &&
         latest_sensor_accel_.timestamp != 0U;
