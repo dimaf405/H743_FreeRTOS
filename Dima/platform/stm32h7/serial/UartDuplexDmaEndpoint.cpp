@@ -46,7 +46,6 @@ struct UartDuplexDmaState {
     std::uint32_t original_fifo_mode;
     std::uint32_t original_tx_fifo_threshold;
     std::uint32_t original_rx_fifo_threshold;
-    SerialLineConfiguration line_configuration;
     std::int32_t configured_port;
     std::uint16_t last_dma_position;
     bool dma_initialized;
@@ -55,11 +54,17 @@ struct UartDuplexDmaState {
     bool running;
 };
 
+// 线路默认值包含 data_bits=8、RX/TX=true。将这 12 B 配置独立保存，使
+// 8 KiB RX Ring、TX 缓冲和其余全零状态进入 .bss，不再占 Flash 初始化镜像。
+// 仍由同一个端点独占，启动/恢复时序、缓冲容量和独立 DMA 段均保持。
 UartDuplexDmaState g_duplex_state{};
+SerialLineConfiguration g_duplex_line_configuration{};
 
 class UartDuplexDmaEndpoint final : public AsyncSerialPort {
 public:
-    explicit UartDuplexDmaEndpoint(UartDuplexDmaState &state) noexcept
+    explicit UartDuplexDmaEndpoint(
+        UartDuplexDmaState &state,
+        SerialLineConfiguration &line_configuration) noexcept
         : uart_(state.uart),
           original_init_(state.original_init),
           original_advanced_init_(state.original_advanced_init),
@@ -80,7 +85,7 @@ public:
           original_fifo_mode_(state.original_fifo_mode),
           original_tx_fifo_threshold_(state.original_tx_fifo_threshold),
           original_rx_fifo_threshold_(state.original_rx_fifo_threshold),
-          line_configuration_(state.line_configuration),
+          line_configuration_(line_configuration),
           configured_port_(state.configured_port),
           last_dma_position_(state.last_dma_position),
           dma_initialized_(state.dma_initialized),
@@ -587,7 +592,8 @@ private:
 
 UartDuplexDmaEndpoint &instance() noexcept
 {
-    static UartDuplexDmaEndpoint value{g_duplex_state};
+    static UartDuplexDmaEndpoint value{
+        g_duplex_state, g_duplex_line_configuration};
     return value;
 }
 

@@ -47,3 +47,7 @@ STM32H7 平台层，也不能把 `system/` 当作杂项目录。平台内部依�
 ## 头文件实现边界
 
 SPI 分频选择和板级启动请求操作的运行期逻辑位于源文件；Board/MCU 后端仍为唯一硬件操作所有者，平台 API 头保持声明边界。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。
+
+## UART 零初始化状态
+
+双向 UART 端点将非零默认值的 `SerialLineConfiguration` 与 `UartDuplexDmaState` 分开保存。大块 RX Ring、TX 缓冲和零状态由普通 `.bss` 启动清零，线路默认值仍完整保留；端点独占、原配置恢复、原子序号、DMA 段和容量均不改变。此项释放的是 Flash 初始化载荷，不能当成运行期 RAM 缩容。
