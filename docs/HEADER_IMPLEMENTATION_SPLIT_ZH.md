@@ -127,3 +127,7 @@ GpsErrorCounter.hpp 现在只保留声明与计数状态；会话基线、UART �
 | Dima/rover/control/RoverControlValidation.hpp | 2 | Dima/rover/control/RoverControlValidation.cpp |
 | Dima/rover/modes/auto_calibration/AutoCalibrationMode.hpp | 1 | Dima/rover/modes/auto_calibration/AutoCalibrationMode.cpp |
 | Dima/rover/modes/auto_calibration/CalibrationParameters.hpp | 7 | Dima/rover/modes/auto_calibration/CalibrationParameters.cpp |
+
+## 后续单行返回例外应用
+
+2026-09-09 后续资源精简将 `param_handle()` 的单行 constexpr 转换恢复到头文件，以消除枚举转换的额外调用，符合当前用户约束。上面的 426 处迁移及 0 个普通运行期定义是该次冻结快照的历史统计，不作为禁止单行 return 的规则；后续变更与资源验收见 `CODE_SIZE_NEXT_OPTIMIZATIONS_ZH.md`。

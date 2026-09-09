@@ -412,3 +412,7 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 本批对项目维护的 Dima、Board 与 MCUboot 适配代码作声明/实现分离：普通函数和访问器迁入对应 .cpp/.c，保留命名、字段、原函数体和条件编译边界。PX4 算法目录中的本地适配同时遵守该边界，模板、编译期值接口和正式生成定义保留；OutputPredictor 私有平方函数复用已有同签名同表达式的 math::Utilities::sq。类型依赖、显式返回类型、C ABI 和 decoder 跨翻译单元静态断言已单独核对。
 
 未改变 tools/upstream 原始快照或参数/消息权威定义，未新增独立版权文件；现有版权头留在原头文件中。具体映射、剩余定义类别、源码等价核对和 Windows 验收见 HEADER_IMPLEMENTATION_SPLIT_ZH.md。
+
+## 2026-09-09 初始化数据、消息缓存与统计实体精简
+
+本批本地适配将 UART 线路默认配置与零初始化状态分开，恢复 param_handle 的单行 constexpr 转换，使用既有 uORB Subscription::copy 直接更新 MAVLink 自有缓存，并共享 VehicleImu 双通道统计实体。保留两路独立状态、计算及复位顺序、原队列消费和 Runtime/USB 重置边界；不改上游快照、消息/参数权威输入或浮点选项。固件身份合同由原生成器维护，普通发布与快速上传准备均在依赖扫描前收敛身份。固定源码的逐项资源、身份切换和 Windows 验收记录见 `CODE_SIZE_NEXT_OPTIMIZATIONS_ZH.md`。
