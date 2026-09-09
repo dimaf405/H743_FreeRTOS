@@ -45,3 +45,7 @@ IMU 健康丢失/恢复摘要由非实时 MAVLink owner 发送，包含两路原
 ## 头文件实现边界
 
 VehicleImuAlgorithms、ICM FIFO/寄存器解码及普通统计访问器已作源/头分离。保留积分、时间跳变、裁剪、校正顺序和失败门禁，运行期实现不再通过 constexpr 留在头中。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。
+
+## 双通道状态统计共享
+
+加速度计与陀螺仪分别持有独立 `StreamStatus`，Welford 在线矩、振动 EWMA、温度和 clipping 计数由同一份非模板源文件函数计算。共享函数只接收正式生成消息中的已知标量/三轴数组，不在两种消息间做类型重解释。发布成功只清窗口矩、计数与温度，跨窗口 clipping、上一样本和振动状态仍按原生命周期复位；积分、校准、健康判定及公式顺序保持。

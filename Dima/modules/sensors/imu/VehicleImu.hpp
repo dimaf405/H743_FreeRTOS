@@ -105,6 +105,23 @@ private:
         std::uint32_t count{0U};
     };
 
+    struct StreamStatus {
+        // 每路独立保留窗口统计与跨窗口累计。发布成功只清窗口计数/温度/矩，
+        // clipping、上一样本和振动 EWMA 按原生命周期单独复位。
+        StatusMoments moments{};
+        Vector3 previous{};
+        std::uint64_t first_us{0U};
+        std::uint64_t last_us{0U};
+        std::uint32_t updates{0U};
+        std::uint32_t raw_samples{0U};
+        float temperature_sum{0.0F};
+        std::uint32_t temperature_count{0U};
+        std::uint32_t clipping_total[3]{};
+        float vibration_metric{0.0F};
+        std::uint8_t first_samples{0U};
+        bool have_previous{false};
+    };
+
     struct LearnedCalibration {
         // estimator_sensor_bias 在机体系，写入 CAL_*_OFF 前已转换回传感器轴。
         Vector3 offset{};
@@ -176,10 +193,10 @@ private:
     bool process_accel(const sensor_accel_s &sample) noexcept;
     bool process_gyro(const sensor_gyro_s &sample) noexcept;
     bool publish_if_ready() noexcept;
-    void accumulate_accel_status(const sensor_accel_s &sample,
-                                 const Vector3 &value) noexcept;
-    void accumulate_gyro_status(const sensor_gyro_s &sample,
-                                const Vector3 &value) noexcept;
+    void accumulate_status(StreamStatus &status, const Vector3 &value,
+                           const std::uint8_t (&clipping)[3],
+                           std::uint64_t timestamp_sample,
+                           std::uint8_t samples, float temperature) noexcept;
     void publish_status(std::uint64_t now_us, bool force = false) noexcept;
     void reset_status_window() noexcept;
     void update_health_state(std::uint64_t now_us) noexcept;
@@ -260,30 +277,8 @@ private:
     std::uint32_t latest_accel_error_count_{0U};
     std::uint32_t latest_gyro_error_count_{0U};
 
-    StatusMoments accel_status_moments_{};
-    StatusMoments gyro_status_moments_{};
-    Vector3 previous_status_accel_{};
-    Vector3 previous_status_gyro_{};
-    bool have_previous_status_accel_{false};
-    bool have_previous_status_gyro_{false};
-    std::uint64_t accel_status_first_us_{0U};
-    std::uint64_t accel_status_last_us_{0U};
-    std::uint64_t gyro_status_first_us_{0U};
-    std::uint64_t gyro_status_last_us_{0U};
-    std::uint32_t accel_status_updates_{0U};
-    std::uint32_t gyro_status_updates_{0U};
-    std::uint32_t accel_status_raw_samples_{0U};
-    std::uint32_t gyro_status_raw_samples_{0U};
-    std::uint8_t accel_status_first_samples_{0U};
-    std::uint8_t gyro_status_first_samples_{0U};
-    float accel_temperature_sum_{0.0F};
-    float gyro_temperature_sum_{0.0F};
-    std::uint32_t accel_temperature_count_{0U};
-    std::uint32_t gyro_temperature_count_{0U};
-    std::uint32_t accel_clipping_total_[3]{};
-    std::uint32_t gyro_clipping_total_[3]{};
-    float accel_vibration_metric_{0.0F};
-    float gyro_vibration_metric_{0.0F};
+    StreamStatus accel_status_{};
+    StreamStatus gyro_status_{};
     float coning_metric_accumulator_{0.0F};
     float coning_metric_time_s_{0.0F};
 

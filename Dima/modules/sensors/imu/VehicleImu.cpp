@@ -219,18 +219,18 @@ bool VehicleImu::start()
     validation_fault_active_ = false;
     clipping_fault_active_ = false;
     status_dirty_ = false;
-    accel_clipping_total_[0] = 0U;
-    accel_clipping_total_[1] = 0U;
-    accel_clipping_total_[2] = 0U;
-    gyro_clipping_total_[0] = 0U;
-    gyro_clipping_total_[1] = 0U;
-    gyro_clipping_total_[2] = 0U;
-    accel_vibration_metric_ = 0.0F;
-    gyro_vibration_metric_ = 0.0F;
-    previous_status_accel_ = {};
-    previous_status_gyro_ = {};
-    have_previous_status_accel_ = false;
-    have_previous_status_gyro_ = false;
+    accel_status_.clipping_total[0] = 0U;
+    accel_status_.clipping_total[1] = 0U;
+    accel_status_.clipping_total[2] = 0U;
+    gyro_status_.clipping_total[0] = 0U;
+    gyro_status_.clipping_total[1] = 0U;
+    gyro_status_.clipping_total[2] = 0U;
+    accel_status_.vibration_metric = 0.0F;
+    gyro_status_.vibration_metric = 0.0F;
+    accel_status_.previous = {};
+    gyro_status_.previous = {};
+    accel_status_.have_previous = false;
+    gyro_status_.have_previous = false;
     reset_status_window();
     clear_pending_configuration();
     clear_learned_calibrations();
@@ -658,10 +658,10 @@ void VehicleImu::apply_configuration(
     active_configuration_ = configuration;
     reset_integrators(true);
     reset_status_window();
-    have_previous_status_accel_ = false;
-    have_previous_status_gyro_ = false;
-    accel_vibration_metric_ = 0.0F;
-    gyro_vibration_metric_ = 0.0F;
+    accel_status_.have_previous = false;
+    gyro_status_.have_previous = false;
+    accel_status_.vibration_metric = 0.0F;
+    gyro_status_.vibration_metric = 0.0F;
     status_dirty_ = true;
 }
 
@@ -1176,7 +1176,9 @@ bool VehicleImu::process_accel(const sensor_accel_s &sample) noexcept
     }
     const Vector3 corrected = correct_accel(sample);
     ++stats_.accel_updates;
-    accumulate_accel_status(sample, corrected);
+    accumulate_status(accel_status_, corrected, sample.clip_counter,
+                      sample.timestamp_sample, sample.samples,
+                      sample.temperature);
     if (!accel_validator_.evaluate(hrt_absolute_time()).healthy()) {
         reset_integrators(true);
         return false;
@@ -1263,7 +1265,9 @@ bool VehicleImu::process_gyro(const sensor_gyro_s &sample) noexcept
     }
     const Vector3 corrected = correct_gyro(sample);
     ++stats_.gyro_updates;
-    accumulate_gyro_status(sample, corrected);
+    accumulate_status(gyro_status_, corrected, sample.clip_counter,
+                      sample.timestamp_sample, sample.samples,
+                      sample.temperature);
     if (!gyro_validator_.evaluate(hrt_absolute_time()).healthy()) {
         reset_integrators(true);
         return false;
@@ -1318,88 +1322,54 @@ bool VehicleImu::process_gyro(const sensor_gyro_s &sample) noexcept
     return true;
 }
 
-void VehicleImu::accumulate_accel_status(
-    const sensor_accel_s &sample, const Vector3 &value) noexcept
+void VehicleImu::accumulate_status(
+    StreamStatus &status, const Vector3 &value,
+    const std::uint8_t (&clipping)[3], std::uint64_t timestamp_sample,
+    std::uint8_t samples, float temperature) noexcept
 {
-    if (accel_status_updates_ == 0U) {
-        accel_status_first_us_ = sample.timestamp_sample;
-        accel_status_first_samples_ = sample.samples;
+    // accel/gyro 各有独立状态，统计计算共用一份非模板实体；仅接收本次样本的
+    // 标量/三轴值，不重解释生成消息类型，也不共享积分、校准或健康状态。
+    if (status.updates == 0U) {
+        status.first_us = timestamp_sample;
+        status.first_samples = samples;
     }
-    accel_status_last_us_ = sample.timestamp_sample;
-    if (accel_status_updates_ != UINT32_MAX) {
-        ++accel_status_updates_;
+    status.last_us = timestamp_sample;
+    if (status.updates != UINT32_MAX) {
+        ++status.updates;
     }
-    saturating_add(accel_status_raw_samples_, sample.samples);
-    update_moments(accel_status_moments_.mean,
-                   accel_status_moments_.m2,
-                   accel_status_moments_.count, value);
+    saturating_add(status.raw_samples, samples);
+    update_moments(status.moments.mean,
+                   status.moments.m2,
+                   status.moments.count, value);
 
     // vibration_metric=0.99*old+0.01*|current-previous|，是样本差分 EWMA，
     // 不是频谱分析或板端机械振动结论。
-    if (have_previous_status_accel_) {
+    if (status.have_previous) {
         const Vector3 difference{
-            value.x - previous_status_accel_.x,
-            value.y - previous_status_accel_.y,
-            value.z - previous_status_accel_.z};
-        accel_vibration_metric_ = 0.99F * accel_vibration_metric_ +
+            value.x - status.previous.x,
+            value.y - status.previous.y,
+            value.z - status.previous.z};
+        status.vibration_metric = 0.99F * status.vibration_metric +
                                    0.01F * vector_norm(difference);
     }
-    previous_status_accel_ = value;
-    have_previous_status_accel_ = true;
+    status.previous = value;
+    status.have_previous = true;
 
-    accel_temperature_sum_ += sample.temperature;
-    if (accel_temperature_count_ != UINT32_MAX) {
-        ++accel_temperature_count_;
+    status.temperature_sum += temperature;
+    if (status.temperature_count != UINT32_MAX) {
+        ++status.temperature_count;
     }
     for (std::size_t axis = 0U; axis < 3U; ++axis) {
-        saturating_add(accel_clipping_total_[axis],
-                       sample.clip_counter[axis]);
-        status_dirty_ = status_dirty_ || sample.clip_counter[axis] != 0U;
-    }
-}
-
-void VehicleImu::accumulate_gyro_status(
-    const sensor_gyro_s &sample, const Vector3 &value) noexcept
-{
-    if (gyro_status_updates_ == 0U) {
-        gyro_status_first_us_ = sample.timestamp_sample;
-        gyro_status_first_samples_ = sample.samples;
-    }
-    gyro_status_last_us_ = sample.timestamp_sample;
-    if (gyro_status_updates_ != UINT32_MAX) {
-        ++gyro_status_updates_;
-    }
-    saturating_add(gyro_status_raw_samples_, sample.samples);
-    update_moments(gyro_status_moments_.mean,
-                   gyro_status_moments_.m2,
-                   gyro_status_moments_.count, value);
-
-    if (have_previous_status_gyro_) {
-        const Vector3 difference{
-            value.x - previous_status_gyro_.x,
-            value.y - previous_status_gyro_.y,
-            value.z - previous_status_gyro_.z};
-        gyro_vibration_metric_ = 0.99F * gyro_vibration_metric_ +
-                                  0.01F * vector_norm(difference);
-    }
-    previous_status_gyro_ = value;
-    have_previous_status_gyro_ = true;
-
-    gyro_temperature_sum_ += sample.temperature;
-    if (gyro_temperature_count_ != UINT32_MAX) {
-        ++gyro_temperature_count_;
-    }
-    for (std::size_t axis = 0U; axis < 3U; ++axis) {
-        saturating_add(gyro_clipping_total_[axis],
-                       sample.clip_counter[axis]);
-        status_dirty_ = status_dirty_ || sample.clip_counter[axis] != 0U;
+        saturating_add(status.clipping_total[axis],
+                       clipping[axis]);
+        status_dirty_ = status_dirty_ || clipping[axis] != 0U;
     }
 }
 
 void VehicleImu::publish_status(std::uint64_t now_us, bool force) noexcept
 {
-    if (accel_status_moments_.count == 0U &&
-        gyro_status_moments_.count == 0U) {
+    if (accel_status_.moments.count == 0U &&
+        gyro_status_.moments.count == 0U) {
         return;
     }
     const bool clock_rollback = last_status_publish_us_ != 0U &&
@@ -1423,29 +1393,29 @@ void VehicleImu::publish_status(std::uint64_t now_us, bool force) noexcept
     status.accel_error_count = latest_accel_error_count_;
     status.gyro_error_count = latest_gyro_error_count_;
     status.accel_rate_hz = update_rate(
-        accel_status_updates_, accel_status_first_us_,
-        accel_status_last_us_);
+        accel_status_.updates, accel_status_.first_us,
+        accel_status_.last_us);
     status.gyro_rate_hz = update_rate(
-        gyro_status_updates_, gyro_status_first_us_,
-        gyro_status_last_us_);
+        gyro_status_.updates, gyro_status_.first_us,
+        gyro_status_.last_us);
     status.accel_raw_rate_hz = raw_rate(
-        accel_status_raw_samples_, accel_status_first_samples_,
-        accel_status_first_us_, accel_status_last_us_);
+        accel_status_.raw_samples, accel_status_.first_samples,
+        accel_status_.first_us, accel_status_.last_us);
     status.gyro_raw_rate_hz = raw_rate(
-        gyro_status_raw_samples_, gyro_status_first_samples_,
-        gyro_status_first_us_, gyro_status_last_us_);
-    status.accel_vibration_metric = accel_vibration_metric_;
-    status.gyro_vibration_metric = gyro_vibration_metric_;
+        gyro_status_.raw_samples, gyro_status_.first_samples,
+        gyro_status_.first_us, gyro_status_.last_us);
+    status.accel_vibration_metric = accel_status_.vibration_metric;
+    status.gyro_vibration_metric = gyro_status_.vibration_metric;
     // coning metric=累计 |coning_increment|*dt / 累计 dt，单位 rad；温度用窗口
     // 算术平均，无有效温度时输出 NaN。
     status.delta_angle_coning_metric = coning_metric_time_s_ > 0.0F
         ? coning_metric_accumulator_ / coning_metric_time_s_
         : 0.0F;
 
-    const Vector3 &accel_mean = accel_status_moments_.mean;
-    const Vector3 &gyro_mean = gyro_status_moments_.mean;
-    const Vector3 &accel_m2 = accel_status_moments_.m2;
-    const Vector3 &gyro_m2 = gyro_status_moments_.m2;
+    const Vector3 &accel_mean = accel_status_.moments.mean;
+    const Vector3 &gyro_mean = gyro_status_.moments.mean;
+    const Vector3 &accel_m2 = accel_status_.moments.m2;
+    const Vector3 &gyro_m2 = gyro_status_.moments.m2;
     status.mean_accel[0] = accel_mean.x;
     status.mean_accel[1] = accel_mean.y;
     status.mean_accel[2] = accel_mean.z;
@@ -1453,30 +1423,30 @@ void VehicleImu::publish_status(std::uint64_t now_us, bool force) noexcept
     status.mean_gyro[1] = gyro_mean.y;
     status.mean_gyro[2] = gyro_mean.z;
     status.var_accel[0] = variance(
-        accel_m2.x, accel_status_moments_.count);
+        accel_m2.x, accel_status_.moments.count);
     status.var_accel[1] = variance(
-        accel_m2.y, accel_status_moments_.count);
+        accel_m2.y, accel_status_.moments.count);
     status.var_accel[2] = variance(
-        accel_m2.z, accel_status_moments_.count);
+        accel_m2.z, accel_status_.moments.count);
     status.var_gyro[0] = variance(
-        gyro_m2.x, gyro_status_moments_.count);
+        gyro_m2.x, gyro_status_.moments.count);
     status.var_gyro[1] = variance(
-        gyro_m2.y, gyro_status_moments_.count);
+        gyro_m2.y, gyro_status_.moments.count);
     status.var_gyro[2] = variance(
-        gyro_m2.z, gyro_status_moments_.count);
+        gyro_m2.z, gyro_status_.moments.count);
 
     const float unavailable = std::numeric_limits<float>::quiet_NaN();
-    status.temperature_accel = accel_temperature_count_ == 0U
+    status.temperature_accel = accel_status_.temperature_count == 0U
         ? unavailable
-        : accel_temperature_sum_ /
-              static_cast<float>(accel_temperature_count_);
-    status.temperature_gyro = gyro_temperature_count_ == 0U
+        : accel_status_.temperature_sum /
+              static_cast<float>(accel_status_.temperature_count);
+    status.temperature_gyro = gyro_status_.temperature_count == 0U
         ? unavailable
-        : gyro_temperature_sum_ /
-              static_cast<float>(gyro_temperature_count_);
+        : gyro_status_.temperature_sum /
+              static_cast<float>(gyro_status_.temperature_count);
     for (std::size_t axis = 0U; axis < 3U; ++axis) {
-        status.accel_clipping[axis] = accel_clipping_total_[axis];
-        status.gyro_clipping[axis] = gyro_clipping_total_[axis];
+        status.accel_clipping[axis] = accel_status_.clipping_total[axis];
+        status.gyro_clipping[axis] = gyro_status_.clipping_total[axis];
     }
 
     if (vehicle_imu_status_pub_.publish(status)) {
@@ -1492,22 +1462,22 @@ void VehicleImu::publish_status(std::uint64_t now_us, bool force) noexcept
 
 void VehicleImu::reset_status_window() noexcept
 {
-    accel_status_moments_ = {};
-    gyro_status_moments_ = {};
-    accel_status_first_us_ = 0U;
-    accel_status_last_us_ = 0U;
-    gyro_status_first_us_ = 0U;
-    gyro_status_last_us_ = 0U;
-    accel_status_updates_ = 0U;
-    gyro_status_updates_ = 0U;
-    accel_status_raw_samples_ = 0U;
-    gyro_status_raw_samples_ = 0U;
-    accel_status_first_samples_ = 0U;
-    gyro_status_first_samples_ = 0U;
-    accel_temperature_sum_ = 0.0F;
-    gyro_temperature_sum_ = 0.0F;
-    accel_temperature_count_ = 0U;
-    gyro_temperature_count_ = 0U;
+    accel_status_.moments = {};
+    gyro_status_.moments = {};
+    accel_status_.first_us = 0U;
+    accel_status_.last_us = 0U;
+    gyro_status_.first_us = 0U;
+    gyro_status_.last_us = 0U;
+    accel_status_.updates = 0U;
+    gyro_status_.updates = 0U;
+    accel_status_.raw_samples = 0U;
+    gyro_status_.raw_samples = 0U;
+    accel_status_.first_samples = 0U;
+    gyro_status_.first_samples = 0U;
+    accel_status_.temperature_sum = 0.0F;
+    gyro_status_.temperature_sum = 0.0F;
+    accel_status_.temperature_count = 0U;
+    gyro_status_.temperature_count = 0U;
     coning_metric_accumulator_ = 0.0F;
     coning_metric_time_s_ = 0.0F;
 }
