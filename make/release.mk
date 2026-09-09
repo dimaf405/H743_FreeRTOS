@@ -87,7 +87,9 @@ endif
 __dima_prepare_make_includes: $(DRONECAN_GENERATED_MAKEFILE)
 	@:
 
-__dima_prepare_generated: $(DIMA_DRONECAN_GENERATED_OUTPUTS) \
+# 固件身份也要在进度计划前收敛，确保计划与实际编译使用同一份 Git 合同。
+__dima_prepare_generated: $(FIRMWARE_IDENTITY_GENERATED_OUTPUTS) \
+		$(DIMA_DRONECAN_GENERATED_OUTPUTS) \
 		$(UM982_CONTRACT_HEADER) \
 		$(MESSAGE_GENERATED_OUTPUTS) $(PARAMETER_GENERATED_OUTPUTS) \
 		$(PARAMETER_METADATA_OUTPUTS) \

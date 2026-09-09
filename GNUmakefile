@@ -116,11 +116,11 @@ else
 ifneq ($(DIMA_FAST_UPLOAD_DISPATCH),)
 
 # Upload already has protocol-level stages and normally reuses a signed image.
-# Execute its real dependency graph once instead of paying for generated-output
-# stabilization plus a second dry-run solely to build a progress plan.  Any
-# stale source, generated contract, key, ELF or signature still rebuilds in the
-# recursive Make before the uploader can start.
-# 快速 OTA 省略的只是“进度计划”与 Factory/MCUboot 非必要重建；签名、哈希、
+# Prepare the shared firmware identity before dependency scanning, then execute
+# the upload graph once. Any stale source, generated contract, key, ELF or
+# signature still rebuilds before the uploader can start.
+# 先在独立 Make 阶段收敛身份头，防止本轮读取到旧 mtime 后漏编译消费者。
+# 快速 OTA 保留这个准备阶段，仍省略进度计划和 Factory/MCUboot 非必要重建；签名、哈希、
 # Application ELF、Secondary/pending/reset/identity 等安全证明仍由依赖链保留。
 __dima_dispatch:
 	+@set -eu; \
@@ -134,6 +134,10 @@ __dima_dispatch:
 		if test -n "$$toolchain_path"; then \
 			printf '[TOOLCHAIN] Build\n  Arm GCC    : %s\n\n' "$$toolchain_path"; \
 		fi; \
+		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -s -f GNUmakefile \
+			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE= \
+			DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
+			GCC_PATH="$$toolchain_path" firmware-identity-generated; \
 		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -s -f GNUmakefile \
 			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE= \
 			DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \

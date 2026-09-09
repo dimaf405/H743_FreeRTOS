@@ -329,8 +329,12 @@ $(FIRMWARE_IDENTITY_GENERATED_STAMP): make/project.mk \
 			--manifest $(FIRMWARE_IDENTITY_MANIFEST) \
 			--output $(FIRMWARE_IDENTITY_GENERATED_DIR) \
 			--git-commit $(FIRMWARE_IDENTITY_GIT_COMMIT)
+	# 合同输出只有一份：成功生成后撤销旧 Git 标记，切回旧提交也必须重新生成。
+	@rm -f "$(FIRMWARE_IDENTITY_GENERATED_DIR)"/.generated-*
 	@touch "$@"
 
+# 公共构建入口先完成身份生成，再启动真正的依赖扫描；未变内容保留 mtime。
+# 输出只等待生成完成，不能把成功标记时间当成头变化，否则 dry-run 会虚报重编译。
 $(FIRMWARE_IDENTITY_GENERATED_OUTPUTS): | \
 		$(FIRMWARE_IDENTITY_GENERATED_STAMP)
 	@test -f "$@"
