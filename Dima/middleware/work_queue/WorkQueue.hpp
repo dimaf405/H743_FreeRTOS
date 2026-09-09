@@ -41,6 +41,8 @@ public:
     WorkItem(const char *name, const wq_config_t &config) noexcept;
     virtual ~WorkItem() = default;
 
+    // 立即请求执行并保留已有周期；未配置周期的任务仍只执行一次。
+    // 要撤销周期应显式 Clear/Cancel，或改用单次 Delayed/At 调度。
     bool ScheduleNow() noexcept;
     bool ScheduleNowFromISR() noexcept;
     bool ScheduleEnable() noexcept;

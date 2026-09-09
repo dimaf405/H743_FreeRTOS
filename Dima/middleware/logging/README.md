@@ -16,6 +16,7 @@
 - 参数 `P/Q` 写入共用 key 长度校验；默认值相同只发合并类型的单条 `Q`，不同默认值按 setup 再 system 写入。保留双记录空间预留、与当前值相同则省略及遇背压立即重试的规则。
 - `P/Q` key 与硬件 UID 的纯字符串/整数格式化复用现有 `dima::format::format_to`，保留返回长度、截断拒绝、补零、大写十六进制和末尾 NUL；不再为两处缓冲格式化引入 newlib 的第二套 formatter。ULog 记录顺序、路由、过滤和背压不变，stdout/setvbuf 与 newlib 链接策略没有改动。
 - `LogWriter` consumer 独占 `wq:storage`，使用固定 64 KiB SPSC 字节 Ring，每次最多向 FatFs 提交 8192 bytes，并每 1 s 执行 `f_sync`；活动写入与关闭前的 UTC 侧车更新共用代次确认路径，写入失败不推进确认代次。producer 不调用任何 FatFs/SDMMC API；Ring 满时写标准 `O` dropout，而不是静默拼接损坏流。
+- producer/consumer 的立即唤醒与 uORB 回调必须保留各自的 5 ms/20 ms 周期。否则开机记录时 producer 可能先于文件创建执行并返回，consumer 只创建 0-byte 文件后也停止，且没有 I/O 错误可报告；文件缺少 ULog magic 时不会进入 QGC 列表。保留周期后，等待文件、Ring 暂空以及同步/重试分支都能继续推进。
 - 每个新介质/文件都推进 session generation，清空旧 Ring、Topic generation 与 message ID，并从 ULog header 全量重建。普通介质失败在 Mode 仍有记录意图时按 3 s 重试；低空间暂停按 60 s 复查，只停止 SD 副本，不影响实时 STATUSTEXT/Event。
 - `sessNNN/log100.ulg` 使用最多三条 64-byte CRC `meta.bin` 记录保存全局顺序、硬件 UID、关闭/恢复状态、最终文件大小/CRC 和可选 GPS UTC。恢复、`sessNNN -> delNNN` 删除、目录上限及 `clamp(容量×5%, 64 MiB, 512 MiB)` 空间回收均由 `wq:storage` 分步推进；未知文件、当前 writer 和 QGC reader 永不自动删除。
 - H743 板没有 card-detect GPIO，无法证明“物理卡在位”。已挂载会话通过最长 500 ms 的 `CTRL_SYNC` 主动命令确认“最近一次探测可用”；失败立即撤销全部 FIL/DIR 与挂载，下一次重试执行完整 SDMMC/FatFs 初始化。

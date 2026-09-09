@@ -148,9 +148,10 @@ bool WorkQueueManager::schedule_from_isr(WorkItem &item) noexcept
         return false;
     }
 
+    // ISR 只追加立即执行请求，保留已有周期；否则一次数据中断就会撤销
+    // 周期超时检查。单次任务的 interval_ 本来为 0，仍保持单次语义。
     ++item.schedule_revision_;
     item.deadline_ = work_queue_time_us();
-    item.interval_ = 0U;
     item.scheduled_ = true;
     dima::platform::services().synchronization.notify_from_isr(
         queue->signal);
@@ -267,7 +268,14 @@ WorkItem::WorkItem(const char *name, const wq_config_t &config) noexcept
 
 bool WorkItem::ScheduleNow() noexcept
 {
-    return WorkQueueManager::schedule(*this, work_queue_time_us(), 0U);
+    if (in_isr()) {
+        return false;
+    }
+    // 立即唤醒不能取消已配置的周期：Logger 等任务在等待文件或暂时无数据时
+    // 会直接返回，仍须靠后续周期继续推进。读取周期与提交请求必须在同一
+    // 临界区，防止并发 Clear/Cancel 后又恢复旧周期；平台临界区支持嵌套。
+    dima::platform::CriticalGuard guard;
+    return WorkQueueManager::schedule(*this, work_queue_time_us(), interval_);
 }
 
 bool WorkItem::ScheduleNowFromISR() noexcept

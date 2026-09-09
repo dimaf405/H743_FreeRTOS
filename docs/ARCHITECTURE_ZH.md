@@ -103,6 +103,7 @@ docs/                         计划、架构、ADR、来源和维护文档
 - TIM2 固定为 1 MHz、32 位 HRT，并由溢出中断扩展为 64 位 `hrt_absolute_time()`；TIM2 及 CH1 保留给 HRT 和未来 compare，不得分配给 PWM、编码器或输入捕获。
 - 当前禁止 tickless sleep、STOP 模式补偿和运行期动态改频。恢复这些能力前，必须同时证明 SysTick 与 TIM2 在低功耗和变频边界上的连续性。
 - 普通 WorkQueue 由 1 ms FreeRTOS tick 唤醒，截止时间向上取整，因此不得提前执行；周期任务以前一截止时间锁相并跳过错过周期，不执行突发补偿。
+- `ScheduleNow/FromISR` 立即请求执行时保留已配置的周期，保证回调后的等待分支仍有后续轮询；`ScheduleDelayed/At` 显式改为单次，`ScheduleClear/CancelAndDrain` 撤销后续调度。任务上下文的周期读取与立即请求提交在同一临界区内完成，取消操作不会被旧周期覆盖。
 - IMU、Estimator 和 Rate Controller 等高频链必须由 DMA、EXTI 或消息事件唤醒。确需亚毫秒 one-shot 时只扩展 TIM2 CH1 compare，不再增加第三套系统时基。
 
 后续将形成独立执行域：
