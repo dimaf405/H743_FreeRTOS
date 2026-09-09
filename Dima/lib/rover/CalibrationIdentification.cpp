@@ -120,20 +120,17 @@ bool update_bank(ArxRls<1U, 0U, Delay> &bank, std::size_t index,
     return true;
 }
 
-template<std::size_t Delay>
-bool evaluate_bank(const ArxRls<1U, 0U, Delay> &bank, std::size_t index,
-                   const IdentificationConfig &config, std::uint32_t sample_count,
-                   float input_variance, float output_variance,
-                   const double (&residual_squared)[FirstOrderDelayIdentifier::kDelayBankSize],
-                   const std::uint32_t (&residual_count)[FirstOrderDelayIdentifier::kDelayBankSize],
-                   FirstOrderModel &model) noexcept
+bool evaluate_model(const matrix::Vector<float, 2U> &coefficients,
+                    const matrix::Vector<float, 2U> &variances,
+                    std::size_t delay, std::size_t index,
+                    const IdentificationConfig &config, std::uint32_t sample_count,
+                    float input_variance, float output_variance,
+                    const double (&residual_squared)[FirstOrderDelayIdentifier::kDelayBankSize],
+                    const std::uint32_t (&residual_count)[FirstOrderDelayIdentifier::kDelayBankSize],
+                    FirstOrderModel &model) noexcept
 {
-    // 一阶模型有 pole/input coefficient 两个自由参数；N<=2 时残差方差
-    // 没有正自由度，不能生成表面有限的系数置信度。
-    if (residual_count[index] <= 2U ||
-        residual_count[index] < config.minimum_samples / 4U) return false;
-    const auto &coefficients = bank.getCoefficients();
-    const auto variances = bank.getVariances();
+    // 六个延迟模型共用同一评估实体；调用方已检查残差样本数并按原顺序
+    // 取得系数/方差。仅把 Delay 作为数据传入，不改公式、精度或短路门禁。
     const float a = coefficients(0);
     const float b = coefficients(1);
     const float pole = -a;
@@ -184,13 +181,13 @@ bool evaluate_bank(const ArxRls<1U, 0U, Delay> &bank, std::size_t index,
         normalized_residual > config.maximum_normalized_rms_residual) return false;
 
     model.valid = true;
-    model.delay_samples = static_cast<std::uint8_t>(Delay);
+    model.delay_samples = static_cast<std::uint8_t>(delay);
     model.sample_count = sample_count;
     model.pole = pole;
     model.input_coefficient = b;
     model.dc_gain = dc_gain;
     model.time_constant_s = time_constant_s;
-    model.delay_s = static_cast<float>(Delay) * config.sample_period_s;
+    model.delay_s = static_cast<float>(delay) * config.sample_period_s;
     model.pole_variance = static_cast<float>(pole_variance);
     model.input_coefficient_variance = static_cast<float>(
         input_coefficient_variance);
@@ -199,6 +196,25 @@ bool evaluate_bank(const ArxRls<1U, 0U, Delay> &bank, std::size_t index,
     model.input_variance = input_variance;
     model.output_variance = output_variance;
     return true;
+}
+
+template<std::size_t Delay>
+bool evaluate_bank(const ArxRls<1U, 0U, Delay> &bank, std::size_t index,
+                   const IdentificationConfig &config, std::uint32_t sample_count,
+                   float input_variance, float output_variance,
+                   const double (&residual_squared)[FirstOrderDelayIdentifier::kDelayBankSize],
+                   const std::uint32_t (&residual_count)[FirstOrderDelayIdentifier::kDelayBankSize],
+                   FirstOrderModel &model) noexcept
+{
+    // 一阶模型有 pole/input coefficient 两个自由参数；N<=2 时残差方差
+    // 没有正自由度，不能生成表面有限的系数置信度。保留先判定、再读模型的顺序。
+    if (residual_count[index] <= 2U ||
+        residual_count[index] < config.minimum_samples / 4U) return false;
+    const auto &coefficients = bank.getCoefficients();
+    const auto variances = bank.getVariances();
+    return evaluate_model(coefficients, variances, Delay, index, config, sample_count,
+                          input_variance, output_variance, residual_squared,
+                          residual_count, model);
 }
 
 bool step_config_valid(const StepValidationConfig &config) noexcept

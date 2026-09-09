@@ -1,6 +1,6 @@
 # 代码体积与逻辑收敛记录
 
-当前第四轮结果见第 8 节；前文保留各轮归档证据，不覆盖历史基线。
+当前第五轮结果见第 9 节；前文保留各轮归档证据，不覆盖历史基线。
 
 ## 1. 范围与完成状态
 
@@ -255,3 +255,52 @@ Logger/uORB 生成清单以及参数 JSON/XML/上游原始头与本轮基线逐�
 EXT 统计包含基线中 110 B 的 `mavlink_msg_param_ext_value_encode.constprop.0.isra.0`，它在新镜像中被内联进公共回复函数；不能只比较两个调用者就漏算原有编码体。本批收益属于小幅维护性收敛，不宣称大幅代码减重或 RAM 节省。未修改或提交并发的 DTCM、启动、组合根和 IMU/遥测代码，也未进行刷机。
 
 该轮实现验收时的 image digest 为 `2fc124dc58c1b94e21fbb4e55ee719e8c600883073bf8827394173f8142a56f6`；BIN SHA-256 为 `bb87e483a3f8dd01301376398ff508a30d46ccf7a8c04085b0c0775eebc7427d`，signed BIN 617926 B、SHA-256 为 `d6c98cb3d7c096f323f8b32925d90fa09f1138b949501f5ebaa38eddd3962899`。前文三轮的四个提交不包含本批内容；本批后续提交使用新的固件身份，不能直接沿用这里的制品哈希。
+
+## 9. 第五轮：共享模型评估与 Metadata extreme 压缩
+
+用户明确授权执行前次排查中的两项；本轮不启用 LTO、不裁剪模型/参数，也不改 stdout 或 EKF 运行算法。两个源文件为 `Dima/lib/rover/CalibrationIdentification.cpp` 与 `tools/mavlink/generate_parameter_metadata.py`。
+
+基线在其他会话提交 DTCM 工作后，以 HEAD `c696905ed607388996f74577e22db7c2bb7794e1` 完成 Windows `[17/17]` exit 0。BIN 616752 B，SHA-256 `27df06d312bd9e4df270aab62c2142048f6fe18075f0fe7bcb6b03b19802a166`；text/data/bss 为 604388/12324/571168 B。源码、各类生成清单、Metadata JSON/XZ 和制品归档在 `C:\Users\master\AppData\Local\Temp\dima-code-size-round5-c0c9a8459e4b476ab94e481d4d7ce91d`，没有操作其他会话的暂存区或提交。
+
+1. 模型评估：薄模板先检查残差样本数，再依次读取系数和方差；非模板实体只接收同类型数据及延迟值。源码对照确认重计算代码体除 `Delay` 名称替换外逐字一致，`fit()` 的候选选择及 PI 代码体也逐字一致。六个独立 RLS bank、0～5 的调用顺序及失败输出语义均保留。
+2. 单独完成第一项后，Windows `[16/16]` exit 0，BIN 为 612952 B，减少 3800 B。`fit()` 由 6008 B 降至 1372 B，共享评估实体 832 B，原候选选择 lambda 仍为 62 B；编译器没有把重计算重新展开成六份。该中间 ELF/BIN/map 也已归档，便于分离两项收益。
+3. Metadata 通过现有 Make 生成及验证入口更新。参数 XZ 从 11880 B 降到 11712 B，执行器 XZ 仍为 420 B，General XZ 仍为 196 B；参数和执行器 JSON 逐字节不变，General JSON 只更新参数文件 CRC。所有 XZ 解压均与对应 JSON 相同，未手写生成产物。
+
+两项完成后的 Windows 完整目标 `[17/17]` exit 0，架构通过 454 个首方源文件，参数 Metadata、MAVLink、uORB、Logger、ELF、签名和 Factory 检查均通过，Application/MCUboot 未解析符号为空。官方参数 JSON/XML/原始头、MAVLink/uORB/Logger 生成清单与本轮基线逐字节一致；仅 Component Metadata 的压缩数据及关联 CRC 按预期更新。
+
+| 指标 | 基线 | 仅模型去重 | 两项完成 |
+|---|---:|---:|---:|
+| BIN / Flash load span | 616752 B | 612952 B | 612784 B |
+| text | 604388 B | 600588 B | 600420 B |
+| data / bss | 12324 / 571168 B | 不变 | 不变 |
+| 参数 Metadata XZ | 11880 B | 11880 B | 11712 B |
+
+模型去重贡献 3800 B，压缩贡献 168 B，总计减少 3968 B（约 3.88 KiB / 0.64%）；Flash 槽占用降至约 78.3%。DTCM 60896 B、SRAM 530784 B、D2 data 172096 B 均不变。本轮没有缩减任务栈或缓冲；反汇编的固定栈帧从原 `fit` 的 240 B，变为新 `fit` 224 B 加共享评估 104 B，评估调用路径增加 88 B。这只统计本层固定帧，不是包含 libm、上层调用者及抢占上下文的运行峰值。
+
+本批只有两个代码源文件改变，源码增加用于明确共享边界的薄适配与中文说明；收益以最终指令及数据占用为准。没有新增/修改测试、框架或仿真路径，实现验收时尚未提交，未推送或刷机，未改变其他会话的 IMU/遥测修改。`git diff --check` 通过。
+
+最终 image digest：`0f7126cac62453a3e63b3815c15a1f2875f5bc708ebe5f34c97816c3992df67e`。BIN SHA-256：`5e9773cb2730ebe390f2df15f966e30db8825370d8fdcb47888da91d77a3c123`；signed BIN 为 613960 B，SHA-256：`a2c9a7ad6bff0f9d5e9936d6cb7046f08c267a453e6444f88a307696317745bc`。这些是上述未提交工作区的静态制品记录，不替代数值运行或实板闭环验证。
+
+收尾时其他会话又修改了 `ArxRls.hpp` 的更新内核、Console、UM982 解析、参数状态接口及相关构建说明，并连续运行共享目录构建。上述 3968 B 收益和制品身份均取自这些后续变动进入前、本代理已完成的独立分步验收；没有回退或修改这些并发工作，也不把其后续收益计入本轮。
+
+确认共享构建空闲后，对组合工作区再次执行 Windows 正式入口：
+
+```powershell
+& C:\Users\master\.local\bin\make.cmd -j4 NO_COLOR=1 `
+  dima_rover uorb-generated-verify mavlink-generated-verify `
+  parameter-metadata-verify logger-generated-verify
+```
+
+组合复核 `[314/314]` exit 0，通过全部生成、架构、ELF、签名和 Factory 门禁；架构仍为 454 个首方源文件，Application/MCUboot 未解析符号为空。此次为依赖重编译，未执行 clean。官方参数 JSON/XML/原始头及 MAVLink/uORB/Logger 生成清单再次与本轮基线核对一致。
+
+组合 BIN 为 602196 B，text/data/bss 为 590872/11284/571104 B，DTCM/SRAM/D2 data 地址占用为 60896/529664/170976 B。这些数值包含其他会话的额外收益，不能用组合结果与本轮基线的全部差值归因这两项优化。组合制品以 `combined_` 前缀存入同一临时归档，并核对复制前后的 SHA-256 一致。
+
+组合 image digest：`7dde67b57311afe8f613e58842b8be842ec1e1d5218678ab2f64b00ce94eae9f`。
+
+| 组合制品 | 字节数 | SHA-256 |
+|---|---:|---|
+| BIN | 602196 | `c9577d1f6a4d8f5fe55de009c82d49b9accca2ad1f9c25fbc02f35a9768dcb8c` |
+| signed BIN | 603370 | `9ee3096d6ec83b22d14d56fc52fcadb419a58353cd19d47438aa6bc72254e163` |
+| Factory HEX | 1568380 | `0253cd8620536de6e18b4a8c4226af11120a99d28138f68c4295df725e71db0e` |
+
+本轮静态交付与文档收尾完成；上述记录对应提交前验收，未执行 QGC、板端或车辆验证，未推送或刷机。按后续授权提交时，仅包含两项实现及对应文档片段，其他会话的修改继续保留在工作区。提交会改变固件身份，后续共享工作区若继续变更，也需对新源码状态重新建立制品证据，不能沿用本次组合复核身份。

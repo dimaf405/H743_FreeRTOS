@@ -389,6 +389,8 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 
 第四轮仅收敛 MAVLink 只读服务：EXT 正常/未找到回复共用标准编码发送，类型/字段容量改用已生成常量；Metadata FTP 复用会话复位并退役恒返回成功的中间包装层，保留回复缓存和协议 ACK 边界。没有修改 XML、运行策略或消息/参数列表，没有引入第三方代码、通用框架或新的传输能力；独立基线和结果见 `CODE_SIZE_REDUCTION_ZH.md` 第 8 节。
 
+第五轮按授权共享本地 `CalibrationIdentification` 的模型评估实体：本轮未修改 `ArxRls` 更新内核，也未减少六个延迟模型；样本数预检查及 getter 顺序仍在薄模板适配中，评估公式、候选选择与 PI 逻辑保持原顺序。Metadata 仅将现有主机 XZ 压缩改为 preset 9 + extreme，原参数/执行器 JSON 与 wire 契约不变，CRC 和嵌入数据继续由正式工具生成；分步制品及并发变动的证据边界见 `CODE_SIZE_REDUCTION_ZH.md` 第 9 节。
+
 ## 2026-09-09 DTCM 任务栈与 CPU 对象分配
 
 本地链接与组合根适配，不新增上游来源或消息/参数契约。平台 48 KiB 单任务栈池迁入 DTCM；Ekf2、RoverDifferential、VehicleImu 采用独立原始存储与延后放置构造，组合根保持原启停顺序。DTCM 低 64 KiB 静态边界与上部 64 KiB MSP 预算由链接器和 ELF 双重核对，D1 日志紧随固定 heap，SD MPU 使用新链接地址。动态 EKF RingBuffer、日志 Ring 和 DMA 归属遵循既有契约；资源与构建记录见 docs/DTCM_MIGRATION_ZH.md，板端性能和稳定性分别验收。

@@ -65,8 +65,11 @@ def json_bytes(value: object) -> bytes:
 
 
 def compress_xz(data: bytes) -> bytes:
+    # 仅增加主机生成阶段的压缩搜索；XZ/LZMA2、CRC64 和 JSON 内容保持原合同。
+    # 文件 CRC、General Metadata 引用与嵌入数组仍由下游统一重算，不手改生成物。
     return lzma.compress(
-        data, format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC64, preset=9
+        data, format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC64,
+        preset=9 | lzma.PRESET_EXTREME
     )
 
 

@@ -29,6 +29,7 @@ Dima module_*.yaml
 
 - 参数数量、handle、类型、默认值、范围、枚举、单位、readOnly、volatile 与 reboot 语义完全由官方 XML、JSON 和生成头决定，不设置固定容量或第二份排序表。
 - `parameter_contract.hpp`、公开转发头、Component Metadata JSON/XZ/Flash 数组、Dima 只读策略与持久化适配只读取官方产物，不重新解释 YAML 或中间 C。
+- Component Metadata 使用主机侧 XZ preset 9 + extreme 压缩；JSON 内容、XZ/LZMA2 与 CRC64 格式保持。参数压缩文件 CRC、General 引用/公告 CRC 和嵌入数组由同一生成器同步更新；不手改压缩字节或保留旧 CRC。
 - MAVLink Classic/Ext 参数协议按官方连续 handle 遍历完整目录；LIST、按 index 补读、READ/SET 与 ACK 使用同一目录索引，不再先维护一份 QGC/public 参数名单。
 - `CAL_MAG1_ID`、`CAL_MAG1_ROT`、`CAL_MAG2_ID`、`CAL_MAG2_ROT`、`SENS_DPRES_OFF` 保持删除，不出现在 YAML、生成头、Metadata、参数协议目录、别名或虚拟参数中。当前产品在缺少这些参数时仍能正常进入并执行校准，这是本次重构必须保持的行为基线。
 - 现有 `CAL_ACC0_*`、`CAL_GYRO0_*`、`CAL_MAG0_*` 等实际校准参数的名称、默认值、持久化和算法语义保持不变。
