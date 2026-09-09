@@ -63,6 +63,8 @@ private:
     static constexpr std::uint32_t kResetTimeoutUs = 1000000U;
     static constexpr std::uint32_t kConfigurationRetryUs = 10000U;
     static constexpr std::uint32_t kDmaTimeoutUs = 5000U;
+    // 空轮询不是故障；连续 100 ms 没有有效批次才按采样停滞恢复，独立于轮询次数。
+    static constexpr std::uint32_t kNoDataTimeoutUs = 100000U;
     /* 8 kHz 下 10 个样本每 1.25 ms 达到 FIFO 水位；看门狗取两倍水位周期 2.5 ms，
      * INT1 延迟/漏失时主动轮询，不允许退化为约 20 ms 的发布空洞。 */
     static constexpr std::uint32_t kWatchdogUs = 2500U;
@@ -84,6 +86,10 @@ private:
         Running,
     };
 
+    enum class FifoReadResult : std::uint8_t {
+        Published, NoData, Failed,
+    };
+
     enum class RestartReason : std::uint8_t {
         None = 0U,
         ResetOrWhoAmI,
@@ -91,6 +97,7 @@ private:
         Verify,
         FifoReset,
         DmaTimeout,
+        FifoNoData,
         FifoTransfer,
         DmaStart,
         RegisterCheck,
@@ -132,7 +139,7 @@ private:
     void run_verify() noexcept;
     void run_fifo(std::uint64_t now_us) noexcept;
     bool start_fifo_transfer(std::uint64_t timestamp_sample) noexcept;
-    bool process_fifo_transfer() noexcept;
+    FifoReadResult process_fifo_transfer() noexcept;
     bool process_fifo(std::uint64_t timestamp_sample,
                       const FifoPacket *packets,
                       std::size_t samples) noexcept;
@@ -158,6 +165,7 @@ private:
     std::uint64_t dma_sample_timestamp_us_{0U};
     std::uint64_t pending_sample_timestamp_us_{0U};
     std::uint64_t last_fifo_request_us_{0U};
+    std::uint64_t last_fifo_progress_us_{0U};
     std::uint64_t last_register_check_us_{0U};
     std::uint32_t suppressed_restart_logs_{0U};
     std::uint32_t healthy_publications_after_fault_{0U};

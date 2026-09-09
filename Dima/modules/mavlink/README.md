@@ -16,7 +16,7 @@
 - `SCALED_IMU`：这是 PX4 注册的原始传感器 MAVLink 流，按 USB 默认 25 Hz 发布第 1 套 `vehicle_imu`、`vehicle_imu_status` 温度与最近一次合法 raw `sensor_mag`；accel、gyro、mag 分别转换为 mG、mrad/s、milliGauss，温度使用 cdegC。当前产品只有实例 0，不伪造 `SCALED_IMU2/3` 或 PX4 未注册的 `RAW_IMU`。
 - `MESSAGE_INTERVAL`：响应 PX4/QGC 的 `MAV_CMD_GET_MESSAGE_INTERVAL`，并与 `MAV_CMD_SET_MESSAGE_INTERVAL`、`MAV_CMD_REQUEST_MESSAGE` 共用同一固定流表；负间隔停流、零恢复固件默认频率、正值保留请求的微秒间隔。100 Hz worker 只形成实际调度上限，不改写协议保存或 GET 回报的请求值。
 - `GPS_RAW_INT`：5 Hz，包含原始 GPS fix、位置、速度、精度、卫星数和双天线 yaw；接收机在线但未定位时仍发送 `NO_FIX`，检测证据不依赖经纬度有效；数据真正超时后发送 `NO_GPS`。
-- `SYS_STATUS`：1 Hz，持久保留曾探测设备的 present/enabled 位，数据超时仅清 health 位。GPS health 还要求 EKF2 `estimator_gps_status.checks_passed`，但该位不反向遮蔽原始 `GPS_RAW_INT`。
+- `SYS_STATUS`：1 Hz，持久保留曾探测设备的 present/enabled 位，数据超时仅清 health 位。GPS health 还要求 EKF2 `estimator_gps_status.checks_passed`，但该位不反向遮蔽原始 `GPS_RAW_INT`。IMU 从健康转为异常时，由本非实时 owner 输出两路原始数据年龄、前端输出年龄及累计错误，恢复时报告一次，USB 重连重报尚未恢复的故障；不改变健康判断、发布门限或消息定义。
 - `ATTITUDE`：50 Hz，从 `vehicle_attitude` 按 PX4 Hamilton quaternion 转 roll/pitch/yaw；机体系角速度来自同一 EKF2 的 `vehicle_odometry`，过期时仅将 rate 置零。
 - `LOCAL_POSITION_NED`：30 Hz，直接映射 `vehicle_local_position` 的 NED position/velocity。
 - `GLOBAL_POSITION_INT`：10 Hz，映射 WGS84 global position 与 NED velocity；严格沿用 PX4 v1.17 的回退合同：存在有效 `home_position` 时为 `gpos.alt-home.alt`，否则为 `gpos.alt`。N1 尚无 `home_position`，因此当前固定走官方无 Home 回退，不把本地 NED 原点另解释为 Home。

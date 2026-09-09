@@ -182,6 +182,7 @@ void ICM42688P::reset_runtime_state() noexcept
     dma_sample_timestamp_us_ = 0U;
     pending_sample_timestamp_us_ = 0U;
     last_fifo_request_us_ = 0U;
+    last_fifo_progress_us_ = 0U;
     last_register_check_us_ = 0U;
     suppressed_restart_logs_ = 0U;
     healthy_publications_after_fault_ = 0U;
@@ -215,6 +216,7 @@ void ICM42688P::log_restart_diagnostics(RestartReason reason) noexcept
     case RestartReason::Verify: reason_name = "verify"; break;
     case RestartReason::FifoReset: reason_name = "fifo_reset"; break;
     case RestartReason::DmaTimeout: reason_name = "dma_timeout"; break;
+    case RestartReason::FifoNoData: reason_name = "fifo_no_data"; break;
     case RestartReason::FifoTransfer: reason_name = "fifo_transfer"; break;
     case RestartReason::DmaStart: reason_name = "dma_start"; break;
     case RestartReason::RegisterCheck: reason_name = "register_check"; break;
@@ -481,6 +483,8 @@ void ICM42688P::Run()
         }
         driver_state_ = DriverState::Running;
         last_fifo_request_us_ = now_us;
+        // 刚完成硬件复位时给予一个完整的数据恢复窗口；之后仅真实发布推进该时刻。
+        last_fifo_progress_us_ = now_us;
         last_register_check_us_ = now_us;
         consecutive_failures_ = 0U;
         (void)schedule_delayed(1000U);
@@ -627,16 +631,27 @@ void ICM42688P::run_fifo(std::uint64_t now_us) noexcept
         }
 
         dma_active_ = false;
-        if (result != dima::platform::SpiTransferResult::Complete ||
-            !process_fifo_transfer()) {
+        const FifoReadResult fifo_result =
+            result == dima::platform::SpiTransferResult::Complete
+                ? process_fifo_transfer() : FifoReadResult::Failed;
+        if (fifo_result == FifoReadResult::Failed) {
             ++stats_.transfer_failures;
             if (++consecutive_failures_ > 10U) {
                 restart_driver(RestartReason::FifoTransfer,
                                kResetRetryUs);
                 return;
             }
-        } else if (consecutive_failures_ > 0U) {
-            --consecutive_failures_;
+        } else if (fifo_result == FifoReadResult::Published) {
+            last_fifo_progress_us_ = hrt_absolute_time();
+            if (consecutive_failures_ > 0U) {
+                --consecutive_failures_;
+            }
+        } else if (now_us - last_fifo_progress_us_ >= kNoDataTimeoutUs) {
+            // 完成通知和水位通知可能交叠，单次 FIFO 空不增加错误密度，也不冒充
+            // 成功样本消退真实故障。连续无有效输出达时限才计一次故障并重启采集。
+            ++stats_.transfer_failures;
+            restart_driver(RestartReason::FifoNoData, kConfigurationRetryUs);
+            return;
         }
     }
 

@@ -77,7 +77,7 @@ float batch_average(const std::int16_t *samples, std::size_t count,
 
 } // namespace
 
-bool ICM42688P::process_fifo_transfer() noexcept
+ICM42688P::FifoReadResult ICM42688P::process_fifo_transfer() noexcept
 {
     const std::uint8_t interrupt_status = fifo_receive_[1];
     const std::uint16_t fifo_count = combine_u16(
@@ -89,15 +89,17 @@ bool ICM42688P::process_fifo_transfer() noexcept
     if (plan.status == icm42688p::fifo::BatchStatus::Overflow) {
         ++stats_.fifo_overflows;
         (void)flush_fifo();
-        return false;
+        return FifoReadResult::Failed;
     }
     if (plan.status == icm42688p::fifo::BatchStatus::Empty) {
+        // FIFO 已被上一笔 DMA 排空、旧水位通知随后才被消费时，可以正常读到空。
+        // 保留诊断次数，但不把它变成传输失败；持续无数据由独立时限判断。
         ++stats_.fifo_empty;
-        return false;
+        return FifoReadResult::NoData;
     }
     if (plan.status != icm42688p::fifo::BatchStatus::Ready) {
         ++stats_.fifo_invalid;
-        return false;
+        return FifoReadResult::Failed;
     }
     if (plan.has_more) {
         pending_sample_timestamp_us_ = hrt_absolute_time();
@@ -105,7 +107,8 @@ bool ICM42688P::process_fifo_transfer() noexcept
 
     const auto *packets = reinterpret_cast<const FifoPacket *>(
         &fifo_receive_[4]);
-    return process_fifo(dma_sample_timestamp_us_, packets, plan.samples);
+    return process_fifo(dma_sample_timestamp_us_, packets, plan.samples)
+               ? FifoReadResult::Published : FifoReadResult::Failed;
 }
 
 bool ICM42688P::process_fifo(std::uint64_t timestamp_sample,
@@ -268,11 +271,12 @@ bool ICM42688P::process_fifo(std::uint64_t timestamp_sample,
 
 std::uint32_t ICM42688P::sensor_error_count() const noexcept
 {
-    /* 向上层暴露驱动累计错误总和，先用 64-bit 求和再饱和到 UINT32_MAX，避免
-     * 多个 32-bit 计数相加回绕成“健康”。 */
+    /* 只汇总真实故障，空轮询次数仅保留在 Stats::fifo_empty。若把正常空读纳入
+     * 累计错误，会最终触发 DataValidator 的不可返回门限，即使采样仍在正常推进。
+     * 64-bit 求和再饱和，仍保留真实错误密度和累计错误保护。 */
     const std::uint64_t total =
         static_cast<std::uint64_t>(stats_.register_failures) +
-        stats_.transfer_failures + stats_.fifo_empty +
+        stats_.transfer_failures +
         stats_.fifo_overflows + stats_.fifo_invalid + stats_.dma_timeouts;
     return total > UINT32_MAX ? UINT32_MAX
                               : static_cast<std::uint32_t>(total);

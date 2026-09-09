@@ -16,6 +16,7 @@
 - `SENS_BOARD_ROT` 使用 PX4 rotation 0..40；`CAL_ACC0_*` 和 `CAL_GYRO0_*` 只在设备 ID 匹配时应用。
 - `IMU_INTEG_RATE` 支持 100/200/250/400 Hz，按实测批次周期选择最接近目标的积分边界；纯 correction/积分参数变化按 PX4 只在 Disarmed 前端直接应用，不另取维护 ticket。
 - `SENS_IMU_AUTOCAL` 默认启用。VehicleImu 只接受 1 s 内新鲜、device ID 匹配且 `valid && stable` 的单实例 `estimator_sensor_bias`；加速度按 `offset_new=offset_old+(R^T*bias)./scale`、陀螺按 `offset_new=offset_old+R^T*bias` 合并回传感器轴。已武装时只缓存候选，Disarmed 后才由 realtime `wq:sensors` 发布固定大小的不可变事务快照，再由非实时 `wq:lp_default` 参数提交器写入 ID 与全部 offset/scale；pending/running 期间前端不改写请求，成功后静默 30 s，失败保留候选并以 1 Hz 重试。Accel/Gyro 变化分别不超过 0.05 m/s²、0.01 rad/s 时不重复写入，物理持久化仍由 autosave 完成。
+- ICM FIFO 处理区分有效发布、暂时无数据与真实失败：水位通知和 DMA 完成交叠后的空轮询仅增加 `fifo_empty` 诊断，不计入 `sensor_accel/sensor_gyro.error_count` 或连续传输失败。进入 Running 后或上次有效双 Topic 发布后连续 100 ms 无数据，才计一次传输故障并重启采集；空轮询也不消退已有真实故障。DMA 超时、包损坏、FIFO 溢出和 DataValidator 原有保护保持。
 - 时间戳倒退或间隔超过 20 ms 时清空双通道积分器；新 accel/gyro 必须各自重新 prime 后才能形成下一个合法积分窗口。
 - `vehicle_imu_status` 每秒发布 device ID、error count、batch/raw rate、累计三轴 clipping、振动、coning、均值/方差和温度；错误或 clipping 可提前触发状态发布。clipping 是诊断，不直接丢弃样本。
 - `SENS_IMU_CLPNOTI` 默认启用；clipping 日志只在新故障边沿报告一次。驱动重启诊断合并为一条核心摘要，并需约 1 秒连续成功的加速度/陀螺仪双 Topic publication 后才允许下一次独立故障再次报告；成功 probe/恢复不写进度日志。
@@ -34,6 +35,8 @@ Commander 唯一接收并 ACK PX4 的 `MAV_CMD_PREFLIGHT_CALIBRATION`，再通�
 - 参数通过单个原子通知批量提交；校准协调器先确认对应 `parameter_update.instance` 已被 `VehicleImu` 或 `VehicleMagnetometer` 应用，再逐项核对 active correction 的 ID/offset/scale。identity 数据路径在首次校准前保持正常，新参数应用后再通过 calibration count/参数握手确认校准已生效；成功或回滚握手完成前一直保持 arming interlock。与 PX4 v1.17 的 gyro/accel/mag `ParametersSave + param_notify_changes` 路径一致，`[cal] done` 不等待 `param_save_default(true)`，物理持久化由现有 autosave 随后完成；断电/重启保持性因此仍需板端验证。
 - QGC 状态由 PX4 v2 `[cal] ...` STATUSTEXT 协议驱动；校准事务按 PX4 Commander worker 架构运行在非实时 `wq:lp_default`，协议文本走无普通等级过滤的 RAW 日志路径，并重复 PX4 的 orientation/side-done 关键转换文本以抵抗单帧丢失。RAW 仍遵守“实时队列禁止格式化”的全局合同，因此不得把 `SensorCalibration` 放回 `wq:sensors`；全零校准命令取消当前传感器校准。
 - 校准协调器的正向应用/回滚共用前端确认谓词，但阶段差异明确保留：Gyro/Accel 正向要求原设备的新鲜样本，回滚只按原有代次和校正值确认，允许恢复旧零 ID 的 identity correction；Mag 两条路径均要求原设备新鲜输出，只有正向应用另要求校准计数推进或饱和后的新输出。超时、终态、互锁释放及回滚失败锁存仍由各自状态处理。
+
+IMU 健康丢失/恢复摘要由非实时 MAVLink owner 发送，包含两路原始数据年龄、前端输出年龄和错误计数；运行期格式化不进入 sensors/ISR。2026-09-08 QGC 实测的累计错误门限停更诊断及修复证据见 `docs/IMU_TELEMETRY_STALL_ZH.md`。
 
 ## 板端验证边界
 

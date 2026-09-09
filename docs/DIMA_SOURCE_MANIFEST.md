@@ -377,6 +377,10 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 
 分类只修改权威 YAML 的标准 category/group：未指定 category 为 Standard，高级项用 Developer，校准值和固定合同用 System。锁定上游 YAML schema 原样保留，Metadata 生产检查仅同步诊断项的新 Developer 分类；未手写派生目录。完整决策、301 项非展示属性等价核对、旧生产快照容量边界和最新 Windows 制品证据见 `PARAMETER_SIMPLIFICATION_ZH.md`；前面的 U1–U5 303 项镜像是历史快照。
 
+## 2026-09-08 IMU 空 FIFO 计错与遥测停更修复
+
+沿用已有 PX4 v1.17 ICM42688P/FIFO/DataValidator 来源，未新增上游快照或第三方依赖。适配层将正常空 FIFO 轮询与传输失败区分：空读只保留诊断，持续 100 ms 无有效双 Topic 发布才按故障恢复，真实 DMA/寄存器/FIFO 错误和原有健康门限保持。非实时 MAVLink owner 补充 IMU 健康丢失/恢复及重连摘要。QGC 旧固件累计错误触发停更的现场记录和新固件验收边界见 docs/IMU_TELEMETRY_STALL_ZH.md；旧固件故障已观测，新固件板端复验待完成。
+
 ## 20. 2026-09-08 保持功能的代码减重第一轮
 
 继续使用原有 nanoprintf/Format、PX4 参数生成链和 Rover 校准数学，不引入新的库、协议、参数或测试框架。SD ULog 两处纯字符串/整数缓冲格式化改用既有 Format，避免拉入第二套 newlib formatter；stdout/setvbuf、浮点日志及存储路线不变。上游参数原始头保持完整，只在公开安装头机械增加 C++17 inline 变量链接属性，合并 TU 私有只读表；R331 仍逐字核对除命名空间/链接属性以外的全部生成内容。

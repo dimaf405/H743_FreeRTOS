@@ -32,6 +32,15 @@ bool fresh(std::uint64_t now, std::uint64_t timestamp,
            now - timestamp <= maximum_age;
 }
 
+std::uint32_t sample_age_ms(std::uint64_t now,
+                            std::uint64_t timestamp) noexcept
+{
+    // 未收到或时间倒退单独用哨兵表示，不能把无符号下溢伪装成超长数据年龄。
+    if (timestamp == 0U || timestamp > now) return UINT32_MAX;
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        (now - timestamp) / 1000ULL, UINT32_MAX));
+}
+
 bool finite3(const float values[3]) noexcept
 {
     return std::isfinite(values[0]) && std::isfinite(values[1]) &&
@@ -161,6 +170,7 @@ void MavlinkService::reset_sensor_streams() noexcept
     imu_streamable_ = false;
     gps_streamable_ = false;
     imu_healthy_ = false;
+    imu_fault_reported_ = false;
     mag_healthy_ = false;
     gps_healthy_ = false;
 }
@@ -301,13 +311,36 @@ void MavlinkService::update_sensor_topics() noexcept
         }
         mag_health_known_ = true;
     }
+    // sensors 队列禁止格式化；在非实时通信 owner 观察健康边沿并报告快照，
+    // 区分原始采集停滞和前端抑制。告警只随丢失/恢复转换，不逐帧刷屏。
+    if (imu_healthy_ && !imu_now) {
+        report_imu_fault(health_now);
+        imu_fault_reported_ = true;
+    } else if (imu_now && imu_fault_reported_) {
+        PX4_INFO("IMU data recovered");
+        imu_fault_reported_ = false;
+    }
     imu_healthy_ = imu_now;
     mag_healthy_ = mag_now;
     gps_healthy_ = gps_now;
 }
 
+void MavlinkService::report_imu_fault(std::uint64_t now) noexcept
+{
+    PX4_ERR("IMU unhealthy raw_ms=%lu/%lu out_ms=%lu err=%lu/%lu",
+            static_cast<unsigned long>(sample_age_ms(now, latest_sensor_accel_.timestamp)),
+            static_cast<unsigned long>(sample_age_ms(now, latest_sensor_gyro_.timestamp)),
+            static_cast<unsigned long>(sample_age_ms(now, latest_vehicle_imu_.timestamp)),
+            static_cast<unsigned long>(latest_sensor_accel_.error_count),
+            static_cast<unsigned long>(latest_sensor_gyro_.error_count));
+}
+
 void MavlinkService::report_sensor_link_summary() noexcept
 {
+    if (imu_fault_reported_) {
+        // USB 重连重新提供尚未恢复的故障摘要，保留同一启动周期的传感器证据。
+        report_imu_fault(hrt_absolute_time());
+    }
     if (!mag_seen_) {
         PX4_WARN("Sensor status: magnetometer not detected");
     } else {

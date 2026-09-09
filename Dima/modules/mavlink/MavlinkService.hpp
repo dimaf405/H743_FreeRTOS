@@ -117,6 +117,7 @@ private:
     void reset_sensor_link_state() noexcept;
     void reset_configured_streams() noexcept;
     void report_sensor_link_summary() noexcept;
+    void report_imu_fault(std::uint64_t now) noexcept;
     void stream_configured_messages(
         std::uint64_t now,
         dima::generated::mavlink_streams::TxStage stage) noexcept;
@@ -259,6 +260,7 @@ private:
     bool imu_streamable_{false};
     bool gps_streamable_{false};
     bool imu_healthy_{false};
+    bool imu_fault_reported_{false};
     bool mag_healthy_{false};
     bool gps_healthy_{false};
     bool rc_loss_timeout_valid_{false};
