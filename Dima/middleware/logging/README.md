@@ -9,9 +9,12 @@
 - uORB 初始化后、Parameter 初始化前，LogService 注册唯一 structured sink。普通日志和 `PX4_INFO_RAW` 都发布为深度 8 的 `mavlink_log`；RAW 保留原正文并使用调用级别，不添加模块前缀，但只绕过普通等级过滤，不绕过 ISR/实时 WorkQueue 的格式化禁令。QGC `[cal]` 协议因此必须由非实时 `wq:lp_default` 的校准事务产生。
 - MavlinkService 独占 USB CDC，并把 `mavlink_log` 转为 STATUSTEXT。断线时 uORB 保留有界最新记录，重连后不发送超过 5 s 的旧记录。
 - Logger 只读取一次重启参数快照：`SDLOG_MODE` 控制四种会话生命周期，`SDLOG_PROFILE` 合并通用 Rover、EKF2 回放和系统辨识采样策略，`SDLOG_DIRS_MAX` 给出包含当前会话的有限目录上限。三项定义只存在于 `module_logger.yaml`，QGC Metadata 与 C++ 合同均由正式参数工具生成。
+- 生成的 Topic 策略只保存运行期需要的分类、逐 Profile 索引和停止刷新标志；相同 kind/interval 共用只读采样表，间隔仍为完整微秒值，不做量化或运行期合并。Topic 名称/ID 继续直接使用 uORB metadata，回放注册继续使用独立生成索引，不保存无人读取的副本。
 - `SdLogWriter` producer 在 `wq:lp_default` 每 5 ms 有界扫描生成的 Topic catalog；`mavlink_log` 只映射为 `L`，`parameter_update` 只触发 `P/Q`，普通实例首次写 `A`、后续按 `o_size_no_padding` 写 `D`。启动定义段写 header/Flag Bits、硬件 UID、自动生成的 `F`、完整生成参数目录的 `P` 以及 current/system default `Q`，Active 段写 `L/O`、变化参数 `P`，并每 500 ms 写 `S` sync marker。
 - 当前 Profile 没有选中任何别名的格式组，在完整解码后使用上游 `clearFormatFromBuffer()` 跳过字符串展开；保留下一组剩余字节与单轮解码预算。有输出的组仍整体预留空间，并在背压时重试同一组。
+- 普通 Topic 发送共用结果处理：固定频率通过原有时间门禁后最多写一条最新样本，源频率仍按队列深度及每轮预算逐 generation 排空。停止边沿仍取最新状态，Blocked 重试原 slot，dropout 与失败处理不改变。
 - 参数 `P/Q` 写入共用 key 长度校验；默认值相同只发合并类型的单条 `Q`，不同默认值按 setup 再 system 写入。保留双记录空间预留、与当前值相同则省略及遇背压立即重试的规则。
+- `P/Q` key 与硬件 UID 的纯字符串/整数格式化复用现有 `dima::format::format_to`，保留返回长度、截断拒绝、补零、大写十六进制和末尾 NUL；不再为两处缓冲格式化引入 newlib 的第二套 formatter。ULog 记录顺序、路由、过滤和背压不变，stdout/setvbuf 与 newlib 链接策略没有改动。
 - `LogWriter` consumer 独占 `wq:storage`，使用固定 64 KiB SPSC 字节 Ring，每次最多向 FatFs 提交 8192 bytes，并每 1 s 执行 `f_sync`；活动写入与关闭前的 UTC 侧车更新共用代次确认路径，写入失败不推进确认代次。producer 不调用任何 FatFs/SDMMC API；Ring 满时写标准 `O` dropout，而不是静默拼接损坏流。
 - 每个新介质/文件都推进 session generation，清空旧 Ring、Topic generation 与 message ID，并从 ULog header 全量重建。普通介质失败在 Mode 仍有记录意图时按 3 s 重试；低空间暂停按 60 s 复查，只停止 SD 副本，不影响实时 STATUSTEXT/Event。
 - `sessNNN/log100.ulg` 使用最多三条 64-byte CRC `meta.bin` 记录保存全局顺序、硬件 UID、关闭/恢复状态、最终文件大小/CRC 和可选 GPS UTC。恢复、`sessNNN -> delNNN` 删除、目录上限及 `clamp(容量×5%, 64 MiB, 512 MiB)` 空间回收均由 `wq:storage` 分步推进；未知文件、当前 writer 和 QGC reader 永不自动删除。

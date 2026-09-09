@@ -519,6 +519,7 @@ def render_logger_header(
         for name, bit in EXPECTED_PROFILES.items()
     ]
     topic_rows: list[str] = []
+    sampling_indices: dict[tuple[str, int], int] = {}
     assertions: list[str] = []
     utc_index = 0
     text_index = 0
@@ -528,16 +529,16 @@ def render_logger_header(
         entry = entries[topic.name]
         policies = []
         for mask in range(8):
-            kind, interval = merged_sampling(entry, mask)
-            policies.append(f"{{SamplingKind::{kind}, {interval}U}}")
+            # 合并规则不变；相同 kind/interval 只存一次，Topic 保留逐 Profile 索引。
+            # 运行期仍是有界查表，不引入动态合并、除法或采样周期量化。
+            sampling = merged_sampling(entry, mask)
+            index = sampling_indices.setdefault(sampling, len(sampling_indices))
+            policies.append(f"{index}U")
         topic_rows.append(
-            "    {ORB_ID::%s, %s, TopicDisposition::%s, {{%s}}, %s, %s}," % (
-                topic.name,
-                json.dumps(topic.name),
+            "    {TopicDisposition::%s, {{%s}}, %s}," % (
                 DISPOSITIONS[entry["disposition"]],
                 ", ".join(policies),
                 "true" if entry["flush_on_stop"] else "false",
-                "true" if entry["replay_callback"] else "false",
             )
         )
         assertions.append(
@@ -552,6 +553,13 @@ def render_logger_header(
             parameter_trigger_index = topic.index
         if entry["replay_callback"]:
             replay_indices.append(topic.index)
+
+    if len(sampling_indices) > 256:
+        raise ContractError("Logger sampling catalogue exceeds uint8 index capacity")
+    sampling_rows = [
+        f"    {{SamplingKind::{kind}, {interval}U}},"
+        for kind, interval in sampling_indices
+    ]
 
     parameter_rows = []
     for symbol, role in (
@@ -612,13 +620,16 @@ def render_logger_header(
         "    std::uint32_t interval_us;",
         "};",
         "",
+        "// 只共享值相同的采样策略；每个 Topic 的八种 Profile 选择保持独立。",
+        f"inline constexpr std::array<SamplingPolicy, {len(sampling_indices)}U> kSamplingPolicies{{{{",
+        *sampling_rows,
+        "}};",
+        "",
+        "// 名称/ID 直接使用 uORB metadata；回放回调使用下方生成的索引表。",
         "struct TopicPolicy {",
-        "    ORB_ID id;",
-        "    const char *name;",
         "    TopicDisposition disposition;",
-        "    std::array<SamplingPolicy, 8U> sampling_by_profile;",
+        "    std::array<std::uint8_t, 8U> sampling_by_profile;",
         "    bool flush_on_stop;",
-        "    bool replay_callback;",
         "};",
         "",
         "inline constexpr std::array<TopicPolicy, ORB_TOPICS_COUNT> kTopicPolicies{{",
@@ -644,7 +655,7 @@ def render_logger_header(
         "    std::size_t index, std::uint8_t profile) noexcept",
         "{",
         "    return profile <= kProfileMask",
-        "               ? kTopicPolicies[index].sampling_by_profile[profile]",
+        "               ? kSamplingPolicies[kTopicPolicies[index].sampling_by_profile[profile]]",
         "               : SamplingPolicy{SamplingKind::Excluded, 0U};",
         "}",
         "",

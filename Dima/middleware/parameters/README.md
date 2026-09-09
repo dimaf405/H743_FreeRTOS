@@ -21,7 +21,7 @@ Dima module_*.yaml
 → Dima 运行时合同与 Component Metadata
 ```
 
-`module_params.c` 和上游原始头只是在构建目录中串接工具的中间产物，不进入源码树，也不得人工修改。原始脚本固定输出的文件名和 `px4` 命名空间仅保留在该暂存头；公开安装头机械适配为 `dima_parameters.hpp`、`dima::parameter_catalog` 和 `dima::params`，不改变枚举、数组、类型或顺序。采用较新的 YAML 工具只替换生成方式，不导入上游主线的新参数、新默认值或新产品策略。
+`module_params.c` 和上游原始头只是在构建目录中串接工具的中间产物，不进入源码树，也不得人工修改。原始脚本固定输出的文件名和 `px4` 命名空间仅保留在该暂存头；公开安装头机械适配为 `dima_parameters.hpp`、`dima::parameter_catalog` 和 `dima::params`，不改变枚举、表内容、类型或顺序。namespace 只读数组使用 C++17 `inline constexpr` 单一定义，避免不同翻译单元各保留一份；仍可用于编译期类型/容量检查，不增加运行期初始化。采用较新的 YAML 工具只替换生成方式，不导入上游主线的新参数、新默认值或新产品策略。
 
 `readonly_params.yaml` 同样是构建目录中的自动派生物，使用上游支持的 block 模式；不是另一份受版本控制的参数定义或手写过滤名单。两遍生成之间逐项核对，只允许固定项增加 `readOnly: true`，禁止参数数量、顺序、类型、默认值或范围发生变化。
 

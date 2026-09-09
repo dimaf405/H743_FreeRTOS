@@ -531,8 +531,10 @@ def write_include_tree(
     parameters = destination / "parameters"
     parameters.mkdir(parents=True, exist_ok=True)
 
-    # 上游原始头仍完整保留在 build/generated；公开安装头只机械替换产品命名
-    # 空间并增加一次包含保护。参数枚举、数组、类型和顺序不在适配层重渲染。
+    # 上游原始头完整保留；公开头只适配命名空间、包含保护与只读表链接属性。
+    # namespace-scope 的 static constexpr 会让不同消费者各保留一份整表；
+    # C++17 inline constexpr 让链接器合并同一定义，同时保留常量表达式能力。
+    # 参数枚举、表内容、类型和顺序不在此重渲染，不改变参数目录或默认值。
     header_text = official_header.read_text(encoding="utf-8")
     namespace_token = "namespace px4"
     if header_text.count(namespace_token) != 2:
@@ -541,6 +543,9 @@ def write_include_tree(
         )
     dima_header = header_text.replace(
         namespace_token, "namespace dima::parameter_catalog"
+    )
+    dima_header = re.sub(
+        r"(?m)^static constexpr ", "inline constexpr ", dima_header
     )
     (parameters / "dima_parameters.hpp").write_text(
         "#pragma once\n" + dima_header,

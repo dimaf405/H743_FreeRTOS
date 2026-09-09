@@ -37,13 +37,13 @@
 #include "api/Services.hpp"
 #include "api/TaskRuntime.hpp"
 #include "api/Time.hpp"
+#include "format/Format.hpp"
 #include "parameters/param.h"
 #include "uORB/uORBMessageFields.hpp"
 
 #include <px4_platform_common/log.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -98,7 +98,8 @@ int format_parameter_key(char *key, std::size_t capacity,
 {
     // 类型/名称来自参数目录，缓冲容量由生成的 P/Q 消息结构提供；两条写入路径
     // 共用长度门禁，避免截断字符串或 uint8 key_len 回绕进入 ULog。
-    const int length = std::snprintf(key, capacity, "%s %s", type_name, name);
+    // 复用现有缓冲格式化器；返回完整所需长度并保留截断/NUL 语义，不改变 ULog 路由。
+    const int length = dima::format::format_to(key, capacity, "%s %s", type_name, name);
     if (length <= 0 || length >= static_cast<int>(capacity) ||
         length > std::numeric_limits<std::uint8_t>::max()) {
         return -1;
@@ -460,7 +461,8 @@ bool SdLogWriter::process_initial_information() noexcept
         StepResult result = StepResult::Skipped;
         if (information_step_ == 0U) {
             char uuid[17]{};
-            const int length = std::snprintf(
+            // 现有格式子集支持 64-bit 大写十六进制与补零，仍保留 16 字节正文及末尾 NUL。
+            const int length = dima::format::format_to(
                 uuid, sizeof(uuid), "%016llX",
                 static_cast<unsigned long long>(hardware_uid_));
             if (length != 16) {
@@ -990,11 +992,8 @@ SdLogWriter::TopicResult SdLogWriter::append_topic(
     }
 
     const std::uint64_t previous_generation = topic_generations_[slot];
-    const bool copied = newest_only
-                            ? uORB::orb_copy_latest(
-                                  metadata, instance, topic_generations_[slot],
-                                  message_buffer_ + sizeof(ulog_message_data_s))
-                            : source_rate
+    // 仅正常 source-rate 排空历史；固定频率和停止边沿都只取最新状态。
+    const bool copied = source_rate && !newest_only
                             ? uORB::orb_copy(
                                   metadata, instance, topic_generations_[slot],
                                   message_buffer_ + sizeof(ulog_message_data_s))
@@ -1070,27 +1069,18 @@ bool SdLogWriter::drain_topics(std::uint64_t now_us) noexcept
             continue;
         }
 
-        if (sampling.kind == generated::SamplingKind::FixedRate) {
+        const bool fixed_rate = sampling.kind == generated::SamplingKind::FixedRate;
+        if (fixed_rate) {
             const std::uint64_t last = last_topic_write_us_[slot];
             if (last != 0U && now_us >= last &&
                 now_us - last < sampling.interval_us) {
                 continue;
             }
-            const TopicResult result = append_topic(
-                topic_index, instance, now_us, sampling.kind);
-            if (result == TopicResult::Written) {
-                ++written;
-            } else if (result == TopicResult::Blocked) {
-                scan_cursor_ = slot;
-                return false;
-            } else if (result == TopicResult::Failed) {
-                fail_stream("Topic message ID or size");
-                return false;
-            }
-            continue;
         }
 
-        const std::size_t burst = std::min<std::size_t>(
+        // 固定频率本轮最多一条；源频率受队列深度和每轮预算共同限制。
+        // 两者共用 Written/NoData/Blocked/Failed 处理，背压仍重试当前 slot。
+        const std::size_t burst = fixed_rate ? 1U : std::min<std::size_t>(
             metadata->o_queue, kMaximumMessagesPerInstancePerRun);
         for (std::size_t index = 0U;
              index < burst && written < kMaximumTopicMessagesPerRun;
