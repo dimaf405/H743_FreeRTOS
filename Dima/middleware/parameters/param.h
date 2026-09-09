@@ -142,10 +142,7 @@ namespace dima {
 using params = parameter_catalog::params;
 }
 
-inline param_t param_handle(dima::params parameter) noexcept
-{
-    return static_cast<param_t>(parameter);
-}
+param_t param_handle(dima::params parameter) noexcept;
 
 #include "atomic_transaction.h"
 

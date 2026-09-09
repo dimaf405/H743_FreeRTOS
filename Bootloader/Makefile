@@ -47,6 +47,8 @@ IMGTOOL ?= $(MCUBOOT_ROOT)/scripts/imgtool.py
 PUBLIC_KEY_C := $(BUILD_DIR)/generated/ecdsa_pub_key.c
 
 C_SOURCES := \
+Boards/H743/Src/dima_boot_request.c \
+Bootloader/Src/endian.c \
 Bootloader/Src/main.c \
 Bootloader/Src/boot_compat.c \
 Boards/H743/Src/boot_diagnostics_store.c \

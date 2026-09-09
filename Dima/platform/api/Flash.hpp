@@ -19,7 +19,7 @@ public:
                      Timeout timeout) noexcept;
     ~FlashTransaction();
 
-    explicit operator bool() const noexcept { return acquired_; }
+    explicit operator bool() const noexcept;
     FlashTransaction(const FlashTransaction &) = delete;
     FlashTransaction &operator=(const FlashTransaction &) = delete;
 
@@ -68,7 +68,7 @@ public:
     explicit FlashWriteLease(ArmedFlashCoordinator &coordinator) noexcept;
     ~FlashWriteLease();
 
-    explicit operator bool() const noexcept { return acquired_; }
+    explicit operator bool() const noexcept;
     FlashWriteLease(const FlashWriteLease &) = delete;
     FlashWriteLease &operator=(const FlashWriteLease &) = delete;
 

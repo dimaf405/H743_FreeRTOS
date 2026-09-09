@@ -609,6 +609,7 @@ DIMA_STM32_C_SOURCES := \
 	Dima/platform/stm32h7/memory/early_memory.c \
 	Dima/platform/stm32h7/flash/flash_bank1.c
 DIMA_BOARD_C_SOURCES := \
+	Boards/H743/Src/dima_boot_request.c \
 	Boards/H743/Src/board_init.c \
 	Boards/H743/Src/boot_diagnostics.c \
 	Boards/H743/Src/motor_pwm.c
@@ -656,6 +657,15 @@ DIMA_ROVER_CONTROL_CXX_SOURCES := \
 	$(sort $(wildcard Dima/rover/control/*.cpp))
 
 DIMA_COMMON_CXX_SOURCES := \
+	Dima/adapters/mavlink/MavlinkBridge.cpp \
+	Dima/middleware/parameters/ConstLayer.cpp \
+	Dima/middleware/parameters/Crc32.cpp \
+	Dima/middleware/parameters/DynamicSparseLayer.cpp \
+	Dima/middleware/parameters/ParamLayer.cpp \
+	Dima/middleware/parameters/atomic_transaction.cpp \
+	Dima/middleware/rover/RoverModeContract.cpp \
+	Dima/platform/common/PlatformTypes.cpp \
+	Dima/platform/common/Time.cpp \
 	Dima/platform/common/Execution.cpp \
 	Dima/platform/common/Flash.cpp \
 	Dima/platform/common/Memory.cpp \
@@ -725,10 +735,12 @@ DIMA_DRONECAN_COMMON_CXX_SOURCES := \
 DIMA_FATFS_FREERTOS_CXX_SOURCES := \
 	Dima/platform/freertos/storage/FatFsAtomicFileStore.cpp
 DIMA_FREERTOS_CXX_SOURCES := \
+	Dima/platform/freertos/BackendTimeout.cpp \
 	Dima/platform/freertos/Backend.cpp \
 	Dima/platform/freertos/HeapOperators.cpp \
 	$(DIMA_FATFS_FREERTOS_CXX_SOURCES)
 DIMA_STM32_CXX_SOURCES := \
+	Dima/platform/stm32h7/spi/SpiClockDivider.cpp \
 	Dima/platform/stm32h7/pwm/ActuatorPwm.cpp \
 	Dima/platform/stm32h7/system/BootControl.cpp \
 	Dima/platform/stm32h7/system/Clock.cpp \
@@ -1017,6 +1029,10 @@ $(DIMA_UORB_RUNTIME_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_MESSAGE_GENERATED_INCLUDES)
 # PX4 MessageFormatReader 原样消费生成的压缩字段；heatshrink 只暴露给该
 # 翻译单元和 Logger 消费者，不扩散到其他中间件或模块。
+# 模式投影声明直接消费正式生成的 Topic 类型，其实现保留相同消息可见性。
+$(filter $(BUILD_DIR)/Dima/middleware/rover/%,$(DIMA_MIDDLEWARE_OBJECTS)): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_MESSAGE_GENERATED_INCLUDES)
+
 $(DIMA_UORB_MESSAGE_FIELDS_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_LIB_INCLUDES) $(DIMA_MESSAGE_GENERATED_INCLUDES) \
 	$(DIMA_HEATSHRINK_INCLUDES)

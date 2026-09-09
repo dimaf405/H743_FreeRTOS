@@ -650,3 +650,16 @@ FlashFSStatus FlashFS::status() noexcept
 }
 
 } // namespace dima::parameters
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::parameters {
+
+bool flash_file_token_t::operator==(const flash_file_token_t &o) const noexcept
+{
+    return bytes[0] == o.bytes[0] && bytes[1] == o.bytes[1] &&
+           bytes[2] == o.bytes[2] && bytes[3] == o.bytes[3];
+}
+
+} // namespace dima::parameters

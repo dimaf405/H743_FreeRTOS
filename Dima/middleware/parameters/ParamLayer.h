@@ -46,7 +46,7 @@ public:
 		sizeof(dima::parameter_catalog::parameters) /
 		sizeof(dima::parameter_catalog::parameters[0]));
 
-	ParamLayer(ParamLayer *parent = nullptr) : _parent(parent) {}
+	ParamLayer(ParamLayer *parent = nullptr);
 
 	ParamLayer(const ParamLayer &) = delete;
 	ParamLayer &operator=(const ParamLayer &) = delete;

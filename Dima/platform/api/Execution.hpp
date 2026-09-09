@@ -14,7 +14,7 @@ public:
     virtual ~MonotonicClock() = default;
     virtual bool initialized() const noexcept = 0;
     virtual TimeUs now_us() const noexcept = 0;
-    TimeMs now_ms() const noexcept { return now_us() / 1000U; }
+    TimeMs now_ms() const noexcept;
 };
 
 class ExecutionContext {

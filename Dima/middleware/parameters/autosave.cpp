@@ -191,3 +191,12 @@ void ParamAutosave::Run()
 }
 
 // Upstream path: src/lib/parameters/autosave.cpp @ d6f12ad1
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+bool ParamAutosave::pending() const noexcept
+{ return _scheduled.load(); }
+
+bool ParamAutosave::writeAllowed() const noexcept
+{ return !_armed_flash.armed() && !param_storage_paused(); }

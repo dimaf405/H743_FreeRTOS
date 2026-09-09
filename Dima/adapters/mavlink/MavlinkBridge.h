@@ -68,16 +68,9 @@ extern "C" {
 extern mavlink_status_t dima_mavlink_channel_status[MAVLINK_COMM_NUM_BUFFERS];
 extern mavlink_message_t dima_mavlink_channel_buffer[MAVLINK_COMM_NUM_BUFFERS];
 
-static inline mavlink_status_t *mavlink_get_channel_status(uint8_t channel)
-{
-    /* 生成代码只会传 MAVLINK_COMM_0；数组容量为 1，调用侧不得传任意 channel。 */
-    return &dima_mavlink_channel_status[channel];
-}
+mavlink_status_t *mavlink_get_channel_status(uint8_t channel);
 
-static inline mavlink_message_t *mavlink_get_channel_buffer(uint8_t channel)
-{
-    return &dima_mavlink_channel_buffer[channel];
-}
+mavlink_message_t *mavlink_get_channel_buffer(uint8_t channel);
 
 #ifdef __cplusplus
 }

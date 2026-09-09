@@ -47,8 +47,8 @@ public:
     void ScheduleClear() noexcept;
     /* 取消未来调度并等待在途 Run 退出；从自身 Run 调用时只取消、不自等待。 */
     void ScheduleCancelAndDrain() noexcept;
-    const char *Name() const noexcept { return name_; }
-    const WorkQueueStats &statistics() const noexcept { return statistics_; }
+    const char *Name() const noexcept;
+    const WorkQueueStats &statistics() const noexcept;
 
 protected:
     virtual void Run() = 0;

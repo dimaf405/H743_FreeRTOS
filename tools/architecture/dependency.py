@@ -348,13 +348,20 @@ def scan_namespace_convention(violations: list[Violation]) -> None:
         "Dima/middleware/uORB/SubscriptionData.hpp",
         "Dima/middleware/work_queue/ScheduledWorkItem.hpp",
     }
-    # 这两个文件逐字节同步 PX4 v1.17 MessageFormatReader；上游把 namespace
-    # 名称与左花括号分成两行，不能仅为本地风格门禁改写原件。
+    # 这两个本地适配文件保留 PX4 的 uORB namespace 分行形式；普通运行期
+    # 成员已按源/头分离迁出，此处只保留命名风格兼容，不豁免实现位置。
     upstream_namespace_files = {
         "Dima/middleware/uORB/uORBMessageFields.cpp",
         "Dima/middleware/uORB/uORBMessageFields.hpp",
     }
     c_abi_files = {
+        # 头文件普通定义外移后的同一 ABI 实体；全局类名/函数名继续兼容 PX4。
+        "Dima/adapters/mavlink/MavlinkBridge.cpp",
+        "Dima/platform/common/Time.cpp",
+        "Dima/middleware/parameters/ParamLayer.cpp",
+        "Dima/middleware/parameters/ConstLayer.cpp",
+        "Dima/middleware/parameters/DynamicSparseLayer.cpp",
+        "Dima/middleware/parameters/atomic_transaction.cpp",
         "Dima/adapters/usb_console/UsbConsole.cpp",
         "Dima/application/app_bootstrap.cpp",
         "Dima/application/app_main.cpp",

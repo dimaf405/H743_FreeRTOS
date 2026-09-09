@@ -55,15 +55,12 @@ public:
 		Complete
 	};
 
-	MessageFormatReader(char *buffer, unsigned buffer_capacity)
-		: _buffer(buffer), _buffer_capacity(buffer_capacity)
-	{
-		heatshrink_decoder_reset(&_hsd);
-		static_assert(orb_compressed_heatshrink_window_length == HEATSHRINK_STATIC_WINDOW_BITS, "window length mismatch");
-		static_assert(orb_compressed_heatshrink_lookahead_length == HEATSHRINK_STATIC_LOOKAHEAD_BITS,
-			      "lookahead length mismatch");
-		_buffer[0] = 0;
-	}
+	// 每个消费者都核对压缩格式与 decoder 布局，不能只在实现文件中检查。
+	static_assert(orb_compressed_heatshrink_window_length == HEATSHRINK_STATIC_WINDOW_BITS, "window length mismatch");
+	static_assert(orb_compressed_heatshrink_lookahead_length == HEATSHRINK_STATIC_LOOKAHEAD_BITS,
+		      "lookahead length mismatch");
+
+	MessageFormatReader(char *buffer, unsigned buffer_capacity);
 
 	/**
 	 * Read and decompress more data into the given buffer (from the constructor).
@@ -84,35 +81,26 @@ public:
 	 * allowing the buffer to be modified.
 	 * @return length of the left-over part.
 	 */
-	unsigned moveLeftoverToBufferEnd()
-	{
-		_buffer_length -= _format_length + 1;
-		memmove(_buffer + _buffer_capacity - _buffer_length, _buffer + _format_length + 1, _buffer_length);
-		return _buffer_length;
-	}
+	unsigned moveLeftoverToBufferEnd();
 	/**
 	 * After calling moveLeftoverToBufferEnd(), this must be called.
 	 */
-	void clearFormatAndRestoreLeftover()
-	{
-		memmove(_buffer, _buffer + _buffer_capacity - _buffer_length, _buffer_length);
-		_format_length = 0;
-	}
+	void clearFormatAndRestoreLeftover();
 
 	/**
 	 * Get the (partial if ReadingFormat or complete if FormatComplete) format length in the buffer
 	 */
-	unsigned formatLength() const { return _format_length; }
+	unsigned formatLength() const;
 
 	/**
 	 * In ReadOrbIDs, ReadingFormat or FormatComplete states, this returns the orb ID's accociated with the format.
 	 */
-	const px4::Array<orb_id_size_t, orb_compressed_max_num_orb_ids> &orbIDs() const { return _orb_ids; }
+	const px4::Array<orb_id_size_t, orb_compressed_max_num_orb_ids> &orbIDs() const;
 	/**
 	 * In ReadOrbIDs, ReadingFormat or FormatComplete states, this returns the dependent orb ID's accociated with the
 	 * format (for nested format definitions).
 	 */
-	const px4::Array<orb_id_size_t, orb_compressed_max_num_orb_id_dependencies> &orbIDsDependencies() const { return _orb_ids_dependencies; }
+	const px4::Array<orb_id_size_t, orb_compressed_max_num_orb_id_dependencies> &orbIDsDependencies() const;
 
 	/**
 	 * Expand a tokenized format (after decompressing it)

@@ -76,3 +76,7 @@ CAN 磁力计已删除 `MAG1_CAN_NODE`；来源节点号由首个合法磁场广
 正式 Make 入口会验证上游来源清单、YAML schema、XML/JSON/Header 一致性、派生 Metadata、五个删除参数的全闭包缺失和架构边界。未新增或修改测试文件、测试框架、runner、fixture、mock 或 test-only API。
 
 Windows 生成、编译和 ELF 检查不能代替实板证明。同上电 `shutdown → init → start`、掉电恢复、损坏回退、ENOSPC、在线 MAVLink 调参、SD 空闲/写入中反复拔插时 HEARTBEAT 与遥测速率保持非零，以及 QGC 5.1.3 陀螺仪/加速度计/磁力计校准回归仍按最终报告标记 `BOARD/QGC PENDING`。
+
+## 头文件实现边界
+
+ParamLayer、ConstLayer、DynamicSparseLayer、AtomicTransaction 与 CRC32 的普通运行期实体位于各自源文件；类布局、生成容量、原子事务、分配失败与回退规则保持。参数模板继续只消费正式生成的类型和枚举。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

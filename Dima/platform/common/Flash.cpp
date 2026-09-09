@@ -96,3 +96,16 @@ FlashWriteLease::~FlashWriteLease()
 }
 
 } // namespace dima::platform
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::platform {
+
+FlashTransaction::operator bool() const noexcept
+{ return acquired_; }
+
+FlashWriteLease::operator bool() const noexcept
+{ return acquired_; }
+
+} // namespace dima::platform

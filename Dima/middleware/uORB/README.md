@@ -20,3 +20,7 @@
 - `newest == 0` 时不得复制空槽；generation 为 0、超前或落后于队列最旧有效样本时，从当前最旧有效样本重新同步，保证深度 8 Topic 在 restart 后可恢复。
 - 模块 stop 必须先注销 callback/订阅，再由 ApplicationContext 执行 uORB shutdown；旧 Runtime 的指针、generation 和广告句柄禁止跨边界复用。
 - Topic 布局、消息字段、队列深度和公开 API 不因 epoch 契约变化；最终 Heap 分配量仍以 Windows 原生 clean build/ELF 为准。
+
+## 头文件实现边界
+
+普通订阅构造/回调注册与 MessageFormatReader 的非模板成员统一在源文件实现；压缩格式与 decoder 的静态布局断言仍在头文件中对所有消费者生效。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

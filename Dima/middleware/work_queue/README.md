@@ -15,3 +15,7 @@
 - Queue Runtime 只保存 POD `SignalHandle`，由 init/shutdown 显式 create/destroy；不得通过全局 `Signal` 析构器延长资源生命期或增加项目 `.init_array/.fini_array` 项。
 - 八个 WorkQueue 静态栈共 34 KiB，加 2 KiB `appMainTask` 后为 36 KiB；不得超过 48 KiB `.dima_task_pool` 或 16 个 task slot。
 - 模块在释放订阅、设备后端、Flash、日志或 Console 资源前必须 cancel-and-drain；shutdown 任一步失败时 ApplicationContext 保持 Error，并允许 owner 后续重试清理，不得直接重新 init。
+
+## 头文件实现边界
+
+普通访问器由 WorkQueue.cpp 实现；头文件保留队列契约，调度、统计和任务所有权不因定义位置改变。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

@@ -1,8 +1,6 @@
 #ifndef DIMA_BOOT_REQUEST_H
 #define DIMA_BOOT_REQUEST_H
 
-#include "stm32h7xx_hal.h"
-
 #include <stdint.h>
 
 /* BKP31R is reserved for one-shot MCUboot handoffs.  The backup domain
@@ -11,49 +9,24 @@
 #define DIMA_BOOT_REQUEST_APPLICATION_MAGIC UINT32_C(0xD14A4A50)
 #define DIMA_BOOT_REQUEST_ACCESS_ATTEMPTS UINT32_C(1024)
 
-static inline int dima_boot_request_enable_access(void)
-{
-    __HAL_RCC_RTC_CLK_ENABLE();
-    SET_BIT(PWR->CR1, PWR_CR1_DBP);
-    for (uint32_t attempt = 0U;
-         attempt < DIMA_BOOT_REQUEST_ACCESS_ATTEMPTS;
-         ++attempt) {
-        if (READ_BIT(PWR->CR1, PWR_CR1_DBP) != 0U) {
-            __DSB();
-            return 1;
-        }
-    }
-    return 0;
-}
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-static inline uint32_t dima_boot_request_read(void)
-{
-    return dima_boot_request_enable_access() ? RTC->BKP31R : 0U;
-}
+int dima_boot_request_enable_access(void);
 
-static inline int dima_boot_request_write(uint32_t value)
-{
-    if (!dima_boot_request_enable_access()) {
-        return 0;
-    }
-    RTC->BKP31R = value;
-    __DSB();
-    return RTC->BKP31R == value;
-}
+uint32_t dima_boot_request_read(void);
 
-static inline int dima_boot_request_set_recovery(void)
-{
-    return dima_boot_request_write(DIMA_BOOT_REQUEST_RECOVERY_MAGIC);
-}
+int dima_boot_request_write(uint32_t value);
 
-static inline int dima_boot_request_set_application(void)
-{
-    return dima_boot_request_write(DIMA_BOOT_REQUEST_APPLICATION_MAGIC);
-}
+int dima_boot_request_set_recovery(void);
 
-static inline int dima_boot_request_clear(void)
-{
-    return dima_boot_request_write(0U);
+int dima_boot_request_set_application(void);
+
+int dima_boot_request_clear(void);
+
+#ifdef __cplusplus
 }
+#endif
 
 #endif /* DIMA_BOOT_REQUEST_H */

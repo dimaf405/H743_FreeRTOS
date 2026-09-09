@@ -57,7 +57,7 @@ public:
     bool resume_after_storage_available() noexcept;
     void stop() noexcept;
     bool enabled() const noexcept;
-    bool pending() const noexcept { return _scheduled.load(); }
+    bool pending() const noexcept;
     hrt_abstime lastAutosave() const noexcept;
 
 private:
@@ -70,7 +70,7 @@ private:
     };
 
     void Run() override;
-    bool writeAllowed() const noexcept { return !_armed_flash.armed() && !param_storage_paused(); }
+    bool writeAllowed() const noexcept;
 
     dima::platform::ArmedFlashCoordinator &_armed_flash;
     CancelSaveFn _cancel_save;

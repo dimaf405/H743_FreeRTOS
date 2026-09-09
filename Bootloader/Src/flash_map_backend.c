@@ -291,3 +291,36 @@ int flash_device_base(uint8_t fd_id, uintptr_t *ret)
     *ret = 0U;
     return 0;
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+uint8_t flash_area_get_id(const struct flash_area *fa)
+{
+    return fa->fa_id;
+}
+
+uint8_t flash_area_get_device_id(const struct flash_area *fa)
+{
+    return fa->fa_device_id;
+}
+
+uint32_t flash_area_get_off(const struct flash_area *fa)
+{
+    return fa->fa_off;
+}
+
+uint32_t flash_area_get_size(const struct flash_area *fa)
+{
+    return fa->fa_size;
+}
+
+uint32_t flash_sector_get_off(const struct flash_sector *fs)
+{
+    return fs->fs_off;
+}
+
+uint32_t flash_sector_get_size(const struct flash_sector *fs)
+{
+    return fs->fs_size;
+}

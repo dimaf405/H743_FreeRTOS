@@ -34,7 +34,7 @@ public:
     void reset() noexcept;
     bool lock(Timeout timeout = Timeout::forever()) noexcept;
     void unlock() noexcept;
-    bool valid() const noexcept { return static_cast<bool>(handle_); }
+    bool valid() const noexcept;
 
     Mutex(const Mutex &) = delete;
     Mutex &operator=(const Mutex &) = delete;
@@ -53,7 +53,7 @@ public:
     void reset() noexcept;
     bool lock(Timeout timeout = Timeout::forever()) noexcept;
     void unlock() noexcept;
-    bool valid() const noexcept { return mutex_.valid(); }
+    bool valid() const noexcept;
 
     RecursiveMutex(const RecursiveMutex &) = delete;
     RecursiveMutex &operator=(const RecursiveMutex &) = delete;
@@ -70,7 +70,7 @@ public:
                         Timeout timeout = Timeout::forever()) noexcept;
     ~MutexGuard();
 
-    explicit operator bool() const noexcept { return locked_; }
+    explicit operator bool() const noexcept;
     MutexGuard(const MutexGuard &) = delete;
     MutexGuard &operator=(const MutexGuard &) = delete;
 
@@ -90,7 +90,7 @@ public:
     bool wait(Timeout timeout = Timeout::forever()) noexcept;
     void notify() noexcept;
     void notify_from_isr() noexcept;
-    bool valid() const noexcept { return static_cast<bool>(handle_); }
+    bool valid() const noexcept;
 
     Signal(const Signal &) = delete;
     Signal &operator=(const Signal &) = delete;

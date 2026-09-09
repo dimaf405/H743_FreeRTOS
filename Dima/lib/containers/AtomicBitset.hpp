@@ -34,6 +34,7 @@
 #pragma once
 
 #include "atomic.h"
+#include <stddef.h>
 
 namespace px4
 {

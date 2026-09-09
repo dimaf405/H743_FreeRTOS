@@ -18,10 +18,10 @@ void transaction_unlock() noexcept;
 namespace px4 {
 class AtomicTransaction {
 public:
-    AtomicTransaction() noexcept { dima::parameters::detail::transaction_begin(); }
-    ~AtomicTransaction() { dima::parameters::detail::transaction_end(); }
-    void lock() noexcept { dima::parameters::detail::transaction_lock(); }
-    void unlock() noexcept { dima::parameters::detail::transaction_unlock(); }
+    AtomicTransaction() noexcept;
+    ~AtomicTransaction();
+    void lock() noexcept;
+    void unlock() noexcept;
     AtomicTransaction(const AtomicTransaction &) = delete;
     AtomicTransaction &operator=(const AtomicTransaction &) = delete;
 };

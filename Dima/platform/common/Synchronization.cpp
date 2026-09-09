@@ -129,3 +129,22 @@ void Signal::notify_from_isr() noexcept
 }
 
 } // namespace dima::platform
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::platform {
+
+bool Mutex::valid() const noexcept
+{ return static_cast<bool>(handle_); }
+
+bool RecursiveMutex::valid() const noexcept
+{ return mutex_.valid(); }
+
+MutexGuard::operator bool() const noexcept
+{ return locked_; }
+
+bool Signal::valid() const noexcept
+{ return static_cast<bool>(handle_); }
+
+} // namespace dima::platform

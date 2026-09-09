@@ -50,12 +50,7 @@ struct IsrCallback {
     void (*function)(void *context) noexcept{nullptr};
     void *context{nullptr};
 
-    void invoke() const noexcept
-    {
-        if (function != nullptr) {
-            function(context);
-        }
-    }
+    void invoke() const noexcept;
 };
 
 } // namespace dima::platform

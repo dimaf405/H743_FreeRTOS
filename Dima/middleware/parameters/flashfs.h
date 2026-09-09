@@ -22,10 +22,7 @@ namespace dima::parameters {
 struct flash_file_token_t {
     std::uint8_t bytes[4];
 
-    bool operator==(const flash_file_token_t &o) const noexcept {
-        return bytes[0] == o.bytes[0] && bytes[1] == o.bytes[1] &&
-               bytes[2] == o.bytes[2] && bytes[3] == o.bytes[3];
-    }
+    bool operator==(const flash_file_token_t &o) const noexcept;
 };
 
 /* 参数文件 token */

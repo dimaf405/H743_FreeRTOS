@@ -490,3 +490,28 @@ void orb_print_message_internal(const orb_metadata *meta, const void *data,
     }
 }
 
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace uORB {
+
+Subscription::Subscription(const orb_metadata *metadata,
+                          uint8_t instance) noexcept
+: metadata_(metadata), instance_(instance)
+{
+}
+
+SubscriptionCallbackWorkItem::SubscriptionCallbackWorkItem(const orb_metadata *metadata,
+                                 px4::WorkItem &work_item,
+                                 uint8_t instance) noexcept
+: Subscription(metadata, instance), work_item_(work_item)
+{
+}
+
+bool SubscriptionCallbackWorkItem::registerCallback() noexcept
+{
+    return Subscription::registerCallback(work_item_);
+}
+
+} // namespace uORB

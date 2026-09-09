@@ -245,3 +245,42 @@ int MessageFormatReader::expandMessageFormat(char *format, unsigned len, unsigne
 }
 
 } // namespace uORB
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace uORB {
+
+MessageFormatReader::MessageFormatReader(char *buffer, unsigned buffer_capacity)
+: _buffer(buffer), _buffer_capacity(buffer_capacity)
+{
+	heatshrink_decoder_reset(&_hsd);
+	static_assert(orb_compressed_heatshrink_window_length == HEATSHRINK_STATIC_WINDOW_BITS, "window length mismatch");
+	static_assert(orb_compressed_heatshrink_lookahead_length == HEATSHRINK_STATIC_LOOKAHEAD_BITS,
+		      "lookahead length mismatch");
+	_buffer[0] = 0;
+}
+
+unsigned MessageFormatReader::moveLeftoverToBufferEnd()
+{
+	_buffer_length -= _format_length + 1;
+	memmove(_buffer + _buffer_capacity - _buffer_length, _buffer + _format_length + 1, _buffer_length);
+	return _buffer_length;
+}
+
+void MessageFormatReader::clearFormatAndRestoreLeftover()
+{
+	memmove(_buffer, _buffer + _buffer_capacity - _buffer_length, _buffer_length);
+	_format_length = 0;
+}
+
+unsigned MessageFormatReader::formatLength() const
+{ return _format_length; }
+
+const px4::Array<orb_id_size_t, orb_compressed_max_num_orb_ids> & MessageFormatReader::orbIDs() const
+{ return _orb_ids; }
+
+const px4::Array<orb_id_size_t, orb_compressed_max_num_orb_id_dependencies> & MessageFormatReader::orbIDsDependencies() const
+{ return _orb_ids_dependencies; }
+
+} // namespace uORB

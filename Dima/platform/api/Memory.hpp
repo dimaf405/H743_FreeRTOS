@@ -41,10 +41,7 @@ struct DmaBufferView {
     std::size_t size{0U};
     std::uintptr_t token{0U};
 
-    explicit operator bool() const noexcept
-    {
-        return data != nullptr && size != 0U && token != 0U;
-    }
+    explicit operator bool() const noexcept;
 };
 
 class DmaMemory {

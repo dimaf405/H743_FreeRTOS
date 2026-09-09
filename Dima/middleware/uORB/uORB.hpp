@@ -69,10 +69,7 @@ void orb_unregister_callback(const orb_metadata *metadata, uint8_t instance,
 class Subscription {
 public:
     explicit Subscription(const orb_metadata *metadata,
-                          uint8_t instance = 0U) noexcept
-        : metadata_(metadata), instance_(instance)
-    {
-    }
+                          uint8_t instance = 0U) noexcept;
 
     bool updated() const noexcept;
     bool copy(void *destination) noexcept;
@@ -94,15 +91,9 @@ class SubscriptionCallbackWorkItem : public Subscription {
 public:
     SubscriptionCallbackWorkItem(const orb_metadata *metadata,
                                  px4::WorkItem &work_item,
-                                 uint8_t instance = 0U) noexcept
-        : Subscription(metadata, instance), work_item_(work_item)
-    {
-    }
+                                 uint8_t instance = 0U) noexcept;
 
-    bool registerCallback() noexcept
-    {
-        return Subscription::registerCallback(work_item_);
-    }
+    bool registerCallback() noexcept;
 
 private:
     px4::WorkItem &work_item_;

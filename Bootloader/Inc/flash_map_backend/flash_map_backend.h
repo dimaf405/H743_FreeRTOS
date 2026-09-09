@@ -21,35 +21,17 @@ struct flash_sector {
     uint32_t fs_size;
 };
 
-static inline uint8_t flash_area_get_id(const struct flash_area *fa)
-{
-    return fa->fa_id;
-}
+uint8_t flash_area_get_id(const struct flash_area *fa);
 
-static inline uint8_t flash_area_get_device_id(const struct flash_area *fa)
-{
-    return fa->fa_device_id;
-}
+uint8_t flash_area_get_device_id(const struct flash_area *fa);
 
-static inline uint32_t flash_area_get_off(const struct flash_area *fa)
-{
-    return fa->fa_off;
-}
+uint32_t flash_area_get_off(const struct flash_area *fa);
 
-static inline uint32_t flash_area_get_size(const struct flash_area *fa)
-{
-    return fa->fa_size;
-}
+uint32_t flash_area_get_size(const struct flash_area *fa);
 
-static inline uint32_t flash_sector_get_off(const struct flash_sector *fs)
-{
-    return fs->fs_off;
-}
+uint32_t flash_sector_get_off(const struct flash_sector *fs);
 
-static inline uint32_t flash_sector_get_size(const struct flash_sector *fs)
-{
-    return fs->fs_size;
-}
+uint32_t flash_sector_get_size(const struct flash_sector *fs);
 
 int flash_area_open(uint8_t id, const struct flash_area **fa);
 void flash_area_close(const struct flash_area *fa);

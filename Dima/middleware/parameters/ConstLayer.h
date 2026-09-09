@@ -42,56 +42,19 @@ public:
 
 	ConstLayer() = default;
 
-	bool store(param_t param, param_value_u value) override
-	{
-		(void)param; (void)value;
-		return false;
-	}
+	bool store(param_t param, param_value_u value) override;
 
-	bool contains(param_t param) const override
-	{
-		return param < PARAM_COUNT;
-	}
+	bool contains(param_t param) const override;
 
-	px4::AtomicBitset<PARAM_COUNT> containedAsBitset() const override
-	{
-		px4::AtomicBitset<PARAM_COUNT> set;
+	px4::AtomicBitset<PARAM_COUNT> containedAsBitset() const override;
 
-		for (int i = 0; i < PARAM_COUNT; i++) {
-			set.set(i);
-		}
+	param_value_u get(param_t param) const override;
 
-		return set;
-	}
+	void reset(param_t param) override;
 
-	param_value_u get(param_t param) const override
-	{
-		if (param >= PARAM_COUNT) {
-			return {0};
-		}
+	void refresh(param_t param) override;
 
-		return dima::parameter_catalog::parameters[param].val;
-	}
+	int size() const override;
 
-	void reset(param_t param) override
-	{
-		(void)param;
-		// Do nothing
-	}
-
-	void refresh(param_t param) override
-	{
-		(void)param;
-		// Do nothing
-	}
-
-	int size() const override
-	{
-		return PARAM_COUNT;
-	}
-
-	int byteSize() const override
-	{
-		return PARAM_COUNT * sizeof(param_info_s);
-	}
+	int byteSize() const override;
 };

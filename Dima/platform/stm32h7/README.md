@@ -43,3 +43,7 @@ STM32H7 平台层，也不能把 `system/` 当作杂项目录。平台内部依�
 
 - **DTCM 布局：** 低 64 KiB 容纳 Bank1 编程代码、平台任务栈池及 CPU 热点对象，上部 64 KiB 保留给 MSP。应用和 MCUboot 共用新增 CPU 段的启动清零入口，MCUboot 提供空边界；DTCM 对象不进入外设直接 DMA 地址范围。
 - **SD 内存边界：** memory 的集中 cache C ABI 支持 clean、invalidate 与 clean-invalidate；直接 DMA 的调用方必须证明整条 cache line 独占。MPU Region 5 覆盖由链接符号指定的 8 KiB D1 SD 双缓冲，Region 6 的 UART/SPI DMA 区与 Region 7 的诊断区保持原布局。SDMMC/FatFs 的唯一板级端口位于 Boards/H743/Src/fatfs_diskio.cpp。
+
+## 头文件实现边界
+
+SPI 分频选择和板级启动请求操作的运行期逻辑位于源文件；Board/MCU 后端仍为唯一硬件操作所有者，平台 API 头保持声明边界。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

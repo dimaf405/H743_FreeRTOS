@@ -51,3 +51,13 @@ TimeUs platform_time_us() noexcept
 TimeMs platform_time_ms() noexcept { return platform_time_us() / 1000U; }
 
 } // namespace dima::platform
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::platform {
+
+TimeMs MonotonicClock::now_ms() const noexcept
+{ return now_us() / 1000U; }
+
+} // namespace dima::platform
