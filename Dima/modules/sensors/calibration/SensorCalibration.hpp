@@ -164,6 +164,7 @@ private:
     bool commit_level(float roll_deg, float pitch_deg) noexcept;
     bool level_parameters_unchanged() const noexcept;
     bool level_applied(std::uint64_t now) const noexcept;
+    bool frontend_parameters_applied(std::uint64_t now) noexcept;
     void process_wait_for_apply(std::uint64_t now) noexcept;
     void process_wait_for_rollback(std::uint64_t now) noexcept;
     int classify_accel_side(const sensor_accel_s &sample) const noexcept;

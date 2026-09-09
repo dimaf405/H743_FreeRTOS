@@ -11,6 +11,7 @@
 - `uORB.h`、`uORB.hpp`、`Publication.hpp` 与 `SubscriptionData.hpp` 只提供使 PX4 生成物在 Dima Runtime 上编译和运行的薄接口，不定义消息字段、Topic ID 或消息 hash。
 - 旧 `.dima_orb_meta`、`MetadataRegistrar`、ABI lock、producer/consumer 名单均已退役。公开旧 `.hpp` 包含路径由生成器根据官方 `ORB_DECLARE` 动态生成 include-only 转发头。
 - schema、上游来源与 `build/generated/uORB/.generated.json` 的输入/输出 SHA-256 闭包由架构门禁动态核对；这里不维护消息名称或数量列表。
+- `MessageFormatReader` 保留产品使用的完整格式组流式解压、展开和余留字节处理；没有消费者的按 ID 查找、逐字段读取及缓冲长度接口已裁退。这是本地格式读取辅助类的接口收敛，不改 Topic、发布订阅 ABI 或官方生成工具快照；ULog 的有界读取与 Failure/Complete 状态保持。
 
 ## Application Runtime 生命周期
 

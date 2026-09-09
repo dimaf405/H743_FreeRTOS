@@ -61,52 +61,37 @@ bool Commander::start()
 
     if (!action_request_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        ScheduleCancelAndDrain();
+        cancel_callbacks_and_drain();
         PX4_ERR("Commander action callback registration failed");
         return false;
     }
     if (!manual_control_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        action_request_subscription_.unregisterCallback();
-        ScheduleCancelAndDrain();
+        cancel_callbacks_and_drain();
         PX4_ERR("Commander manual callback registration failed");
         return false;
     }
     if (!parameter_update_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        manual_control_subscription_.unregisterCallback();
-        action_request_subscription_.unregisterCallback();
-        ScheduleCancelAndDrain();
+        cancel_callbacks_and_drain();
         PX4_ERR("Commander parameter callback registration failed");
         return false;
     }
     if (!sensor_calibration_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        parameter_update_subscription_.unregisterCallback();
-        manual_control_subscription_.unregisterCallback();
-        action_request_subscription_.unregisterCallback();
-        ScheduleCancelAndDrain();
+        cancel_callbacks_and_drain();
         PX4_ERR("Commander sensor calibration callback registration failed");
         return false;
     }
     if (!navigation_status_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        sensor_calibration_subscription_.unregisterCallback();
-        parameter_update_subscription_.unregisterCallback();
-        manual_control_subscription_.unregisterCallback();
-        action_request_subscription_.unregisterCallback();
-        ScheduleCancelAndDrain();
+        cancel_callbacks_and_drain();
         PX4_ERR("Commander navigation status callback registration failed");
         return false;
     }
     if (!vehicle_command_subscription_.registerCallback()) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        navigation_status_subscription_.unregisterCallback();
-        sensor_calibration_subscription_.unregisterCallback();
-        parameter_update_subscription_.unregisterCallback();
-        manual_control_subscription_.unregisterCallback();
-        action_request_subscription_.unregisterCallback();
-        ScheduleCancelAndDrain();
+        cancel_callbacks_and_drain();
         PX4_ERR("Commander vehicle_command callback registration failed");
         return false;
     }
@@ -126,10 +111,11 @@ bool Commander::start()
     return true;
 }
 
-void Commander::stop()
+void Commander::cancel_callbacks_and_drain() noexcept
 {
-    armed_flash_.disarm();
-    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    // 未注册回调的注销是空操作，因此部分启动失败、正常停止与 Error 可以
+    // 共用逆注册顺序清理。先断开唤醒源，再排空 WorkQueue；不在这里改 Arm
+    // 或会话授权，调用者继续保持各自的 Disarm/撤销/状态发布时序。
     vehicle_command_subscription_.unregisterCallback();
     navigation_status_subscription_.unregisterCallback();
     sensor_calibration_subscription_.unregisterCallback();
@@ -137,6 +123,14 @@ void Commander::stop()
     manual_control_subscription_.unregisterCallback();
     action_request_subscription_.unregisterCallback();
     ScheduleCancelAndDrain();
+}
+
+void Commander::stop()
+{
+    armed_flash_.disarm();
+    state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    cancel_callbacks_and_drain();
+    // 排空后再关闭门控，覆盖已在执行中的回调；不能与排空前的 Disarm 合并。
     armed_flash_.disarm();
     reset_runtime_state();
 }
@@ -249,13 +243,7 @@ void Commander::enter_error(const char *reason) noexcept
     revoke_auto_calibration();
     state_ = dima::middleware::lifecycle::ModuleState::Error;
     armed_flash_.disarm();
-    vehicle_command_subscription_.unregisterCallback();
-    navigation_status_subscription_.unregisterCallback();
-    sensor_calibration_subscription_.unregisterCallback();
-    parameter_update_subscription_.unregisterCallback();
-    manual_control_subscription_.unregisterCallback();
-    action_request_subscription_.unregisterCallback();
-    ScheduleCancelAndDrain();
+    cancel_callbacks_and_drain();
     actuator_armed_.armed = false;
     vehicle_control_mode_.flag_armed = false;
     vehicle_status_.arming_state = vehicle_status_s::ARMING_STATE_DISARMED;

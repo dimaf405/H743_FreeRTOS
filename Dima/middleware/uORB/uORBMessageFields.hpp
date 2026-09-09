@@ -70,25 +70,9 @@ public:
 	 * Call iteratively until completed or a failure happens.
 	 * @return current state
 	 */
+	// 产品按完整格式组流式消费；组间余留字节、展开和失败状态仍由本读取器管理。
 	State readMore();
 
-	/**
-	 * Read until the start of a format given an ORB ID
-	 * @return true on success
-	 */
-	bool readUntilFormat(orb_id_size_t orb_id);
-
-	/**
-	 * Iteratively read fields for the current format
-	 * @param field_length [in,out] field length, set to 0 initially
-	 * @return true while there is a field
-	 */
-	bool readNextField(int &field_length);
-
-	/**
-	 * Current length of the buffer
-	 */
-	uint32_t bufferLength() const { return _buffer_length; }
 	/**
 	 * Clear the buffer during ReadingFormat (if it does not need to be accumulated) or FormatComplete.
 	 * After FormatComplete either this or clearFormatAndRestoreLeftover must be called.

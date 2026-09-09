@@ -152,6 +152,7 @@ private:
     bool action_request_fresh(const action_request_s &request,
                               std::uint64_t now) const noexcept;
     bool publish_state(std::uint64_t now) noexcept;
+    void cancel_callbacks_and_drain() noexcept;
     void reset_runtime_state() noexcept;
     void initialize_public_state(std::uint64_t now) noexcept;
     void initialize_disarmed_snapshot(std::uint64_t now) noexcept;

@@ -156,15 +156,12 @@ void SensorCalibration::begin_wait_for_apply(std::uint64_t now) noexcept
     // 仍由现有 autosave 路径异步完成，QGC done token 不等待 param_save_default。
 }
 
-void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
+bool SensorCalibration::frontend_parameters_applied(std::uint64_t now) noexcept
 {
-    if (apply_type_ == Type::Level && feedback_owner_ == sensor_calibration_request_s::FEEDBACK_AUTO &&
-        param_set_count() != committed_set_count_) {
-        fail("parameters changed while applying automatic level");
-        return;
-    }
-    // 成功条件同时包含：捕获本次 parameter_update generation、对应前端标记已
-    // 应用、device_id/校正值精确匹配、新鲜输出可见；不能仅以 param_set 成功结束。
+    // 只共用前端代次/校正值确认，不接管终态、超时或 arming interlock。
+    // 正向 Gyro/Accel 还要求原设备的新鲜样本；回滚保留允许旧 ID=0/identity
+    // correction 的确认路径，不能套用正向样本门禁而阻断恢复。
+    const bool rollback = phase_ == Phase::WaitForRollback;
     bool applied = false;
     const bool update_captured = capture_required_parameter_update();
     const bool imu_update_applied = update_captured &&
@@ -176,18 +173,18 @@ void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
         const float values[3]{parameter_expectation_.values[0],
                               parameter_expectation_.values[1],
                               parameter_expectation_.values[2]};
-        applied = sensor_gyro_.device_id == device_id_ &&
-            fresh(now, sensor_gyro_.timestamp, kSensorFreshnessUs) &&
+        applied = (rollback || (sensor_gyro_.device_id == device_id_ &&
+            fresh(now, sensor_gyro_.timestamp, kSensorFreshnessUs))) &&
             parameter_expectation_.valid &&
-            parameter_expectation_.type == Type::Gyro &&
+            (rollback || parameter_expectation_.type == Type::Gyro) &&
             imu_update_applied &&
             vehicle_imu_frontend_.gyro_calibration_matches(
                 required_parameter_update_instance_, parameter_expectation_.id, values);
     } else if (apply_type_ == Type::Accel) {
-        applied = sensor_accel_.device_id == device_id_ &&
-            fresh(now, sensor_accel_.timestamp, kSensorFreshnessUs) &&
+        applied = (rollback || (sensor_accel_.device_id == device_id_ &&
+            fresh(now, sensor_accel_.timestamp, kSensorFreshnessUs))) &&
             parameter_expectation_.valid &&
-            parameter_expectation_.type == Type::Accel &&
+            (rollback || parameter_expectation_.type == Type::Accel) &&
             imu_update_applied &&
             vehicle_imu_frontend_.accel_calibration_matches(
                 required_parameter_update_instance_, parameter_expectation_.id,
@@ -197,8 +194,8 @@ void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
             vehicle_magnetometer_frontend_.
                 calibration_parameter_update_applied(
                     required_parameter_update_instance_);
-        // 磁前端还必须产生 calibration_count 变化；若计数已饱和，则以提交后的
-        // 新鲜输出时间证明新配置已走过前端应用路径。
+        // 磁的两条路径都要求原设备、新鲜输出和校正值匹配；只有正向应用
+        // 另要求 calibration_count 变化，饱和时改用提交后的输出时间。
         applied = vehicle_magnetometer_.device_id == device_id_ &&
             fresh(now, vehicle_magnetometer_.timestamp,
                    kSensorFreshnessUs) &&
@@ -208,11 +205,22 @@ void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
             vehicle_magnetometer_frontend_.mag_calibration_matches(
                 required_parameter_update_instance_, parameter_expectation_.id,
                 parameter_expectation_.values) &&
-            (vehicle_magnetometer_.calibration_count !=
+            (rollback || vehicle_magnetometer_.calibration_count !=
                  previous_mag_calibration_count_ ||
              (previous_mag_calibration_count_ == UINT8_MAX &&
               vehicle_magnetometer_.timestamp >= commit_time_us_));
     }
+    return applied;
+}
+
+void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
+{
+    if (apply_type_ == Type::Level && feedback_owner_ == sensor_calibration_request_s::FEEDBACK_AUTO &&
+        param_set_count() != committed_set_count_) {
+        fail("parameters changed while applying automatic level");
+        return;
+    }
+    const bool applied = frontend_parameters_applied(now);
     if (applied) {
         finish_success();
     } else if (now >= apply_deadline_us_) {
@@ -294,41 +302,7 @@ void SensorCalibration::latch_rollback_failure() noexcept
 void SensorCalibration::process_wait_for_rollback(
     std::uint64_t now) noexcept
 {
-    bool applied = false;
-    const bool update_captured = capture_required_parameter_update();
-    const bool imu_update_applied = update_captured &&
-        vehicle_imu_frontend_.calibration_parameter_update_applied(
-            required_parameter_update_instance_);
-    if (apply_type_ == Type::Level) {
-        applied = level_applied(now);
-    } else if (apply_type_ == Type::Gyro) {
-        const float values[3]{parameter_expectation_.values[0],
-                              parameter_expectation_.values[1],
-                              parameter_expectation_.values[2]};
-        applied = parameter_expectation_.valid && imu_update_applied &&
-            vehicle_imu_frontend_.gyro_calibration_matches(
-                required_parameter_update_instance_, parameter_expectation_.id, values);
-    } else if (apply_type_ == Type::Accel) {
-        applied = parameter_expectation_.valid && imu_update_applied &&
-            vehicle_imu_frontend_.accel_calibration_matches(
-                required_parameter_update_instance_, parameter_expectation_.id,
-                parameter_expectation_.values);
-    } else if (apply_type_ == Type::Mag) {
-        const bool mag_update_applied = update_captured &&
-            vehicle_magnetometer_frontend_.
-                calibration_parameter_update_applied(
-                    required_parameter_update_instance_);
-        applied = vehicle_magnetometer_.device_id == device_id_ &&
-            fresh(now, vehicle_magnetometer_.timestamp,
-                  kSensorFreshnessUs) &&
-            parameter_expectation_.valid &&
-            parameter_expectation_.type == Type::Mag &&
-            mag_update_applied &&
-            vehicle_magnetometer_frontend_.mag_calibration_matches(
-                required_parameter_update_instance_, parameter_expectation_.id,
-                parameter_expectation_.values);
-    }
-
+    const bool applied = frontend_parameters_applied(now);
     // 回滚的前端确认与正向应用使用相同 generation 和数值匹配合同。
     if (applied) {
         finish_rollback();

@@ -33,6 +33,7 @@ Commander 唯一接收并 ACK PX4 的 `MAV_CMD_PREFLIGHT_CALIBRATION`，再通�
 - 校准只允许在 Disarmed 且传感器数据新鲜时开始；期间 Commander 拒绝 Arm/Unkill 等正向动作，但保留 Disarm/Kill/Termination。
 - 参数通过单个原子通知批量提交；校准协调器先确认对应 `parameter_update.instance` 已被 `VehicleImu` 或 `VehicleMagnetometer` 应用，再逐项核对 active correction 的 ID/offset/scale。identity 数据路径在首次校准前保持正常，新参数应用后再通过 calibration count/参数握手确认校准已生效；成功或回滚握手完成前一直保持 arming interlock。与 PX4 v1.17 的 gyro/accel/mag `ParametersSave + param_notify_changes` 路径一致，`[cal] done` 不等待 `param_save_default(true)`，物理持久化由现有 autosave 随后完成；断电/重启保持性因此仍需板端验证。
 - QGC 状态由 PX4 v2 `[cal] ...` STATUSTEXT 协议驱动；校准事务按 PX4 Commander worker 架构运行在非实时 `wq:lp_default`，协议文本走无普通等级过滤的 RAW 日志路径，并重复 PX4 的 orientation/side-done 关键转换文本以抵抗单帧丢失。RAW 仍遵守“实时队列禁止格式化”的全局合同，因此不得把 `SensorCalibration` 放回 `wq:sensors`；全零校准命令取消当前传感器校准。
+- 校准协调器的正向应用/回滚共用前端确认谓词，但阶段差异明确保留：Gyro/Accel 正向要求原设备的新鲜样本，回滚只按原有代次和校正值确认，允许恢复旧零 ID 的 identity correction；Mag 两条路径均要求原设备新鲜输出，只有正向应用另要求校准计数推进或饱和后的新输出。超时、终态、互锁释放及回滚失败锁存仍由各自状态处理。
 
 ## 板端验证边界
 
