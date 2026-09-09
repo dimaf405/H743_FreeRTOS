@@ -6,6 +6,7 @@ import struct
 
 from .reader import (
     STB_WEAK,
+    STT_OBJECT,
     SHT_NOBITS,
     Elf32,
     ElfVerificationError,
@@ -26,7 +27,6 @@ DMA_SIZE = 32 * 1024
 D3_DIAGNOSTICS_BASE = 0x38000000
 D3_DIAGNOSTICS_SIZE = 512
 PLATFORM_HEAP_SIZE = 256 * 1024
-TASK_POOL_BASE = RAM_D1_BASE + PLATFORM_HEAP_SIZE
 TASK_POOL_MAX_SIZE = 48 * 1024
 SD_DMA_SIZE = 8 * 1024
 SDMMC1_VECTOR_INDEX = 16 + 49
@@ -90,6 +90,34 @@ def verify_memory_layout(elf: Elf32) -> None:
     assert bss is not None
     sram_bss = elf.section(".dima_sram_bss")
     assert sram_bss is not None
+    dtcm_bss = elf.section(".dima_dtcm_bss")
+    assert dtcm_bss is not None
+    task_pool = verify_section(
+        elf, ".dima_task_pool", ramfunc.address + ramfunc.size,
+        TASK_POOL_MAX_SIZE, exact_size=TASK_POOL_MAX_SIZE,
+    )
+    # 三个区间连续位于低 64 KiB；任务栈与 CPU 对象都不能越过 MSP 边界。
+    if (task_pool.section_type != SHT_NOBITS or
+            task_pool.address % 32 != 0 or
+            not range_contains(DTCM_BASE, DTCM_STATIC_LIMIT,
+                               task_pool.address, task_pool.size)):
+        raise ElfVerificationError("task pool must be 48 KiB DTCM NOLOAD storage")
+    if (dtcm_bss.section_type != SHT_NOBITS or
+            dtcm_bss.address != task_pool.address + task_pool.size or
+            dtcm_bss.address % 32 != 0 or dtcm_bss.size % 32 != 0 or
+            not range_contains(DTCM_BASE, DTCM_STATIC_LIMIT,
+                               dtcm_bss.address, dtcm_bss.size)):
+        raise ElfVerificationError("DTCM CPU storage must follow the task pool")
+    # 组合根的三份原始存储必须实际落入此段，防止只建立空段或遗漏一个对象。
+    for owner in ("ekf2_instance", "rover_differential_instance",
+                  "vehicle_imu_instance"):
+        storage = [symbol for symbol in elf.symbols
+                   if owner in symbol.name and symbol.name.endswith("storage")
+                   and symbol.symbol_type == STT_OBJECT and symbol.defined]
+        if (len(storage) != 1 or storage[0].section_index != dtcm_bss.index or
+                not range_contains(dtcm_bss.address, dtcm_bss.size,
+                                   storage[0].value, storage[0].size)):
+            raise ElfVerificationError(f"{owner} storage is not in DTCM")
     sd_dma = elf.section(".dima_sd_dma")
     assert sd_dma is not None
     # 普通初始化/零初始化数据必须完整位于 D2 SRAM1/2，DMA SRAM3 由独立段管理。
@@ -105,6 +133,7 @@ def verify_memory_layout(elf: Elf32) -> None:
     # DTCM 静态低地址占用不得超过 64 KiB，以保留 MSP 向下增长空间。
     if (not range_contains(DTCM_BASE, DTCM_SIZE,
                            user_stack.address, user_stack.size) or
+            user_stack.address < dtcm_bss.address + dtcm_bss.size or
             user_stack.address + user_stack.size >
             DTCM_BASE + DTCM_STATIC_LIMIT):
         raise ElfVerificationError(
@@ -117,6 +146,14 @@ def verify_memory_layout(elf: Elf32) -> None:
         "_edata": data.address + data.size,
         "_sbss": bss.address,
         "_ebss": bss.address + bss.size,
+        "__dima_task_pool_start__": task_pool.address,
+        "__dima_task_pool_end__": task_pool.address + task_pool.size,
+        "__dima_dtcm_bss_start__": dtcm_bss.address,
+        "__dima_dtcm_bss_end__": dtcm_bss.address + dtcm_bss.size,
+        "__dima_dtcm_static_limit__": DTCM_BASE + DTCM_STATIC_LIMIT,
+        "__dima_msp_limit__": DTCM_BASE + DTCM_STATIC_LIMIT,
+        "__dima_msp_top__": DTCM_BASE + DTCM_SIZE,
+        "_estack": DTCM_BASE + DTCM_SIZE,
         "__dima_sram_bss_start__": sram_bss.address,
         "__dima_sram_bss_end__": sram_bss.address + sram_bss.size,
         "__dima_sd_dma_start__": sd_dma.address,
@@ -138,21 +175,15 @@ def verify_memory_layout(elf: Elf32) -> None:
         elf, ".dima_heap", RAM_D1_BASE, PLATFORM_HEAP_SIZE,
         exact_size=PLATFORM_HEAP_SIZE,
     )
-    task_pool = verify_section(
-        elf, ".dima_task_pool", TASK_POOL_BASE, TASK_POOL_MAX_SIZE,
-    )
-    if not range_contains(RAM_D1_BASE, RAM_D1_SIZE,
-                          task_pool.address, task_pool.size):
-        raise ElfVerificationError("task pool exceeds D1 SRAM capacity")
-    # 大块 CPU 静态存储必须是独立 NOLOAD 段，完整位于既有任务栈池之后；
+    # D1 大块日志存储必须紧随 heap，不保留已迁走栈池的旧地址洞；
     # 不固化某个业务对象的大小，只验证区域、清零边界和 cache-line 对齐。
     if (sram_bss.section_type != SHT_NOBITS or
             not range_contains(RAM_D1_BASE, RAM_D1_SIZE,
                                sram_bss.address, sram_bss.size) or
-            sram_bss.address < task_pool.address + task_pool.size or
+            sram_bss.address != RAM_D1_BASE + PLATFORM_HEAP_SIZE or
             sram_bss.address % 32 != 0 or sram_bss.size % 32 != 0):
         raise ElfVerificationError(
-            ".dima_sram_bss must be aligned D1 NOLOAD storage after the task pool"
+            ".dima_sram_bss must be aligned D1 NOLOAD storage after the heap"
         )
     # SD IDMA 的两个半区必须位于独立 MPU 可描述区；不接受普通日志段混入。
     if (sd_dma.section_type != SHT_NOBITS or sd_dma.size != SD_DMA_SIZE or

@@ -36,6 +36,9 @@
 .word  _siramfunc
 .word  _sramfunc
 .word  _eramfunc
+/* DTCM CPU 对象与普通 .bss 分开清零；MCUboot 提供相等的空边界。 */
+.word  __dima_dtcm_bss_start__
+.word  __dima_dtcm_bss_end__
 /* start address for the initialization values of the .data section.
 defined in linker script */
 .word  _sidata
@@ -118,6 +121,20 @@ FillZerobss:
 LoopFillZerobss:
   cmp r2, r4
   bcc FillZerobss
+
+/* DTCM 原始对象存储先清零，再由组合根延后放置构造；不触碰任务栈池与 MSP。 */
+  ldr r2, =__dima_dtcm_bss_start__
+  ldr r4, =__dima_dtcm_bss_end__
+  movs r3, #0
+  b LoopFillZeroDtcmBss
+
+FillZeroDtcmBss:
+  str r3, [r2]
+  adds r2, r2, #4
+
+LoopFillZeroDtcmBss:
+  cmp r2, r4
+  bcc FillZeroDtcmBss
 
 /* D1 大块静态对象与 D2 .bss 不连续，必须在任何 C++ 构造之前独立清零。
  * 先比较后写入兼容 MCUboot 的空段；不触碰相邻 heap、任务栈或 D3 诊断。 */

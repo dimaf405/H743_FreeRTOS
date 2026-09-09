@@ -184,8 +184,9 @@ AUTO: Mission + vehicle_local_position + vehicle_odometry health
 - ISR、控制循环、EKF2 更新、Arming/Failsafe、Mixer 和 PWM 输出禁止分配。
 - 通用 Heap 已固定为 D1 AXI SRAM 中 256 KiB 的 `.dima_heap`。
 - D2 普通内存与 SRAM3 固定 32 KiB `.dima_dma` 分离；MPU 将 `0x30040000～0x30047FFF` 配置为 Normal、Shareable、Non-cacheable、XN，DMA 只接受 `DmaBufferView` 或平台 bounce buffer。
-- 48 KiB 固定任务栈池位于 D1 的 `.dima_task_pool`，与 256 KiB `.dima_heap` 分离；普通 `.data/.bss` 位于 D2 SRAM1/2，DTCM 保留同 Bank Flash 编程例程和 MSP 空间，不加入通用 Heap。
-- `LogService` 及其 64 KiB ULog Ring 使用独立 `.dima_sram_bss`，放在 D1 固定 heap/task pool 之后；组合根持有唯一静态实例引用，启动汇编先按链接边界清零，再允许构造。Application 与 MCUboot 共用该清零流程，后者当前提供空区间。
+- 48 KiB 固定任务栈池位于 DTCM 的 `.dima_task_pool`，通用 256 KiB `.dima_heap` 保留 D1；普通 `.data/.bss` 位于 D2 SRAM1/2。DTCM 低 64 KiB 顺序容纳 Bank1 Flash 编程代码、任务栈池和 `.dima_dtcm_bss` CPU 对象，上部 64 KiB 是 MSP 预算，不加入通用 heap。
+- `LogService` 及其 64 KiB ULog Ring 使用独立 `.dima_sram_bss`，紧随 D1 固定 heap，回收栈池迁出后的 48 KiB 空间；组合根持有唯一静态实例引用，启动汇编先按链接边界清零，再允许构造。Application 与 MCUboot 共用该清零流程，后者当前提供空区间。
+- `Ekf2`、`RoverDifferential`、`VehicleImu` 独立原始存储位于 `.dima_dtcm_bss.*`。Reset_Handler 在 C++ 构造前清零，组合根在原构造时点通过 placement new 建立成员初值并持有引用；MCUboot 的对应清零区间为空。ELF 门禁验证三份存储实际位于 DTCM、栈池容量及总静态上界。动态 EKF 缓冲仍由 D1 heap 提供。
 - D1 日志与 D2 普通数据沿用相同的默认 SRAM 缓存属性；日志生产、Ring 容量、原子发布、写块上限与 work queue 调度不随存储位置改变。SD 块端口使用 IDMA：D1 对齐缓冲可以直接传输，其他来源经独立 8 KiB D1 双缓冲；UART/SPI DMA 仍位于 SRAM3。缓存或总线争用对 deadline/dropout 的影响需要板端数据验证。
 - D3 `0x38000000～0x3800FFFF` 为 non-cacheable 跨复位诊断区。
 - 已启用 malloc failed hook、Heap 统计和内存故障 Event；任务栈高水位待目标板采集。

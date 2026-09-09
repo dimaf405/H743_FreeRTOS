@@ -9,6 +9,9 @@
 #include "uORB/uORB.hpp"
 #include "work_queue/WorkQueue.hpp"
 
+#include <cstdint>
+#include <new>
+
 namespace dima::rover {
 namespace {
 
@@ -32,6 +35,37 @@ dima::modules::logging::LogService &log_service_instance(
     alignas(32) static dima::modules::logging::LogService instance
         __attribute__((section(".dima_sram_bss"))){log_files};
     return instance;
+}
+
+// DTCM 中仅保留原始零初始化存储；放置构造明确执行全部成员初始化，避免
+// NOLOAD 丢弃编译器生成的非零初值。首次调用仍在 Services/heap 就绪后的
+// ApplicationContext 构造中；实例随固件常驻，原 start/stop 负责运行期生命周期。
+dima::modules::sensors::VehicleImu &vehicle_imu_instance(
+    dima::platform::ArmedFlashCoordinator &armed) noexcept
+{
+    using Type = dima::modules::sensors::VehicleImu;
+    alignas(Type) static std::uint8_t storage[sizeof(Type)]
+        __attribute__((section(".dima_dtcm_bss.vehicle_imu")));
+    static Type *const instance = ::new (static_cast<void *>(storage)) Type{armed};
+    return *instance;
+}
+
+dima::modules::ekf2::Ekf2 &ekf2_instance() noexcept
+{
+    using Type = dima::modules::ekf2::Ekf2;
+    alignas(Type) static std::uint8_t storage[sizeof(Type)]
+        __attribute__((section(".dima_dtcm_bss.ekf2")));
+    static Type *const instance = ::new (static_cast<void *>(storage)) Type{};
+    return *instance;
+}
+
+dima::rover::control::RoverDifferential &rover_differential_instance() noexcept
+{
+    using Type = dima::rover::control::RoverDifferential;
+    alignas(Type) static std::uint8_t storage[sizeof(Type)]
+        __attribute__((section(".dima_dtcm_bss.rover_differential")));
+    static Type *const instance = ::new (static_cast<void *>(storage)) Type{};
+    return *instance;
 }
 
 template <typename... Modules>
@@ -72,16 +106,18 @@ ApplicationContext::ApplicationContext(
       um982_gps_(services.async_serial_port, services.clock, serial_config_,
                  services.armed_flash, maintenance_),
       icm42688p_(services.spi, services.interrupt_sources),
-      vehicle_imu_(services.armed_flash),
+      vehicle_imu_(vehicle_imu_instance(services.armed_flash)),
       vehicle_magnetometer_(services.armed_flash),
       sensor_calibration_(services.armed_flash, vehicle_imu_,
                           vehicle_magnetometer_),
       dronecan_mag2_(services.can, services.armed_flash, maintenance_,
                      flashfs_),
+      ekf2_(ekf2_instance()),
       motor_output_(services.actuator_pwm),
       commander_(services.armed_flash, maintenance_, mission_service_),
       sbus_rc_(services.timestamped_serial_input, serial_config_),
       auto_mode_(mission_service_),
+      rover_differential_(rover_differential_instance()),
       auto_calibration_(services.armed_flash, vehicle_magnetometer_, vehicle_imu_, rover_differential_, auto_mode_)
 {
 }

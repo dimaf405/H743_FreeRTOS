@@ -88,11 +88,12 @@ private:
     dima::modules::serial::SerialConfig serial_config_;
     dima::drivers::gps::Um982Gps um982_gps_;
     dima::drivers::imu::ICM42688P icm42688p_;
-    dima::modules::sensors::VehicleImu vehicle_imu_;
+    // 高频 CPU 对象由独立 DTCM 存储持有；引用保持原模块依赖和构造顺序。
+    dima::modules::sensors::VehicleImu &vehicle_imu_;
     dima::modules::sensors::VehicleMagnetometer vehicle_magnetometer_;
     dima::modules::sensors::SensorCalibration sensor_calibration_;
     dima::drivers::magnetometer::DroneCanMag2 dronecan_mag2_;
-    dima::modules::ekf2::Ekf2 ekf2_{};
+    dima::modules::ekf2::Ekf2 &ekf2_;
     dima::modules::motor::MotorOutput motor_output_;
     dima::modules::safety::Commander commander_;
     dima::drivers::rc::SbusRc sbus_rc_;
@@ -100,7 +101,7 @@ private:
     dima::modules::rc::RcManualInput rc_manual_input_{};
     dima::rover::modes::ManualMode manual_mode_{};
     dima::rover::modes::AutoMode auto_mode_;
-    dima::rover::control::RoverDifferential rover_differential_{};
+    dima::rover::control::RoverDifferential &rover_differential_;
     dima::rover::modes::AutoCalibrationMode auto_calibration_;
     dima::platform::TaskHandle owner_task_{};
     RuntimeState runtime_state_{RuntimeState::Stopped};

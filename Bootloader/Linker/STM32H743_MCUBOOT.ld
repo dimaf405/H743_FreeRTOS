@@ -178,6 +178,16 @@ SECTIONS
     __bss_end__ = _ebss;
   } >DTCMRAM
 
+  /* 共用启动清零入口；MCUboot 不装载应用 DTCM 对象，空边界直接跳过。 */
+  .dima_dtcm_bss (NOLOAD) :
+  {
+    __dima_dtcm_bss_start__ = .;
+    *(.dima_dtcm_bss .dima_dtcm_bss.*)
+    __dima_dtcm_bss_end__ = .;
+  } >DTCMRAM
+  ASSERT(SIZEOF(.dima_dtcm_bss) == 0,
+         "MCUboot must not include application DTCM CPU objects")
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
   {

@@ -79,6 +79,10 @@ FLASH (rx)         : ORIGIN = 0x08040400, LENGTH = 0x000BF000
 /* 直接 IDMA 仅接受本板 D1 范围；端口与 MPU 从链接符号获取边界。 */
 __dima_axi_sram_start__ = ORIGIN(RAM_D1);
 __dima_axi_sram_end__ = ORIGIN(RAM_D1) + LENGTH(RAM_D1);
+/* 低半区容纳静态数据和任务栈，上半区保持 64 KiB MSP 预算。 */
+__dima_dtcm_static_limit__ = ORIGIN(DTCMRAM) + 64K;
+__dima_msp_limit__ = __dima_dtcm_static_limit__;
+__dima_msp_top__ = _estack;
 
 /* Define output sections */
 SECTIONS
@@ -162,6 +166,28 @@ SECTIONS
   } >DTCMRAM AT> FLASH
   _siramfunc = LOADADDR(.dima_ramfunc);
 
+  /* 固定 48 KiB 任务栈池紧随 ramfunc，位于 DTCM 低 64 KiB；
+     每个任务仍由 Backend 在分配时清栈，保留原单池与启停回收规则。 */
+  .dima_task_pool (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_task_pool_start__ = .;
+    KEEP(*(.dima_task_pool))
+    KEEP(*(.dima_task_pool*))
+    __dima_task_pool_end__ = .;
+    . = ALIGN(32);
+  } >DTCMRAM
+
+  /* CPU 热点对象独立清零，不能作为 DMA 缓冲；构造时机由组合根保证。 */
+  .dima_dtcm_bss (NOLOAD) :
+  {
+    . = ALIGN(32);
+    __dima_dtcm_bss_start__ = .;
+    *(.dima_dtcm_bss .dima_dtcm_bss.*)
+    . = ALIGN(32);
+    __dima_dtcm_bss_end__ = .;
+  } >DTCMRAM
+
   /* 普通初始化数据固定从 D2 SRAM1 基址开始，加载副本仍顺序保存在 Flash。 */
   .data ORIGIN(RAM_D2) :
   {
@@ -217,7 +243,7 @@ SECTIONS
   __dima_dma_region_end__ = ORIGIN(RAM_DMA) + LENGTH(RAM_DMA);
 
   /* Dima general heap lives in D1 AXI SRAM; DTCM and DMA-oriented D2 stay isolated. */
-  /* 固定 256 KiB 平台堆与随后 task pool 分区，链接 ASSERT 防止二者重叠。 */
+  /* 固定 256 KiB 平台堆；DTCM 栈池迁出后，后续 D1 对象紧接 heap，不保留旧洞。 */
   .dima_heap (NOLOAD) :
   {
     . = ALIGN(32);
@@ -227,18 +253,7 @@ SECTIONS
     . = ALIGN(32);
   } >RAM_D1
 
-  /* FreeRTOS task stacks come from a fixed platform pool outside the heap. */
-  .dima_task_pool (NOLOAD) :
-  {
-    . = ALIGN(32);
-    __dima_task_pool_start__ = .;
-    KEEP(*(.dima_task_pool))
-    KEEP(*(.dima_task_pool*))
-    __dima_task_pool_end__ = .;
-    . = ALIGN(32);
-  } >RAM_D1
-
-  /* 大块 CPU 静态对象放在 D1 固定 heap/task pool 之后；NOLOAD 不携带 Flash
+  /* 大块日志对象紧随 D1 固定 heap；NOLOAD 不携带 Flash
      初值，Reset_Handler 必须在 C++ 构造之前清零。该段不作为 DMA 缓冲区。 */
   .dima_sram_bss (NOLOAD) :
   {
@@ -293,21 +308,28 @@ SECTIONS
          "Application .data/.bss exceed D2 SRAM1/2 capacity")
   /* DTCM 低 64 KiB 是静态占用硬上限，至少为向下增长的 MSP 留出 64 KiB。 */
   ASSERT(ADDR(._user_heap_stack) + SIZEOF(._user_heap_stack) <=
-         ORIGIN(DTCMRAM) + 64K,
+         __dima_dtcm_static_limit__,
          "DTCM static footprint exceeds the 64 KiB budget")
+  ASSERT(ADDR(.dima_task_pool) == ADDR(.dima_ramfunc) + SIZEOF(.dima_ramfunc) &&
+         SIZEOF(.dima_task_pool) == 48K,
+         "Task pool must be exactly 48 KiB after DTCM ramfunc")
+  ASSERT(ADDR(.dima_dtcm_bss) == ADDR(.dima_task_pool) + SIZEOF(.dima_task_pool) &&
+         (ADDR(.dima_dtcm_bss) & 31) == 0 &&
+         (SIZEOF(.dima_dtcm_bss) & 31) == 0,
+         "DTCM CPU objects must follow the task pool with 32-byte boundaries")
+  ASSERT(ADDR(._user_heap_stack) >= ADDR(.dima_dtcm_bss) + SIZEOF(.dima_dtcm_bss),
+         "DTCM minimum stack budget overlaps CPU objects")
+  ASSERT(__dima_msp_top__ - __dima_msp_limit__ == 64K,
+         "Application MSP must retain its 64 KiB budget")
   ASSERT(ADDR(.dima_dma) == 0x30040000,
          "DMA region must start at D2 SRAM3 base")
   ASSERT((ADDR(.dima_dma) & 31) == 0,
          "DMA region must be cache-line aligned")
   ASSERT(SIZEOF(.dima_dma) <= 32K,
          "DMA buffers exceed the fixed 32 KiB SRAM3 region")
-  ASSERT(ADDR(.dima_task_pool) >= 0x24040000,
-         "Task pool must not overlap the 256 KiB D1 heap")
-  /* 新增静态段不能侵占既有任务栈或超出 D1；32 字节边界兼容启动按字清零
-     与 cache line 对齐，不把物理空闲误当成已分配平台 heap 的一部分。 */
-  ASSERT(ADDR(.dima_sram_bss) >=
-         ADDR(.dima_task_pool) + SIZEOF(.dima_task_pool),
-         "D1 static storage overlaps the task stack pool")
+  /* 日志段必须紧随 heap，不能把迁走的任务池位置保留成 D1 空洞。 */
+  ASSERT(ADDR(.dima_sram_bss) == ADDR(.dima_heap) + SIZEOF(.dima_heap),
+         "D1 static storage must follow the platform heap")
   ASSERT((ADDR(.dima_sram_bss) & 31) == 0 &&
          (SIZEOF(.dima_sram_bss) & 31) == 0,
          "D1 static storage must be cache-line aligned")
@@ -322,6 +344,4 @@ SECTIONS
          ADDR(.dima_sd_dma) + SIZEOF(.dima_sd_dma) <=
          ORIGIN(RAM_D1) + LENGTH(RAM_D1),
          "SD IDMA storage overlaps D1 objects or exceeds AXI SRAM")
-  ASSERT(SIZEOF(.dima_task_pool) <= 48K,
-         "Task pool exceeds its fixed platform budget")
 }

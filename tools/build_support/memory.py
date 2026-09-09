@@ -8,7 +8,7 @@ import re
 import struct
 import sys
 
-from elf_support.layout import APP_FLASH_SIZE
+from elf_support.layout import APP_FLASH_SIZE, DTCM_STATIC_LIMIT
 
 from .formatting import color_enabled, colored, report_progress_error
 from .models import ProgressError
@@ -243,12 +243,22 @@ def print_memory_summary(
         f"  {_fmt_pct(flash_used, flash_total)}  {flash_bar}"
     )
 
-    # DTCM 仅统计 RAM 执行代码和 MSP 最小保留，不再包含普通 .data/.bss。
+    # 静态跨度含任务栈池/CPU 对象；MSP 上部预算单列，不能把它当成普通空闲。
     dtcm_bar = _bar(dtcm_used, dtcm_total, enabled=enabled)
     print(
         f"    {'DTCM':<10} {dtcm_used:>7,} / {dtcm_total:>7,} B"
         f"  ({_fmt_bytes(dtcm_used)} / {_fmt_bytes(dtcm_total)})"
         f"  {_fmt_pct(dtcm_used, dtcm_total)}  {dtcm_bar}"
+    )
+
+    dtcm_headroom = max(0, DTCM_STATIC_LIMIT - dtcm_used)
+    print(
+        f"      static budget {dtcm_used:,} / {DTCM_STATIC_LIMIT:,} B"
+        f"; headroom {dtcm_headroom:,} B"
+    )
+    print(
+        f"      MSP reserved  {dtcm_total - DTCM_STATIC_LIMIT:,} B"
+        " (runtime peak not measured)"
     )
 
     # Combined SRAM line.
