@@ -142,7 +142,9 @@ namespace dima {
 using params = parameter_catalog::params;
 }
 
-param_t param_handle(dima::params parameter) noexcept;
+// 生成枚举与 param_t 共用底层整数表示；单行 constexpr 转换保留常量折叠，
+// 不为固定参数句柄引入跨翻译单元调用，也不维护另一份参数映射。
+constexpr param_t param_handle(dima::params parameter) noexcept { return static_cast<param_t>(parameter); }
 
 #include "atomic_transaction.h"
 

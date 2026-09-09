@@ -84,3 +84,5 @@ Windows 生成、编译和 ELF 检查不能代替实板证明。同上电 `shutd
 ## 头文件实现边界
 
 ParamLayer、ConstLayer、DynamicSparseLayer、AtomicTransaction 与 CRC32 的普通运行期实体位于各自源文件；类布局、生成容量、原子事务、分配失败与回退规则保持。参数模板继续只消费正式生成的类型和枚举。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。
+
+`param_handle()` 仅执行生成枚举到 `param_t` 的单行 `constexpr` 转换，按头文件单行返回例外保留常量折叠；Param 的绑定/更新仍使用已有按值类型共享的源文件实体，不复制参数目录。

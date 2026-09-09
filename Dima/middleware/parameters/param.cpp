@@ -670,13 +670,3 @@ bool update_value(param_t handle, bool &value, bool &bound) noexcept
 }
 
 } // namespace do_not_explicitly_use_this_namespace
-
-
-// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
-
-#ifdef __cplusplus
-param_t param_handle(dima::params parameter) noexcept
-{
-    return static_cast<param_t>(parameter);
-}
-#endif
