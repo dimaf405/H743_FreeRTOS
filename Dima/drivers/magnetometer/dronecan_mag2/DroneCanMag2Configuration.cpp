@@ -46,8 +46,7 @@ bool DroneCanMag2::bind_parameters() noexcept
 {
     const bool bound = enable_parameter_.bind() &&
                        bitrate_parameter_.bind() &&
-                       local_node_parameter_.bind() &&
-                       magnetic_node_parameter_.bind();
+                       local_node_parameter_.bind();
     if (!bound) {
         invalidate_parameters();
     }
@@ -58,14 +57,13 @@ bool DroneCanMag2::update_parameters() noexcept
 {
     // 任一缓存曾失效时重新执行完整 bind，避免把新旧参数值拼成一个总线配置。
     if (!enable_parameter_.bound() || !bitrate_parameter_.bound() ||
-        !local_node_parameter_.bound() || !magnetic_node_parameter_.bound()) {
+        !local_node_parameter_.bound()) {
         return bind_parameters();
     }
 
     bool updated = enable_parameter_.update();
     updated = bitrate_parameter_.update() && updated;
     updated = local_node_parameter_.update() && updated;
-    updated = magnetic_node_parameter_.update() && updated;
     if (!updated) {
         invalidate_parameters();
     }
@@ -77,7 +75,6 @@ void DroneCanMag2::invalidate_parameters() noexcept
     enable_parameter_.invalidate();
     bitrate_parameter_.invalidate();
     local_node_parameter_.invalidate();
-    magnetic_node_parameter_.invalidate();
 }
 
 bool DroneCanMag2::load_configuration(
@@ -86,15 +83,12 @@ bool DroneCanMag2::load_configuration(
     const std::int32_t enable = enable_parameter_.get();
     const std::int32_t bitrate = bitrate_parameter_.get();
     const std::int32_t local_node = local_node_parameter_.get();
-    const std::int32_t magnetic_node = magnetic_node_parameter_.get();
 
     // 节点上限来自 DSDL 协议生成合同；bitrate 的具体可实现集合由 STM32 FDCAN
     // 后端统一校验，本层只阻止负值在转成 uint32_t 后伪装成巨大合法速率。
     if (!operating_mode_supported(enable) || bitrate <= 0 ||
         local_node <= 0 ||
-        local_node > static_cast<std::int32_t>(contract::kMaximumNodeId) ||
-        magnetic_node < 0 ||
-        magnetic_node > static_cast<std::int32_t>(contract::kMaximumNodeId)) {
+        local_node > static_cast<std::int32_t>(contract::kMaximumNodeId)) {
         return false;
     }
 
@@ -104,8 +98,6 @@ bool DroneCanMag2::load_configuration(
         mode == OperatingMode::Automatic;
     configuration.bitrate = static_cast<std::uint32_t>(bitrate);
     configuration.local_node_id = static_cast<std::uint8_t>(local_node);
-    configuration.magnetic_node_id =
-        static_cast<std::uint8_t>(magnetic_node);
     return true;
 }
 
@@ -114,8 +106,7 @@ bool DroneCanMag2::same_transport_configuration(
 {
     return lhs.enabled == rhs.enabled && lhs.bitrate == rhs.bitrate &&
            lhs.automatic_allocation == rhs.automatic_allocation &&
-           lhs.local_node_id == rhs.local_node_id &&
-           lhs.magnetic_node_id == rhs.magnetic_node_id;
+           lhs.local_node_id == rhs.local_node_id;
 }
 
 bool DroneCanMag2::same_configuration(
@@ -127,7 +118,7 @@ bool DroneCanMag2::same_configuration(
 bool DroneCanMag2::apply_configuration(
     const Configuration &configuration, std::uint64_t now) noexcept
 {
-    // enabled/bitrate/分配模式/本地或磁力计节点任一变化都要求完整协议重启；
+    // enabled/bitrate/分配模式/本地节点任一变化都要求完整协议重启；
     // 相同配置只清 transfer-ID tracker，不制造无意义 transport 抖动。
     const bool restart =
         !same_transport_configuration(configuration_, configuration);
@@ -337,10 +328,9 @@ bool DroneCanMag2::start_protocol(std::uint64_t now) noexcept
     reset_source_state(now);
     if (!protocol_start_log_reported_) {
         protocol_start_log_reported_ = true;
-        PX4_INFO("FDCAN1 DroneCAN bitrate=%lu node=%u mag_node=%u dna=%u",
+        PX4_INFO("FDCAN1 DroneCAN bitrate=%lu node=%u mag=auto dna=%u",
                  static_cast<unsigned long>(configuration_.bitrate),
                  configuration_.local_node_id,
-                 configuration_.magnetic_node_id,
                  configuration_.automatic_allocation ? 1U : 0U);
     }
     if (!configuration_.automatic_allocation &&

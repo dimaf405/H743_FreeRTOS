@@ -35,16 +35,3 @@ parameters:
         default: 1
         min: 1
         max: 125
-
-  - group: Magnetometer
-    definitions:
-      MAG1_CAN_NODE:
-        description:
-          short: DroneCAN Node ID of the magnetometer
-          long: |-
-            Zero binds the first valid standard DroneCAN magnetic-field
-            publisher; a non-zero value accepts only that Node ID.
-        type: int32
-        default: 0
-        min: 0
-        max: 125

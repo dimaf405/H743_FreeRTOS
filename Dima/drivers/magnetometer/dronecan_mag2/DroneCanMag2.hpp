@@ -62,7 +62,6 @@ private:
         bool automatic_allocation{false};
         std::uint32_t bitrate{500000U};
         std::uint8_t local_node_id{0U};
-        std::uint8_t magnetic_node_id{0U};
     };
 
     enum class ReconfigurePhase : std::uint8_t {
@@ -115,12 +114,11 @@ private:
     dima::parameters::FlashFS &allocation_storage_;
     uORB::Subscription parameter_update_subscription_{
         ORB_ID(parameter_update)};
-    // 四个句柄均来自统一生成的 dima::params；这里不保留参数名字符串、句柄
+    // 参数句柄均来自统一生成的 dima::params；这里不保留参数名字符串、句柄
     // 数组或 DroneCAN 专用参数合同。
     dima::ParamInt<dima::params::UAVCAN1_ENABLE> enable_parameter_{};
     dima::ParamInt<dima::params::UAVCAN1_BITRATE> bitrate_parameter_{};
     dima::ParamInt<dima::params::UAVCAN1_NODE_ID> local_node_parameter_{};
-    dima::ParamInt<dima::params::MAG1_CAN_NODE> magnetic_node_parameter_{};
     uORB::Publication<sensor_mag_s> sensor_mag_publication_{
         ORB_ID(sensor_mag)};
     // configuration_ 是已应用值，pending_configuration_ 是等待维护许可的候选；

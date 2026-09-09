@@ -12,12 +12,13 @@
 
 ## 运行合同
 
-- `module_dronecan.yaml` 与其他 `module_*.yaml` 一样直接进入统一参数工具链；`UAVCAN1_ENABLE/BITRATE/NODE_ID` 位于 `UAVCAN` 参数组，`MAG1_CAN_NODE` 位于 `Magnetometer` 组。驱动通过生成的 `dima::ParamInt` 绑定这些参数，不保留 JSON、构建目录 YAML 或 DroneCAN 专用参数头。`SENS_MAG_RATE` 和 `CAL_MAG0_*` 只由独立 `VehicleMagnetometer` 前端拥有。
-- 共享节点能力提供静态节点 ID、1 Hz NodeStatus 和 GetNodeInfo；本驱动订阅 Mag/Mag2，并由 transfer-ID tracker 拒绝重复/过期传输。
+- `module_dronecan.yaml` 与其他 `module_*.yaml` 一样直接进入统一参数工具链；`UAVCAN1_ENABLE/BITRATE/NODE_ID` 位于 `UAVCAN` 参数组。驱动通过生成的 `dima::ParamInt` 绑定这些参数，不保留 JSON、构建目录 YAML 或 DroneCAN 专用参数头。`SENS_MAG_RATE` 和 `CAL_MAG0_*` 只由独立 `VehicleMagnetometer` 前端拥有。
+- 共享节点能力提供本机节点 ID、1 Hz NodeStatus、GetNodeInfo 和默认开启的集中式动态节点分配；匿名外设仍须支持并发送标准 DNA 请求，已具有节点号的外设直接从广播来源识别。
+- 磁力计节点不提供手动选择参数。协议启动后自动探测首个通过传输、解码和三轴有限值检查的 Mag/Mag2 广播来源，将节点号与生成的 device ID 记录在当前会话，并由 transfer-ID tracker 拒绝重复/过期传输。绑定后不接受其他节点；500 ms 超时只标记离线，协议重启后才重新发现，避免运行中混用校准对象。
 - DroneCAN 驱动只发布未套用 `CAL_MAG0_*` 的 `sensor_mag`，设备 ID 为 0、旧 ID 失配或校准无效都不能阻断原始数据。
 - `Dima/modules/sensors/magnetometer/VehicleMagnetometer.*` 独立订阅 `sensor_mag`，按检测到的 device ID 选择匹配校准或 PX4 identity correction，再按 `SENS_MAG_RATE` 的 1..200 Hz 上限平均并发布 `vehicle_magnetometer`。该参数不改变远端 RM3100 的硬件采样率。
 - 首个有效样本、恢复和 500 ms timeout 均产生日志。`HIGHRES_IMU` 提供校准后的实时磁场，`SYS_STATUS` 提供 MAG present/health。
-- 未检测/超时日志报告配置或活动 node、CAN RX 以及 accepted/reject/decode 三项磁场累计计数；CAN 出错时另报 overrun、RX/TX error、bus-off、恢复失败和最后错误标志。节点协议与动态分配统计由 `DroneCanNode` 自己维护，本驱动不镜像累计。重复/过期 transfer-ID 的拒绝规则和原始 `sensor_mag.error_count` 保持独立有效。
+- 未检测日志标明自动探测，超时日志报告已探测的活动 node、CAN RX 以及 accepted/reject/decode 三项磁场累计计数；CAN 出错时另报 overrun、RX/TX error、bus-off、恢复失败和最后错误标志。节点协议与动态分配统计由 `DroneCanNode` 自己维护，本驱动不镜像累计。重复/过期 transfer-ID 的拒绝规则和原始 `sensor_mag.error_count` 保持独立有效。
 
 ## QGC 磁力计校准
 

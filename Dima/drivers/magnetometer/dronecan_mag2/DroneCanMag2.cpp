@@ -102,13 +102,13 @@ dima::middleware::lifecycle::ModuleState DroneCanMag2::state() const
 
 void DroneCanMag2::reset_source_state(std::uint64_t now) noexcept
 {
-    // transport 配置变化使 transfer-ID 会话和源时间域全部失效；配置了固定
-    // magnetic_node_id 时预先绑定该源，0 则允许首个合法节点完成绑定。
+    // 协议启动或重启后清除旧源和时间域，等待 CAN 上首个合法磁场广播。
+    // 节点号只由实际接收来源自动赋值，不从参数预先指定或沿用上次会话。
     magnetic_transfer_ids_.reset();
     start_time_us_ = now;
     last_magnetic_time_us_ = 0U;
     active_device_id_ = 0U;
-    active_source_node_id_ = configuration_.magnetic_node_id;
+    active_source_node_id_ = 0U;
     source_online_ = false;
     source_timeout_reported_ = false;
 }
@@ -181,8 +181,7 @@ void DroneCanMag2::process_periodic(std::uint64_t now) noexcept
         source_absence_log_reported_ = true;
         const auto can = transport_.stats();
         if (last_magnetic_time_us_ == 0U) {
-            PX4_WARN("DroneCAN mag not detected node=%u can_rx=%lu accepted=%lu reject=%lu decode=%lu",
-                     configuration_.magnetic_node_id,
+            PX4_WARN("DroneCAN mag not detected (auto) can_rx=%lu accepted=%lu reject=%lu decode=%lu",
                      static_cast<unsigned long>(can.received_frames),
                      static_cast<unsigned long>(stats_.accepted_transfers),
                      static_cast<unsigned long>(stats_.rejected_sources),
@@ -364,8 +363,9 @@ void DroneCanMag2::handle_magnetic_field(
         }
     }
 
-    // 首个合法源锁定生成的 device_id；后续不同源即使数据可解码也拒绝，避免
-    // 运行中校准对象静默切换。重配/协议重启才允许重新选择。
+    // 只有通过传输、解码和有限值校验的 CAN 报文才能自动确定磁力计节点号；
+    // 首个合法源锁定生成的 device_id，后续不同源拒绝，避免运行中混用校准。
+    // 探测结果只保存在当前会话，重配/协议重启后重新发现。
     const std::uint32_t candidate_device_id =
         make_device_id(source_node_id);
     if (active_device_id_ != 0U &&
