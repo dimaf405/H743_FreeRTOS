@@ -59,8 +59,35 @@
 
 #include <matrix/math.hpp>
 
-// Dima 薄适配：保持上游数学核，纳入本产品允许的外层命名空间。
+// Dima 薄适配：保持上游公式与求值顺序，共享不依赖输入延迟的数学实体。
 namespace dima::lib::rover::calibration {
+namespace detail {
+
+// Size 仅由模型阶数决定，D 只影响调用者的历史缓冲和预热，不复制矩阵更新。
+// theta_prev 仍在采样前取得；按原顺序更新 P、innovation、theta 和系数差值，
+// 不重排乘法、不改变精度，也不改变任何模型自己的状态与样本门禁。
+template<size_t Size>
+void update_arx_model(const matrix::Vector<float, Size> &phi,
+                      const matrix::Vector<float, Size> &theta_prev,
+                      float output, float forgetting_factor,
+                      matrix::SquareMatrix<float, Size> &covariance,
+                      matrix::Vector<float, Size> &theta,
+                      matrix::Vector<float, Size> &difference,
+                      float &innovation)
+{
+    const matrix::Matrix<float, 1, Size> phi_t = phi.transpose();
+    covariance = (covariance - covariance * phi * phi_t * covariance /
+                  (forgetting_factor + (phi_t * covariance * phi)(0, 0))) /
+                 forgetting_factor;
+    innovation = output - (phi_t * theta)(0, 0);
+    theta = theta + covariance * phi * innovation;
+
+    for (size_t i = 0; i < Size; i++) {
+        difference(i) = fabsf(theta(i) - theta_prev(i));
+    }
+}
+
+} // namespace detail
 
 template<size_t N, size_t M, size_t D>
 class ArxRls final
@@ -125,15 +152,8 @@ public:
 		}
 
 		const matrix::Vector < float, N + M + 1 > phi = constructDesignVector();
-		const matrix::Matrix < float, 1, N + M + 1 > phi_t = phi.transpose();
-
-		_P = (_P - _P * phi * phi_t * _P / (_lambda + (phi_t * _P * phi)(0, 0))) / _lambda;
-		_innovation = _y[N] - (phi_t * _theta_hat)(0, 0);
-		_theta_hat = _theta_hat + _P * phi * _innovation;
-
-		for (size_t i = 0; i < N + M + 1; i++) {
-			_diff_theta_hat(i) = fabsf(_theta_hat(i) - theta_prev(i));
-		}
+		detail::update_arx_model(phi, theta_prev, _y[N], _lambda, _P,
+		                        _theta_hat, _diff_theta_hat, _innovation);
 
 		/* fixCovarianceErrors(); // TODO: this could help against ill-conditioned matrix but needs more testing*/
 	}

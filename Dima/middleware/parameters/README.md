@@ -51,6 +51,7 @@ Dima module_*.yaml
 ## Parameter Core 与持久化
 
 - 固件通过生成的 `dima::parameter_catalog::parameters`、`parameters_type` 与 `dima::Param<T>` 访问参数；`Param<T>` 构造不访问 Core，模块每次 start 显式 `bind()`。
+- `Param<T, ID>` 保留生成枚举和编译期类型检查，运行期 bind/update 在 `param.cpp` 按 float/INT32/bool 共享实体。bind 成功后才标记 used 并提交缓存；update 不标记 used，未绑定时不读取 Core，失败清零并撤销绑定。bool 仍读取完整 INT32 后转换，不改变计数、原子候选、通知和重启生效语义，也不维护第二份参数表。
 - Parameter Core 的运行期状态、事务及 get/set/reset 位于 `param.cpp`；持久化后端注册、save/load/status 位于 `param_storage.cpp`，公开兼容接口统一由 `param.h` 提供。
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
 - ParameterService 与 Autosave 固定运行于独立低优先级 `wq:storage`；Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，并按 10 ms 小步推进。ENOSPC 进入可恢复暂停态，SD 从 unavailable 转为 available 后恢复受控保存。

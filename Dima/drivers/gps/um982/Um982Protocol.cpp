@@ -355,7 +355,15 @@ bool parse_heading(char *header, char *data,
 bool parse_version(char *data, Um982Protocol::Frame &frame) noexcept
 {
     if (data == nullptr) return false;
-    frame.version.is_um982 = std::strstr(data, "UM982") != nullptr;
+    // 版本合同只匹配固定的五字节型号；复用有界比较，避免引入通用长串搜索。
+    // 每个起点都允许匹配，strncmp 遇 NUL 即停止，保留短输入和任意前缀语义。
+    frame.version.is_um982 = false;
+    for (const char *cursor = data; *cursor != '\0'; ++cursor) {
+        if (*cursor == 'U' && std::strncmp(cursor, "UM982", 5U) == 0) {
+            frame.version.is_um982 = true;
+            break;
+        }
+    }
     return frame.version.is_um982;
 }
 

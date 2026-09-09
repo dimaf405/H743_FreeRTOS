@@ -560,11 +560,9 @@ mavlink-generated-verify: $(MAVLINK_GENERATED_OUTPUTS) | $(HOST_TOOLS_STAMP)
 			$(foreach xml,$(MAVLINK_UPSTREAM_XML_INPUTS),--upstream-xml "$(xml)") \
 			--policy $(MAVLINK_RUNTIME_POLICY) --lock $(MAVLINK_LOCK) --verify
 
-# newlib-nano lazily allocates its three standard FILE objects on the first
-# setvbuf/printf call.  Keep standard-stream setup independent of the shared
-# platform heap by linking the full newlib variant whose _reent embeds
-# stdin/stdout/stderr statically.  Keep the generated root Makefile and the
-# independent MCUboot build untouched.
+# 生产输出直接使用 Console/Format/MAVLink，USB 初始化不再配置 stdio 缓冲。
+# 仍保留 full newlib 的既有 ABI；将来接入 printf 的调试路径时，不能让 nano
+# 标准 FILE 的懒分配绕过平台 Heap/失败合同。此处不改变生成 Makefile 或 MCUboot。
 override LDFLAGS := $(filter-out -specs=nano.specs,$(LDFLAGS))
 
 # CubeMX may restore heap_4.c when regenerating its Makefile.  The platform owns

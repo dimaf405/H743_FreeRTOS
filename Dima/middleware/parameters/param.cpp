@@ -607,3 +607,66 @@ void param_register_lock_callbacks(param_lock_callback_t lock,
 }
 
 } // extern "C"
+
+namespace do_not_explicitly_use_this_namespace {
+namespace {
+
+// bind 先读取、再标记 used、最后提交缓存；update 仅刷新已经绑定的缓存。
+// 读取失败统一清值并撤销绑定；bool 仍先读取完整 INT32，再按非零转换。
+template<typename T>
+bool refresh_value(param_t handle, T &value, bool &bound, bool bind) noexcept
+{
+    if (!bind && !bound) {
+        value = T{};
+        return false;
+    }
+    using Storage = std::conditional_t<std::is_same_v<T, bool>, int32_t, T>;
+    Storage candidate{};
+    if (param_get(handle, &candidate) != 0) {
+        value = T{};
+        bound = false;
+        return false;
+    }
+    if (bind) {
+        param_set_used(handle);
+    }
+    value = static_cast<T>(candidate);
+    if (bind) {
+        bound = true;
+    }
+    return true;
+}
+
+} // namespace
+
+bool bind_value(param_t handle, float &value, bool &bound) noexcept
+{
+    return refresh_value(handle, value, bound, true);
+}
+
+bool bind_value(param_t handle, int32_t &value, bool &bound) noexcept
+{
+    return refresh_value(handle, value, bound, true);
+}
+
+bool bind_value(param_t handle, bool &value, bool &bound) noexcept
+{
+    return refresh_value(handle, value, bound, true);
+}
+
+bool update_value(param_t handle, float &value, bool &bound) noexcept
+{
+    return refresh_value(handle, value, bound, false);
+}
+
+bool update_value(param_t handle, int32_t &value, bool &bound) noexcept
+{
+    return refresh_value(handle, value, bound, false);
+}
+
+bool update_value(param_t handle, bool &value, bool &bound) noexcept
+{
+    return refresh_value(handle, value, bound, false);
+}
+
+} // namespace do_not_explicitly_use_this_namespace

@@ -151,20 +151,25 @@ inline param_t param_handle(dima::params parameter) noexcept
 
 namespace do_not_explicitly_use_this_namespace
 {
+// 模板只保留生成枚举的类型检查；按值类型共享运行期绑定/更新，避免按参数 ID 展开。
+bool bind_value(param_t handle, float &value, bool &bound) noexcept;
+bool bind_value(param_t handle, int32_t &value, bool &bound) noexcept;
+bool bind_value(param_t handle, bool &value, bool &bound) noexcept;
+bool update_value(param_t handle, float &value, bool &bound) noexcept;
+bool update_value(param_t handle, int32_t &value, bool &bound) noexcept;
+bool update_value(param_t handle, bool &value, bool &bound) noexcept;
+
 template<typename T, dima::params p> struct ParamTraits;
 template<dima::params p> struct ParamTraits<float, p> {
     static constexpr param_type_t type = PARAM_TYPE_FLOAT;
-    static int get(param_t h, float &v) { return param_get(h, &v); }
     static int set(param_t h, const float &v, bool notify) { return notify ? param_set(h, &v) : param_set_no_notification(h, &v); }
 };
 template<dima::params p> struct ParamTraits<int32_t, p> {
     static constexpr param_type_t type = PARAM_TYPE_INT32;
-    static int get(param_t h, int32_t &v) { return param_get(h, &v); }
     static int set(param_t h, const int32_t &v, bool notify) { return notify ? param_set(h, &v) : param_set_no_notification(h, &v); }
 };
 template<dima::params p> struct ParamTraits<bool, p> {
     static constexpr param_type_t type = PARAM_TYPE_INT32;
-    static int get(param_t h, bool &v) { int32_t raw{}; const int ret = param_get(h, &raw); v = raw != 0; return ret; }
     static int set(param_t h, const bool &v, bool notify) { const int32_t raw = v ? 1 : 0; return notify ? param_set(h, &raw) : param_set_no_notification(h, &raw); }
 };
 
@@ -180,37 +185,13 @@ public:
                           static_cast<unsigned>(p)] == ParamTraits<T, p>::type,
                       "parameter type mismatch");
     }
-    bool bind()
-    {
-        T value{};
-        if (ParamTraits<T, p>::get(handle(), value) != 0) {
-            invalidate();
-            return false;
-        }
-        param_set_used(handle());
-        _value = value;
-        _bound = true;
-        return true;
-    }
+    bool bind() { return bind_value(handle(), _value, _bound); }
     void invalidate() noexcept { _value = T{}; _bound = false; }
     bool bound() const noexcept { return _bound; }
     T get() const { return _value; }
     const T &reference() const { return _value; }
     void set(T value) { _value = value; }
-    bool update()
-    {
-        if (!_bound) {
-            _value = T{};
-            return false;
-        }
-        T value{};
-        if (ParamTraits<T, p>::get(handle(), value) != 0) {
-            invalidate();
-            return false;
-        }
-        _value = value;
-        return true;
-    }
+    bool update() { return update_value(handle(), _value, _bound); }
     bool commit() const { return _bound && ParamTraits<T, p>::set(handle(), _value, true) == 0; }
     bool commit_no_notification() const { return _bound && ParamTraits<T, p>::set(handle(), _value, false) == 0; }
     bool commit_no_notification(T value) { if (value == _value) { return false; } _value = value; return commit_no_notification(); }

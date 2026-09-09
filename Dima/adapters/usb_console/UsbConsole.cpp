@@ -2,7 +2,6 @@
 #include "api/Services.hpp"
 
 #include <cerrno>
-#include <cstdio>
 #include <cstring>
 
 namespace dima::adapters {
@@ -50,10 +49,8 @@ public:
             }
             set_initialized(true);
         }
-        if (initialized() && !stdout_unbuffered_ &&
-            std::setvbuf(stdout, nullptr, _IONBF, 0) == 0) {
-            stdout_unbuffered_ = true;
-        }
+        // 现有生产输出直接经过 Console/Format/MAVLink，不建立无消费者的 FILE
+        // 缓冲策略；避免 USB 初始化拉入 newlib stdio 分配链。_write 兼容入口独立保留。
         return initialized();
     }
 
@@ -434,7 +431,6 @@ private:
     std::uint32_t transport_epoch_{0U};
     bool transport_online_{false};
     bool initialized_{false};
-    bool stdout_unbuffered_{false};
     bool in_flight_{false};
     std::uint32_t in_flight_epoch_{0U};
 };

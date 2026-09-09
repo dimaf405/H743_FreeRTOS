@@ -38,6 +38,7 @@
 - CubeMX 生成区只保留初始化和胶水，不承载产品业务逻辑。
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 工程；源码树不保留第二份 `.ioc`、README-only 规划目录或未列入 `make/project.mk` 的 Dima 翻译单元。
 - USB CDC 是系统调试日志与维护命令口，不运行周期性示例输出；实时路径只上报固定结构事件，由 LP 日志服务有界格式化和发送。
+- 当前生产输出直接经过 Console/Format/MAVLink，USB 初始化不再主动建立 newlib stdout 缓冲策略；`_write` 的 fd、errno、100 ms 超时与串行 TX 兼容源码保持，真正接入 stdio 的构建按需链接该入口。full newlib 选择和平台 Heap 失败合同不变。
 - `make check-architecture` 强制检查源码标识、硬件操作所有权和各层私有 include 集；`firmware`、`verify`、`dima_rover` 均以该门禁为前置条件。
 - 新增自研应用代码不得恢复顶层 `App/` 目录。
 

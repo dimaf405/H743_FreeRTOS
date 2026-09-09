@@ -338,7 +338,7 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 
 | 来源/合同 | 本地映射与适配边界 |
 |---|---|
-| PX4 v1.17.0 `src/lib/system_identification/arx_rls.hpp`，commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`，BSD-3-Clause | `Dima/lib/rover/ArxRls.hpp` 保留版权和算法；仅将 matrix include 改为本仓库路径并包入 `dima::lib::rover::calibration` namespace。未导入上游测试或其他机型 Autotune 模块 |
+| PX4 v1.17.0 `src/lib/system_identification/arx_rls.hpp`，commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`，BSD-3-Clause | `Dima/lib/rover/ArxRls.hpp` 保留版权、状态布局和公式求值顺序；matrix include 与 namespace 作本地适配，并按模型维度共享与延迟 D 无关的数学更新实体。各延迟的历史/预热门禁仍独立，未导入上游测试或其他机型 Autotune 模块 |
 | 本地 Rover 并联 PI 设计 | `CalibrationIdentification` 在固定六个一阶 ARX 延迟模型上检查稳定性、噪声、激励、残差及系数协方差，按时间常数/延迟和可用输出余量设计正 P/I；不从 PID 候选丢弃 D。真实闭环验收失败整组恢复原值 |
 | 既有 PurePursuit/HeadingController/DrivingStateMachine/速度规划 | `SegmentGuidance` 只提取必要的共享组合顺序，`AutoMode` 与校准 RAM 路径共用；未复制另一套导航控制器或修改用户 Mission 存储 |
 | 本地校准定位点安全合同 | `CalibrationFence` 使用 WGS84 椭球局部尺度和固定全球圆心；`AutoCalibrationFence` 负责空间分配，`RoverDifferentialCalibration` 独立检查新鲜定位、同设备、冻结配置及停车余量。停车距离来自配置，不从命令 deceleration 推导实际制动能力 |
@@ -392,3 +392,7 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 ## 2026-09-09 DTCM 任务栈与 CPU 对象分配
 
 本地链接与组合根适配，不新增上游来源或消息/参数契约。平台 48 KiB 单任务栈池迁入 DTCM；Ekf2、RoverDifferential、VehicleImu 采用独立原始存储与延后放置构造，组合根保持原启停顺序。DTCM 低 64 KiB 静态边界与上部 64 KiB MSP 预算由链接器和 ELF 双重核对，D1 日志紧随固定 heap，SD MPU 使用新链接地址。动态 EKF RingBuffer、日志 Ring 和 DMA 归属遵循既有契约；资源与构建记录见 docs/DTCM_MIGRATION_ZH.md，板端性能和稳定性分别验收。
+
+## 2026-09-09 四项生产代码体积优化
+
+本批新增本地薄适配：UM982 固定子串匹配复用既有有界比较，Param 模板共享按值类型的运行实体，ArxRls 共享与延迟 D 无关的原矩阵更新表达式，USB 不再主动配置无生产消费者的 stdout FILE 缓冲。参数/消息权威输入、RLS 状态及公式顺序、Console 生产输出与 _write 兼容源码保留；full newlib 和浮点选项不变。原始上游快照未修改，当前适配边界已同步到第 17 节；独立基线、各项收益与正式验收见 `CODE_SIZE_FOUR_OPTIMIZATIONS_ZH.md`。
