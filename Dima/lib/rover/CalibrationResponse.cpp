@@ -224,10 +224,9 @@ bool ResponseStatistics::add(std::uint64_t timestamp_us, float value) noexcept
     if (failure_ != ResponseFailure::None || !valid_timestamp(timestamp_us, last_timestamp_us_, failure_)) return false;
     if (count_ == 0U) {
         first_timestamp_us_ = timestamp_us;
-        minimum_ = maximum_ = value;
+        maximum_ = value;
     }
     last_timestamp_us_ = timestamp_us;
-    minimum_ = std::min(minimum_, value);
     maximum_ = std::max(maximum_, value);
     ++count_;
     const double difference = value - mean_;
@@ -254,11 +253,6 @@ float ResponseStatistics::standard_deviation() const noexcept
     return static_cast<float>(std::sqrt(variance()));
 }
 
-float ResponseStatistics::minimum() const noexcept
-{
-    return count_ != 0U && failure_ == ResponseFailure::None ? minimum_ : unavailable();
-}
-
 float ResponseStatistics::maximum() const noexcept
 {
     return count_ != 0U && failure_ == ResponseFailure::None ? maximum_ : unavailable();
@@ -268,14 +262,6 @@ float ResponseStatistics::duration_s() const noexcept
 {
     return count_ >= 2U && failure_ == ResponseFailure::None
         ? static_cast<float>(last_timestamp_us_ - first_timestamp_us_) * 1.0e-6F : 0.0F;
-}
-
-ResponseEstimate ResponseStatistics::noise_stddev(float measurement_noise) const noexcept
-{
-    if (failure_ != ResponseFailure::None) return rejected(failure_);
-    if (!valid_noise(measurement_noise)) return rejected(ResponseFailure::InvalidConfiguration);
-    if (count_ < 8U) return rejected(ResponseFailure::InsufficientSamples);
-    return estimate(std::max(std::sqrt(variance()), static_cast<double>(measurement_noise)));
 }
 
 bool TransientSlope::add(std::uint64_t timestamp_us, float response) noexcept
@@ -377,18 +363,18 @@ ResponseEstimate MotorResponseProfile::speed_lower_bound(std::size_t direction,
 }
 
 ResponseEstimate MotorResponseProfile::gain_lower_bound(std::size_t direction,
-                                                         float measurement_noise,
-                                                         ResponseGainCoordinate coordinate) const noexcept
+                                                         float measurement_noise) const noexcept
 {
     if (failure_ != ResponseFailure::None) return rejected(failure_);
-    if (direction >= kDirections || !valid_noise(measurement_noise) ||
-        (coordinate != ResponseGainCoordinate::PreShaping && coordinate != ResponseGainCoordinate::Applied))
+    if (direction >= kDirections || !valid_noise(measurement_noise))
         return rejected(ResponseFailure::InvalidConfiguration);
     double minimum = std::numeric_limits<double>::infinity();
     unsigned levels{};
     for (const auto &plateau : plateaus_[direction]) {
         if (!plateau_valid(plateau) || !input_stable(plateau)) continue;
-        const auto &input = coordinate == ResponseGainCoordinate::Applied ? plateau.applied_input : plateau.pre_input;
+        // 生产调用只需要整形前命令坐标；ARX和全局电机曲线仍各自使用真实
+        // applied输入，不因删除未使用的坐标选项而改变物理辨识链。
+        const auto &input = plateau.pre_input;
         const double sigma = response_sigma(plateau, measurement_noise);
         const double lower = plateau.raw_speed.mean() - kConfidenceMultiplier * sigma;
         if (lower <= 2.0 * measurement_noise || input.mean() <= kMinimumDivisor) continue;
@@ -398,48 +384,6 @@ ResponseEstimate MotorResponseProfile::gain_lower_bound(std::size_t direction,
     }
     return levels >= 3U && minimum > 0.0 ? estimate(minimum)
                                         : rejected(ResponseFailure::InsufficientExcitation);
-}
-
-ResponseEstimate MotorResponseProfile::matched_gain_ratio(float measurement_noise,
-                                                            float relative_tolerance) const noexcept
-{
-    if (failure_ != ResponseFailure::None) return rejected(failure_);
-    if (!valid_noise(measurement_noise) || !std::isfinite(relative_tolerance) || relative_tolerance <= 0.0F || relative_tolerance > 1.0F)
-        return rejected(ResponseFailure::InvalidConfiguration);
-    unsigned pairs{}, used_reverse{};
-    double sum{}, minimum = std::numeric_limits<double>::infinity(), maximum{};
-    for (const auto &forward : plateaus_[kForward]) {
-        if (!plateau_valid(forward) || !input_stable(forward) || forward.raw_speed.mean() <= 5.0 * measurement_noise) continue;
-        for (std::size_t level = 0U; level < kLevels; ++level) {
-            const auto &reverse = plateaus_[kReverse][level];
-            if ((used_reverse & (1U << level)) != 0U || !plateau_valid(reverse) || !input_stable(reverse) ||
-                reverse.raw_speed.mean() <= 5.0 * measurement_noise) continue;
-            // 只比较真实 applied 匹配的平台，不用六个稀疏点之间的插值虚构覆盖。
-            const double difference = std::fabs(forward.applied_input.mean() - reverse.applied_input.mean());
-            if (difference > 0.005 || difference > 0.02 * std::max(forward.applied_input.mean(), reverse.applied_input.mean())) continue;
-            const double ratio = forward.raw_speed.mean() / reverse.raw_speed.mean();
-            const double relative_sigma = std::hypot(response_sigma(forward, measurement_noise) / forward.raw_speed.mean(),
-                response_sigma(reverse, measurement_noise) / reverse.raw_speed.mean());
-            if (!std::isfinite(ratio) || kConfidenceMultiplier * relative_sigma > relative_tolerance) continue;
-            sum += ratio;
-            minimum = std::min(minimum, ratio);
-            maximum = std::max(maximum, ratio);
-            used_reverse |= 1U << level;
-            ++pairs;
-            break;
-        }
-    }
-    if (pairs < 3U) return rejected(ResponseFailure::InsufficientExcitation);
-    const double mean = sum / pairs;
-    if (maximum - minimum > relative_tolerance * mean) return rejected(ResponseFailure::InconsistentDirections);
-    return estimate(mean);
-}
-
-bool MotorResponseProfile::directions_consistent(float measurement_noise,
-                                                 float relative_tolerance) const noexcept
-{
-    const auto ratio = matched_gain_ratio(measurement_noise, relative_tolerance);
-    return ratio.valid() && std::fabs(ratio.value - 1.0F) <= relative_tolerance;
 }
 
 ResponseFailure MotorResponseProfile::global_coverage(float motor_max,

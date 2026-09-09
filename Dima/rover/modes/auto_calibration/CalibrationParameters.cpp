@@ -139,25 +139,6 @@ bool CalibrationParameters::refine(std::uint64_t now, std::uint32_t expected_set
     return apply_candidate(now, provisional_);
 }
 
-bool CalibrationParameters::replace_provisional(std::uint64_t now, std::uint32_t expected_set_count,
-                                                const float *values, std::size_t count) noexcept
-{
-    // 控制增益组是固定容量 float 组；只能替换原组的候选，不能改变成员、顺序
-    // 或最初 old 快照。路径增益比较多个候选也始终能回到进入该组前的值。
-    if (phase_ != Phase::Provisional || values == nullptr || count != count_ || count == 0U) return false;
-    for (std::size_t i = 0U; i < count; ++i)
-        if (entries_[i].type != PARAM_TYPE_FLOAT || !std::isfinite(values[i])) return false;
-    if (!armed_.begin_maintenance()) return false;
-    held_ = true;
-    px4::AtomicTransaction atomic;
-    if (!storage_paused_ || param_set_count() != expected_set_count || !matches(false)) {
-        phase_ = Phase::Fault;
-        return false;
-    }
-    for (std::size_t i = 0U; i < count; ++i) entries_[i].next.f = values[i];
-    return apply_candidate(now, provisional_);
-}
-
 bool CalibrationParameters::finalize_provisional(std::uint64_t now, std::uint32_t expected_set_count) noexcept
 {
     // 闭环验证只授权当前候选代。最终保存仍须停车/Disarm、参数值/代次匹配，

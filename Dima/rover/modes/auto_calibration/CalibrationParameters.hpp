@@ -22,8 +22,6 @@ public:
     bool add_int(dima::params parameter, std::int32_t value) noexcept;
     bool apply(std::uint64_t now, std::uint32_t expected_set_count, bool provisional = false) noexcept;
     bool refine(std::uint64_t now, std::uint32_t expected_set_count, const float (&offsets)[3]) noexcept;
-    bool replace_provisional(std::uint64_t now, std::uint32_t expected_set_count,
-                             const float *values, std::size_t count) noexcept;
     bool finalize_provisional(std::uint64_t now, std::uint32_t expected_set_count) noexcept;
     bool revise_float(dima::params parameter, float value) noexcept;
     bool apply_revisions(std::uint64_t now, std::uint32_t expected_set_count) noexcept;

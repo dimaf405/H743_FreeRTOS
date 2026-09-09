@@ -40,16 +40,13 @@ public:
     double mean() const noexcept;
     double variance() const noexcept;
     float standard_deviation() const noexcept;
-    float minimum() const noexcept;
     float maximum() const noexcept;
     float duration_s() const noexcept;
     ResponseFailure failure() const noexcept { return failure_; }
-    ResponseEstimate noise_stddev(float measurement_noise) const noexcept;
 
 private:
     double mean_{};
     double m2_{};
-    float minimum_{};
     float maximum_{};
     std::uint64_t first_timestamp_us_{};
     std::uint64_t last_timestamp_us_{};
@@ -91,11 +88,6 @@ struct ResponsePlateau {
     std::uint32_t count() const noexcept { return raw_speed.count(); }
 };
 
-enum class ResponseGainCoordinate : std::uint8_t {
-    PreShaping,
-    Applied,
-};
-
 class MotorResponseProfile final {
 public:
     static constexpr std::size_t kDirections{2U};
@@ -119,13 +111,7 @@ public:
     ResponseEstimate speed_lower_bound(std::size_t direction,
                                        float measurement_noise) const noexcept;
     ResponseEstimate gain_lower_bound(std::size_t direction,
-                                      float measurement_noise,
-                                      ResponseGainCoordinate coordinate =
-                                          ResponseGainCoordinate::PreShaping) const noexcept;
-    ResponseEstimate matched_gain_ratio(float measurement_noise,
-                                         float relative_tolerance = 0.20F) const noexcept;
-    bool directions_consistent(float measurement_noise,
-                                float relative_tolerance = 0.20F) const noexcept;
+                                      float measurement_noise) const noexcept;
     ResponseFailure global_coverage(float motor_max,
                                     float measurement_noise) const noexcept;
 
