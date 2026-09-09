@@ -354,7 +354,7 @@ bool Commander::update_public_projection(std::uint64_t now) noexcept
 {
     const bool checks_pass = preflight_checks_pass(now);
     // 已 Armed 时保持 ready_to_arm，避免健康状态瞬变让投影自相矛盾；真实故障仍由
-    // evaluate_safety 先执行强制 Disarm，再在下一投影中反映为不可解锁。
+    // evaluate_safety 执行强制 Disarm，再由下一投影发布实际解除结果。
     const bool ready_to_arm = checks_pass || actuator_armed_.armed;
     const bool failsafe = termination_latched_ ||
                           recoverable_failsafe_causes_ != FailsafeNone;
@@ -530,8 +530,8 @@ bool Commander::actuator_output_mapping_valid() const noexcept
 bool Commander::actuator_output_ready_for_arming(
     std::uint64_t now) const noexcept
 {
-    // Arm 前要求后端正在输出完整 Disarmed Neutral 帧；Hard Safe Off 虽然安全，
-    // 但不能证明映射和定时器已具备接管动力的能力。
+    // 运动校准 Arm 和执行器故障恢复要求完整 Disarmed Neutral 帧；
+    // 手动 Arm 只使用左右电机分配证据，不以当前波形状态作为预检条件。
     if (!actuator_output_status_fresh(now) ||
         !actuator_output_mapping_valid() ||
         actuator_output_status_.state !=
@@ -564,7 +564,7 @@ bool Commander::actuator_output_recovered_disarmed(
     std::uint64_t now) const noexcept
 {
     // 故障恢复可由零活动掩码、全零脉宽的 Hard Safe Off 证明，用于清除历史 failsafe；
-    // 它仍不满足下一次 Arm 的 Neutral 波形前置条件。
+    // 它仍不满足运动校准 Arm 的 Neutral 波形前置条件。
     if (!actuator_output_status_fresh(now) ||
         !actuator_output_mapping_valid() ||
         actuator_output_status_.state !=
@@ -707,9 +707,28 @@ bool Commander::actuator_output_fault_while_armed(
 
 bool Commander::preflight_checks_pass(std::uint64_t now) const noexcept
 {
-    // 这是唯一正向 Arm 合同：参数、人工模式、新鲜且居中的 RC、可接管的 Neutral
-    // 输出、Kill/Termination 以及两类校准状态必须同时满足。
-    const bool manual = vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL && !auto_calibration_status_.active;
+    // 急停、不可恢复终止和正在运行的校准事务属于互锁，任何模式都不能通过
+    // 简化预检绕过；维护/Flash 的最终原子互锁仍由 arm() 统一执行。
+    if (actuator_armed_.kill || termination_latched_ ||
+        vehicle_status_.rc_calibration_in_progress ||
+        vehicle_status_.calibration_enabled) {
+        return false;
+    }
+
+    if (vehicle_status_.nav_state ==
+        vehicle_status_s::NAVIGATION_STATE_MANUAL) {
+        // 手动解锁只检查 MotorOutput 已应用的有效分配：左右各至少一路。
+        // 状态须新鲜且无待应用映射，避免用旧配置放行；不要求 RC/摇杆居中、
+        // Commander 参数有效或 PWM 已输出 Neutral。解锁后的失联、参数和
+        // 执行器故障仍由 evaluate_safety() 与 MotorOutput 处理。
+        return !auto_calibration_status_.active &&
+               actuator_output_status_fresh(now) &&
+               !actuator_output_status_.parameter_update_pending &&
+               actuator_output_mapping_valid();
+    }
+
+    // 运动校准仍要求明确的等待解锁阶段、有效参数、新鲜且居中的 RC 和
+    // 已可接管的 Neutral 输出，手动模式的简化不能扩大自动续行授权。
     const bool calibration = vehicle_status_.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1 &&
         auto_calibration_fresh(now) && auto_calibration_status_.active && auto_calibration_status_.awaiting_arm &&
         (auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_FIRST ||
@@ -718,12 +737,9 @@ bool Commander::preflight_checks_pass(std::uint64_t now) const noexcept
          auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_VALIDATION ||
          auto_calibration_status_.state == auto_calibration_status_s::STATE_WAIT_ARM_PROFILE) &&
         auto_calibration_status_.result == auto_calibration_status_s::RESULT_RUNNING;
-    return parameters_valid_ && (manual || calibration) &&
+    return parameters_valid_ && calibration &&
            rc_input_valid(now) && sticks_centered() &&
-           actuator_output_ready_for_arming(now) &&
-           !actuator_armed_.kill && !termination_latched_ &&
-           !vehicle_status_.rc_calibration_in_progress &&
-           !vehicle_status_.calibration_enabled;
+           actuator_output_ready_for_arming(now);
 }
 
 bool Commander::action_request_fresh(const action_request_s &request,
