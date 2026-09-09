@@ -5,11 +5,10 @@ parameters:
     COM_RC_IN_MODE:
       category: System
       description:
-        short: Manual control input source policy
+        short: 手动控制输入来源策略
         long: |-
-          Dima currently has one production manual-control source: the local RC/SBUS
-          pipeline.  Values which select MAVLink or disable RC are deliberately not
-          accepted until those control-source paths exist.
+          Dima 当前唯一已实现的手动控制来源是本地 RC/SBUS 链路。
+          在其他控制来源链路实现前，不接受选择 MAVLink 或禁用遥控的取值。
       type: enum
       values:
         0: RC only
@@ -20,7 +19,7 @@ parameters:
   definitions:
     COM_RC_LOSS_T:
       description:
-        short: COM_RC_LOSS_T
+        short: 遥控信号丢失判定超时
       type: float
       default: 0.5
       unit: s
@@ -29,11 +28,11 @@ parameters:
       increment: 0.1
     COM_FLTMODE${i}:
       description:
-        short: Mode slot ${i}
+        short: 模式槽 ${i}
         long: |-
-          Selects the mode applied when the main RC mode channel is in this
-          slot. Auto Calibration is accepted only while disarmed and never
-          arms the vehicle implicitly. Reserved / Unassigned remains inert.
+          选择主遥控模式通道位于此槽时应用的模式。
+          自动校准仅在上锁状态下接受，绝不会隐式解锁车辆。
+          保留/未分配选项不触发模式动作。
       type: enum
       values:
         -1: Calibration Reserved / Unassigned
@@ -48,10 +47,10 @@ parameters:
     RC_MAP_ROLL:
       category: System
       description:
-        short: QGC roll completion marker
+        short: QGC 横滚通道配置完成标记
         long: |-
-          Fixed nonzero marker used only to satisfy the stock QGC four-axis
-          radio setup gate. Rover runtime control does not consume this map.
+          固定的非零标记，仅用于满足原版 QGC 四轴遥控配置检查。
+          差速车运行期控制不使用此映射。
       type: enum
       values:
         2: Channel 2
@@ -61,10 +60,10 @@ parameters:
     RC_MAP_PITCH:
       category: System
       description:
-        short: QGC pitch completion marker
+        short: QGC 俯仰通道配置完成标记
         long: |-
-          Fixed nonzero marker used only to satisfy the stock QGC four-axis
-          radio setup gate. Rover runtime control does not consume this map.
+          固定的非零标记，仅用于满足原版 QGC 四轴遥控配置检查。
+          差速车运行期控制不使用此映射。
       type: enum
       values:
         1: Channel 1
@@ -75,7 +74,7 @@ parameters:
   definitions:
     RC_MAP_THROTTLE:
       description:
-        short: RC_MAP_THROTTLE
+        short: 油门输入的遥控通道映射
       type: enum
       values:
         0: Unassigned
@@ -102,7 +101,7 @@ parameters:
       max: 18
     RC_MAP_YAW:
       description:
-        short: RC_MAP_YAW
+        short: 偏航输入的遥控通道映射
       type: enum
       values:
         0: Unassigned
@@ -129,7 +128,7 @@ parameters:
       max: 18
     RC_MAP_ARM_SW:
       description:
-        short: RC_MAP_ARM_SW
+        short: 解锁开关的遥控通道映射
       type: enum
       values:
         0: Unassigned
@@ -156,17 +155,17 @@ parameters:
       max: 18
     RC_MAP_KILL_SW:
       description:
-        short: RC_MAP_KILL_SW
+        short: 急停开关的遥控通道映射
       type: int32
       default: 0
       min: 0
       max: 18
     RC_MAP_FLTMODE:
       description:
-        short: Main mode selector channel
+        short: 主模式选择遥控通道
         long: |-
-          Selects the RC channel whose calibrated position is divided into
-          the six COM_FLTMODE slots. Zero disables RC mode selection.
+          选择遥控通道，并将其校准后的位置划分为六个 COM_FLTMODE 模式槽。
+          设为 0 时禁用遥控模式选择。
       type: enum
       values:
         0: Disabled
@@ -193,7 +192,7 @@ parameters:
       max: 18
     RC_ARMSWITCH_TH:
       description:
-        short: RC_ARMSWITCH_TH
+        short: 遥控解锁开关触发阈值
       type: float
       default: 0.75
       min: -1
@@ -201,7 +200,7 @@ parameters:
       increment: 0.01
     RC_KILLSWITCH_TH:
       description:
-        short: RC_KILLSWITCH_TH
+        short: 遥控急停开关触发阈值
       type: float
       default: 0.75
       min: 0
@@ -212,7 +211,7 @@ parameters:
     RC_CHAN_CNT:
       category: System
       description:
-        short: RC_CHAN_CNT
+        short: 遥控通道数量
       type: int32
       default: 0
       min: 0

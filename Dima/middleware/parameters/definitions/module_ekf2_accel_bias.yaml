@@ -5,7 +5,7 @@ parameters:
     EKF2_ABIAS_INIT:
       category: Developer
       description:
-        short: 1-sigma IMU accelerometer switch-on bias
+        short: IMU 加速度计上电偏置不确定度（1σ）
       type: float
       default: 0.2
       min: 0.0
@@ -16,7 +16,7 @@ parameters:
     EKF2_ACC_B_NOISE:
       category: Developer
       description:
-        short: Process noise for IMU accelerometer bias prediction
+        short: IMU 加速度计偏置预测的过程噪声
       type: float
       default: 0.003
       min: 0.0
@@ -26,9 +26,9 @@ parameters:
     EKF2_ABL_LIM:
       category: Developer
       description:
-        short: Accelerometer bias learning limit
-        long: The ekf accel bias states will be limited to within a range equivalent
-          to +- of this value.
+        short: 加速度计偏置学习限值
+        long: |-
+          EKF 加速度计偏置状态被限制在此值的正负范围内。
       type: float
       default: 0.4
       min: 0.0
@@ -38,11 +38,10 @@ parameters:
     EKF2_ABL_ACCLIM:
       category: Developer
       description:
-        short: Maximum IMU accel magnitude that allows IMU bias learning
-        long: If the magnitude of the IMU accelerometer vector exceeds this value,
-          the EKF accel bias state estimation will be inhibited. This reduces the
-          adverse effect of high manoeuvre accelerations and IMU nonlinerity and scale
-          factor errors on the accel bias estimates.
+        short: 允许 IMU 偏置学习的最大加速度向量模长
+        long: |-
+          当 IMU 加速度向量模长超过此值时，暂停 EKF 加速度计偏置状态估计。
+          这可减小大幅机动加速度、IMU 非线性及比例系数误差对偏置估计的不利影响。
       type: float
       default: 25.0
       min: 20.0
@@ -52,11 +51,10 @@ parameters:
     EKF2_ABL_GYRLIM:
       category: Developer
       description:
-        short: Maximum IMU gyro angular rate magnitude that allows IMU bias learning
-        long: If the magnitude of the IMU angular rate vector exceeds this value,
-          the EKF accel bias state estimation will be inhibited. This reduces the
-          adverse effect of rapid rotation rates and associated errors on the accel
-          bias estimates.
+        short: 允许 IMU 偏置学习的最大角速度向量模长
+        long: |-
+          当 IMU 角速度向量模长超过此值时，暂停 EKF 加速度计偏置状态估计。
+          这可减小快速旋转及其相关误差对偏置估计的不利影响。
       type: float
       default: 3.0
       min: 2.0
@@ -66,10 +64,10 @@ parameters:
     EKF2_ABL_TAU:
       category: Developer
       description:
-        short: Accel bias learning inhibit time constant
-        long: The vector magnitude of angular rate and acceleration used to check
-          if learning should be inhibited has a peak hold filter applied to it with
-          an exponential decay. This parameter controls the time constant of the decay.
+        short: 加速度计偏置学习抑制的时间常数
+        long: |-
+          判断是否暂停偏置学习时，对角速度和加速度向量模长应用带指数衰减的峰值保持滤波。
+          此参数控制该指数衰减的时间常数。
       type: float
       default: 0.5
       min: 0.1

@@ -25,6 +25,10 @@ Dima module_*.yaml
 
 `readonly_params.yaml` 同样是构建目录中的自动派生物，使用上游支持的 block 模式；不是另一份受版本控制的参数定义或手写过滤名单。两遍生成之间逐项核对，只允许固定项增加 `readOnly: true`，禁止参数数量、顺序、类型、默认值或范围发生变化。
 
+参数的 `description.short` 和已有的 `description.long` 统一在权威 YAML 中使用中文，原先仅重复参数名的简述也应说明实际用途。保留公式、单位、参数引用及安全条件；参数名、分组、类别和枚举选项名称继续遵守现有兼容约定。模板中的 `${i}` 仍交由上游工具展开，不手写各实例的派生说明或维护独立翻译表。
+
+QGC 5.1.3 的 `CompInfoParam::setJson()` 将车辆提供的参数 JSON 交给 `FactMetaData::createFromJsonObject()`，后者把 `shortDesc`、`longDesc` 作为 Unicode 字符串读取。项目 Component Metadata 生成器以 UTF-8 写入中文，再统一生成 XZ、CRC 和嵌入数组，因此不需要修改 QGC。更新固件后，QGC 应根据元数据 CRC 获取新描述；若仍显示旧内容，需重新连接并确认车辆元数据下载完成，必要时清理地面站元数据缓存。源码与生成验证只证明中文传输格式兼容，实际字体、显示和缓存刷新仍需 QGC 会话确认。
+
 ## 生成物与下游边界
 
 - 参数数量、handle、类型、默认值、范围、枚举、单位、readOnly、volatile 与 reboot 语义完全由官方 XML、JSON 和生成头决定，不设置固定容量或第二份排序表。

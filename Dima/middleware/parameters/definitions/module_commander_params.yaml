@@ -5,8 +5,9 @@ parameters:
     COM_ARM_STICK_DZ:
       category: Developer
       description:
-        short: "运动校准解锁时 throttle/yaw 相对中位允许的最大归一化偏差。"
-        long: "仅用于运动校准模式的解锁检查；手动模式解锁不检查摇杆居中。"
+        short: 运动校准解锁时油门和偏航摇杆相对中位允许的最大归一化偏差
+        long: |-
+          仅用于运动校准模式的解锁检查；手动模式解锁不检查摇杆居中。
       type: float
       default: 0.1
       min: 0.0
@@ -15,10 +16,10 @@ parameters:
       decimal: 2
     COM_ACT_LOSS_T:
       description:
-        short: Actuator command loss timeout
+        short: 执行器命令丢失超时
         long: |-
-          Maximum age of both the actuator command publication and its original
-          input sample before the physical PWM backend returns to safe-off.
+          执行器命令的发布时间及其原始输入样本的最大允许时龄。
+          任一超时后，物理 PWM 后端均恢复为安全停波状态。
       type: float
       default: 0.1
       unit: s

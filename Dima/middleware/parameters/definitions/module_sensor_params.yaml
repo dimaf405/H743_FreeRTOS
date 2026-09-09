@@ -5,10 +5,10 @@ parameters:
     GPS_YAW_OFFSET:
       category: System
       description:
-        short: Heading/Yaw offset for dual antenna GPS
+        short: 双天线 GPS 航向/偏航偏移角
         long: |-
-          Set this to zero when the antennas are parallel to vehicle forward and the
-          Unicore primary antenna is in front. The offset increases clockwise.
+          当天线连线平行于车辆前向，且和芯星通主天线位于前方时，设为 0。
+          偏移角按顺时针方向增大。
       type: float
       default: 0.0
       unit: deg
@@ -19,12 +19,11 @@ parameters:
     GPS_YAW_BASELINE:
       category: System
       description:
-        short: Dual antenna measured baseline
+        short: 双天线实测基线长度
         long: |-
-          Robustly measured distance between the two GNSS antennas. Zero means
-          unlearned and disables the runtime baseline-consistency gate. The
-          receiver still measures the baseline; this value is not an invented
-          UM982 configuration command.
+          经过稳健测量得到的两根 GNSS 天线之间的距离。
+          0 表示尚未学习，并禁用运行期基线一致性检查；接收机仍会测量基线。
+          此值用于本地检查，并不对应 UM982 配置命令。
       type: float
       default: 0.0
       unit: m
@@ -36,13 +35,13 @@ parameters:
   definitions:
     CAL_ACC0_ID:
       description:
-        short: Accelerometer device identity
+        short: 加速度计 设备标识
       category: System
       type: int32
       default: 0
     CAL_ACC0_XOFF:
       description:
-        short: Accelerometer X offset
+        short: 加速度计 X 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -50,7 +49,7 @@ parameters:
       decimal: 3
     CAL_ACC0_YOFF:
       description:
-        short: Accelerometer Y offset
+        short: 加速度计 Y 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -58,7 +57,7 @@ parameters:
       decimal: 3
     CAL_ACC0_ZOFF:
       description:
-        short: Accelerometer Z offset
+        short: 加速度计 Z 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -66,7 +65,7 @@ parameters:
       decimal: 3
     CAL_ACC0_XSCALE:
       description:
-        short: Accelerometer X scale
+        short: 加速度计 X 轴比例系数
       category: System
       type: float
       default: 1.0
@@ -75,7 +74,7 @@ parameters:
       decimal: 3
     CAL_ACC0_YSCALE:
       description:
-        short: Accelerometer Y scale
+        short: 加速度计 Y 轴比例系数
       category: System
       type: float
       default: 1.0
@@ -84,7 +83,7 @@ parameters:
       decimal: 3
     CAL_ACC0_ZSCALE:
       description:
-        short: Accelerometer Z scale
+        short: 加速度计 Z 轴比例系数
       category: System
       type: float
       default: 1.0
@@ -93,13 +92,13 @@ parameters:
       decimal: 3
     CAL_GYRO0_ID:
       description:
-        short: Gyroscope device identity
+        short: 陀螺仪 设备标识
       category: System
       type: int32
       default: 0
     CAL_GYRO0_XOFF:
       description:
-        short: Gyroscope X offset
+        short: 陀螺仪 X 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -107,7 +106,7 @@ parameters:
       decimal: 3
     CAL_GYRO0_YOFF:
       description:
-        short: Gyroscope Y offset
+        short: 陀螺仪 Y 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -115,7 +114,7 @@ parameters:
       decimal: 3
     CAL_GYRO0_ZOFF:
       description:
-        short: Gyroscope Z offset
+        short: 陀螺仪 Z 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -123,13 +122,13 @@ parameters:
       decimal: 3
     CAL_MAG0_ID:
       description:
-        short: Magnetometer device identity
+        short: 磁力计 设备标识
       category: System
       type: int32
       default: 0
     CAL_MAG0_XOFF:
       description:
-        short: Magnetometer X offset
+        short: 磁力计 X 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -137,7 +136,7 @@ parameters:
       decimal: 3
     CAL_MAG0_YOFF:
       description:
-        short: Magnetometer Y offset
+        short: 磁力计 Y 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -145,7 +144,7 @@ parameters:
       decimal: 3
     CAL_MAG0_ZOFF:
       description:
-        short: Magnetometer Z offset
+        short: 磁力计 Z 轴偏移量
       category: System
       type: float
       default: 0.0
@@ -153,7 +152,7 @@ parameters:
       decimal: 3
     CAL_MAG0_XSCALE:
       description:
-        short: Magnetometer X scale
+        short: 磁力计 X 轴比例系数
       category: System
       type: float
       default: 1.0
@@ -162,7 +161,7 @@ parameters:
       decimal: 3
     CAL_MAG0_YSCALE:
       description:
-        short: Magnetometer Y scale
+        short: 磁力计 Y 轴比例系数
       category: System
       type: float
       default: 1.0
@@ -171,7 +170,7 @@ parameters:
       decimal: 3
     CAL_MAG0_ZSCALE:
       description:
-        short: Magnetometer Z scale
+        short: 磁力计 Z 轴比例系数
       category: System
       type: float
       default: 1.0
@@ -180,7 +179,7 @@ parameters:
       decimal: 3
     CAL_MAG0_ROT:
       description:
-        short: Magnetometer rotation using the PX4 rotation enum
+        short: 磁力计安装旋转方向（PX4 旋转枚举）
       category: System
       type: enum
       values:
@@ -233,12 +232,11 @@ parameters:
     SENS_MAG_RATE:
       category: Developer
       description:
-        short: Magnetometer maximum publication rate
+        short: 磁力计数据最大发布频率
         long: |-
-          This limits the calibrated vehicle_magnetometer publication rate. The raw
-          sensor_mag stream remains at the incoming DroneCAN rate for source
-          detection and calibration, matching the PX4 SENS_MAG_RATE data-flow role.
-          It does not configure the remote node's hardware sampling rate.
+          限制校准后 vehicle_magnetometer 数据的发布频率。
+          原始 sensor_mag 流保持 DroneCAN 输入频率，用于来源识别和校准，
+          与 PX4 的 SENS_MAG_RATE 数据流职责一致。此参数不配置远端节点的硬件采样率。
       type: float
       default: 15.0
       min: 1
@@ -246,7 +244,7 @@ parameters:
       unit: Hz
     SENS_BOARD_ROT:
       description:
-        short: Board sensor rotation using the PX4 rotation enum
+        short: 板载传感器安装旋转方向（PX4 旋转枚举）
       type: enum
       values:
         0: No rotation
@@ -296,8 +294,9 @@ parameters:
     SENS_BOARD_X_OFF:
       category: System
       description:
-        short: Board roll fine adjustment
-        long: Fine roll correction applied after SENS_BOARD_ROT.
+        short: 板载传感器横滚角微调
+        long: |-
+          在 SENS_BOARD_ROT 旋转之后应用的横滚角精细修正。
       type: float
       default: 0.0
       unit: deg
@@ -308,8 +307,9 @@ parameters:
     SENS_BOARD_Y_OFF:
       category: System
       description:
-        short: Board pitch fine adjustment
-        long: Fine pitch correction applied after SENS_BOARD_ROT.
+        short: 板载传感器俯仰角微调
+        long: |-
+          在 SENS_BOARD_ROT 旋转之后应用的俯仰角精细修正。
       type: float
       default: 0.0
       unit: deg
@@ -320,10 +320,10 @@ parameters:
     SENS_BOARD_Z_OFF:
       category: System
       description:
-        short: Board yaw fine adjustment
+        short: 板载传感器偏航角微调
         long: |-
-          Fine yaw correction applied after SENS_BOARD_ROT. Automatic level
-          calibration preserves this value because gravity cannot observe yaw.
+          在 SENS_BOARD_ROT 旋转之后应用的偏航角精细修正。
+          由于重力无法观测偏航，自动水平校准会保留此值。
       type: float
       default: 0.0
       unit: deg
@@ -334,12 +334,11 @@ parameters:
     IMU_INTEG_RATE:
       category: Developer
       description:
-        short: IMU integration rate
+        short: IMU 积分频率
         long: |-
-          Rate at which calibrated raw IMU data is integrated into delta angle and
-          delta velocity. The listed rates are the modes verified against the fixed
-          8 kHz ICM42688P FIFO path in this product. Changes are applied by the
-          disarmed sensor-configuration maintenance transaction.
+          将校准后的原始 IMU 数据积分为角增量和速度增量的频率。
+          所列频率是本产品针对固定 8 kHz ICM42688P FIFO 链路验证的工作档位。
+          参数变更通过上锁状态下的传感器配置维护事务应用。
       type: enum
       values:
         100: 100 Hz
@@ -352,19 +351,18 @@ parameters:
       unit: Hz
     SENS_IMU_AUTOCAL:
       description:
-        short: IMU auto calibration
+        short: IMU 自动校准
         long: |-
-          Automatically initialize IMU accelerometer and gyroscope calibration
-          from stable EKF2 in-run bias estimates when available.
+          当 EKF2 运行期偏置估计稳定且可用时，自动用其初始化 IMU 加速度计和陀螺仪校准。
       category: Developer
       type: boolean
       default: 1
     SENS_IMU_CLPNOTI:
       description:
-        short: IMU clipping notification
+        short: IMU 测量削顶通知
         long: |-
-          Emit a rate-limited warning when integrated accelerometer or gyroscope data
-          reports clipping. This does not alter or discard samples.
+          积分后的加速度计或陀螺仪数据报告削顶时，按限频策略发出警告。
+          此功能不会修改或丢弃样本。
       category: Developer
       type: boolean
       default: 1

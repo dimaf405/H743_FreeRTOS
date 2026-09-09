@@ -4,7 +4,7 @@ parameters:
   definitions:
     PWM_S1_FUNC:
       description:
-        short: PWM S1 function
+        short: PWM S1 输出功能
       type: enum
       values:
         0: Disabled
@@ -14,7 +14,7 @@ parameters:
     PWM_S1_MIN:
       category: System
       description:
-        short: PWM S1 minimum pulse
+        short: PWM S1 最小脉宽
       type: int32
       default: 1000
       unit: us
@@ -24,7 +24,7 @@ parameters:
     PWM_S1_CENT:
       category: System
       description:
-        short: PWM S1 center pulse
+        short: PWM S1 中位脉宽
       type: int32
       default: 1500
       unit: us
@@ -34,7 +34,7 @@ parameters:
     PWM_S1_MAX:
       category: System
       description:
-        short: PWM S1 maximum pulse
+        short: PWM S1 最大脉宽
       type: int32
       default: 2000
       unit: us
@@ -43,7 +43,7 @@ parameters:
       increment: 1
     PWM_S1_REV:
       description:
-        short: PWM S1 reverse
+        short: PWM S1 输出方向反转
       type: enum
       values:
         0: Normal
@@ -53,7 +53,7 @@ parameters:
       max: 1
     PWM_S2_FUNC:
       description:
-        short: PWM S2 function
+        short: PWM S2 输出功能
       type: enum
       values:
         0: Disabled
@@ -63,7 +63,7 @@ parameters:
     PWM_S2_MIN:
       category: System
       description:
-        short: PWM S2 minimum pulse
+        short: PWM S2 最小脉宽
       type: int32
       default: 1000
       unit: us
@@ -73,7 +73,7 @@ parameters:
     PWM_S2_CENT:
       category: System
       description:
-        short: PWM S2 center pulse
+        short: PWM S2 中位脉宽
       type: int32
       default: 1500
       unit: us
@@ -83,7 +83,7 @@ parameters:
     PWM_S2_MAX:
       category: System
       description:
-        short: PWM S2 maximum pulse
+        short: PWM S2 最大脉宽
       type: int32
       default: 2000
       unit: us
@@ -92,7 +92,7 @@ parameters:
       increment: 1
     PWM_S2_REV:
       description:
-        short: PWM S2 reverse
+        short: PWM S2 输出方向反转
       type: enum
       values:
         0: Normal
@@ -102,7 +102,7 @@ parameters:
       max: 1
     PWM_S3_FUNC:
       description:
-        short: PWM S3 function
+        short: PWM S3 输出功能
       type: enum
       values:
         0: Disabled
@@ -112,7 +112,7 @@ parameters:
     PWM_S3_MIN:
       category: System
       description:
-        short: PWM S3 minimum pulse
+        short: PWM S3 最小脉宽
       type: int32
       default: 1000
       unit: us
@@ -122,7 +122,7 @@ parameters:
     PWM_S3_CENT:
       category: System
       description:
-        short: PWM S3 center pulse
+        short: PWM S3 中位脉宽
       type: int32
       default: 1500
       unit: us
@@ -132,7 +132,7 @@ parameters:
     PWM_S3_MAX:
       category: System
       description:
-        short: PWM S3 maximum pulse
+        short: PWM S3 最大脉宽
       type: int32
       default: 2000
       unit: us
@@ -141,7 +141,7 @@ parameters:
       increment: 1
     PWM_S3_REV:
       description:
-        short: PWM S3 reverse
+        short: PWM S3 输出方向反转
       type: enum
       values:
         0: Normal
@@ -151,7 +151,7 @@ parameters:
       max: 1
     PWM_S4_FUNC:
       description:
-        short: PWM S4 function
+        short: PWM S4 输出功能
       type: enum
       values:
         0: Disabled
@@ -161,7 +161,7 @@ parameters:
     PWM_S4_MIN:
       category: System
       description:
-        short: PWM S4 minimum pulse
+        short: PWM S4 最小脉宽
       type: int32
       default: 1000
       unit: us
@@ -171,7 +171,7 @@ parameters:
     PWM_S4_CENT:
       category: System
       description:
-        short: PWM S4 center pulse
+        short: PWM S4 中位脉宽
       type: int32
       default: 1500
       unit: us
@@ -181,7 +181,7 @@ parameters:
     PWM_S4_MAX:
       category: System
       description:
-        short: PWM S4 maximum pulse
+        short: PWM S4 最大脉宽
       type: int32
       default: 2000
       unit: us
@@ -190,7 +190,7 @@ parameters:
       increment: 1
     PWM_S4_REV:
       description:
-        short: PWM S4 reverse
+        short: PWM S4 输出方向反转
       type: enum
       values:
         0: Normal
@@ -200,7 +200,7 @@ parameters:
       max: 1
     PWM_S5_FUNC:
       description:
-        short: PWM S5 function
+        short: PWM S5 输出功能
       type: enum
       values:
         0: Disabled
@@ -210,7 +210,7 @@ parameters:
     PWM_S5_MIN:
       category: System
       description:
-        short: PWM S5 minimum pulse
+        short: PWM S5 最小脉宽
       type: int32
       default: 1000
       unit: us
@@ -220,7 +220,7 @@ parameters:
     PWM_S5_CENT:
       category: System
       description:
-        short: PWM S5 center pulse
+        short: PWM S5 中位脉宽
       type: int32
       default: 1500
       unit: us
@@ -230,7 +230,7 @@ parameters:
     PWM_S5_MAX:
       category: System
       description:
-        short: PWM S5 maximum pulse
+        short: PWM S5 最大脉宽
       type: int32
       default: 2000
       unit: us
@@ -239,7 +239,7 @@ parameters:
       increment: 1
     PWM_S5_REV:
       description:
-        short: PWM S5 reverse
+        short: PWM S5 输出方向反转
       type: enum
       values:
         0: Normal
@@ -249,7 +249,7 @@ parameters:
       max: 1
     PWM_S6_FUNC:
       description:
-        short: PWM S6 function
+        short: PWM S6 输出功能
       type: enum
       values:
         0: Disabled
@@ -259,7 +259,7 @@ parameters:
     PWM_S6_MIN:
       category: System
       description:
-        short: PWM S6 minimum pulse
+        short: PWM S6 最小脉宽
       type: int32
       default: 1000
       unit: us
@@ -269,7 +269,7 @@ parameters:
     PWM_S6_CENT:
       category: System
       description:
-        short: PWM S6 center pulse
+        short: PWM S6 中位脉宽
       type: int32
       default: 1500
       unit: us
@@ -279,7 +279,7 @@ parameters:
     PWM_S6_MAX:
       category: System
       description:
-        short: PWM S6 maximum pulse
+        short: PWM S6 最大脉宽
       type: int32
       default: 2000
       unit: us
@@ -288,7 +288,7 @@ parameters:
       increment: 1
     PWM_S6_REV:
       description:
-        short: PWM S6 reverse
+        short: PWM S6 输出方向反转
       type: enum
       values:
         0: Normal
@@ -300,8 +300,9 @@ parameters:
   definitions:
     RO_CMD_TIMEOUT:
       description:
-        short: Rover motion request timeout
-        long: Maximum age of both the request publication and its input sample.
+        short: 车辆运动请求超时
+        long: |-
+          运动请求的发布时间及其输入样本的最大允许时龄。
       type: float
       default: 0.1
       unit: s
@@ -312,8 +313,9 @@ parameters:
     RD_REV_STEER:
       category: Developer
       description:
-        short: Reverse steering in Manual mode
-        long: Keeps the commanded vehicle nose direction intuitive while reversing.
+        short: 手动模式倒车转向反转
+        long: |-
+          倒车时保持所请求的车头转向符合直观操作习惯。
       type: int32
       default: 1
       min: 0
@@ -321,10 +323,10 @@ parameters:
     RD_STR_THR_MIX:
       category: Developer
       description:
-        short: Steering versus throttle saturation priority
+        short: 输出饱和时转向与油门的优先级
         long: |-
-          0 preserves longitudinal command, 0.5 scales both axes proportionally,
-          and 1 preserves steering command.
+          0 表示优先保留纵向命令；0.5 表示两轴按相同比例缩放；
+          1 表示优先保留转向命令。
       type: float
       default: 0.5
       min: 0.0
@@ -336,10 +338,9 @@ parameters:
     MOT_THR_MIN:
       category: System
       description:
-        short: Minimum nonzero motor output
+        short: 最小非零电机输出
         long: |-
-          Static-friction compensation applied only after a nonzero motor command.
-          This is not an RC input deadzone.
+          仅在电机命令非零时应用静摩擦补偿。此参数不是遥控输入死区。
       type: float
       default: 0.0
       min: 0.0
@@ -348,7 +349,7 @@ parameters:
       decimal: 2
     MOT_THR_MAX:
       description:
-        short: Maximum motor output
+        short: 最大电机输出
       type: float
       default: 1.0
       min: 0.05
@@ -358,8 +359,9 @@ parameters:
     MOT_SLEW_RATE:
       category: System
       description:
-        short: Longitudinal command slew rate
-        long: A value of zero disables slew limiting.
+        short: 纵向命令变化率
+        long: |-
+          设为 0 时禁用变化率限制。
       type: float
       default: 1.0
       unit: 1/s
@@ -369,8 +371,9 @@ parameters:
       decimal: 2
     MOT_REV_DELAY:
       description:
-        short: Per-side motor reversal delay
-        long: Each side independently holds zero before accepting the opposite sign.
+        short: 单侧电机换向延迟
+        long: |-
+          左右两侧独立处理：接受反向命令之前，先保持一段时间的零输出。
       type: float
       default: 0.2
       unit: s
@@ -381,10 +384,9 @@ parameters:
     MOT_THR_EXPO:
       category: System
       description:
-        short: Motor thrust curve expo
+        short: 电机推力曲线指数系数
         long: |-
-          Zero is linear. Positive values compensate a weak low end; negative values
-          reduce low-end response.
+          0 表示线性响应；正值补偿低输出段动力不足；负值减弱低输出段响应。
       type: float
       default: 0.0
       min: -1.0
@@ -394,8 +396,9 @@ parameters:
     MOT_THR_ASYM:
       category: System
       description:
-        short: Forward to reverse thrust asymmetry
-        long: Values above one increase negative motor commands before final limiting.
+        short: 前进与后退推力不对称系数
+        long: |-
+          大于 1 时，在最终限幅之前增大负向电机命令的幅值。
       type: float
       default: 1.0
       min: 1.0
@@ -404,7 +407,7 @@ parameters:
       decimal: 2
     MOT_ARM_RAMP:
       description:
-        short: Motor output ramp after arming
+        short: 解锁后的电机输出渐增时间
       type: float
       default: 0.5
       unit: s

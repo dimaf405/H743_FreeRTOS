@@ -7,10 +7,10 @@ parameters:
     NAV_RCL_ACT:
       category: System
       description:
-        short: RC-loss action
+        short: 遥控信号丢失时的动作
         long: |-
-          Commander currently fails closed by disarming on RC loss.  Other PX4
-          actions require navigation or landing capabilities which are not present.
+          当前 Commander 在遥控信号丢失时通过上锁进入安全状态。
+          其他 PX4 动作依赖本产品尚未提供的导航或降落能力。
       type: enum
       values:
         6: Disarm
@@ -20,10 +20,9 @@ parameters:
     NAV_DLL_ACT:
       category: System
       description:
-        short: GCS data-link-loss action
+        short: 地面站数据链丢失时的动作
         long: |-
-          USB/GCS is not a Dima control source in this stage, so disconnect has no
-          navigation action.
+          当前阶段 USB/地面站不是 Dima 的控制来源，断开连接不会触发导航动作。
       type: enum
       values:
         0: Disabled
@@ -33,8 +32,9 @@ parameters:
     COM_LOW_BAT_ACT:
       category: System
       description:
-        short: Low-battery action compatibility value
-        long: 'UI-only in this stage: no battery detector or low-battery action exists.'
+        short: 低电量动作兼容值
+        long: |-
+          当前阶段仅用于界面兼容，尚未实现电池检测或低电量动作。
       type: enum
       values:
         0: No implemented action
@@ -44,10 +44,9 @@ parameters:
     MAV_SYS_ID:
       category: System
       description:
-        short: MAVLink system ID
+        short: MAVLink 系统 ID
         long: |-
-          The current Dima protocol surface uses the fixed system/component identity
-          1/1 for every encoder and target filter.
+          当前 Dima 的所有协议编码器和目标过滤器均使用固定的系统/组件标识 1/1。
       type: int32
       default: 1
       min: 1
@@ -56,11 +55,10 @@ parameters:
     SYS_AUTOSTART:
       category: System
       description:
-        short: PX4-compatible airframe identity
+        short: 兼容 PX4 的机架标识
         long: |-
-          Dima is a fixed differential rover product.  This value matches PX4's
-          Generic Rover Differential airframe, but does not enable runtime airframe
-          selection or PX4 startup scripts.
+          Dima 是固定的差速车产品。该值与 PX4 的通用差速车机架一致，
+          但不会启用运行期机架选择或 PX4 启动脚本。
       type: enum
       values:
         50000: Generic Rover Differential
@@ -70,10 +68,10 @@ parameters:
     SYS_AUTOCONFIG:
       category: System
       description:
-        short: PX4 airframe autoconfiguration request
+        short: PX4 机架自动配置请求
         long: |-
-          Dima has no PX4 airframe-default transaction.  The fixed zero value means
-          keep the current product configuration; requests to set one are rejected.
+          Dima 不提供 PX4 机架默认值配置事务。固定值 0 表示保留当前产品配置；
+          写入 1 的请求会被拒绝。
       type: enum
       values:
         0: Keep current product configuration

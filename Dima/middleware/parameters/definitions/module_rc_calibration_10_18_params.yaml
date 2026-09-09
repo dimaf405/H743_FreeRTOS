@@ -5,7 +5,7 @@ parameters:
     RC10_MIN:
       category: System
       description:
-        short: RC10_MIN
+        short: 遥控通道 10 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -14,7 +14,7 @@ parameters:
     RC10_TRIM:
       category: System
       description:
-        short: RC10_TRIM
+        short: 遥控通道 10 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -23,7 +23,7 @@ parameters:
     RC10_MAX:
       category: System
       description:
-        short: RC10_MAX
+        short: 遥控通道 10 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -32,7 +32,7 @@ parameters:
     RC10_REV:
       category: System
       description:
-        short: RC10_REV
+        short: 遥控通道 10 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -43,7 +43,7 @@ parameters:
     RC10_DZ:
       category: System
       description:
-        short: RC10_DZ
+        short: 遥控通道 10 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -52,7 +52,7 @@ parameters:
     RC11_MIN:
       category: System
       description:
-        short: RC11_MIN
+        short: 遥控通道 11 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -61,7 +61,7 @@ parameters:
     RC11_TRIM:
       category: System
       description:
-        short: RC11_TRIM
+        short: 遥控通道 11 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -70,7 +70,7 @@ parameters:
     RC11_MAX:
       category: System
       description:
-        short: RC11_MAX
+        short: 遥控通道 11 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -79,7 +79,7 @@ parameters:
     RC11_REV:
       category: System
       description:
-        short: RC11_REV
+        short: 遥控通道 11 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -90,7 +90,7 @@ parameters:
     RC11_DZ:
       category: System
       description:
-        short: RC11_DZ
+        short: 遥控通道 11 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -99,7 +99,7 @@ parameters:
     RC12_MIN:
       category: System
       description:
-        short: RC12_MIN
+        short: 遥控通道 12 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -108,7 +108,7 @@ parameters:
     RC12_TRIM:
       category: System
       description:
-        short: RC12_TRIM
+        short: 遥控通道 12 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -117,7 +117,7 @@ parameters:
     RC12_MAX:
       category: System
       description:
-        short: RC12_MAX
+        short: 遥控通道 12 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -126,7 +126,7 @@ parameters:
     RC12_REV:
       category: System
       description:
-        short: RC12_REV
+        short: 遥控通道 12 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -137,7 +137,7 @@ parameters:
     RC12_DZ:
       category: System
       description:
-        short: RC12_DZ
+        short: 遥控通道 12 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -146,7 +146,7 @@ parameters:
     RC13_MIN:
       category: System
       description:
-        short: RC13_MIN
+        short: 遥控通道 13 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -155,7 +155,7 @@ parameters:
     RC13_TRIM:
       category: System
       description:
-        short: RC13_TRIM
+        short: 遥控通道 13 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -164,7 +164,7 @@ parameters:
     RC13_MAX:
       category: System
       description:
-        short: RC13_MAX
+        short: 遥控通道 13 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -173,7 +173,7 @@ parameters:
     RC13_REV:
       category: System
       description:
-        short: RC13_REV
+        short: 遥控通道 13 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -184,7 +184,7 @@ parameters:
     RC13_DZ:
       category: System
       description:
-        short: RC13_DZ
+        short: 遥控通道 13 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -193,7 +193,7 @@ parameters:
     RC14_MIN:
       category: System
       description:
-        short: RC14_MIN
+        short: 遥控通道 14 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -202,7 +202,7 @@ parameters:
     RC14_TRIM:
       category: System
       description:
-        short: RC14_TRIM
+        short: 遥控通道 14 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -211,7 +211,7 @@ parameters:
     RC14_MAX:
       category: System
       description:
-        short: RC14_MAX
+        short: 遥控通道 14 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -220,7 +220,7 @@ parameters:
     RC14_REV:
       category: System
       description:
-        short: RC14_REV
+        short: 遥控通道 14 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -231,7 +231,7 @@ parameters:
     RC14_DZ:
       category: System
       description:
-        short: RC14_DZ
+        short: 遥控通道 14 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -240,7 +240,7 @@ parameters:
     RC15_MIN:
       category: System
       description:
-        short: RC15_MIN
+        short: 遥控通道 15 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -249,7 +249,7 @@ parameters:
     RC15_TRIM:
       category: System
       description:
-        short: RC15_TRIM
+        short: 遥控通道 15 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -258,7 +258,7 @@ parameters:
     RC15_MAX:
       category: System
       description:
-        short: RC15_MAX
+        short: 遥控通道 15 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -267,7 +267,7 @@ parameters:
     RC15_REV:
       category: System
       description:
-        short: RC15_REV
+        short: 遥控通道 15 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -278,7 +278,7 @@ parameters:
     RC15_DZ:
       category: System
       description:
-        short: RC15_DZ
+        short: 遥控通道 15 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -287,7 +287,7 @@ parameters:
     RC16_MIN:
       category: System
       description:
-        short: RC16_MIN
+        short: 遥控通道 16 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -296,7 +296,7 @@ parameters:
     RC16_TRIM:
       category: System
       description:
-        short: RC16_TRIM
+        short: 遥控通道 16 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -305,7 +305,7 @@ parameters:
     RC16_MAX:
       category: System
       description:
-        short: RC16_MAX
+        short: 遥控通道 16 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -314,7 +314,7 @@ parameters:
     RC16_REV:
       category: System
       description:
-        short: RC16_REV
+        short: 遥控通道 16 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -325,7 +325,7 @@ parameters:
     RC16_DZ:
       category: System
       description:
-        short: RC16_DZ
+        short: 遥控通道 16 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -334,7 +334,7 @@ parameters:
     RC17_MIN:
       category: System
       description:
-        short: RC17_MIN
+        short: 遥控通道 17 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -343,7 +343,7 @@ parameters:
     RC17_TRIM:
       category: System
       description:
-        short: RC17_TRIM
+        short: 遥控通道 17 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -352,7 +352,7 @@ parameters:
     RC17_MAX:
       category: System
       description:
-        short: RC17_MAX
+        short: 遥控通道 17 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -361,7 +361,7 @@ parameters:
     RC17_REV:
       category: System
       description:
-        short: RC17_REV
+        short: 遥控通道 17 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -372,7 +372,7 @@ parameters:
     RC17_DZ:
       category: System
       description:
-        short: RC17_DZ
+        short: 遥控通道 17 的中位死区
       type: float
       default: 0.0
       unit: us
@@ -381,7 +381,7 @@ parameters:
     RC18_MIN:
       category: System
       description:
-        short: RC18_MIN
+        short: 遥控通道 18 的最小输入值
       type: float
       default: 1000.0
       unit: us
@@ -390,7 +390,7 @@ parameters:
     RC18_TRIM:
       category: System
       description:
-        short: RC18_TRIM
+        short: 遥控通道 18 的中位校准值
       type: float
       default: 1500.0
       unit: us
@@ -399,7 +399,7 @@ parameters:
     RC18_MAX:
       category: System
       description:
-        short: RC18_MAX
+        short: 遥控通道 18 的最大输入值
       type: float
       default: 2000.0
       unit: us
@@ -408,7 +408,7 @@ parameters:
     RC18_REV:
       category: System
       description:
-        short: RC18_REV
+        short: 遥控通道 18 的输入方向反转
       type: float
       values:
         -1: Reverse
@@ -419,7 +419,7 @@ parameters:
     RC18_DZ:
       category: System
       description:
-        short: RC18_DZ
+        short: 遥控通道 18 的中位死区
       type: float
       default: 0.0
       unit: us

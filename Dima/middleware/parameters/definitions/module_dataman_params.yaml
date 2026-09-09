@@ -6,10 +6,10 @@ parameters:
       SYS_DM_BACKEND:
         category: Developer
         description:
-          short: Dataman storage backend
+          short: 任务数据存储后端
           long: |-
-            If the board supports persistent storage, Default storage uses that
-            board storage. Otherwise it uses non-persistent RAM storage.
+            若板级支持持久化存储，默认存储使用板级存储；
+            否则使用不具备持久化能力的 RAM 存储。
         type: enum
         values:
           -1: Dataman disabled

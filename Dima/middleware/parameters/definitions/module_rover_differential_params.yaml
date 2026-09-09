@@ -4,9 +4,9 @@ parameters:
   definitions:
     RD_WHEEL_TRACK:
       description:
-        short: Wheel track
-        long: Distance from the center of the right wheel to the center of the left
-          wheel.
+        short: 左右轮轮距
+        long: |-
+          右轮中心到左轮中心的距离。
       type: float
       default: 0.0
       unit: m
@@ -17,7 +17,7 @@ parameters:
     RD_TRANS_TRN_DRV:
       category: Developer
       description:
-        short: Yaw error threshold to switch from spot turning to driving
+        short: 从原地转向切换为行驶的偏航误差阈值
       type: float
       default: 0.0872665
       unit: rad
@@ -28,7 +28,7 @@ parameters:
     RD_TRANS_DRV_TRN:
       category: Developer
       description:
-        short: Yaw error threshold to switch from driving to spot turning
+        short: 从行驶切换为原地转向的偏航误差阈值
       type: float
       default: 0.174533
       unit: rad
@@ -39,8 +39,9 @@ parameters:
     RD_YAW_STK_GAIN:
       category: Developer
       description:
-        short: Yaw stick gain for Manual mode
-        long: Assign value below 1.0 to decrease stick response for yaw control.
+        short: 手动模式偏航摇杆增益
+        long: |-
+          设为小于 1.0 的值可减弱偏航控制对摇杆输入的响应。
       type: float
       default: 1.0
       min: 0.1

@@ -5,7 +5,7 @@ parameters:
     EKF2_GRAV_NOISE:
       category: Developer
       description:
-        short: Accelerometer measurement noise for gravity based observations
+        short: 重力观测使用的加速度计测量噪声
       type: float
       default: 1.0
       min: 0.1

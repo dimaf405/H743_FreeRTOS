@@ -5,10 +5,13 @@ parameters:
     EKF2_GPS_CTRL:
       category: Developer
       description:
-        short: GNSS sensor aiding
-        long: 'Set bits in the following positions to enable: 0 : Longitude and latitude
-          fusion 1 : Altitude fusion 2 : 3D velocity fusion 3 : Dual antenna heading
-          fusion'
+        short: GNSS 辅助观测融合控制
+        long: |-
+          将对应位置的位设为 1 可启用相应融合：
+          位 0：经纬度融合。
+          位 1：高度融合。
+          位 2：三维速度融合。
+          位 3：双天线航向融合。
       type: bitmask
       bit:
         0: Lon/lat
@@ -21,9 +24,10 @@ parameters:
     EKF2_GPS_MODE:
       category: Developer
       description:
-        short: Fusion reset mode
-        long: 'Automatic: reset on fusion timeout if no other source of position is available
-          Dead-reckoning: reset on fusion timeout if no source of velocity is available'
+        short: 融合重置模式
+        long: |-
+          自动模式：融合超时且没有其他位置源时执行重置。
+          航位推算模式：融合超时且没有速度源时执行重置。
       type: enum
       values:
         0: Automatic
@@ -32,7 +36,7 @@ parameters:
     EKF2_GPS_DELAY:
       category: Developer
       description:
-        short: GPS measurement delay relative to IMU measurements
+        short: GPS 测量相对于 IMU 测量的延迟
       type: float
       default: 110
       min: 0
@@ -43,7 +47,7 @@ parameters:
     EKF2_GPS_P_NOISE:
       category: Developer
       description:
-        short: Measurement noise for GNSS position
+        short: GNSS 位置测量噪声
       type: float
       default: 0.5
       min: 0.01
@@ -53,9 +57,9 @@ parameters:
     EKF2_GPS_P_GATE:
       category: Developer
       description:
-        short: Gate size for GNSS position fusion
-        long: Sets the number of standard deviations used by the innovation consistency
-          test.
+        short: GNSS 位置融合的新息门限
+        long: |-
+          设置新息一致性检查所使用的标准差倍数。
       type: float
       default: 5.0
       min: 1.0
@@ -64,9 +68,9 @@ parameters:
     EKF2_GPS_V_GATE:
       category: Developer
       description:
-        short: Gate size for GNSS velocity fusion
-        long: Sets the number of standard deviations used by the innovation consistency
-          test.
+        short: GNSS 速度融合的新息门限
+        long: |-
+          设置新息一致性检查所使用的标准差倍数。
       type: float
       default: 5.0
       min: 1.0
@@ -75,7 +79,7 @@ parameters:
     EKF2_GPS_V_NOISE:
       category: Developer
       description:
-        short: Measurement noise for GNSS velocity
+        short: GNSS 速度测量噪声
       type: float
       default: 0.3
       min: 0.01
@@ -84,24 +88,27 @@ parameters:
       decimal: 2
     EKF2_GPS_POS_X:
       description:
-        short: X position of GPS antenna in body frame
-        long: Forward (roll) axis with origin relative to vehicle centre of gravity
+        short: GPS 天线在机体系中的 X 轴位置
+        long: |-
+          以车辆重心为原点，X 轴为横滚轴，正方向朝前。
       type: float
       default: 0.0
       unit: m
       decimal: 3
     EKF2_GPS_POS_Y:
       description:
-        short: Y position of GPS antenna in body frame
-        long: Right (pitch) axis with origin relative to vehicle centre of gravity
+        short: GPS 天线在机体系中的 Y 轴位置
+        long: |-
+          以车辆重心为原点，Y 轴为俯仰轴，正方向朝右。
       type: float
       default: 0.0
       unit: m
       decimal: 3
     EKF2_GPS_POS_Z:
       description:
-        short: Z position of GPS antenna in body frame
-        long: Down (yaw) axis with origin relative to vehicle centre of gravity
+        short: GPS 天线在机体系中的 Z 轴位置
+        long: |-
+          以车辆重心为原点，Z 轴为偏航轴，正方向朝下。
       type: float
       default: 0.0
       unit: m
@@ -109,9 +116,10 @@ parameters:
     EKF2_GPS_CHECK:
       category: Developer
       description:
-        short: Integer bitmask controlling GPS checks
-        long: 'Each threshold value is defined by the parameter indicated next to the check.
-          Drift and offset checks only run when the vehicle is on ground and stationary.'
+        short: GPS 健康检查位掩码
+        long: |-
+          各项检查的阈值由该检查旁标注的参数定义。
+          漂移和偏移检查仅在车辆处于地面且静止时运行。
       type: bitmask
       bit:
         0: Sat count (EKF2_REQ_NSATS)
@@ -131,7 +139,7 @@ parameters:
     EKF2_REQ_EPH:
       category: Developer
       description:
-        short: Required EPH to use GPS
+        short: 使用 GPS 允许的最大水平位置误差（EPH）
       type: float
       default: 3.0
       min: 2
@@ -141,7 +149,7 @@ parameters:
     EKF2_REQ_EPV:
       category: Developer
       description:
-        short: Required EPV to use GPS
+        short: 使用 GPS 允许的最大垂直位置误差（EPV）
       type: float
       default: 5.0
       min: 2
@@ -151,7 +159,7 @@ parameters:
     EKF2_REQ_SACC:
       category: Developer
       description:
-        short: Required speed accuracy to use GPS
+        short: 使用 GPS 允许的最大速度误差
       type: float
       default: 0.5
       min: 0.5
@@ -161,7 +169,7 @@ parameters:
     EKF2_REQ_NSATS:
       category: Developer
       description:
-        short: Required satellite count to use GPS
+        short: 使用 GPS 所需的最少卫星数
       type: int32
       default: 6
       min: 4
@@ -169,7 +177,7 @@ parameters:
     EKF2_REQ_PDOP:
       category: Developer
       description:
-        short: Maximum PDOP to use GPS
+        short: 使用 GPS 允许的最大位置精度衰减因子（PDOP）
       type: float
       default: 2.5
       min: 1.5
@@ -178,7 +186,7 @@ parameters:
     EKF2_REQ_HDRIFT:
       category: Developer
       description:
-        short: Maximum horizontal drift speed to use GPS
+        short: 使用 GPS 允许的最大水平漂移速度
       type: float
       default: 0.1
       min: 0.1
@@ -188,7 +196,7 @@ parameters:
     EKF2_REQ_VDRIFT:
       category: Developer
       description:
-        short: Maximum vertical drift speed to use GPS
+        short: 使用 GPS 允许的最大垂直漂移速度
       type: float
       default: 0.2
       min: 0.1
@@ -198,8 +206,9 @@ parameters:
     EKF2_REQ_FIX:
       category: Developer
       description:
-        short: Required GPS fix
-        long: Minimum GPS fix type required for GPS usage.
+        short: 使用 GPS 所需的定位解类型
+        long: |-
+          使用 GPS 所需的最低定位解类型。
       type: enum
       values:
         0: No fix required
@@ -213,10 +222,10 @@ parameters:
     EKF2_REQ_GPS_H:
       category: Developer
       description:
-        short: Required GPS health time on startup
-        long: Minimum continuous period without GPS failure required to mark a healthy
-          GPS status. It can be reduced to speed up initialization, but it's recommended
-          to keep this unchanged for a vehicle.
+        short: 启动时 GPS 健康状态的持续时间要求
+        long: |-
+          将 GPS 标记为健康之前，要求连续无 GPS 故障的最短时间。
+          减小此值可加快初始化，但车辆使用时建议保持原值。
       type: float
       default: 10.0
       min: 0.1

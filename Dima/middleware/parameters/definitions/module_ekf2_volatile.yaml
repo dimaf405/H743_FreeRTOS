@@ -4,7 +4,7 @@ parameters:
   definitions:
     EKF2_MAG_DECL:
       description:
-        short: Magnetic declination
+        short: 磁偏角
       category: System
       type: float
       default: 0

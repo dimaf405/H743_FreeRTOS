@@ -5,10 +5,10 @@ parameters:
     definitions:
       UAVCAN1_ENABLE:
         description:
-          short: DroneCAN mode on FDCAN1
+          short: FDCAN1 的 DroneCAN 工作模式
           long: |-
-            Automatic mode enables the Dima centralized dynamic Node ID
-            allocator. Firmware update serving is not implemented.
+            自动模式启用 Dima 集中式动态节点 ID 分配器。
+            当前未实现固件更新服务。
         type: enum
         default: 2
         min: 0
@@ -19,7 +19,7 @@ parameters:
           2: Sensors Automatic Node Allocation
       UAVCAN1_BITRATE:
         description:
-          short: FDCAN1 nominal DroneCAN bitrate
+          short: FDCAN1 的 DroneCAN 标称位速率
         type: enum
         default: 500000
         unit: bit/s
@@ -30,7 +30,7 @@ parameters:
           1000000: 1 Mbit/s
       UAVCAN1_NODE_ID:
         description:
-          short: Static DroneCAN Node ID used by the flight controller
+          short: 控制器使用的静态 DroneCAN 节点 ID
         type: int32
         default: 1
         min: 1

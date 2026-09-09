@@ -5,17 +5,15 @@ parameters:
     EKF2_MAG_TYPE:
       category: Developer
       description:
-        short: Type of magnetometer fusion
-        long: Integer controlling the type of magnetometer fusion used - magnetic
-          heading or 3-component vector. The fusion of magnetometer data as a three
-          component vector enables vehicle body fixed hard iron errors to be learned,
-          but requires a stable earth field. If set to 'Automatic' magnetic heading
-          fusion is used when on-ground and 3-axis magnetic field fusion in-flight.
-          If set to 'Magnetic heading' magnetic heading fusion is used at all times.
-          If set to 'None' the magnetometer will not be used under any circumstance.
-          If no external source of yaw is available, it is possible to use post-takeoff
-          horizontal movement combined with GNSS velocity measurements to align the yaw angle.
-          If set to 'Init' the magnetometer is only used to initalize the heading.
+        short: 磁力计融合类型
+        long: |-
+          选择磁航向融合或三轴磁场向量融合等方式。
+          三轴向量融合可学习固定在车体上的硬铁误差，但要求地磁场稳定。
+          自动（Automatic）：在地面使用磁航向融合，在空中使用三轴磁场融合。
+          磁航向（Magnetic heading）：始终使用磁航向融合。
+          禁用（None）：任何情况下均不使用磁力计。若没有外部偏航源，
+          可结合起飞后的水平运动与 GNSS 速度测量对齐偏航角。
+          仅初始化（Init）：仅使用磁力计初始化航向。
       type: enum
       values:
         0: Automatic
@@ -27,7 +25,7 @@ parameters:
     EKF2_MAG_DELAY:
       category: Developer
       description:
-        short: Magnetometer measurement delay relative to IMU measurements
+        short: 磁力计测量相对于 IMU 测量的延迟
       type: float
       default: 0
       min: 0
@@ -38,9 +36,9 @@ parameters:
     EKF2_MAG_GATE:
       category: Developer
       description:
-        short: Gate size for magnetometer XYZ component fusion
-        long: Sets the number of standard deviations used by the innovation consistency
-          test.
+        short: 磁力计 XYZ 分量融合的新息门限
+        long: |-
+          设置新息一致性检查所使用的标准差倍数。
       type: float
       default: 3.0
       min: 1.0
@@ -49,7 +47,7 @@ parameters:
     EKF2_MAG_NOISE:
       category: Developer
       description:
-        short: Measurement noise for magnetometer 3-axis fusion
+        short: 磁力计三轴融合的测量噪声
       type: float
       default: 0.05
       min: 0.001
@@ -59,7 +57,7 @@ parameters:
     EKF2_MAG_B_NOISE:
       category: Developer
       description:
-        short: Process noise for body magnetic field prediction
+        short: 机体系磁场预测的过程噪声
       type: float
       default: 0.0001
       min: 0.0
@@ -69,7 +67,7 @@ parameters:
     EKF2_MAG_E_NOISE:
       category: Developer
       description:
-        short: Process noise for earth magnetic field prediction
+        short: 地磁场预测的过程噪声
       type: float
       default: 0.001
       min: 0.0
@@ -79,12 +77,12 @@ parameters:
     EKF2_DECL_TYPE:
       category: Developer
       description:
-        short: Integer bitmask controlling handling of magnetic declination
-        long: 'Set bits in the following positions to enable functions. 0 : Set to
-          true to use the declination from the geo_lookup library when the GPS position
-          becomes available, set to false to always use the EKF2_MAG_DECL value. 1
-          : Set to true to save the EKF2_MAG_DECL parameter to the value returned
-          by the EKF when the vehicle disarms.'
+        short: 磁偏角处理方式位掩码
+        long: |-
+          将对应位置的位设为 1 可启用相应功能：
+          位 0：GPS 位置可用后使用 geo_lookup 库提供的磁偏角；
+          未设置此位时始终使用 EKF2_MAG_DECL。
+          位 1：车辆上锁时，将 EKF 返回的磁偏角保存到 EKF2_MAG_DECL。
       type: bitmask
       bit:
         0: use geo_lookup declination
@@ -96,10 +94,9 @@ parameters:
     EKF2_MAG_ACCLIM:
       category: Developer
       description:
-        short: Horizontal acceleration threshold used for heading observability check
-        long: The heading is assumed to be observable when the body acceleration is
-          greater than this parameter when a global position/velocity aiding source
-          is active.
+        short: 航向可观测性检查的水平加速度阈值
+        long: |-
+          当全局位置/速度辅助源生效，且机体加速度超过此值时，认为航向可观测。
       type: float
       default: 0.5
       min: 0.0
@@ -109,15 +106,14 @@ parameters:
     EKF2_MAG_CHECK:
       category: Developer
       description:
-        short: Magnetic field strength test selection
-        long: 'Bitmask to set which check is used to decide whether the magnetometer
-          data is valid. If GNSS data is received, the magnetic field is compared
-          to a World Magnetic Model (WMM), otherwise an average value is used. This
-          check is useful to reject occasional hard iron disturbance. Set bits to
-          1 to enable checks. Checks enabled by the following bit positions 0 : Magnetic
-          field strength. Set tolerance using EKF2_MAG_CHK_STR 1 : Magnetic field
-          inclination. Set tolerance using EKF2_MAG_CHK_INC 2 : Wait for GNSS to find
-          the theoretical strength and inclination using the WMM'
+        short: 磁场有效性检查选择
+        long: |-
+          通过位掩码选择用于判断磁力计数据是否有效的检查，可抑制偶发硬铁干扰。
+          收到 GNSS 数据时，与世界磁场模型（WMM）比较；否则使用平均参考值。
+          将对应位置的位设为 1 可启用检查：
+          位 0：磁场强度检查，容差由 EKF2_MAG_CHK_STR 设置。
+          位 1：磁倾角检查，容差由 EKF2_MAG_CHK_INC 设置。
+          位 2：等待 GNSS 数据，以便通过 WMM 获取理论磁场强度和磁倾角。
       type: bitmask
       bit:
         0: Strength (EKF2_MAG_CHK_STR)
@@ -129,9 +125,9 @@ parameters:
     EKF2_MAG_CHK_STR:
       category: Developer
       description:
-        short: Magnetic field strength check tolerance
-        long: Maximum allowed deviation from the expected magnetic field strength
-          to pass the check.
+        short: 磁场强度检查容差
+        long: |-
+          通过检查所允许的实测磁场强度与预期值之间的最大偏差。
       type: float
       default: 0.2
       min: 0.0
@@ -141,9 +137,9 @@ parameters:
     EKF2_MAG_CHK_INC:
       category: Developer
       description:
-        short: Magnetic field inclination check tolerance
-        long: Maximum allowed deviation from the expected magnetic field inclination
-          to pass the check.
+        short: 磁倾角检查容差
+        long: |-
+          通过检查所允许的实测磁倾角与预期值之间的最大偏差。
       type: float
       default: 20.0
       min: 0.0
@@ -153,13 +149,11 @@ parameters:
     EKF2_SYNT_MAG_Z:
       category: Developer
       description:
-        short: Enable synthetic magnetometer Z component measurement
-        long: Use for vehicles where the measured body Z magnetic field is subject
-          to strong magnetic interference. For magnetic heading fusion the magnetometer
-          Z measurement will be replaced by a synthetic value calculated using the
-          knowledge of the 3D magnetic field vector at the location of the drone.
-          Therefore, this parameter will only have an effect if the global position
-          of the drone is known. For 3D mag fusion the magnetometer Z measurement
-          will simply be ignored instead of fusing the synthetic value.
+        short: 启用磁力计 Z 轴合成测量
+        long: |-
+          适用于机体系 Z 轴磁场测量受到强磁干扰的载具。
+          磁航向融合时，使用当前位置的三维磁场向量计算合成值，替代实测 Z 轴磁场；
+          因此只有已知全局位置时，此参数才生效。
+          三轴磁场融合时直接忽略 Z 轴测量，不融合该合成值。
       type: boolean
       default: 0

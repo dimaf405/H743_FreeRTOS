@@ -5,13 +5,13 @@ parameters:
     definitions:
       SDLOG_MODE:
         description:
-          short: SD ULog session mode
+          short: SD 卡 ULog 日志会话模式
           long: |-
-            Selects when this product creates SD-card ULog sessions. Mode 0
-            creates one session for every armed interval. Mode 1 starts at
-            boot and stops permanently at the first disarm edge observed
-            after arming. Mode 2 records from boot until shutdown. Mode 3
-            starts at the first arm edge and then records until shutdown.
+            选择本产品创建 SD 卡 ULog 日志会话的时机。
+            模式 0：每次解锁期间创建一个会话，上锁时结束。
+            模式 1：从启动开始记录，在首次解锁后的第一次上锁时永久停止。
+            模式 2：从启动持续记录到关闭。
+            模式 3：从首次解锁开始持续记录到关闭。
         type: enum
         values:
           0: Armed sessions
@@ -25,13 +25,11 @@ parameters:
       SDLOG_PROFILE:
         category: Developer
         description:
-          short: SD ULog topic profiles
+          short: SD 卡 ULog 主题记录配置
           long: |-
-            Selects the product logging data sets. Multiple bits may be
-            combined; source-rate recording takes priority, otherwise the
-            highest requested fixed rate is used. Zero keeps ULog headers,
-            parameters, hardware identity, text, sync markers and real
-            dropout records, but writes no ordinary uORB topic data.
+            选择本产品记录的数据集，可组合多个位。优先按源发布速率记录；
+            否则使用所请求的最高固定速率。设为 0 时仍记录 ULog 头、参数、
+            硬件标识、文本、同步标记和实际丢数记录，但不写入普通 uORB 主题数据。
         type: bitmask
         bit:
           0: General Rover
@@ -43,11 +41,10 @@ parameters:
         reboot_required: true
       SDLOG_DIRS_MAX:
         description:
-          short: Maximum SD log session directories
+          short: SD 卡日志会话目录数量上限
           long: |-
-            Maximum number of Logger-owned sessNNN directories retained on
-            the SD card, including the active session. The product always
-            enforces a finite limit; zero is not an unlimited mode.
+            SD 卡上保留的、由日志模块管理的 sessNNN 目录数量上限，包含当前会话。
+            本产品始终执行有限的数量限制，0 不表示无限制。
         type: int32
         default: 50
         min: 1

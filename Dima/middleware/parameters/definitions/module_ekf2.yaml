@@ -5,10 +5,10 @@ parameters:
     EKF2_PREDICT_US:
       category: Developer
       description:
-        short: EKF prediction period
-        long: EKF prediction period in microseconds. This should ideally be an integer
-          multiple of the IMU time delta. Actual filter update will be an integer
-          multiple of IMU update.
+        short: EKF 预测周期
+        long: |-
+          EKF 预测周期，单位为微秒。理想情况下应为 IMU 采样时间间隔的整数倍。
+          滤波器实际更新周期会取 IMU 更新周期的整数倍。
       type: int32
       default: 10000
       min: 1000
@@ -18,9 +18,10 @@ parameters:
     EKF2_DELAY_MAX:
       category: Developer
       description:
-        short: Maximum delay of all the aiding sensors
-        long: Defines the delay between the current time and the delayed-time horizon.
-          This value should be at least as large as the largest EKF2_XXX_DELAY parameter.
+        short: 所有辅助传感器的最大延迟
+        long: |-
+          定义当前时刻与延迟融合时刻之间的时间差。
+          此值应不小于所有 EKF2_XXX_DELAY 参数中的最大值。
       type: float
       default: 200
       min: 0
@@ -31,7 +32,7 @@ parameters:
     EKF2_ANGERR_INIT:
       category: Developer
       description:
-        short: 1-sigma tilt angle uncertainty after gravity vector alignment
+        short: 重力向量对齐后的倾角不确定度（1σ）
       type: float
       default: 0.1
       min: 0.0
@@ -42,9 +43,9 @@ parameters:
     EKF2_HDG_GATE:
       category: Developer
       description:
-        short: Gate size for heading fusion
-        long: Sets the number of standard deviations used by the innovation consistency
-          test.
+        short: 航向融合的新息门限
+        long: |-
+          设置新息一致性检查所使用的标准差倍数。
       type: float
       default: 2.6
       min: 1.0
@@ -53,7 +54,7 @@ parameters:
     EKF2_HEAD_NOISE:
       category: Developer
       description:
-        short: Measurement noise for magnetic heading fusion
+        short: 磁航向融合的测量噪声
       type: float
       default: 0.3
       min: 0.01
@@ -63,7 +64,7 @@ parameters:
     EKF2_NOAID_NOISE:
       category: Developer
       description:
-        short: Measurement noise for non-aiding position hold
+        short: 无辅助观测时位置保持的测量噪声
       type: float
       default: 10.0
       min: 0.5
@@ -73,10 +74,10 @@ parameters:
     EKF2_NOAID_TOUT:
       category: Developer
       description:
-        short: Maximum inertial dead-reckoning time
-        long: Maximum lapsed time from last fusion of measurements that constrain
-          velocity drift before the EKF will report the horizontal nav solution as
-          invalid
+        short: 最大惯性航位推算时间
+        long: |-
+          从最后一次融合能够约束速度漂移的观测开始计时，
+          超过此时限后，EKF 将水平导航解标记为无效。
       type: int32
       default: 5000000
       min: 500000
@@ -89,11 +90,10 @@ parameters:
     EKF2_HGT_REF:
       category: System
       description:
-        short: GNSS height reference used by the EKF
+        short: EKF 使用的 GNSS 高度参考
         long: |-
-          Dima Rover compiles GNSS as its only height source. Barometric pressure,
-          range sensor and external vision height fusion are not part of the N1
-          estimator closure, so this compatibility value is fixed to GPS.
+          Dima Rover 仅编译了 GNSS 高度源。气压、测距传感器及外部视觉的高度融合
+          不在 N1 估计器功能范围内，因此此兼容值固定为 GPS。
       type: enum
       values:
         1: GPS
@@ -104,7 +104,7 @@ parameters:
     EKF2_IMU_CTRL:
       category: Developer
       description:
-        short: IMU control
+        short: IMU 融合与偏置估计控制
       type: bitmask
       bit:
         0: Gyro Bias
@@ -116,7 +116,7 @@ parameters:
     EKF2_GYR_NOISE:
       category: Developer
       description:
-        short: Rate gyro noise for covariance prediction
+        short: 协方差预测使用的陀螺仪角速度噪声
       type: float
       default: 0.015
       min: 0.0001
@@ -126,7 +126,7 @@ parameters:
     EKF2_ACC_NOISE:
       category: Developer
       description:
-        short: Accelerometer noise for covariance prediction
+        short: 协方差预测使用的加速度计噪声
       type: float
       default: 0.35
       min: 0.01
@@ -135,24 +135,27 @@ parameters:
       decimal: 2
     EKF2_IMU_POS_X:
       description:
-        short: X position of IMU in body frame
-        long: Forward axis with origin relative to vehicle centre of gravity
+        short: IMU 在机体系中的 X 轴位置
+        long: |-
+          以车辆重心为原点，X 轴正方向朝前。
       type: float
       default: 0.0
       unit: m
       decimal: 3
     EKF2_IMU_POS_Y:
       description:
-        short: Y position of IMU in body frame
-        long: Forward axis with origin relative to vehicle centre of gravity
+        short: IMU 在机体系中的 Y 轴位置
+        long: |-
+          以车辆重心为原点，Y 轴正方向朝右。
       type: float
       default: 0.0
       unit: m
       decimal: 3
     EKF2_IMU_POS_Z:
       description:
-        short: Z position of IMU in body frame
-        long: Forward axis with origin relative to vehicle centre of gravity
+        short: IMU 在机体系中的 Z 轴位置
+        long: |-
+          以车辆重心为原点，Z 轴正方向朝下。
       type: float
       default: 0.0
       unit: m
@@ -161,7 +164,7 @@ parameters:
     EKF2_TAU_VEL:
       category: Developer
       description:
-        short: Time constant of the velocity output prediction and smoothing filter
+        short: 速度输出预测与平滑滤波的时间常数
       type: float
       default: 0.25
       max: 1.0
@@ -170,8 +173,9 @@ parameters:
     EKF2_TAU_POS:
       category: Developer
       description:
-        short: Output predictor position time constant
-        long: Controls how tightly the output track the EKF states
+        short: 输出预测器的位置时间常数
+        long: |-
+          控制位置输出跟随 EKF 状态的紧密程度。
       type: float
       default: 0.25
       min: 0.1
@@ -182,7 +186,7 @@ parameters:
     EKF2_VEL_LIM:
       category: Developer
       description:
-        short: Velocity limit
+        short: 速度上限
       type: float
       default: 100
       max: 299792458

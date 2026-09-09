@@ -5,7 +5,7 @@ parameters:
     EKF2_GBIAS_INIT:
       category: Developer
       description:
-        short: 1-sigma IMU gyro switch-on bias
+        short: IMU 陀螺仪上电偏置不确定度（1σ）
       type: float
       default: 0.1
       min: 0.0
@@ -16,7 +16,7 @@ parameters:
     EKF2_GYR_B_NOISE:
       category: Developer
       description:
-        short: Process noise for IMU rate gyro bias prediction
+        short: IMU 陀螺仪角速度偏置预测的过程噪声
       type: float
       default: 0.001
       min: 0.0
@@ -26,9 +26,9 @@ parameters:
     EKF2_GYR_B_LIM:
       category: Developer
       description:
-        short: Gyro bias learning limit
-        long: The ekf gyro bias states will be limited to within a range equivalent
-          to +- of this value.
+        short: 陀螺仪偏置学习限值
+        long: |-
+          EKF 陀螺仪偏置状态被限制在此值的正负范围内。
       type: float
       default: 0.15
       min: 0.0
