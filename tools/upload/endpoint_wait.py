@@ -84,6 +84,9 @@ def wait_for_recovery(
                         f"PORT_BUSY: {port} is already open by another process "
                         f"({output})"
                     )
+                # QGC/串口监视器排他占用时，本轮的 MAVLink 打开同样无法完成；
+                # 留到下一轮重试，保留原期限、设备绑定与多端点拒绝规则。
+                continue
 
             if reboot_requested:
                 continue

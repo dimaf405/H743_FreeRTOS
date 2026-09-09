@@ -396,6 +396,10 @@ def install_directories(pairs: list[tuple[Path, Path]]) -> None:
             )
             backup_roots.append(backup_root)
             for old_file in sorted(path for path in target.rglob("*") if path.is_file()):
+                candidate = staged / old_file.relative_to(target)
+                # 未改变的 Topic/目录保留 mtime；失败回滚仅恢复真正改动的文件。
+                if candidate.is_file() and candidate.read_bytes() == old_file.read_bytes():
+                    continue
                 backup_file = backup_root / old_file.relative_to(target)
                 backup_file.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(old_file, backup_file)
@@ -404,6 +408,8 @@ def install_directories(pairs: list[tuple[Path, Path]]) -> None:
                 path for path in staged.rglob("*") if path.is_file()
             ):
                 target_file = target / staged_file.relative_to(staged)
+                if target_file.is_file() and target_file.read_bytes() == staged_file.read_bytes():
+                    continue
                 target_file.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(staged_file, target_file)
                 installed.append(target_file)

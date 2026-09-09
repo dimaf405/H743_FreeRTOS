@@ -190,17 +190,27 @@ WSL 的 `make -j4 NO_COLOR=1 upload-ready` 与 `make -n upload MCUMGR_PORT=COM5 
 变化会自动失效并重新执行完整架构检查；单独执行 `make dima_rover`、`make verify`、`make firmware`、
 `make app-check` 或 `make check-architecture` 时仍强制实时检查。完整 Factory 发布流程不走快速调度。
 
-上传日志的每个 `[STAGE]` 现在同时打印 `t=`（从命令开始的累计耗时）和 `delta=`（距上一个阶段的
+上传日志的每个 `[STAGE]` 现在同时打印 `t=`（从上传器启动开始的累计耗时）和 `delta=`（距上一个阶段的
 耗时），可直接区分主机准备、Recovery/应用重枚举和镜像传输。当前开发阶段的主机上传流程不再等待或
 探测 `image_ok`；板端仍可在健康条件满足后自行确认，但该状态不再作为上传命令的成功门禁。
 
-该命令在用户未显式传入 `-jN` 时自动采用 `-j4`，只构建上传必需的应用 ELF/BIN、签名镜像并缓存
+该命令在用户未显式传入 `-jN` 时按 CPU/可用内存选择 1～8 路并行；未知内存回退最多 4 路。
+初始预算预留 768 MiB、每任务按 384 MiB 计算，不是实测单任务峰值；显式 `-jN` 或
+`DIMA_DEFAULT_JOBS=N` 优先。只构建上传必需的应用 ELF/BIN、签名镜像并缓存
 应用 ELF 与签名校验结果；不会为日常 OTA 重建 MCUboot、Factory HEX 或重跑完整 Factory 布局验收。
 `make dima_rover` 单独执行时仍保留完整发布验收。C 源码的 GCC 汇编 listing 默认关闭；需底层排查时
 先执行 `make clean`，再设置 `DIMA_LISTINGS=1` 完整重建。上传器默认选择
 `build/H743_FreeRTOS_signed.bin`，解析本地签名镜像 SHA-256，
 扫描并识别应用或 Recovery 串口；主机工具只解析一次，设备探测不再在构建前额外重复一轮独立
 USB 预检。板上已运行相同 active/confirmed hash 时默认跳过重写并恢复应用运行。
+
+构建新增 `[BUILD] total=`，覆盖主机准备到命令结束，并输出临时目录中的 JSON 计时报告；
+`DIMA_BUILD_TRACE=1` 才包装各编译调用并列出最慢文件，正常快速 OTA 不增加逐对象 Python 进程。
+默认自动缓存固定 ccache 4.11.3（Windows x64 归档及 exe 均核对 SHA-256）；不可用时回退 GCC，
+也可用 `DIMA_CCACHE=off` 关闭。对象缓存保存在主机工具缓存下的 `compiler-cache`，不随项目
+`clean` 清除；链接、签名和设备身份校验不使用该缓存。Python 依赖按解释器/依赖/安装配方内容
+隔离在 `host-python-envs`，与旧版可整体替换的 `host-python` 并列，安装使用跨进程锁。
+完整改动范围、无缓存/缓存重建与未授权板测的证据边界见 `BUILD_SPEED_OPTIMIZATION_ZH.md`。
 当前开发阶段不会因 Primary 仍是 active 但未 confirmed 的测试镜像而阻止上传；再次上传会直接覆盖
 Secondary，因此旧镜像的回滚副本也会随之丢失。签名校验、必要的 TEST 请求、复位和应用身份闭环不变。
 

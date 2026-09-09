@@ -2,8 +2,10 @@
 #   make IMAGE_VERSION=1.2.3+45 KEY_FILE=/secure/path/production.pem
 # IMAGE_VERSION 来自权威 firmware_identity.json；KEY_FILE 的内容身份另存 stamp，
 # 因而同一路径换钥匙也会使签名、MCUboot 与验证链失效重建。
-IMAGE_VERSION ?= $(shell $(PYTHON) $(FIRMWARE_IDENTITY_GENERATOR) \
+ifeq ($(origin IMAGE_VERSION),undefined)
+IMAGE_VERSION := $(shell $(PYTHON) $(FIRMWARE_IDENTITY_GENERATOR) \
 	--manifest $(FIRMWARE_IDENTITY_MANIFEST) --print-image-version)
+endif
 ifeq ($(strip $(IMAGE_VERSION)),)
 $(error IMAGE_VERSION could not be generated from $(FIRMWARE_IDENTITY_MANIFEST))
 endif
@@ -36,9 +38,11 @@ ARCHITECTURE_VERIFY_STAMP = $(BUILD_DIR)/.architecture-verified
 # architecture stamp 是对受控源码/manifest/生成器输入的内容寻址证明；上传可复用
 # 当前 stamp，但任一输入哈希漂移都会先完整重跑架构门禁。
 DIMA_ARCHITECTURE_FULL_GOALS := check-architecture app-check firmware verify dima_rover
-DIMA_ARCHITECTURE_FORCE_GOALS := $(if $(filter upload,$(MAKECMDGOALS)),\
+# 空目标列表必须 strip；续行缩进留下的空格也会被 Make 的 if 当作真，
+# 否则 upload-ready 即使指纹 current 仍强制全扫描，缓存永远无法命中。
+DIMA_ARCHITECTURE_FORCE_GOALS := $(strip $(if $(filter upload,$(MAKECMDGOALS)),\
 	$(filter check-architecture,$(MAKECMDGOALS)),\
-	$(filter $(DIMA_ARCHITECTURE_FULL_GOALS),$(MAKECMDGOALS)))
+	$(filter $(DIMA_ARCHITECTURE_FULL_GOALS),$(MAKECMDGOALS))))
 DIMA_ARCHITECTURE_CACHE_GOALS := architecture-ready upload upload-ready
 # Avoid hashing the architecture surface in generated-output preparation,
 # summaries, preflight, and full goals that will force the checker anyway.
@@ -136,54 +140,7 @@ __dima_clean_progress:
 	$(DIMA_PROGRESS_RUN) --label CLEAN --target "$(BUILD_DIR)" \
 		--display "$(BUILD_DIR)" -- rm -fR "$(BUILD_DIR)"
 
-GENERATION_HOST_REQUIREMENTS := tools/generation/requirements-host.txt
-
-# 生成器依赖使用固定归档哈希并禁用隐式依赖解析，避免 PyPI 最新版本改变
-# 参数、uORB 或 Metadata 产物。Windows/Linux 使用各自主机 Python 和缓存，
-# 依赖锁同时允许对应 wheel 与受校验的源码包，不能跨平台复用 C 扩展模块。
-$(HOST_TOOLS_STAMP): $(MCUBOOT_ROOT)/scripts/requirements.txt \
-		$(GENERATION_HOST_REQUIREMENTS) make/release.mk
-	@set -eu; \
-		mkdir -p "$(HOST_TOOLS_CACHE_ROOT)"; \
-		tmp="$(HOST_PYTHON_DIR).tmp.$$$$"; \
-		old="$(HOST_PYTHON_DIR).old.$$$$"; \
-		rm -rf "$$tmp" "$$old"; \
-		cleanup() { \
-			status=$$?; \
-			trap - EXIT HUP INT TERM; \
-			rm -rf "$$tmp"; \
-			if test -e "$$old"; then \
-				if test -e "$(HOST_PYTHON_DIR)"; then \
-					rm -rf "$$old"; \
-				else \
-					mv "$$old" "$(HOST_PYTHON_DIR)"; \
-				fi; \
-			fi; \
-			exit "$$status"; \
-		}; \
-		trap cleanup EXIT HUP INT TERM; \
-		if test "$(V)" = "1"; then \
-			printf '%s\n' '+ $(PYTHON) -m pip install --disable-pip-version-check --target $(HOST_PYTHON_DIR) -r $<'; \
-		fi; \
-		$(PYTHON) -m pip install --disable-pip-version-check \
-			--target "$$tmp" -r "$<"; \
-		$(PYTHON) -m pip install --disable-pip-version-check \
-			--upgrade --no-deps --require-hashes \
-			--target "$$tmp" -r "$(GENERATION_HOST_REQUIREMENTS)"; \
-		if test -e "$(HOST_PYTHON_DIR)"; then \
-			mv "$(HOST_PYTHON_DIR)" "$$old"; \
-		fi; \
-		if ! mv "$$tmp" "$(HOST_PYTHON_DIR)"; then \
-			exit 1; \
-		fi; \
-		if ! touch "$@"; then \
-			rm -rf "$(HOST_PYTHON_DIR)"; \
-			exit 1; \
-		fi; \
-		rm -rf "$$old"; \
-		trap - EXIT HUP INT TERM; \
-		$(DIMA_PROGRESS_RUN) --label HOST --target "$@" \
-			--display "$(HOST_PYTHON_DIR)" --quiet-command -- true
+include make/host_tools.mk
 
 host-tools: $(HOST_TOOLS_STAMP)
 

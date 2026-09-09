@@ -3,7 +3,6 @@
 #include "boot_health/BootHealthService.hpp"
 #include "dronecan_mag2/DroneCanMag2.hpp"
 #include "magnetometer/VehicleMagnetometer.hpp"
-#include "logging/LogService.hpp"
 #include "um982/Um982Gps.hpp"
 #include "mavlink/MavlinkService.hpp"
 #include "mission/MissionService.hpp"
@@ -11,7 +10,6 @@
 #include "parameters/flashfs.h"
 #include "api/PlatformTypes.hpp"
 #include "api/Services.hpp"
-#include "control/RoverDifferential.hpp"
 #include "rc/RcManualInput.hpp"
 #include "auto/AutoMode.hpp"
 #include "auto_calibration/AutoCalibrationMode.hpp"
@@ -22,11 +20,16 @@
 #include "safety/Commander.hpp"
 #include "serial/SerialConfig.hpp"
 #include "icm42688p/ICM42688P.hpp"
-#include "imu/VehicleImu.hpp"
-#include "ekf2/Ekf2.hpp"
 #include "calibration/SensorCalibration.hpp"
 #include "lifecycle/module_manager.hpp"
 #include "maintenance/RuntimeMaintenanceCoordinator.hpp"
+
+// 引用成员不需要完整类型；具体实现只在装配 .cpp 展开，避免 appMain 等
+// 入口反复解析 EKF/控制器的模板和生成头。静态对象、布局及构造顺序不变。
+namespace dima::modules::logging { class LogService; }
+namespace dima::modules::sensors { class VehicleImu; }
+namespace dima::modules::ekf2 { class Ekf2; }
+namespace dima::rover::control { class RoverDifferential; }
 
 namespace dima::rover {
 

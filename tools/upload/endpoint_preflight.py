@@ -76,6 +76,9 @@ def endpoint_preflight(
                         f"PORT_BUSY: {port} is already open by another process "
                         f"({output})"
                     )
+                # 同轮已证明排他占用，不再启动另一进程重复打开该 COM；
+                # 下一轮仍按原 1 Hz 和完整等待期限重新探测，不结束占用者。
+                continue
 
             _, identity, identify_output = try_application_identify(
                 codec,

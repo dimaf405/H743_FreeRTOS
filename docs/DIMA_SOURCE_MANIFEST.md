@@ -402,3 +402,7 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 ## 2026-09-09 四项生产代码体积优化
 
 本批新增本地薄适配：UM982 固定子串匹配复用既有有界比较，Param 模板共享按值类型的运行实体，ArxRls 共享与延迟 D 无关的原矩阵更新表达式，USB 不再主动配置无生产消费者的 stdout FILE 缓冲。参数/消息权威输入、RLS 状态及公式顺序、Console 生产输出与 _write 兼容源码保留；full newlib 和浮点选项不变。原始上游快照未修改，当前适配边界已同步到第 17 节；独立基线、各项收益与正式验收见 `CODE_SIZE_FOUR_OPTIMIZATIONS_ZH.md`。
+
+## 2026-09-09 构建到上传优化
+
+本地构建薄适配沿用 GNU Make、正式生成器、Arm GNU 10.3.1 与 MCUboot 上传合同。主机对象缓存使用 ccache 上游 v4.11.3 Windows x86_64 发行包，归档 SHA-256 为 `bfd031cad091b7db7e68c3303be542b0f7fee7a3e716d76ec6f7e6c7ef4b3526`，仅在主机缓存安装已核对的 exe，不引入固件依赖。生成器保留上游内容与权威清单，只对未变化产物保留 mtime；ApplicationContext 的引用类型前置声明不改变对象或算法。上传仅收敛同轮串口占用处理和注册表快照，不修改 wire、窗口、回滚或设备身份检查。实测与并发归因边界见 `BUILD_SPEED_OPTIMIZATION_ZH.md`。

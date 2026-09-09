@@ -1,4 +1,8 @@
 #include "ApplicationContext.hpp"
+#include "logging/LogService.hpp"
+#include "control/RoverDifferential.hpp"
+#include "imu/VehicleImu.hpp"
+#include "ekf2/Ekf2.hpp"
 #include "api/Boot.hpp"
 #include "api/Console.hpp"
 #include "api/Memory.hpp"

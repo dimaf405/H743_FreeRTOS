@@ -13,6 +13,22 @@ def parser() -> argparse.ArgumentParser:
     main_parser = argparse.ArgumentParser()
     subparsers = main_parser.add_subparsers(dest="operation", required=True)
 
+    from .session import finish as session_finish, host_key, jobs, start
+    host_parser = subparsers.add_parser("host-key")
+    host_parser.set_defaults(handler=host_key)
+    jobs_parser = subparsers.add_parser("jobs")
+    jobs_parser.set_defaults(handler=jobs)
+    start_parser = subparsers.add_parser("session-start")
+    start_parser.add_argument("--build-dir", required=True)
+    start_parser.add_argument("--cache-root", required=True)
+    start_parser.add_argument("--ccache", choices=("auto", "off"), default="auto")
+    start_parser.add_argument("--jobs", default="")
+    start_parser.set_defaults(handler=start)
+    end_parser = subparsers.add_parser("session-finish")
+    end_parser.add_argument("--session", required=True)
+    end_parser.add_argument("--exit-code", type=int, required=True)
+    end_parser.set_defaults(handler=session_finish)
+
     prepare_parser = subparsers.add_parser("prepare")
     prepare_parser.add_argument("--plan", required=True)
     prepare_parser.add_argument("--state", required=True)
@@ -58,4 +74,3 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     arguments = parser().parse_args()
     return int(arguments.handler(arguments))
-

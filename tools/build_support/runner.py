@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import shlex
 import subprocess
 import sys
+import time
 
 from .formatting import (
     child_exit_code,
@@ -19,6 +21,7 @@ from .formatting import (
 from .models import CAPTURED_OUTPUT_LABELS, PROGRESS_ERROR_EXIT, ProgressError
 from .plan import derive_step
 from .state import finish_step, reserve_step
+from .session import record
 
 def run_step(arguments: argparse.Namespace) -> int:
     command = list(arguments.command)
@@ -56,6 +59,9 @@ def run_step(arguments: argparse.Namespace) -> int:
     )
     captured_stdout = b""
     captured_stderr = b""
+    started = time.monotonic()
+    if os.environ.get("DIMA_BUILD_SESSION") and step.label not in {"CC", "CXX", "AS"}:
+        print(f"[START] {step.label} {step.display}", flush=True)
     try:
         completed = subprocess.run(
             command,
@@ -72,6 +78,8 @@ def run_step(arguments: argparse.Namespace) -> int:
         returncode = 127
     except KeyboardInterrupt:
         returncode = 130
+
+    record(step.label, step.display, time.monotonic() - started, returncode)
 
     if returncode != 0:
         emit_child_output(captured_stdout, sys.stdout)

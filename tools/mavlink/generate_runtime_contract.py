@@ -600,6 +600,15 @@ def replace_with_retry(source: pathlib.Path, destination: pathlib.Path) -> None:
 def install_tree(staging: pathlib.Path, destination: pathlib.Path) -> None:
     """原子替换整棵生成树，失败时恢复旧版，避免混合 wire 头。"""
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # 整树原子切换仍保留；相同内容继承旧 mtime，避免未改变的 common 头
+    # 让全部 MAVLink 消费者重新编译。不能用时间戳跳过真实字节比较。
+    # 成功 stamp 不继承旧 mtime，否则输入变过但输出相同时会永久重复生成。
+    for candidate in staging.rglob("*"):
+        if candidate.is_file() and candidate.name != ".generated.json":
+            previous = destination / candidate.relative_to(staging)
+            if previous.is_file() and previous.read_bytes() == candidate.read_bytes():
+                stat = previous.stat()
+                os.utime(candidate, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     backup = destination.with_name(destination.name + ".previous")
     if backup.exists():
         shutil.rmtree(backup)

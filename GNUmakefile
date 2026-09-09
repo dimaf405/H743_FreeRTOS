@@ -13,7 +13,10 @@ override BUILD_DIR := $(if $(strip $(BUILD_DIR)),$(BUILD_DIR),$(DIMA_DEFAULT_BUI
 endif
 export BUILD_DIR
 DIMA_ARM_GCC_BOOTSTRAP := tools/bootstrap_arm_gcc.py
-DIMA_DEFAULT_JOBS ?= 4
+DIMA_DEFAULT_JOBS ?= $(shell $(PYTHON) tools/build_progress.py jobs)
+DIMA_CCACHE ?= auto
+DIMA_BUILD_TRACE ?= 0
+export DIMA_BUILD_TRACE
 ifeq ($(strip $(DIMA_DEFAULT_JOBS)),)
 $(error DIMA_DEFAULT_JOBS must be a positive job count)
 endif
@@ -66,6 +69,33 @@ DIMA_FAST_UPLOAD_DISPATCH := $(and \
 	$(if $(filter dima_rover,$(DIMA_REQUESTED_GOALS)),\
 		$(filter upload,$(DIMA_REQUESTED_GOALS)),1))
 
+# 同一会话计时覆盖主机准备到上传结束；不通过 Python 包装递归 Make，保留
+# GNU Make jobserver。逐对象计时仅在 TRACE=1 时启用，日常 OTA 不增加编译包装进程。
+define DIMA_START_SESSION
+DIMA_BUILD_SESSION=$$($(PYTHON) tools/build_progress.py session-start \
+	--build-dir "$(BUILD_DIR)" --cache-root "$(HOST_TOOLS_CACHE_ROOT)" \
+	--ccache "$(if $(DIMA_TOOLCHAIN_GOALS),$(DIMA_CCACHE),off)" --jobs="$(DIMA_PARALLEL_FLAG)"); \
+export DIMA_BUILD_SESSION; \
+IFS= read -r DIMA_CCACHE_EXECUTABLE < "$$DIMA_BUILD_SESSION/ccache-path"; \
+export DIMA_CCACHE_EXECUTABLE; \
+export CCACHE_DIR="$(HOST_TOOLS_CACHE_ROOT)/compiler-cache"; \
+export CCACHE_BASEDIR="$(CURDIR)" CCACHE_MAXSIZE=2G CCACHE_COMPILERCHECK=content; \
+export CCACHE_SLOPPINESS= CCACHE_IGNOREHEADERS= CCACHE_IGNOREOPTIONS=; \
+export CCACHE_STATSLOG="$$DIMA_BUILD_SESSION/ccache.log"; \
+progress_dir=; \
+cleanup() { \
+	status=$$?; trap - EXIT HUP INT TERM; \
+	$(PYTHON) tools/build_progress.py session-finish \
+		--session "$$DIMA_BUILD_SESSION" --exit-code "$$status" || true; \
+	if test -n "$$progress_dir"; then \
+		$(PYTHON) -c "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)" "$$progress_dir"; \
+	fi; \
+	exit "$$status"; \
+}; \
+trap cleanup EXIT; \
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM;
+endef
+
 .DEFAULT_GOAL := __dima_dispatch
 .PHONY: __dima_dispatch $(DIMA_REQUESTED_GOALS)
 
@@ -94,6 +124,7 @@ ifneq ($(DIMA_FAST_UPLOAD_DISPATCH),)
 # Application ELF、Secondary/pending/reset/identity 等安全证明仍由依赖链保留。
 __dima_dispatch:
 	+@set -eu; \
+		$(DIMA_START_SESSION) \
 		toolchain_path="$(GCC_PATH)"; \
 		if test -n "$(DIMA_TOOLCHAIN_GOALS)" && test -z "$$toolchain_path"; then \
 			toolchain_path=$$($(PYTHON) $(DIMA_ARM_GCC_BOOTSTRAP) \
@@ -113,6 +144,7 @@ else
 
 __dima_dispatch:
 	+@set -eu; \
+		$(DIMA_START_SESSION) \
 		toolchain_path="$(GCC_PATH)"; \
 		if test -n "$(DIMA_TOOLCHAIN_GOALS)" && test -z "$$toolchain_path"; then \
 			toolchain_path=$$($(PYTHON) $(DIMA_ARM_GCC_BOOTSTRAP) \
@@ -122,15 +154,6 @@ __dima_dispatch:
 			printf '[TOOLCHAIN] Build\n  Arm GCC    : %s\n\n' "$$toolchain_path"; \
 		fi; \
 		progress_dir=$$($(PYTHON) -c "import pathlib,tempfile; print(pathlib.Path(tempfile.mkdtemp(prefix='dima-build-progress.')).as_posix())"); \
-		cleanup() { \
-			status=$$?; \
-			trap - EXIT HUP INT TERM; \
-			if test -n "$$progress_dir"; then \
-				$(PYTHON) -c "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)" "$$progress_dir"; \
-			fi; \
-			exit "$$status"; \
-		}; \
-		trap cleanup EXIT HUP INT TERM; \
 		generated_prepare_goal=__dima_prepare_make_includes; \
 		if test -n "$(DIMA_STABILIZE_GENERATED_GOALS)"; then \
 			generated_prepare_goal=__dima_prepare_generated; \
@@ -164,9 +187,7 @@ __dima_dispatch:
 				GCC_PATH="$$toolchain_path" \
 				DIMA_SUMMARY_GOALS="$(DIMA_REQUESTED_GOALS)" \
 				__dima_summary; \
-		fi; \
-		trap - EXIT HUP INT TERM; \
-		$(PYTHON) -c "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)" "$$progress_dir"
+		fi
 
 endif
 endif

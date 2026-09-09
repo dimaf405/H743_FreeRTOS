@@ -34,6 +34,10 @@ DIMA_PROJECT_LISTING_FLAG = $(if $(filter 1,$(DIMA_LISTINGS)),$(DIMA_PROJECT_LIS
 PYTHON ?= python3
 BUILD_PROGRESS_TOOL ?= tools/build_progress.py
 DIMA_PROGRESS_STATE ?=
+DIMA_BUILD_TRACE ?= 0
+ifneq ($(filter-out 0 1,$(DIMA_BUILD_TRACE)),)
+$(error DIMA_BUILD_TRACE must be 0 or 1)
+endif
 DIMA_PROGRESS_VERBOSE_FLAG = $(if $(filter 1,$(V)),--verbose,)
 DIMA_PROGRESS_NO_COLOR_FLAG = $(if $(strip $(NO_COLOR)),--no-color,)
 DIMA_PROGRESS_RUN = $(PYTHON) $(BUILD_PROGRESS_TOOL) run \
@@ -385,6 +389,7 @@ $(MESSAGE_GENERATED_MAKEFILE): make/project.mk $(MESSAGE_GENERATOR_DEPS) \
 			--upstream-root $(UORB_UPSTREAM_ROOT) \
 			--output $(MESSAGE_GENERATED_DIR) \
 			--compat-output $(MESSAGE_COMPAT_GENERATED_DIR)
+	@touch "$@"
 
 include $(MESSAGE_GENERATED_MAKEFILE)
 
@@ -446,6 +451,7 @@ parameter-generated: $(PARAMETER_GENERATED_OUTPUTS)
 			--commit 1f6b6f61f8f42eaab0269c16a442cb580f954d7c \
 			--verify
 
+# 输出头保留未变 mtime，但成功标记必须刷新，避免同一输入变动反复触发生成。
 $(LOGGER_CONTRACT_STAMP): make/project.mk $(LOGGER_GENERATOR_DEPS) \
 		$(MESSAGE_GENERATED_OUTPUTS) $(PARAMETER_GENERATED_OUTPUTS) | \
 		$(HOST_TOOLS_STAMP)
@@ -462,6 +468,7 @@ $(LOGGER_CONTRACT_STAMP): make/project.mk $(LOGGER_GENERATOR_DEPS) \
 			--ulog-source $(LOGGER_ULOG_SOURCE) \
 			--source-manifest $(UORB_SOURCE_MANIFEST) \
 			--output $(LOGGER_GENERATED_DIR)
+	@touch "$@"
 
 $(filter-out $(LOGGER_CONTRACT_STAMP),$(LOGGER_GENERATED_OUTPUTS)): | \
 		$(LOGGER_CONTRACT_STAMP)
@@ -863,13 +870,18 @@ DIMA_BOARD_COMPOSITION_OBJECT := \
 	$(BUILD_DIR)/Boards/H743/Src/platform_composition.o
 DIMA_CUBEMX_APPLICATION_BRIDGE_OBJECT := $(BUILD_DIR)/main.o
 DIMA_CUBEMX_USB_CONSOLE_BRIDGE_OBJECT := $(BUILD_DIR)/usbd_cdc_if.o
-$(PROJECT_OBJECTS): | $(PARAMETER_GENERATED_STAMP) $(PARAMETER_METADATA_STAMP) \
-	$(MESSAGE_GENERATED_STAMP) $(MAVLINK_GENERATED_STAMP) \
-	$(DIMA_DRONECAN_PROTOCOL_HEADER) \
-	$(FIRMWARE_IDENTITY_GENERATED_STAMP) $(SENSOR_DEVICE_GENERATED_STAMP) \
-	$(UM982_GENERATED_STAMP) $(LOGGER_CONTRACT_STAMP)
-# 项目对象只等待实际编译所需的生成合同；这些 order-only 依赖避免 stamp 的
-# mtime 更新触发无意义重编译，生成输出的真实内容依赖仍由各自规则维护。
+# 二次展开读取目标实际可见的 include 根，不手写消费者名单。首次编译还没有
+# .d 时也保证需要的生成头先完成；不相关的纯算法不再等待全部协议/Metadata。
+.SECONDEXPANSION:
+$(PROJECT_OBJECTS): | \
+	$$(if $$(filter $(DIMA_PARAMETER_GENERATED_INCLUDES),$$(DIMA_PRIVATE_INCLUDES)),$(PARAMETER_GENERATED_STAMP)) \
+	$$(if $$(filter $(DIMA_COMPONENT_GENERATED_INCLUDES),$$(DIMA_PRIVATE_INCLUDES)),$(PARAMETER_METADATA_STAMP)) \
+	$$(if $$(filter $(DIMA_MESSAGE_GENERATED_INCLUDES),$$(DIMA_PRIVATE_INCLUDES)),$(MESSAGE_GENERATED_STAMP)) \
+	$$(if $$(filter $(MAVLINK_GENERATED_DIR),$$(DIMA_PRIVATE_INCLUDES)),$(MAVLINK_GENERATED_STAMP)) \
+	$$(if $$(filter $(DIMA_DRONECAN_CONTRACT_INCLUDES),$$(DIMA_PRIVATE_INCLUDES)),$(DIMA_DRONECAN_PROTOCOL_HEADER)) \
+	$$(if $$(filter $(DIMA_UM982_GENERATED_INCLUDES),$$(DIMA_PRIVATE_INCLUDES)),$(UM982_GENERATED_STAMP)) \
+	$$(if $$(filter $(DIMA_LOGGER_GENERATED_INCLUDES),$$(DIMA_PRIVATE_INCLUDES)),$(LOGGER_CONTRACT_STAMP)) \
+	$(FIRMWARE_IDENTITY_GENERATED_STAMP) $(SENSOR_DEVICE_GENERATED_STAMP)
 override OBJECTS += $(PROJECT_OBJECTS)
 
 # Object files share one Application build directory.  Keep a single profile
@@ -1068,10 +1080,15 @@ CXX = $(PREFIX)g++
 endif
 DIMA_REAL_CXX := $(CXX)
 
-ifneq ($(strip $(DIMA_PROGRESS_STATE)),)
-override CC = $(DIMA_PROGRESS_RUN) --kind cc --target "$@" --source "$<" -- $(DIMA_REAL_CC)
+# 只对 .o 编译调用 ccache；链接、汇编、签名仍直接调用原工具。缓存键继续
+# 覆盖真实编译器、宏、选项与 include，不能通过 sloppiness 制造命中。
+DIMA_CCACHE_PREFIX = $(if $(and $(strip $(DIMA_CCACHE_EXECUTABLE)),$(filter %.o,$@)),"$(DIMA_CCACHE_EXECUTABLE)" ,)
+override CC = $(DIMA_CCACHE_PREFIX)$(DIMA_REAL_CC)
+override CXX = $(DIMA_CCACHE_PREFIX)$(DIMA_REAL_CXX)
+ifneq ($(strip $(DIMA_PROGRESS_STATE)$(filter 1,$(DIMA_BUILD_TRACE))),)
+override CC = $(DIMA_PROGRESS_RUN) --kind cc --target "$@" --source "$<" -- $(DIMA_CCACHE_PREFIX)$(DIMA_REAL_CC)
 override AS = $(DIMA_PROGRESS_RUN) --kind as --target "$@" --source "$<" -- $(DIMA_REAL_AS)
-override CXX = $(DIMA_PROGRESS_RUN) --kind cxx --target "$@" --source "$<" -- $(DIMA_REAL_CXX)
+override CXX = $(DIMA_PROGRESS_RUN) --kind cxx --target "$@" --source "$<" -- $(DIMA_CCACHE_PREFIX)$(DIMA_REAL_CXX)
 override CP = $(DIMA_PROGRESS_RUN) --kind objcopy --target "$@" --source "$<" -- $(DIMA_REAL_CP)
 override SZ = $(DIMA_PROGRESS_RUN) --kind size --target "$@" --source "$<" -- $(DIMA_REAL_SZ)
 .SILENT:
@@ -1104,15 +1121,20 @@ override CFLAGS += -Werror
 
 ifneq ($(strip $(PROJECT_C_OBJECTS)),)
 $(PROJECT_C_OBJECTS): $(BUILD_DIR)/%.o: %.c GNUmakefile Makefile make/project.mk
-	@mkdir -p $(@D)
 	$(CC) -c $(DIMA_PROJECT_CFLAGS) $(DIMA_PROJECT_LISTING_FLAG) $< -o $@
 endif
 
 ifneq ($(strip $(PROJECT_CXX_OBJECTS)),)
 $(PROJECT_CXX_OBJECTS): $(BUILD_DIR)/%.o: %.cpp GNUmakefile Makefile make/project.mk
-	@mkdir -p $(@D)
 	$(CXX) -c $(DIMA_PROJECT_CXXFLAGS) $< -o $@
 endif
+
+# 目录从正式对象闭包派生，一次构建每个目录最多创建一次；避免 Windows
+# 缓存命中后仍为每个对象启动 mkdir。order-only 不把目录 mtime 当作源码变化。
+DIMA_OBJECT_DIRECTORIES := $(sort $(dir $(PROJECT_OBJECTS)))
+$(DIMA_OBJECT_DIRECTORIES): | $(BUILD_DIR)
+	@mkdir -p "$@"
+$(PROJECT_OBJECTS): | $$(dir $$@)
 
 # Generated MAVLink C library headers (c_library_v2) trigger packed-member
 # and alignment warnings, suppressed upstream by PX4 the same way.

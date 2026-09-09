@@ -7,3 +7,4 @@
 - **DTCM 热点对象：** `Ekf2`、`RoverDifferential`、`VehicleImu` 使用独立 `.dima_dtcm_bss.*` 原始存储，组合根持有引用；启动先清零，Services/heap 就绪后在原成员构造顺序中放置构造，运行期仍按原 start/stop 管理。动态 EKF RingBuffer 继续使用 D1 heap，整个静态 DTCM 低区不得越过 64 KiB MSP 预算边界。
 - **禁止事项：** 不在装配层复制控制算法，不绕过参数、消息总线、安全状态和执行器链。
 - **上游 API 保留：** 以适配和组合方式复用上游公开 API；自有产品代码使用 `dima::rover` 命名空间，不改写上游标识。
+- **编译边界：** `ApplicationContext.hpp` 对独立存储、仅以引用持有的 LogService、VehicleImu、Ekf2、RoverDifferential 使用前置声明，完整实现由装配 `.cpp` 引入；不更改静态对象布局、首次构造顺序、owner 或 watchdog 调用路径。

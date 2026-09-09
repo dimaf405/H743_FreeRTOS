@@ -85,10 +85,11 @@ def windows_instance_present(instance_id: str) -> bool | None:
         return None
 
 
-def windows_registry_port_binding_candidates() -> dict[str, dict[str, str]]:
+def windows_registry_port_binding_candidates(
+    present_ports: set[str],
+) -> dict[str, dict[str, str]]:
     if winreg is None:
         return {}
-    present_ports = windows_registry_present_ports()
     if not present_ports:
         return {}
 
@@ -196,13 +197,15 @@ def windows_serial_ports() -> list[str]:
 
 
 def windows_port_bindings() -> dict[str, str]:
-    candidates = windows_registry_port_binding_candidates()
+    # 一次枚举使用同一份 present 集合，避免在候选扫描后重复访问注册表。
+    # 快照仅属于本次调用；Recovery/应用重枚举后必须重新读取，不能缓存设备身份。
+    present_ports = windows_registry_present_ports()
+    candidates = windows_registry_port_binding_candidates(present_ports)
     bindings: dict[str, str] = {}
     for port, port_candidates in candidates.items():
         unique_bindings = set(port_candidates.values())
         if len(unique_bindings) == 1:
             bindings[port] = next(iter(unique_bindings))
-    present_ports = windows_registry_present_ports()
     if present_ports and bindings.keys() >= present_ports:
         return bindings
 
@@ -285,4 +288,3 @@ def serial_ports(runtime: McumgrRuntime) -> list[str]:
     if runtime.serial_backend == SerialBackend.WINDOWS_COM:
         return windows_serial_ports()
     return posix_serial_ports()
-

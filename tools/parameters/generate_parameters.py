@@ -583,6 +583,11 @@ def install_directories_atomically(pairs: list[tuple[Path, Path]]) -> None:
             # Windows 可能拒绝替换一个刚关闭的目录；文件级 os.replace 仍保证
             # 每份公开合同不会以半写状态出现，stamp 只会在整个事务成功后生成。
             for old_file in sorted(path for path in target.rglob("*") if path.is_file()):
+                candidate = staged / old_file.relative_to(target)
+                # 内容不变保留原文件/mtime，避免参数说明或生成器变化让所有
+                # 消费者重编译；变更和删除仍进入原有整组备份/回滚事务。
+                if candidate.is_file() and candidate.read_bytes() == old_file.read_bytes():
+                    continue
                 backup_file = backup_root / old_file.relative_to(target)
                 backup_file.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(old_file, backup_file)
@@ -592,6 +597,8 @@ def install_directories_atomically(pairs: list[tuple[Path, Path]]) -> None:
                 path for path in staged.rglob("*") if path.is_file()
             ):
                 target_file = target / staged_file.relative_to(staged)
+                if target_file.is_file() and target_file.read_bytes() == staged_file.read_bytes():
+                    continue
                 target_file.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(staged_file, target_file)
                 installed.append(target_file)

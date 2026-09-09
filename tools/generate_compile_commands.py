@@ -90,6 +90,9 @@ def make_plan(
         "GNUmakefile",
         "DIMA_BUILD_INTERNAL=1",
         "DIMA_PROGRESS_STATE=",
+        # compilation database 记录真实编译器，不把缓存/观测包装层交给 IDE。
+        "DIMA_CCACHE_EXECUTABLE=",
+        "DIMA_BUILD_TRACE=0",
         f"PYTHON={python}",
         f"GCC_PATH={gcc_path.as_posix()}",
         *make_variables,

@@ -8,7 +8,9 @@ import hashlib
 import json
 import lzma
 import math
+import os
 import re
+import tempfile
 from pathlib import Path
 
 
@@ -71,6 +73,19 @@ def compress_xz(data: bytes) -> bytes:
         data, format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC64,
         preset=9 | lzma.PRESET_EXTREME
     )
+
+
+def write_if_changed(path: Path, data: bytes) -> None:
+    """生成内容相同则保留 mtime；单文件原子替换，最终 stamp 仍负责整组校验。"""
+    if path.is_file() and path.read_bytes() == data:
+        return
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def mavlink_crc32(data: bytes) -> int:
@@ -698,7 +713,7 @@ def main() -> int:
         ).encode("utf-8"),
     }
     for filename, data in outputs.items():
-        (args.output / filename).write_bytes(data)
+        write_if_changed(args.output / filename, data)
 
     stamp = {
         "actuator_crc32": actuator_crc,
@@ -712,11 +727,8 @@ def main() -> int:
         "parameter_crc32": parameter_crc,
         "public_parameter_count": len(parameters),
     }
-    (args.output / ".generated.json").write_text(
-        json.dumps(stamp, sort_keys=True, separators=(",", ":")),
-        encoding="utf-8",
-        newline="\n",
-    )
+    write_if_changed(args.output / ".generated.json",
+                     json.dumps(stamp, sort_keys=True, separators=(",", ":")).encode("utf-8"))
     print(
         "generated parameter metadata: "
         f"{len(parameters)} params, "
