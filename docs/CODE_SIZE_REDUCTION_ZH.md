@@ -1,6 +1,6 @@
 # 代码体积与逻辑收敛记录
 
-当前第三轮结果见第 7 节；前文保留各轮归档证据，不覆盖历史基线。
+当前第四轮结果见第 8 节；前文保留各轮归档证据，不覆盖历史基线。
 
 ## 1. 范围与完成状态
 
@@ -234,3 +234,24 @@ Logger/uORB 生成清单以及参数 JSON/XML/上游原始头与本轮基线逐�
 | `build/H743_FreeRTOS.bin` | 616784 | `869e14d7aa6d004cc132eaa3318420aec569df2ebdd1e0fd9c83dda8df5658d9` |
 | `build/H743_FreeRTOS_signed.bin` | 617960 | `7803a5700834f00fb6c3015a747535f3718209291761b30a5da1b26e2d51ec0b` |
 | `build/H743_FreeRTOS_factory.hex` | 1603427 | `1ae5341402bfff499d872c47329ca8b9acfbd19d246a54e20ea5d9b8f6c1c8be` |
+
+## 8. 第四轮：MAVLink 只读应答与会话清理
+
+本轮只修改 `MavlinkParameterExt.cpp`、`MavlinkParameters.hpp`、`MavlinkMetadataFtp.cpp/.hpp`：共享 EXT 编码发送入口，直接消费生成的类型/容量；完整 FTP reset 复用会话清理，超时复用完整 reset，协议 ResetSessions 直接清理会话并保留 ACK。任务进度观察与断链复位的状态保留语义不同，Flash/SD 写入分支的恢复职责也不同，本轮不合并它们。
+
+边界核对：EXT 字符串格式、索引拒绝及未找到哨兵不变；空发送回调之前仍执行编码，保持序号推进；FTP 完整复位清缓存而协议关闭不提前清本次应答。`MAV_PARAM_EXT_TYPE_INT32/REAL32` 仍为 6/9，生成的名称/值容量仍为 16/128，未修改任何权威参数、消息、XML 或生成工具。
+
+2026-09-09 Windows 基线 `[7/7]` exit 0，HEAD 为 `10650e7dd5a08bb864a0cdd8c7106be551d24d71`。BIN 616792 B、SHA-256 `27541dcb9d707d6bc2d22c8295d6fc295c095c92b3694e79858c42922388e2f7`；DTCM 60896 B、SRAM 530784 B、D2 data 172096 B。这些数值已包含其他会话的 DTCM/链接布局修改，不与上轮直接比较来计算本批收益。基线源码、生成清单与制品归档到 `C:\Users\master\AppData\Local\Temp\dima-code-size-round4-d99d241dde90492497e3d536dfba1758`；本批四个代码文件在归档时均无未提交修改。
+
+完成后四个代码文件新增 24 行、删除 37 行，净减 13 行。Windows 完整目标 `[153/153]` exit 0，架构通过 454 个首方源文件；MAVLink/uORB/Logger 生成清单与参数 JSON/XML/上游原始头均与基线逐字节一致，签名/Factory 布局和未解析符号检查通过。没有新增或修改测试、框架及仿真路径，`git diff --check` 通过。
+
+| 指标 | 第四轮基线 | 第四轮后 | 差值 |
+|---|---:|---:|---:|
+| Application BIN | 616792 B | 616752 B | −40 B |
+| EXT 应答处理及编码函数合计 | 550 B | 526 B | −24 B |
+| FTP reset / expire / reset_session 合计 | 116 B | 100 B | −16 B |
+| DTCM / SRAM / D2 data 地址占用 | 60896 / 530784 / 172096 B | 60896 / 530784 / 172096 B | 不变 |
+
+EXT 统计包含基线中 110 B 的 `mavlink_msg_param_ext_value_encode.constprop.0.isra.0`，它在新镜像中被内联进公共回复函数；不能只比较两个调用者就漏算原有编码体。本批收益属于小幅维护性收敛，不宣称大幅代码减重或 RAM 节省。未修改或提交并发的 DTCM、启动、组合根和 IMU/遥测代码，也未进行刷机。
+
+该轮实现验收时的 image digest 为 `2fc124dc58c1b94e21fbb4e55ee719e8c600883073bf8827394173f8142a56f6`；BIN SHA-256 为 `bb87e483a3f8dd01301376398ff508a30d46ccf7a8c04085b0c0775eebc7427d`，signed BIN 617926 B、SHA-256 为 `d6c98cb3d7c096f323f8b32925d90fa09f1138b949501f5ebaa38eddd3962899`。前文三轮的四个提交不包含本批内容；本批后续提交使用新的固件身份，不能直接沿用这里的制品哈希。

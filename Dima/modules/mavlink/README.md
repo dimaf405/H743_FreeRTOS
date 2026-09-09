@@ -40,6 +40,11 @@
 - 源码审查对照官方 QGC 5.1.3 commit `7fe5b11b18a4c2eec17beb1b2a3ef45ac0c4e32e`。它可以通过标准目录发现 `Auto Calibration`，但没有本项目的专用校准向导、圆形围栏覆盖层或结构化增益验收页；参数页和消息面板分别承载配置/结果与操作提示。实际发现、切换和重连仍需板端验证，未修改 QGC。
 - STATUSTEXT 短文本保持 `id=0`；长文本采用非零 ID 分片，整 50 字节倍数另发带 NUL 的结束片，使 QGC 5.1.3 正确结束重组。`[autocal]` 在阶段切换及每 5 s 重报当前边界、Arm 等待和临时/最终状态，重连不依赖已经丢失的一次性提示。
 
+## 参数 EXT 与只读 Metadata FTP
+
+- EXT 正常与未找到回复共用标准 `PARAM_EXT_VALUE` 编码/发送入口；类型和字段容量直接使用 mavgen 枚举/宏。保留名称读取、索引拒绝、count/index、十进制格式、先编码后检查回调及原有重试行为；Classic 参数协议不改动。
+- Metadata FTP 的链路/Runtime 复位和会话超时复用完整 reset，会话与旧回复同时失效；协议 `ResetSessions/TerminateSession` 只复用会话清理，仍生成并缓存本次 ACK。单会话所有权、指纹去重、EAGAIN 重试上限和其他错误的缓存重放规则保持。
+
 ## Onboard Log
 
 - `MavlinkLogHandler` 对照 PX4 v1.17.0 同名实现处理 `LOG_REQUEST_LIST/DATA/END/ERASE`，并复用同一 storage worker/Ring 生成 `STORAGE_INFORMATION`；日志 ID 从 0 开始，`LOG_DATA` 长度直接由 mavgen 字段容量派生。

@@ -6,12 +6,6 @@
 #include <cstring>
 
 namespace dima::modules::mavlink {
-namespace {
-
-constexpr std::uint8_t kMavParamExtTypeFloat = 9U;
-constexpr std::uint8_t kMavParamExtTypeInt32 = 6U;
-
-} // namespace
 
 void MavlinkParameters::handle_param_ext_request_read(
     const mavlink_message_t *msg) noexcept
@@ -46,8 +40,7 @@ void MavlinkParameters::handle_param_ext_request_read(
         return;
     }
 
-    char value_str[128];
-    std::memset(value_str, 0, sizeof(value_str));
+    char value_str[MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_VALUE_LEN]{};
     uint8_t ext_type;
 
     // PARAM_EXT_VALUE 以十进制字符串携带值，不复用 Classic 协议的逐字节 float 槽。
@@ -58,7 +51,7 @@ void MavlinkParameters::handle_param_ext_request_read(
         }
         (void)::dima::format::format_to(value_str, sizeof(value_str), "%d",
                                         static_cast<int>(value));
-        ext_type = kMavParamExtTypeInt32;
+        ext_type = MAV_PARAM_EXT_TYPE_INT32;
     } else {
         float value;
         if (param_get(param, &value) != 0) {
@@ -66,7 +59,7 @@ void MavlinkParameters::handle_param_ext_request_read(
         }
         (void)::dima::format::format_to(value_str, sizeof(value_str), "%.9g",
                                         static_cast<double>(value));
-        ext_type = kMavParamExtTypeFloat;
+        ext_type = MAV_PARAM_EXT_TYPE_REAL32;
     }
 
     unsigned reply_count = param_count_used();
@@ -87,17 +80,12 @@ void MavlinkParameters::handle_param_ext_request_read(
     std::strncpy(reply.param_value, value_str,
                  MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_VALUE_LEN);
 
-    mavlink_message_t packet{};
-    mavlink_msg_param_ext_value_encode(MAVLINK_SYSTEM_ID,
-                                       MAVLINK_COMPONENT_ID,
-                                       &packet, &reply);
-    if (send_ != nullptr) {
-        send_(send_ctx_, packet);
-    }
+    send_param_ext_reply(reply);
 }
 
 void MavlinkParameters::send_param_ext_not_found(
-    const char param_id[16], uint16_t count) noexcept
+    const char param_id[MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_ID_LEN],
+    uint16_t count) noexcept
 {
     mavlink_param_ext_value_t reply{};
     reply.param_count = count;
@@ -106,6 +94,14 @@ void MavlinkParameters::send_param_ext_not_found(
     std::memcpy(reply.param_id, param_id,
                 MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_ID_LEN);
 
+    send_param_ext_reply(reply);
+}
+
+void MavlinkParameters::send_param_ext_reply(
+    const mavlink_param_ext_value_t &reply) noexcept
+{
+    // 正常/未找到回复只共用标准编码和发送；各自的 count/index/type 保持不变。
+    // 保留先编码、再检查回调的顺序，不改变 MAVLink 序号推进或失败后的重试策略。
     mavlink_message_t packet{};
     mavlink_msg_param_ext_value_encode(MAVLINK_SYSTEM_ID,
                                        MAVLINK_COMPONENT_ID,

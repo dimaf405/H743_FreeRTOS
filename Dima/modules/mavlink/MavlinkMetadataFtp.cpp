@@ -21,12 +21,8 @@ void MavlinkMetadataFtp::init(const VirtualFile *files,
 
 void MavlinkMetadataFtp::reset() noexcept
 {
-    session_open_ = false;
-    session_file_ = nullptr;
-    session_size_ = 0U;
-    session_owner_system_ = 0U;
-    session_owner_component_ = 0U;
-    session_last_activity_us_ = 0U;
+    // 链路/Runtime 复位同时丢弃会话和旧应答；协议关闭操作只清会话。
+    reset_session();
     reply_ = ReplySlot{};
 }
 
@@ -169,8 +165,7 @@ void MavlinkMetadataFtp::expire_session(std::uint64_t now_us) noexcept
     if (session_open_ && session_last_activity_us_ != 0U &&
         (now_us < session_last_activity_us_ ||
          now_us - session_last_activity_us_ >= kSessionTimeoutUs)) {
-        reset_session();
-        reply_ = ReplySlot{};
+        reset();
     }
 }
 
@@ -204,7 +199,8 @@ void MavlinkMetadataFtp::process_request(const Payload &request,
             error = terminate_session(key);
             break;
         case kCmdResetSessions:
-            error = reset_sessions();
+            // 这里只清会话，仍由本请求构造并缓存成功 ACK。
+            reset_session();
             break;
         case kCmdOpenFileRO:
             error = open_file(request, reply, key, now_us);
@@ -312,12 +308,6 @@ MavlinkMetadataFtp::ErrorCode MavlinkMetadataFtp::terminate_session(
     if (!session_owned_by(key)) {
         return kErrInvalidSession;
     }
-    reset_session();
-    return kErrNone;
-}
-
-MavlinkMetadataFtp::ErrorCode MavlinkMetadataFtp::reset_sessions() noexcept
-{
     reset_session();
     return kErrNone;
 }

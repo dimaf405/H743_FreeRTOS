@@ -89,8 +89,11 @@ private:
     void handle_param_ext_request_read(
         const mavlink_message_t *msg) noexcept;
 
-    void send_param_ext_not_found(const char param_id[16],
-                                  uint16_t count) noexcept;
+    void send_param_ext_not_found(
+        const char param_id[MAVLINK_MSG_PARAM_EXT_VALUE_FIELD_PARAM_ID_LEN],
+        uint16_t count) noexcept;
+
+    void send_param_ext_reply(const mavlink_param_ext_value_t &reply) noexcept;
 
     SendFn send_{nullptr};
     void *send_ctx_{nullptr};

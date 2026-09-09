@@ -154,8 +154,6 @@ private:
 
     ErrorCode terminate_session(const RequestKey &key) noexcept;
 
-    ErrorCode reset_sessions() noexcept;
-
     void reset_session() noexcept;
 
     SendFn send_{nullptr};
