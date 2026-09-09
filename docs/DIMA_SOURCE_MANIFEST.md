@@ -406,3 +406,9 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 ## 2026-09-09 构建到上传优化
 
 本地构建薄适配沿用 GNU Make、正式生成器、Arm GNU 10.3.1 与 MCUboot 上传合同。主机对象缓存使用 ccache 上游 v4.11.3 Windows x86_64 发行包，归档 SHA-256 为 `bfd031cad091b7db7e68c3303be542b0f7fee7a3e716d76ec6f7e6c7ef4b3526`，仅在主机缓存安装已核对的 exe，不引入固件依赖。生成器保留上游内容与权威清单，只对未变化产物保留 mtime；ApplicationContext 的引用类型前置声明不改变对象或算法。上传仅收敛同轮串口占用处理和注册表快照，不修改 wire、窗口、回滚或设备身份检查。实测与并发归因边界见 `BUILD_SPEED_OPTIMIZATION_ZH.md`。
+
+## 2026-09-09 普通运行期实现统一移出头文件
+
+本批对项目维护的 Dima、Board 与 MCUboot 适配代码作声明/实现分离：普通函数和访问器迁入对应 .cpp/.c，保留命名、字段、原函数体和条件编译边界。PX4 算法目录中的本地适配同时遵守该边界，模板、编译期值接口和正式生成定义保留；OutputPredictor 私有平方函数复用已有同签名同表达式的 math::Utilities::sq。类型依赖、显式返回类型、C ABI 和 decoder 跨翻译单元静态断言已单独核对。
+
+未改变 tools/upstream 原始快照或参数/消息权威定义，未新增独立版权文件；现有版权头留在原头文件中。具体映射、剩余定义类别、源码等价核对和 Windows 验收见 HEADER_IMPLEMENTATION_SPLIT_ZH.md。

@@ -257,3 +257,9 @@ make verify
 两个 4 KiB 半区组成 8 KiB、8 KiB 对齐、NOLOAD 的 .dima_sd_dma，MPU Region 5 为 Normal/Shareable/Non-cacheable/XN。每次硬件事务最多两半区，半区 0 结束后硬件不会回绕重用；CPU 可以处理已释放半区，延迟调度只降低流水重叠。直接路径仅接收独占 cache line 的 D1 扇区数据，TX clean，RX 先 clean-invalidate、完成或硬件终止后 invalidate。内存余量按最终地址跨度计入 MPU 对齐空隙。
 
 TaskRuntime 提供 CPU 总览和任务明细快照，复用 TIM2 1 MHz 时钟与 FreeRTOS 原生运行时间统计；保持格式化统计关闭且不动态分配。SYS_STATUS.load 使用现有字段上报 0–1000 千分比，无效窗口保留上次有效值。任务 CPU 归账与板级 SD IRQ 累计/峰值耗时分开，不能用包含阻塞的 WorkQueue Run 墙钟时间宣称 CPU 消耗下降。新代码与 Windows 构建证据不替代板端读回、拔卡和 CPU 对比。
+
+## 头文件与运行期实现的分界
+
+项目维护的普通函数、访问器和构造逻辑放入对应实现文件；仅含单行 `return` 语句的函数允许保留在头文件中。平台 API 的方法由 platform/common 持有平台无关实现，FreeRTOS/STM32/Board 的私有实现仍留在原所有者。通用模板、必要的 constexpr 值接口和正式生成代码按 C++ 与工具链要求保留可见定义；=default/=delete 及类布局、默认成员值不作为普通函数体迁移。
+
+头文件中的 decoder/消息布局 static_assert 仍对每个消费者生效。外移的 auto 返回接口使用原有成员类型明确声明，不维护第二份消息结构；所有新增源文件进入既有 Make 所有者或正式目录发现闭包。全库清单与验收记录见 HEADER_IMPLEMENTATION_SPLIT_ZH.md。

@@ -47,8 +47,8 @@
 - 同目录头文件引用只写文件名。
 - 跨目录 include 最多保留一层职责名，例如 `uORB/Publication.hpp`、`sbus/SbusRc.hpp`。
 - 禁止两层及以上的首方 include；不得写 `platform/api/Execution.hpp`、完整 `Dima/...` 或 `Boards/H743/Inc/...` 路径。存在同名头时通过精确 include root 和一层职责名消歧，不扩大为仓库全局路径。
-- 自有 `.hpp` 只保留声明、类型、模板、`constexpr` 和极短访问器；普通函数、协议状态机与算法实现放入同名 `.cpp`。
-- 只有模板、生成代码或经文档明确说明的上游合同可以采用 header-only；不得用 header-only 规避 `make/project.mk` 的显式翻译单元清单。
+- 项目维护的 `.h/.hpp` 保留声明、类型、编译期数据和必要的模板/`constexpr` 接口；普通函数、成员访问器、构造逻辑、协议状态机与运行期算法实现放入对应 `.cpp/.c`，仅含单行 `return` 语句的函数允许保留在头文件中。
+- 通用模板与编译期值接口保留可见定义，`=default/=delete` 保留类型语义；正式生成头由权威工具维护。除单行 `return` 函数外，普通运行期函数不能仅通过添加 `inline/constexpr` 留在头文件中，新增源文件须进入既有 Make 所有者或正式目录发现闭包。
 - 私有实现头只在所属后端目录内共享，不属于公共 include 面；同目录使用 basename，跨一个子域时也必须遵守最多一层规则。
 
 ## 命名与来源
