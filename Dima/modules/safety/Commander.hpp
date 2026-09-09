@@ -84,7 +84,7 @@ public:
     dima::middleware::lifecycle::ModuleState state() const override;
 
     /** 供非 Commander WorkQueue 的存储门控读取。 */
-    bool armed() const noexcept { return armed_flash_.armed(); }
+    bool armed() const noexcept;
 
 private:
     static constexpr std::uint32_t kCheckIntervalUs = 20000U;

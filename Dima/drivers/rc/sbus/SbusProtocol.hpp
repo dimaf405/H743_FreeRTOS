@@ -65,7 +65,7 @@ public:
     bool parse(std::uint64_t byte_arrival_us, std::uint8_t byte,
                Frame &frame) noexcept;
     void reset() noexcept;
-    const Stats &stats() const noexcept { return stats_; }
+    const Stats &stats() const noexcept;
 
 private:
     bool decode(Frame &frame) noexcept;

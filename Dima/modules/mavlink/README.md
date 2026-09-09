@@ -62,3 +62,7 @@
 Windows 构建只证明生成、编译和链接。QGC Inspector 实时值、USB 长连接、带宽、丢包和板端传感器 health 转换均需实机验证。
 
 - **CPU 负载：** SYS_STATUS.load 复用平台 CpuUsage 的有效窗口千分比；不新增消息或参数。无效/回绕窗口保留上次有效值，原有 SYS_STATUS 发送节奏不变。任务明细与 SD IRQ 开销分别用于诊断，不能把 I/O 等待墙钟时间当作 CPU 运行时间。
+
+## 头文件实现边界
+
+MavlinkBridge 的非模板 channel getter 由独立 C ABI 实现提供，MavlinkIdentity 的普通访问器位于原源文件。生成 codec、消息列表、缓冲所有权和序号合同保持。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

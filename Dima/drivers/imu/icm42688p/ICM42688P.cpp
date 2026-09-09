@@ -723,3 +723,13 @@ bool ICM42688P::start_fifo_transfer(
 }
 
 } // namespace dima::drivers::imu
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::drivers::imu {
+
+const ICM42688P::Stats & ICM42688P::stats() const noexcept
+{ return stats_; }
+
+} // namespace dima::drivers::imu

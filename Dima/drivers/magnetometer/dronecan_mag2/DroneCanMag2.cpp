@@ -406,3 +406,19 @@ void DroneCanMag2::handle_magnetic_field(
 }
 
 } // namespace dima::drivers::magnetometer
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::drivers::magnetometer {
+
+std::uint32_t DroneCanMag2::make_device_id(
+        std::uint8_t source_node_id) noexcept
+{
+    // device_id 使用生成合同中的固定 PX4 位布局，禁止在驱动里手拼 bus/
+    // devtype 位；source node-ID 是同类远端传感器的唯一实例标识。
+    return dima::protocols::dronecan::generated::
+        make_magnetometer_device_id(source_node_id);
+}
+
+} // namespace dima::drivers::magnetometer

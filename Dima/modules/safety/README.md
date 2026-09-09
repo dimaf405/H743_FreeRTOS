@@ -25,3 +25,7 @@ Commander 只维护安全状态和 uORB 投影，不直接拥有传感器、串�
 Kill/Termination、RC/传感器校准及活动的自动校准会话仍与手动 Arm 互锁，维护/Flash 仍经过最终原子门。解锁后的 RC loss、Commander 参数故障和执行器故障继续触发 Disarm，因此无有效 RC 时即使手动 Arm 命令通过预检，也不能保持 Armed 或输出动力；GCS loss 不触发导航动作。传感器是否检测到目前是可观测健康信息，不会静默改变手动驾驶或 BootHealth 的既有策略。
 
 源码/构建验证不等于车辆安全验证；校准中负向动作、参数应用竞争、看门狗、PWM safe-off 和真实解锁边沿均保持 `BOARD PENDING`。
+
+## 头文件实现边界
+
+Commander 的普通状态访问器定义在 Commander.cpp；仅改变定义位置，不改变 Armed 语义、安全互锁或输出锁存。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

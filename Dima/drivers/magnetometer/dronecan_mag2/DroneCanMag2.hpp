@@ -37,14 +37,8 @@ public:
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
 
-    static constexpr std::uint32_t make_device_id(
-        std::uint8_t source_node_id) noexcept
-    {
-        // device_id 使用生成合同中的固定 PX4 位布局，禁止在驱动里手拼 bus/
-        // devtype 位；source node-ID 是同类远端传感器的唯一实例标识。
-        return dima::protocols::dronecan::generated::
-            make_magnetometer_device_id(source_node_id);
-    }
+    static std::uint32_t make_device_id(
+        std::uint8_t source_node_id) noexcept;
 
 private:
     // 只保存在线/失联日志实际消费的磁场统计；节点协议统计仍归 DroneCanNode，

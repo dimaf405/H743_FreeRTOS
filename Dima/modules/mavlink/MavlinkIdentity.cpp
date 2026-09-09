@@ -65,3 +65,31 @@ void MavlinkIdentity::get_os_custom_version(uint8_t out[8]) const noexcept
 }
 
 } // namespace dima::modules::mavlink
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::modules::mavlink {
+
+uint8_t MavlinkIdentity::base_mode()      const noexcept
+{ return base_mode_; }
+
+uint8_t MavlinkIdentity::system_status()  const noexcept
+{ return system_status_; }
+
+uint32_t MavlinkIdentity::flight_sw_version() const noexcept
+{ return flight_sw_version_; }
+
+uint32_t MavlinkIdentity::board_version() const noexcept
+{ return board_version_; }
+
+uint64_t MavlinkIdentity::uid()           const noexcept
+{ return uid_; }
+
+uint16_t MavlinkIdentity::vendor_id()     const noexcept
+{ return vendor_id_; }
+
+uint16_t MavlinkIdentity::product_id()    const noexcept
+{ return product_id_; }
+
+} // namespace dima::modules::mavlink

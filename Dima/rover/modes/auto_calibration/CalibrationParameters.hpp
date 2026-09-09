@@ -16,7 +16,7 @@ namespace dima::rover::modes {
 class CalibrationParameters final {
 public:
     enum class Phase : std::uint8_t { Idle, Applying, Provisional, Rollback, Saving, Done, Failed, Fault };
-    explicit CalibrationParameters(dima::platform::ArmedFlashCoordinator &armed) noexcept : armed_(armed) {}
+    explicit CalibrationParameters(dima::platform::ArmedFlashCoordinator &armed) noexcept;
     bool prepare() noexcept;
     bool add_float(dima::params parameter, float value) noexcept;
     bool add_int(dima::params parameter, std::int32_t value) noexcept;
@@ -27,13 +27,13 @@ public:
     bool apply_revisions(std::uint64_t now, std::uint32_t expected_set_count) noexcept;
     void poll(bool frontend_confirmed, bool validated, std::uint64_t now) noexcept;
     void cancel(std::uint64_t now) noexcept;
-    Phase phase() const noexcept { return phase_; }
+    Phase phase() const noexcept;
     bool active() const noexcept;
-    bool rolling_back() const noexcept { return rollback_; }
-    bool generation_valid() const noexcept { return generation_valid_; }
-    std::uint32_t generation() const noexcept { return generation_; }
-    std::uint64_t applied_at() const noexcept { return applied_at_; }
-    std::uint32_t set_count_snapshot() const noexcept { return set_count_; }
+    bool rolling_back() const noexcept;
+    bool generation_valid() const noexcept;
+    std::uint32_t generation() const noexcept;
+    std::uint64_t applied_at() const noexcept;
+    std::uint32_t set_count_snapshot() const noexcept;
     float expected_float(dima::params parameter) const noexcept;
     float original_float(dima::params parameter) const noexcept;
     std::int32_t expected_int(dima::params parameter) const noexcept;

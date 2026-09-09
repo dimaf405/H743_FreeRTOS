@@ -32,3 +32,7 @@ modes/
 - **有限路径与降级：** `AutoCalibrationPath` 在同一圆内用闭合瘦三角 RAM 路径和共享 `SegmentGuidance`，所有候选先回固定入口、对齐同一首边，不覆盖用户 Mission。缺 RC/PWM/双天线不提前阻止 Level；缺磁力计可以跳过磁阶段。运动依赖、激励、空间或时间不足报告未完成项，不猜测参数、不扩大圆或放松 EKF 门限。全局整形必须覆盖实际使用范围；局部低速数据不授权修改 Manual 共用整形。
 - **统一 IMU 零偏：** 复用 EKF 稳定偏置和 VehicleImu 实际校正快照，提交合格 ID/offset，保留 scale；重新确认前端、EKF 与残差后保存。组合会话暂停独立 IMU 后台写回，`EKF2_MAG_DECL` 仍只更新 volatile RAM。
 - **扩展：** Navigation、Offboard 等后续模式统一建立各自的一级职责子目录；`modes/` 根目录只保留组织说明，不再混放模式实现文件。
+
+## 头文件实现边界
+
+模式状态访问器与校准事务构造/访问器统一在对应源文件实现；本轮没有合并不同阶段的终态、回滚或稳定窗口策略。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

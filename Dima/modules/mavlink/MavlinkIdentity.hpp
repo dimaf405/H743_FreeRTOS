@@ -61,13 +61,13 @@ public:
 
     /* 只读访问器供打包路径使用，避免发送线程重新推导身份或状态。 */
 
-    uint8_t  base_mode()      const noexcept { return base_mode_; }
-    uint8_t  system_status()  const noexcept { return system_status_; }
-    uint32_t flight_sw_version() const noexcept { return flight_sw_version_; }
-    uint32_t board_version() const noexcept { return board_version_; }
-    uint64_t uid()           const noexcept { return uid_; }
-    uint16_t vendor_id()     const noexcept { return vendor_id_; }
-    uint16_t product_id()    const noexcept { return product_id_; }
+    uint8_t  base_mode()      const noexcept;
+    uint8_t  system_status()  const noexcept;
+    uint32_t flight_sw_version() const noexcept;
+    uint32_t board_version() const noexcept;
+    uint64_t uid()           const noexcept;
+    uint16_t vendor_id()     const noexcept;
+    uint16_t product_id()    const noexcept;
 
     uint64_t capabilities() const noexcept;
 

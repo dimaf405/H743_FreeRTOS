@@ -1683,3 +1683,13 @@ void VehicleImu::Run()
 }
 
 } // namespace dima::modules::sensors
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::modules::sensors {
+
+const VehicleImu::Stats & VehicleImu::stats() const noexcept
+{ return stats_; }
+
+} // namespace dima::modules::sensors

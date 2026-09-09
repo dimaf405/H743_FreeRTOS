@@ -56,7 +56,7 @@ public:
     ~AutoCalibrationMode() override;
     bool start() override;
     void stop() override;
-    dima::middleware::lifecycle::ModuleState state() const override { return module_state_; }
+    dima::middleware::lifecycle::ModuleState state() const override;
 
 private:
     using Status = auto_calibration_status_s;

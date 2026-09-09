@@ -89,7 +89,7 @@ public:
         /** Valid only for the duration of the receive callback. */
         // native_handle 指向 libcanard 的临时接收对象；回调返回即释放 payload，
         // 消费者必须同步解码，不能跨回调保存该句柄或任何内部指针。
-        void *native_handle() const noexcept { return native_handle_; }
+        void *native_handle() const noexcept;
 
     private:
         friend class DroneCanNode;
@@ -128,11 +128,9 @@ public:
     // service 的固定次序为：底层总线恢复 -> RX -> 分配/持久化 -> 1 Hz 节点状态
     // 与过期会话清理 -> TX。调用者需周期调用，函数自身不阻塞。
     bool service(std::uint64_t now_us) noexcept;
-    bool running() const noexcept { return running_; }
-    void set_health_warning(bool warning) noexcept {
-        health_warning_ = warning;
-    }
-    const Stats &stats() const noexcept { return stats_; }
+    bool running() const noexcept;
+    void set_health_warning(bool warning) noexcept;
+    const Stats &stats() const noexcept;
 
 private:
     // libcanard 实例和 3 KiB 会话池均由对象内静态内存提供；启动后无堆分配。

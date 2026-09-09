@@ -307,3 +307,13 @@ bool Commander::refresh_navigation_status() noexcept
 }
 
 } // namespace dima::modules::safety
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::modules::safety {
+
+bool Commander::armed() const noexcept
+{ return armed_flash_.armed(); }
+
+} // namespace dima::modules::safety

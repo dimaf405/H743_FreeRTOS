@@ -41,3 +41,7 @@ IMU 健康丢失/恢复摘要由非实时 MAVLink owner 发送，包含两路原
 ## 板端验证边界
 
 源码静态检查和 Windows 构建不能代替以下 `BOARD PENDING` 证据：WHOAMI/寄存器回读、SPI/DMA/中断波形、原始与状态 Topic 频率、断流/冻结/时间戳倒退/错误密度恢复、六面实物校准残差、温漂、重启后参数持久化，以及 QGC 向导与 `HIGHRES_IMU/SCALED_IMU/SYS_STATUS` 实测。
+
+## 头文件实现边界
+
+VehicleImuAlgorithms、ICM FIFO/寄存器解码及普通统计访问器已作源/头分离。保留积分、时间跳变、裁剪、校正顺序和失败门禁，运行期实现不再通过 constexpr 留在头中。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

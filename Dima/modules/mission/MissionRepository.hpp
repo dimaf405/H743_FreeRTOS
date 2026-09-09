@@ -48,13 +48,10 @@ public:
                      MissionItem &item) const noexcept;
     void active_plan(MissionPlan &plan) const noexcept;
 
-    std::uint16_t active_count() const noexcept { return active_.count; }
-    std::uint16_t current() const noexcept { return active_.current; }
-    std::uint32_t mission_id() const noexcept { return active_.mission_id; }
-    bool committed() const noexcept
-    {
-        return active_.count > 0U && active_.mission_id != 0U;
-    }
+    std::uint16_t active_count() const noexcept;
+    std::uint16_t current() const noexcept;
+    std::uint32_t mission_id() const noexcept;
+    bool committed() const noexcept;
 
 private:
     static bool valid_item(const MissionItem &item) noexcept;

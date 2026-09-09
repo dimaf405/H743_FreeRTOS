@@ -36,3 +36,7 @@
 ## 板端验证边界
 
 UART 电平与接线、接收机实际输出端口、八档 baud 探测、生成合同声明的消息实际频率、RTK fix/双天线 yaw、EKF GNSS 资格时间和失联恢复仍是 `BOARD PENDING`。配置控制面还必须确认首轮读取/必要修改完成后持续停留在 Run，不再每 30 秒出现 `p=2..5` 或重复 `UNLOG/LOG/SAVECONFIG`。在 QGC MAVLink Inspector 中同时检查 `GPS_RAW_INT` 与 `SYS_STATUS`，并在固件内部检查 EKF2 发布的 `estimator_gps_status`；不能用一次性日志或 Windows 构建替代实时数据。
+
+## 头文件实现边界
+
+GpsErrorCounter 的会话基线、UART 增量、饱和累计及访问器统一在 GpsErrorCounter.cpp 实现；头文件只保留声明和计数状态，原计数语义保持。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。

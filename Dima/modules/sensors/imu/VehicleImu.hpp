@@ -60,7 +60,7 @@ public:
     bool start() override;
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
-    const Stats &stats() const noexcept { return stats_; }
+    const Stats &stats() const noexcept;
     bool calibration_parameter_update_applied(
         std::uint32_t required_instance) const noexcept;
     bool accel_calibration_matches(

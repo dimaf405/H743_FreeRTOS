@@ -515,3 +515,13 @@ bool AutoCalibrationMode::publish(std::uint64_t now) noexcept
 }
 
 } // namespace dima::rover::modes
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::rover::modes {
+
+dima::middleware::lifecycle::ModuleState AutoCalibrationMode::state() const
+{ return module_state_; }
+
+} // namespace dima::rover::modes

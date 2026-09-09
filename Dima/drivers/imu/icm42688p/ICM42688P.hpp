@@ -51,7 +51,7 @@ public:
     void stop() override;
     dima::middleware::lifecycle::ModuleState state() const override;
 
-    const Stats &stats() const noexcept { return stats_; }
+    const Stats &stats() const noexcept;
 
 private:
     using Bank = icm42688p::registers::Bank;

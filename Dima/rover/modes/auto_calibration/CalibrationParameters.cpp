@@ -303,3 +303,32 @@ std::int32_t CalibrationParameters::expected_int(dima::params parameter) const n
 }
 
 } // namespace dima::rover::modes
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::rover::modes {
+
+CalibrationParameters::CalibrationParameters(dima::platform::ArmedFlashCoordinator &armed) noexcept
+: armed_(armed)
+{}
+
+CalibrationParameters::Phase CalibrationParameters::phase() const noexcept
+{ return phase_; }
+
+bool CalibrationParameters::rolling_back() const noexcept
+{ return rollback_; }
+
+bool CalibrationParameters::generation_valid() const noexcept
+{ return generation_valid_; }
+
+std::uint32_t CalibrationParameters::generation() const noexcept
+{ return generation_; }
+
+std::uint64_t CalibrationParameters::applied_at() const noexcept
+{ return applied_at_; }
+
+std::uint32_t CalibrationParameters::set_count_snapshot() const noexcept
+{ return set_count_; }
+
+} // namespace dima::rover::modes

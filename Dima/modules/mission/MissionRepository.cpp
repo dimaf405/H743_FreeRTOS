@@ -132,3 +132,24 @@ void MissionRepository::active_plan(MissionPlan &plan) const noexcept
 }
 
 } // namespace dima::modules::mission
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::modules::mission {
+
+std::uint16_t MissionRepository::active_count() const noexcept
+{ return active_.count; }
+
+std::uint16_t MissionRepository::current() const noexcept
+{ return active_.current; }
+
+std::uint32_t MissionRepository::mission_id() const noexcept
+{ return active_.mission_id; }
+
+bool MissionRepository::committed() const noexcept
+{
+    return active_.count > 0U && active_.mission_id != 0U;
+}
+
+} // namespace dima::modules::mission

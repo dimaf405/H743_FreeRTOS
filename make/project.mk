@@ -658,16 +658,22 @@ DIMA_ROVER_CONTROL_CXX_SOURCES := \
 
 DIMA_COMMON_CXX_SOURCES := \
 	Dima/adapters/mavlink/MavlinkBridge.cpp \
+	Dima/drivers/gps/um982/GpsErrorCounter.cpp \
+	Dima/drivers/imu/icm42688p/ICM42688PFifoAlgorithms.cpp \
+	Dima/drivers/imu/icm42688p/ICM42688PRegisters.cpp \
+	Dima/lib/dronecan/TransferIdTracker.cpp \
 	Dima/lib/mathlib/math/Functions.cpp \
 	Dima/lib/mathlib/math/Limits.cpp \
 	Dima/lib/mathlib/math/TrajMath.cpp \
 	Dima/lib/matrix/matrix/helper_functions.cpp \
+	Dima/lib/serial/SerialPortAssignments.cpp \
 	Dima/middleware/parameters/ConstLayer.cpp \
 	Dima/middleware/parameters/Crc32.cpp \
 	Dima/middleware/parameters/DynamicSparseLayer.cpp \
 	Dima/middleware/parameters/ParamLayer.cpp \
 	Dima/middleware/parameters/atomic_transaction.cpp \
 	Dima/middleware/rover/RoverModeContract.cpp \
+	Dima/modules/sensors/imu/VehicleImuAlgorithms.cpp \
 	Dima/platform/common/PlatformTypes.cpp \
 	Dima/platform/common/Time.cpp \
 	Dima/platform/common/Execution.cpp \

@@ -22,56 +22,15 @@ inline constexpr std::int32_t kSerialFunctionDisabled = 0;
 inline constexpr std::int32_t kSerialFunctionSbus = 1;
 inline constexpr std::int32_t kSerialFunctionGps = 2;
 
-inline constexpr bool serial_function_supported(
-    std::int32_t function) noexcept
-{
-    return function >= kSerialFunctionDisabled &&
-           function <= kSerialFunctionGps;
-}
+bool serial_function_supported(
+    std::int32_t function) noexcept;
 
-inline SerialParameterIdentity identify_serial_parameter(
-    const char *name) noexcept
-{
-    constexpr char kPrefix[] = "SERIAL";
-    if (name == nullptr || std::strncmp(name, kPrefix, sizeof(kPrefix) - 1U) != 0) {
-        return {};
-    }
+SerialParameterIdentity identify_serial_parameter(
+    const char *name) noexcept;
 
-    const char *cursor = name + sizeof(kPrefix) - 1U;
-    if (*cursor < '1' || *cursor > '9') {
-        return {};
-    }
+bool serial_baud_parameter(const char *name) noexcept;
 
-    // 从 PX4 生成的参数注册表按命名规则发现端口，不在源码维护 SERIAL1/2/... 清单。
-    std::uint32_t port = 0U;
-    do {
-        const std::uint32_t digit = static_cast<std::uint32_t>(*cursor - '0');
-        if (port > (UINT32_MAX - digit) / 10U) {
-            return {};
-        }
-        port = port * 10U + digit;
-        ++cursor;
-    } while (*cursor >= '0' && *cursor <= '9');
-
-    if (std::strcmp(cursor, "_BAUD") == 0) {
-        return {port, SerialParameterKind::Baud};
-    }
-    if (std::strcmp(cursor, "_FUNCTION") == 0) {
-        return {port, SerialParameterKind::Function};
-    }
-    return {};
-}
-
-inline bool serial_baud_parameter(const char *name) noexcept
-{
-    return identify_serial_parameter(name).kind == SerialParameterKind::Baud;
-}
-
-inline bool serial_function_parameter(const char *name) noexcept
-{
-    return identify_serial_parameter(name).kind ==
-           SerialParameterKind::Function;
-}
+bool serial_function_parameter(const char *name) noexcept;
 
 /**
  * 参数服务选出的只读产品串口所有权视图。

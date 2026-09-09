@@ -400,3 +400,24 @@ void DroneCanNode::respond_node_info(void *native_transfer) noexcept
 }
 
 } // namespace dima::protocols::dronecan
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::protocols::dronecan {
+
+void * DroneCanNode::Transfer::native_handle() const noexcept
+{ return native_handle_; }
+
+bool DroneCanNode::running() const noexcept
+{ return running_; }
+
+void DroneCanNode::set_health_warning(bool warning) noexcept
+{
+    health_warning_ = warning;
+}
+
+const DroneCanNode::Stats & DroneCanNode::stats() const noexcept
+{ return stats_; }
+
+} // namespace dima::protocols::dronecan
