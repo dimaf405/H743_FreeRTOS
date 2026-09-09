@@ -518,3 +518,37 @@ MotorResponseCandidate design_motor_response(const MotorResponseProfile &profile
 }
 
 } // namespace dima::lib::rover::calibration
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::lib::rover::calibration {
+
+bool ResponseEstimate::valid() const noexcept
+{ return failure == ResponseFailure::None; }
+
+std::uint32_t ResponseStatistics::count() const noexcept
+{ return count_; }
+
+ResponseFailure ResponseStatistics::failure() const noexcept
+{ return failure_; }
+
+std::uint32_t TransientSlope::count() const noexcept
+{ return count_; }
+
+ResponseFailure TransientSlope::failure() const noexcept
+{ return failure_; }
+
+std::uint32_t ResponsePlateau::count() const noexcept
+{ return raw_speed.count(); }
+
+ResponseFailure MotorResponseProfile::failure() const noexcept
+{ return failure_; }
+
+bool MotorResponseCandidate::complete() const noexcept
+{
+    return failure == ResponseFailure::None && global_coverage &&
+           identifiable_mask == kAll;
+}
+
+} // namespace dima::lib::rover::calibration

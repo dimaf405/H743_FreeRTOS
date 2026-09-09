@@ -1,3 +1,4 @@
+#include "imu_down_sampler.hpp"
 #include "imu_down_sampler/imu_down_sampler.hpp"
 
 #include <mathlib/mathlib.h>
@@ -66,4 +67,14 @@ void ImuDownSampler::reset()
 
 	// minimum delta angle dt (in addition to number of samples)
 	_min_dt_s = math::max(_delta_ang_dt_avg * (_required_samples - 1.f), _delta_ang_dt_avg * 0.5f);
+}
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+imuSample ImuDownSampler::getDownSampledImuAndTriggerReset()
+{
+	imuSample imu{_imu_down_sampled};
+	reset();
+	return imu;
 }

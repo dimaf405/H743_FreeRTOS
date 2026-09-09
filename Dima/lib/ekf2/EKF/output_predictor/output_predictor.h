@@ -44,10 +44,7 @@
 class OutputPredictor
 {
 public:
-	OutputPredictor()
-	{
-		reset();
-	};
+	OutputPredictor();;
 
 	~OutputPredictor() = default;
 
@@ -81,33 +78,21 @@ public:
 
 	void print_status();
 
-	bool allocate(uint8_t size)
-	{
-		if (_output_buffer.allocate(size) && _output_vert_buffer.allocate(size)) {
-			reset();
-			return true;
-		}
+	bool allocate(uint8_t size);
 
-		return false;
-	}
-
-	void release()
-	{
-		_output_buffer.release();
-		_output_vert_buffer.release();
-	}
+	void release();
 
 	void reset();
 
-	const matrix::Quatf &getQuaternion() const { return _output_new.quat_nominal; }
+	const matrix::Quatf &getQuaternion() const;
 
 	matrix::Vector3f getAngularVelocityAndResetAccumulator();
 
 	// get a yaw value solely based on bias-removed gyro integration
-	float getUnaidedYaw() const { return _unaided_yaw; }
+	float getUnaidedYaw() const;
 
 	// get the velocity of the body frame origin in local NED earth frame
-	matrix::Vector3f getVelocity() const { return _output_new.vel - _vel_imu_rel_body_ned; }
+	matrix::Vector3f getVelocity() const;
 
 	// get the mean velocity derivative in earth frame since reset (see `resetVelocityDerivativeAccumulation()`)
 	matrix::Vector3f getVelocityDerivative() const;
@@ -115,23 +100,17 @@ public:
 	void resetVelocityDerivativeAccumulation();
 
 	// get the derivative of the vertical position of the body frame origin in local NED earth frame
-	float getVerticalPositionDerivative() const { return _output_vert_new.vert_vel - _vel_imu_rel_body_ned(2); }
+	float getVerticalPositionDerivative() const;
 
-	LatLonAlt getLatLonAlt() const
-	{
-		// rotate the position of the IMU relative to the boy origin into earth frame
-		const matrix::Vector3f pos_offset_earth{_R_to_earth_now * _imu_pos_body};
-		// subtract from the EKF position (which is at the IMU) to get position at the body origin
-		return _global_ref + (_output_new.pos - pos_offset_earth);
-	}
+	LatLonAlt getLatLonAlt() const;
 
 	// return an array containing the output predictor angular, velocity and position tracking
 	// error magnitudes (rad), (m/sec), (m)
-	const matrix::Vector3f &getOutputTrackingError() const { return _output_tracking_error; }
+	const matrix::Vector3f &getOutputTrackingError() const;
 
-	void set_imu_offset(const matrix::Vector3f &offset) { _imu_pos_body = offset; }
-	void set_pos_correction_tc(const float tau) { _pos_tau = tau; }
-	void set_vel_correction_tc(const float tau) { _vel_tau = tau; }
+	void set_imu_offset(const matrix::Vector3f &offset);
+	void set_pos_correction_tc(const float tau);
+	void set_vel_correction_tc(const float tau);
 
 private:
 
@@ -153,7 +132,6 @@ private:
 	void applyCorrectionToOutputBuffer(const matrix::Vector3f &vel_correction, const matrix::Vector3f &pos_correction);
 
 	// return the square of two floating point numbers - used in auto coded sections
-	static constexpr float sq(float var) { return var * var; }
 
 	struct outputSample {
 		uint64_t         time_us{0};                       ///< timestamp of the measurement (uSec)

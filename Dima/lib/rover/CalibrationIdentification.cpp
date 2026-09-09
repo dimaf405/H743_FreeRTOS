@@ -548,3 +548,27 @@ StepValidationResult StepResponseValidator::result() const noexcept
 }
 
 } // namespace dima::lib::rover::calibration
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::lib::rover::calibration {
+
+bool IdentificationResult::valid() const noexcept
+{
+    return failure == CalibrationAlgorithmFailure::None && model.valid && pi.valid;
+}
+
+CalibrationAlgorithmFailure FirstOrderDelayIdentifier::sample_failure() const noexcept
+{ return sample_failure_; }
+
+std::uint32_t FirstOrderDelayIdentifier::sample_count() const noexcept
+{ return sample_count_; }
+
+bool StepValidationResult::valid() const noexcept
+{ return failure == CalibrationAlgorithmFailure::None; }
+
+CalibrationAlgorithmFailure StepResponseValidator::sample_failure() const noexcept
+{ return sample_failure_; }
+
+} // namespace dima::lib::rover::calibration

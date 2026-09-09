@@ -53,10 +53,7 @@ Floating wrap_floating(Floating x, Floating low, Floating high)
  * @param high upper limit of the allowed range
  * @return wrapped value inside the range
  */
-inline float wrap(float x, float low, float high)
-{
-	return matrix::detail::wrap_floating(x, low, high);
-}
+float wrap(float x, float low, float high);
 
 /**
  * Wrap double precision floating point value to stay in range [low, high)
@@ -66,10 +63,7 @@ inline float wrap(float x, float low, float high)
  * @param high upper limit of the allowed range
  * @return wrapped value inside the range
  */
-inline double wrap(double x, double low, double high)
-{
-	return matrix::detail::wrap_floating(x, low, high);
-}
+double wrap(double x, double low, double high);
 
 /**
  * Wrap integer value to stay in range [low, high)

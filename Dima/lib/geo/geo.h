@@ -169,10 +169,7 @@ public:
 	/**
 	 * @brief Construct and initialize a new Map Projection object
 	 */
-	MapProjection(double lat_0, double lon_0, uint64_t timestamp = 0)
-	{
-		initReference(lat_0, lon_0, timestamp);
-	}
+	MapProjection(double lat_0, double lon_0, uint64_t timestamp = 0);
 
 	/**
 	 * Initialize the map transformation
@@ -187,22 +184,22 @@ public:
 	/**
 	 * @return true, if the map reference has been initialized before
 	 */
-	bool isInitialized() const { return _ref_init_done; };
+	bool isInitialized() const;;
 
 	/**
 	 * @return the timestamp of the reference which the map projection was initialized with
 	 */
-	uint64_t getProjectionReferenceTimestamp() const { return _ref_timestamp; };
+	uint64_t getProjectionReferenceTimestamp() const;;
 
 	/**
 	 * @return the projection reference latitude in degrees
 	 */
-	double getProjectionReferenceLat() const { return math::degrees(_ref_lat); };
+	double getProjectionReferenceLat() const;;
 
 	/**
 	 * @return the projection reference longitude in degrees
 	 */
-	double getProjectionReferenceLon() const { return math::degrees(_ref_lon); };
+	double getProjectionReferenceLon() const;;
 
 	/**
 	 * Transform a point in the geographic coordinate system to the local
@@ -221,12 +218,7 @@ public:
 	 * @param lon in degrees (8.1234567°, not 81234567°)
 	 * @return the point in local coordinates as north / east
 	 */
-	inline matrix::Vector2f project(double lat, double lon) const
-	{
-		matrix::Vector2f res;
-		project(lat, lon, res(0), res(1));
-		return res;
-	}
+	matrix::Vector2f project(double lat, double lon) const;
 
 	/**
 	 * Transform a point in the local azimuthal equidistant plane to the

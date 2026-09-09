@@ -400,3 +400,30 @@ float mavlink_wpm_distance_to_point_local(float x_now, float y_now, float z_now,
 
 	return sqrtf(dx * dx + dy * dy + dz * dz);
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+MapProjection::MapProjection(double lat_0, double lon_0, uint64_t timestamp)
+{
+	initReference(lat_0, lon_0, timestamp);
+}
+
+bool MapProjection::isInitialized() const
+{ return _ref_init_done; }
+
+uint64_t MapProjection::getProjectionReferenceTimestamp() const
+{ return _ref_timestamp; }
+
+double MapProjection::getProjectionReferenceLat() const
+{ return math::degrees(_ref_lat); }
+
+double MapProjection::getProjectionReferenceLon() const
+{ return math::degrees(_ref_lon); }
+
+matrix::Vector2f MapProjection::project(double lat, double lon) const
+{
+	matrix::Vector2f res;
+	project(lat, lon, res(0), res(1));
+	return res;
+}

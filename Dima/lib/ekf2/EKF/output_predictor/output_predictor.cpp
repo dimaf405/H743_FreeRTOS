@@ -342,11 +342,11 @@ void OutputPredictor::correctOutputStates(const uint64_t time_delayed_us,
 
 	// calculate a velocity correction that will be applied to the output state history
 	_vel_err_integ += vel_err;
-	const Vector3f vel_correction = vel_err * vel_gain + _vel_err_integ * sq(vel_gain) * 0.1f;
+	const Vector3f vel_correction = vel_err * vel_gain + _vel_err_integ * math::Utilities::sq(vel_gain) * 0.1f;
 
 	// calculate a position correction that will be applied to the output state history
 	_pos_err_integ += pos_err;
-	const Vector3f pos_correction = pos_err * pos_gain + _pos_err_integ * sq(pos_gain) * 0.1f;
+	const Vector3f pos_correction = pos_err * pos_gain + _pos_err_integ * math::Utilities::sq(pos_gain) * 0.1f;
 
 	// as the reference changes, adjust the position correction to keep a constant global position
 	const Vector3f pos_correction_with_ref_change = pos_correction - pos_state;
@@ -434,3 +434,59 @@ Vector3f OutputPredictor::getAngularVelocityAndResetAccumulator()
 
 	return angular_velocity;
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+OutputPredictor::OutputPredictor()
+{
+	reset();
+}
+
+bool OutputPredictor::allocate(uint8_t size)
+{
+	if (_output_buffer.allocate(size) && _output_vert_buffer.allocate(size)) {
+		reset();
+		return true;
+	}
+
+	return false;
+}
+
+void OutputPredictor::release()
+{
+	_output_buffer.release();
+	_output_vert_buffer.release();
+}
+
+const matrix::Quatf & OutputPredictor::getQuaternion() const
+{ return _output_new.quat_nominal; }
+
+float OutputPredictor::getUnaidedYaw() const
+{ return _unaided_yaw; }
+
+matrix::Vector3f OutputPredictor::getVelocity() const
+{ return _output_new.vel - _vel_imu_rel_body_ned; }
+
+float OutputPredictor::getVerticalPositionDerivative() const
+{ return _output_vert_new.vert_vel - _vel_imu_rel_body_ned(2); }
+
+LatLonAlt OutputPredictor::getLatLonAlt() const
+{
+	// rotate the position of the IMU relative to the boy origin into earth frame
+	const matrix::Vector3f pos_offset_earth{_R_to_earth_now * _imu_pos_body};
+	// subtract from the EKF position (which is at the IMU) to get position at the body origin
+	return _global_ref + (_output_new.pos - pos_offset_earth);
+}
+
+const matrix::Vector3f & OutputPredictor::getOutputTrackingError() const
+{ return _output_tracking_error; }
+
+void OutputPredictor::set_imu_offset(const matrix::Vector3f &offset)
+{ _imu_pos_body = offset; }
+
+void OutputPredictor::set_pos_correction_tc(const float tau)
+{ _pos_tau = tau; }
+
+void OutputPredictor::set_vel_correction_tc(const float tau)
+{ _vel_tau = tau; }

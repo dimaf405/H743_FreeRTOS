@@ -1,3 +1,4 @@
+#include "gnss_checks.hpp"
 /****************************************************************************
  *
  *   Copyright (c) 2025 PX4 Development Team. All rights reserved.
@@ -248,3 +249,64 @@ void GnssChecks::resetDriftFilters()
 	_filtered_horizontal_velocity_m_s = NAN;
 }
 }; // namespace estimator
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace estimator {
+
+GnssChecks::GnssChecks(int32_t &check_mask, int32_t &ekf2_req_nsats, float &ekf2_req_pdop, float &ekf2_req_eph, float &ekf2_req_epv,
+		   float &ekf2_req_sacc, float &ekf2_req_hdrift, float &ekf2_req_vdrift, int32_t &ekf2_req_fix, float &ekf2_vel_lim,
+		   uint32_t &min_health_time_us, filter_control_status_u &control_status)
+:
+		_params{check_mask, ekf2_req_nsats, ekf2_req_pdop, ekf2_req_eph, ekf2_req_epv, ekf2_req_sacc, ekf2_req_hdrift, ekf2_req_vdrift, ekf2_req_fix, ekf2_vel_lim, min_health_time_us},
+		_control_status(control_status)
+{}
+
+void GnssChecks::resetHard()
+{
+	_initial_checks_passed = false;
+	reset();
+}
+
+void GnssChecks::reset()
+{
+	_passed = false;
+	_time_last_pass_us = 0;
+	_time_last_fail_us = 0;
+	resetDriftFilters();
+}
+
+bool GnssChecks::passed() const
+{ return _passed; }
+
+bool GnssChecks::initialChecksPassed() const
+{ return _initial_checks_passed; }
+
+uint64_t GnssChecks::getLastPassUs() const
+{ return _time_last_pass_us; }
+
+uint64_t GnssChecks::getLastFailUs() const
+{ return _time_last_fail_us; }
+
+const GnssChecks::gps_check_fail_status_u & GnssChecks::getFailStatus() const
+{ return _check_fail_status; }
+
+float GnssChecks::horizontal_position_drift_rate_m_s() const
+{ return _horizontal_position_drift_rate_m_s; }
+
+float GnssChecks::vertical_position_drift_rate_m_s() const
+{ return _vertical_position_drift_rate_m_s; }
+
+float GnssChecks::filtered_horizontal_velocity_m_s() const
+{ return _filtered_horizontal_velocity_m_s; }
+
+bool GnssChecks::isCheckEnabled(GnssChecksMask check)
+{ return (_params.check_mask & static_cast<int32_t>(check)); }
+
+bool GnssChecks::isTimedOut(uint64_t timestamp_to_check_us, uint64_t now_us, uint64_t timeout_period) const
+{
+	return (timestamp_to_check_us == 0) || (timestamp_to_check_us + timeout_period < now_us);
+}
+
+} // namespace estimator

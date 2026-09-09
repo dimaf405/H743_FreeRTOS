@@ -240,3 +240,20 @@ ImuValidationResult validate_imu_sample(
 }
 
 } // namespace dima::lib::sensors::validation
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::lib::sensors::validation {
+
+bool GpsStructureResult::valid() const noexcept
+{
+    return failure_mask == GpsFailureNone;
+}
+
+bool ImuValidationResult::valid() const noexcept
+{
+    return failure_mask == ImuFailureNone;
+}
+
+} // namespace dima::lib::sensors::validation

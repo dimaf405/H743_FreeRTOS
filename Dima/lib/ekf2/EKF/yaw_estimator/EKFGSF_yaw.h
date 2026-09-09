@@ -53,19 +53,9 @@ public:
 	// vel_accuracy: 1-sigma accuracy of velocity measurement (m/s)
 	void fuseVelocity(const matrix::Vector2f &vel_NE, float vel_accuracy, bool in_air);
 
-	void setTrueAirspeed(float true_airspeed) { _true_airspeed = true_airspeed; }
+	void setTrueAirspeed(float true_airspeed);
 
-	void setGyroBias(const matrix::Vector3f &imu_gyro_bias, const bool force = false)
-	{
-		// Initialise to gyro bias estimate from main filter because there could be a large
-		// uncorrected rate gyro bias error about the gravity vector
-		if (!_ahrs_ekf_gsf_tilt_aligned || !_ekf_gsf_vel_fuse_started || force) {
-			// init gyro bias for each model
-			for (uint8_t model_index = 0; model_index < N_MODELS_EKFGSF; model_index++) {
-				_ahrs_ekf_gsf[model_index].gyro_bias = imu_gyro_bias;
-			}
-		}
-	}
+	void setGyroBias(const matrix::Vector3f &imu_gyro_bias, const bool force = false);
 
 	// get solution data for logging
 	bool getLogData(float *yaw_composite,
@@ -75,10 +65,10 @@ public:
 			float innov_VE[N_MODELS_EKFGSF],
 			float weight[N_MODELS_EKFGSF]) const;
 
-	bool isActive() const { return _ekf_gsf_vel_fuse_started; }
+	bool isActive() const;
 
-	float getYaw() const { return _gsf_yaw; }
-	float getYawVar() const { return _gsf_yaw_variance; }
+	float getYaw() const;
+	float getYawVar() const;
 
 	void reset();
 
@@ -136,7 +126,7 @@ private:
 	// return false if update failed
 	bool updateEKF(const uint8_t model_index, const matrix::Vector2f &vel_NE, const float vel_accuracy);
 
-	inline float sq(float x) const { return x * x; };
+	float sq(float x) const;;
 
 	// Declarations used by the Gaussian Sum Filter (GSF) that combines the individual EKF yaw estimates
 

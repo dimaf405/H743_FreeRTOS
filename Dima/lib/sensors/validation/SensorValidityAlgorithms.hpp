@@ -63,10 +63,7 @@ struct GpsSample {
 struct GpsStructureResult {
     std::uint32_t failure_mask{GpsFailureNone};
 
-    constexpr bool valid() const noexcept
-    {
-        return failure_mask == GpsFailureNone;
-    }
+    bool valid() const noexcept;
 };
 
 bool known_fix_type(std::uint8_t fix_type) noexcept;
@@ -129,10 +126,7 @@ struct ImuSample {
 struct ImuValidationResult {
     std::uint32_t failure_mask{ImuFailureNone};
 
-    constexpr bool valid() const noexcept
-    {
-        return failure_mask == ImuFailureNone;
-    }
+    bool valid() const noexcept;
 };
 
 ImuValidationResult validate_imu_sample(

@@ -41,7 +41,7 @@ public:
     /* 三轴独立使用 Welford 在线算法，固定内存且比 sum/sum² 更抗消减误差。 */
     void reset() noexcept;
     void add(double x, double y, double z) noexcept;
-    std::uint32_t count() const noexcept { return count_; }
+    std::uint32_t count() const noexcept;
     Vector3d mean() const noexcept;
     Vector3d variance() const noexcept;
 

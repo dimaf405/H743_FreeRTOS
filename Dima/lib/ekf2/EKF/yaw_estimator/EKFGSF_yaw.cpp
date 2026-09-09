@@ -433,3 +433,33 @@ float EKFGSF_yaw::ahrsCalcAccelGain() const
 	const float delta_accel_g = (ahrs_accel_norm - CONSTANTS_ONE_G) / CONSTANTS_ONE_G;
 	return _tilt_gain * sq(1.f - math::min(attenuation * fabsf(delta_accel_g), 1.f));
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+void EKFGSF_yaw::setTrueAirspeed(float true_airspeed)
+{ _true_airspeed = true_airspeed; }
+
+void EKFGSF_yaw::setGyroBias(const matrix::Vector3f &imu_gyro_bias, const bool force)
+{
+	// Initialise to gyro bias estimate from main filter because there could be a large
+	// uncorrected rate gyro bias error about the gravity vector
+	if (!_ahrs_ekf_gsf_tilt_aligned || !_ekf_gsf_vel_fuse_started || force) {
+		// init gyro bias for each model
+		for (uint8_t model_index = 0; model_index < N_MODELS_EKFGSF; model_index++) {
+			_ahrs_ekf_gsf[model_index].gyro_bias = imu_gyro_bias;
+		}
+	}
+}
+
+bool EKFGSF_yaw::isActive() const
+{ return _ekf_gsf_vel_fuse_started; }
+
+float EKFGSF_yaw::getYaw() const
+{ return _gsf_yaw; }
+
+float EKFGSF_yaw::getYawVar() const
+{ return _gsf_yaw_variance; }
+
+float EKFGSF_yaw::sq(float x) const
+{ return x * x; }

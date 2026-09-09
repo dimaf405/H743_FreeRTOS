@@ -45,10 +45,7 @@ class GnssChecks final
 public:
 	GnssChecks(int32_t &check_mask, int32_t &ekf2_req_nsats, float &ekf2_req_pdop, float &ekf2_req_eph, float &ekf2_req_epv,
 		   float &ekf2_req_sacc, float &ekf2_req_hdrift, float &ekf2_req_vdrift, int32_t &ekf2_req_fix, float &ekf2_vel_lim,
-		   uint32_t &min_health_time_us, filter_control_status_u &control_status):
-		_params{check_mask, ekf2_req_nsats, ekf2_req_pdop, ekf2_req_eph, ekf2_req_epv, ekf2_req_sacc, ekf2_req_hdrift, ekf2_req_vdrift, ekf2_req_fix, ekf2_vel_lim, min_health_time_us},
-		_control_status(control_status)
-	{};
+		   uint32_t &min_health_time_us, filter_control_status_u &control_status);;
 
 	union gps_check_fail_status_u {
 		struct {
@@ -67,34 +64,24 @@ public:
 		uint16_t value;
 	};
 
-	void resetHard()
-	{
-		_initial_checks_passed = false;
-		reset();
-	}
+	void resetHard();
 
-	void reset()
-	{
-		_passed = false;
-		_time_last_pass_us = 0;
-		_time_last_fail_us = 0;
-		resetDriftFilters();
-	}
+	void reset();
 
 	/*
 	 * Return true if the GNSS solution quality is adequate.
 	*/
 	bool run(const gnssSample &gnss, uint64_t time_us);
-	bool passed() const { return _passed; }
-	bool initialChecksPassed() const { return _initial_checks_passed; }
-	uint64_t getLastPassUs() const { return _time_last_pass_us; }
-	uint64_t getLastFailUs() const { return _time_last_fail_us; }
+	bool passed() const;
+	bool initialChecksPassed() const;
+	uint64_t getLastPassUs() const;
+	uint64_t getLastFailUs() const;
 
-	const gps_check_fail_status_u &getFailStatus() const { return _check_fail_status; }
+	const gps_check_fail_status_u &getFailStatus() const;
 
-	float horizontal_position_drift_rate_m_s() const { return _horizontal_position_drift_rate_m_s; }
-	float vertical_position_drift_rate_m_s() const { return _vertical_position_drift_rate_m_s; }
-	float filtered_horizontal_velocity_m_s() const { return _filtered_horizontal_velocity_m_s; }
+	float horizontal_position_drift_rate_m_s() const;
+	float vertical_position_drift_rate_m_s() const;
+	float filtered_horizontal_velocity_m_s() const;
 
 private:
 	enum class GnssChecksMask : int32_t {
@@ -111,7 +98,7 @@ private:
 		kFix     = (1 << 10)
 	};
 
-	bool isCheckEnabled(GnssChecksMask check) { return (_params.check_mask & static_cast<int32_t>(check)); }
+	bool isCheckEnabled(GnssChecksMask check);
 
 	bool runSimplifiedChecks(const gnssSample &gnss);
 	bool runInitialFixChecks(const gnssSample &gnss);
@@ -119,10 +106,7 @@ private:
 
 	void resetDriftFilters();
 
-	bool isTimedOut(uint64_t timestamp_to_check_us, uint64_t now_us, uint64_t timeout_period) const
-	{
-		return (timestamp_to_check_us == 0) || (timestamp_to_check_us + timeout_period < now_us);
-	}
+	bool isTimedOut(uint64_t timestamp_to_check_us, uint64_t now_us, uint64_t timeout_period) const;
 
 	gps_check_fail_status_u _check_fail_status{};
 

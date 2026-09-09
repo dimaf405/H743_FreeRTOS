@@ -72,14 +72,14 @@ class ExternalVisionVel;
 
 class Ekf final : public EstimatorInterface
 {
+	// 返回类型显式声明，访问器实现不再依赖头内 auto 推导。
+	struct StateResets;
+
 public:
 	typedef matrix::Vector<float, State::size> VectorState;
 	typedef matrix::SquareMatrix<float, State::size> SquareMatrixState;
 
-	Ekf()
-	{
-		reset();
-	};
+	Ekf();;
 
 	virtual ~Ekf() = default;
 
@@ -91,50 +91,50 @@ public:
 	// should be called every time new data is pushed into the filter
 	bool update();
 
-	const StateSample &state() const { return _state; }
+	const StateSample &state() const;
 
 #if defined(CONFIG_EKF2_BAROMETER)
-	const auto &aid_src_baro_hgt() const { return _aid_src_baro_hgt; }
-	const BiasEstimator::status &getBaroBiasEstimatorStatus() const { return _baro_b_est.getStatus(); }
+	const estimator_aid_source1d_s &aid_src_baro_hgt() const;
+	const BiasEstimator::status &getBaroBiasEstimatorStatus() const;
 #endif // CONFIG_EKF2_BAROMETER
 
 #if defined(CONFIG_EKF2_TERRAIN)
 	// terrain estimate
-	bool isTerrainEstimateValid() const { return _terrain_valid; }
+	bool isTerrainEstimateValid() const;
 
 	// get the estimated terrain vertical position relative to the NED origin
-	float getTerrainVertPos() const { return _state.terrain + getEkfGlobalOriginAltitude(); };
-	float getHagl() const { return _state.terrain + _gpos.altitude(); }
+	float getTerrainVertPos() const;;
+	float getHagl() const;
 
 	// get the terrain variance
-	float getTerrainVariance() const { return P(State::terrain.idx, State::terrain.idx); }
+	float getTerrainVariance() const;
 
 #endif // CONFIG_EKF2_TERRAIN
 
 #if defined(CONFIG_EKF2_RANGE_FINDER)
 	// range height
-	const auto &aid_src_rng_hgt() const { return _aid_src_rng_hgt; }
+	const estimator_aid_source1d_s &aid_src_rng_hgt() const;
 
-	float getHaglRateInnov() const { return _rng_consistency_check.getInnov(); }
-	float getHaglRateInnovVar() const { return _rng_consistency_check.getInnovVar(); }
-	float getHaglRateInnovRatio() const { return _rng_consistency_check.getSignedTestRatioLpf(); }
+	float getHaglRateInnov() const;
+	float getHaglRateInnovVar() const;
+	float getHaglRateInnovRatio() const;
 #endif // CONFIG_EKF2_RANGE_FINDER
 
 #if defined(CONFIG_EKF2_OPTICAL_FLOW)
-	const auto &aid_src_optical_flow() const { return _aid_src_optical_flow; }
+	const estimator_aid_source2d_s &aid_src_optical_flow() const;
 
-	const Vector2f &getFlowVelBody() const { return _flow_vel_body; }
-	Vector2f getFlowVelNE() const { return Vector2f(_R_to_earth * Vector3f(getFlowVelBody()(0), getFlowVelBody()(1), 0.f)); }
+	const Vector2f &getFlowVelBody() const;
+	Vector2f getFlowVelNE() const;
 
-	const Vector2f &getFilteredFlowVelBody() const { return _flow_vel_body_lpf.getState(); }
-	Vector2f getFilteredFlowVelNE() const { return Vector2f(_R_to_earth * Vector3f(getFilteredFlowVelBody()(0), getFilteredFlowVelBody()(1), 0.f)); }
+	const Vector2f &getFilteredFlowVelBody() const;
+	Vector2f getFilteredFlowVelNE() const;
 
-	const Vector2f &getFlowCompensated() const { return _flow_rate_compensated; }
-	const Vector2f &getFlowUncompensated() const { return _flow_sample_delayed.flow_rate; }
+	const Vector2f &getFlowCompensated() const;
+	const Vector2f &getFlowUncompensated() const;
 
-	const Vector3f getFlowGyro() const { return _flow_sample_delayed.gyro_rate; }
-	const Vector3f &getFlowGyroBias() const { return _flow_gyro_bias; }
-	const Vector3f &getFlowRefBodyRate() const { return _ref_body_rate; }
+	const Vector3f getFlowGyro() const;
+	const Vector3f &getFlowGyroBias() const;
+	const Vector3f &getFlowRefBodyRate() const;
 #endif // CONFIG_EKF2_OPTICAL_FLOW
 
 	float getHeadingInnov() const;
@@ -142,17 +142,17 @@ public:
 	float getHeadingInnovRatio() const;
 
 #if defined(CONFIG_EKF2_DRAG_FUSION)
-	const auto &aid_src_drag() const { return _aid_src_drag; }
+	const estimator_aid_source2d_s &aid_src_drag() const;
 #endif // CONFIG_EKF2_DRAG_FUSION
 
 #if defined(CONFIG_EKF2_GRAVITY_FUSION)
-	const auto &aid_src_gravity() const { return _aid_src_gravity; }
+	const estimator_aid_source3d_s &aid_src_gravity() const;
 #endif // CONFIG_EKF2_GRAVITY_FUSION
 
 #if defined(CONFIG_EKF2_WIND)
 	// get the wind velocity in m/s
-	const Vector2f &getWindVelocity() const { return _state.wind_vel; };
-	Vector2f getWindVelocityVariance() const { return getStateVariance<State::wind_vel>(); }
+	const Vector2f &getWindVelocity() const;;
+	Vector2f getWindVelocityVariance() const;
 
 	/**
 	* @brief Resets the wind states to an external observation
@@ -173,20 +173,20 @@ public:
 	matrix::SquareMatrix<float, S.dof>getStateCovariance() const { return P.slice<S.dof, S.dof>(S.idx, S.idx); }
 
 	// get the full covariance matrix
-	const matrix::SquareMatrix<float, State::size> &covariances() const { return P; }
-	float stateCovariance(unsigned r, unsigned c) const { return P(r, c); }
+	const matrix::SquareMatrix<float, State::size> &covariances() const;
+	float stateCovariance(unsigned r, unsigned c) const;
 
 	// get the diagonal elements of the covariance matrix
-	matrix::Vector<float, State::size> covariances_diagonal() const { return P.diag(); }
+	matrix::Vector<float, State::size> covariances_diagonal() const;
 
 	matrix::Vector3f getRotVarBody() const;
 	matrix::Vector3f getRotVarNed() const;
 	float getYawVar() const;
 	float getTiltVariance() const;
 
-	Vector3f getVelocityVariance() const { return getStateVariance<State::vel>(); };
+	Vector3f getVelocityVariance() const;;
 
-	Vector3f getPositionVariance() const { return getStateVariance<State::pos>(); }
+	Vector3f getPositionVariance() const;
 
 	// get the ekf WGS-84 origin position and height and the system time it was last set
 	void getEkfGlobalOrigin(uint64_t &origin_time, double &latitude, double &longitude, float &origin_alt) const;
@@ -219,44 +219,17 @@ public:
 	void resetAccelBias();
 	void resetAccelBiasCov();
 
-	bool isGlobalHorizontalPositionValid() const
-	{
-		return _local_origin_lat_lon.isInitialized() && isLocalHorizontalPositionValid();
-	}
+	bool isGlobalHorizontalPositionValid() const;
 
-	bool isGlobalVerticalPositionValid() const
-	{
-		return PX4_ISFINITE(_local_origin_alt) && isLocalVerticalPositionValid();
-	}
+	bool isGlobalVerticalPositionValid() const;
 
-	bool isLocalHorizontalPositionValid() const
-	{
-		return !_horizontal_deadreckon_time_exceeded;
-	}
+	bool isLocalHorizontalPositionValid() const;
 
-	bool isLocalVerticalPositionValid() const
-	{
-		return !_vertical_position_deadreckon_time_exceeded;
-	}
+	bool isLocalVerticalPositionValid() const;
 
-	bool isLocalVerticalVelocityValid() const
-	{
-		return !_vertical_velocity_deadreckon_time_exceeded;
-	}
+	bool isLocalVerticalVelocityValid() const;
 
-	bool isYawFinalAlignComplete() const
-	{
-#if defined(CONFIG_EKF2_MAGNETOMETER)
-		const bool is_using_mag = (_control_status.flags.mag_3D || _control_status.flags.mag_hdg);
-		const bool is_mag_alignment_in_flight_complete = is_using_mag
-				&& _control_status.flags.mag_aligned_in_flight
-				&& ((_time_delayed_us - _flt_mag_align_start_time) > (uint64_t)1e6);
-		return _control_status.flags.yaw_align
-		       && (is_mag_alignment_in_flight_complete || !is_using_mag);
-#else
-		return _control_status.flags.yaw_align;
-#endif
-	}
+	bool isYawFinalAlignComplete() const;
 
 	// fuse single direct state measurement (eg NED velocity, NED position, mag earth field, etc)
 	// constrain_variances must be false when called from inside constrainStateVar to prevent
@@ -267,75 +240,51 @@ public:
 	bool measurementUpdate(VectorState &K, const VectorState &H, const float R, const float innovation);
 
 	// gyro bias
-	const Vector3f &getGyroBias() const { return _state.gyro_bias; } // get the gyroscope bias in rad/s
-	Vector3f getGyroBiasVariance() const { return getStateVariance<State::gyro_bias>(); } // get the gyroscope bias variance in rad/s
-	float getGyroBiasLimit() const { return _params.ekf2_gyr_b_lim; }
-	float getGyroNoise() const { return _params.ekf2_gyr_noise; }
+	const Vector3f &getGyroBias() const; // get the gyroscope bias in rad/s
+	Vector3f getGyroBiasVariance() const; // get the gyroscope bias variance in rad/s
+	float getGyroBiasLimit() const;
+	float getGyroNoise() const;
 
 	// accel bias
-	const Vector3f &getAccelBias() const { return _state.accel_bias; } // get the accelerometer bias in m/s**2
-	Vector3f getAccelBiasVariance() const { return getStateVariance<State::accel_bias>(); } // get the accelerometer bias variance in m/s**2
-	float getAccelBiasLimit() const { return _params.ekf2_abl_lim; }
+	const Vector3f &getAccelBias() const; // get the accelerometer bias in m/s**2
+	Vector3f getAccelBiasVariance() const; // get the accelerometer bias variance in m/s**2
+	float getAccelBiasLimit() const;
 
 #if defined(CONFIG_EKF2_MAGNETOMETER)
-	const Vector3f &getMagEarthField() const { return _state.mag_I; }
+	const Vector3f &getMagEarthField() const;
 
-	const Vector3f &getMagBias() const { return _state.mag_B; }
-	Vector3f getMagBiasVariance() const { return getStateVariance<State::mag_B>(); } // get the mag bias variance in Gauss
-	float getMagBiasLimit() const { return 0.5f; } // 0.5 Gauss
+	const Vector3f &getMagBias() const;
+	Vector3f getMagBiasVariance() const; // get the mag bias variance in Gauss
+	float getMagBiasLimit() const; // 0.5 Gauss
 #endif // CONFIG_EKF2_MAGNETOMETER
 
-	bool accel_bias_inhibited() const { return _accel_bias_inhibit[0] || _accel_bias_inhibit[1] || _accel_bias_inhibit[2]; }
-	bool gyro_bias_inhibited() const { return _gyro_bias_inhibit[0] || _gyro_bias_inhibit[1] || _gyro_bias_inhibit[2]; }
+	bool accel_bias_inhibited() const;
+	bool gyro_bias_inhibited() const;
 
-	const auto &state_reset_status() const { return _state_reset_status; }
+	const StateResets &state_reset_status() const;
 
 	// return the amount the local vertical position changed in the last reset and the number of reset events
-	uint8_t get_posD_reset_count() const { return _state_reset_status.reset_count.posD; }
-	void get_posD_reset(float *delta, uint8_t *counter) const
-	{
-		*delta = _state_reset_status.posD_change;
-		*counter = _state_reset_status.reset_count.posD;
-	}
+	uint8_t get_posD_reset_count() const;
+	void get_posD_reset(float *delta, uint8_t *counter) const;
 
-	uint8_t get_hagl_reset_count() const { return _state_reset_status.reset_count.hagl; }
-	void get_hagl_reset(float *delta, uint8_t *counter) const
-	{
-		*delta = _state_reset_status.hagl_change;
-		*counter = _state_reset_status.reset_count.hagl;
-	}
+	uint8_t get_hagl_reset_count() const;
+	void get_hagl_reset(float *delta, uint8_t *counter) const;
 
 	// return the amount the local vertical velocity changed in the last reset and the number of reset events
-	uint8_t get_velD_reset_count() const { return _state_reset_status.reset_count.velD; }
-	void get_velD_reset(float *delta, uint8_t *counter) const
-	{
-		*delta = _state_reset_status.velD_change;
-		*counter = _state_reset_status.reset_count.velD;
-	}
+	uint8_t get_velD_reset_count() const;
+	void get_velD_reset(float *delta, uint8_t *counter) const;
 
 	// return the amount the local horizontal position changed in the last reset and the number of reset events
-	uint8_t get_posNE_reset_count() const { return _state_reset_status.reset_count.posNE; }
-	void get_posNE_reset(float delta[2], uint8_t *counter) const
-	{
-		_state_reset_status.posNE_change.copyTo(delta);
-		*counter = _state_reset_status.reset_count.posNE;
-	}
+	uint8_t get_posNE_reset_count() const;
+	void get_posNE_reset(float delta[2], uint8_t *counter) const;
 
 	// return the amount the local horizontal velocity changed in the last reset and the number of reset events
-	uint8_t get_velNE_reset_count() const { return _state_reset_status.reset_count.velNE; }
-	void get_velNE_reset(float delta[2], uint8_t *counter) const
-	{
-		_state_reset_status.velNE_change.copyTo(delta);
-		*counter = _state_reset_status.reset_count.velNE;
-	}
+	uint8_t get_velNE_reset_count() const;
+	void get_velNE_reset(float delta[2], uint8_t *counter) const;
 
 	// return the amount the quaternion has changed in the last reset and the number of reset events
-	uint8_t get_quat_reset_count() const { return _state_reset_status.reset_count.quat; }
-	void get_quat_reset(float delta_quat[4], uint8_t *counter) const
-	{
-		_state_reset_status.quat_change.copyTo(delta_quat);
-		*counter = _state_reset_status.reset_count.quat;
-	}
+	uint8_t get_quat_reset_count() const;
+	void get_quat_reset(float delta_quat[4], uint8_t *counter) const;
 
 	float getHeadingInnovationTestRatio() const;
 
@@ -353,46 +302,46 @@ public:
 	// return a bitmask integer that describes which state estimates are valid
 	uint16_t get_ekf_soln_status() const;
 
-	HeightSensor getHeightSensorRef() const { return _height_sensor_ref; }
+	HeightSensor getHeightSensorRef() const;
 
 #if defined(CONFIG_EKF2_AIRSPEED)
-	const auto &aid_src_airspeed() const { return _aid_src_airspeed; }
+	const estimator_aid_source1d_s &aid_src_airspeed() const;
 #endif // CONFIG_EKF2_AIRSPEED
 
 #if defined(CONFIG_EKF2_SIDESLIP)
-	const auto &aid_src_sideslip() const { return _aid_src_sideslip; }
+	const estimator_aid_source1d_s &aid_src_sideslip() const;
 #endif // CONFIG_EKF2_SIDESLIP
 
-	const auto &aid_src_fake_hgt() const { return _aid_src_fake_hgt; }
-	const auto &aid_src_fake_pos() const { return _aid_src_fake_pos; }
+	const estimator_aid_source1d_s &aid_src_fake_hgt() const;
+	const estimator_aid_source2d_s &aid_src_fake_pos() const;
 
 #if defined(CONFIG_EKF2_EXTERNAL_VISION)
-	const auto &aid_src_ev_hgt() const { return _aid_src_ev_hgt; }
-	const auto &aid_src_ev_pos() const { return _aid_src_ev_pos; }
-	const auto &aid_src_ev_vel() const { return _aid_src_ev_vel; }
-	const auto &aid_src_ev_yaw() const { return _aid_src_ev_yaw; }
+	const estimator_aid_source1d_s &aid_src_ev_hgt() const;
+	const estimator_aid_source2d_s &aid_src_ev_pos() const;
+	const estimator_aid_source3d_s &aid_src_ev_vel() const;
+	const estimator_aid_source1d_s &aid_src_ev_yaw() const;
 
-	const BiasEstimator::status &getEvHgtBiasEstimatorStatus() const { return _ev_hgt_b_est.getStatus(); }
-	const BiasEstimator::status &getEvPosBiasEstimatorStatus(int i) const { return _ev_pos_b_est.getStatus(i); }
+	const BiasEstimator::status &getEvHgtBiasEstimatorStatus() const;
+	const BiasEstimator::status &getEvPosBiasEstimatorStatus(int i) const;
 #endif // CONFIG_EKF2_EXTERNAL_VISION
 
 #if defined(CONFIG_EKF2_GNSS)
 	// set minimum continuous period without GPS fail required to mark a healthy GPS status
-	void set_min_required_gps_health_time(uint32_t time_us) { _min_gps_health_time_us = time_us; }
+	void set_min_required_gps_health_time(uint32_t time_us);
 
-	const GnssChecks::gps_check_fail_status_u &gps_check_fail_status() const { return _gnss_checks.getFailStatus(); }
-	const decltype(GnssChecks::gps_check_fail_status_u::flags) &gps_check_fail_status_flags() const { return _gnss_checks.getFailStatus().flags; }
+	const GnssChecks::gps_check_fail_status_u &gps_check_fail_status() const;
+	const decltype(GnssChecks::gps_check_fail_status_u::flags) &gps_check_fail_status_flags() const;
 
-	bool gps_checks_passed() const { return _gnss_checks.passed(); };
+	bool gps_checks_passed() const;;
 
-	const BiasEstimator::status &getGpsHgtBiasEstimatorStatus() const { return _gps_hgt_b_est.getStatus(); }
+	const BiasEstimator::status &getGpsHgtBiasEstimatorStatus() const;
 
-	const auto &aid_src_gnss_hgt() const { return _aid_src_gnss_hgt; }
-	const auto &aid_src_gnss_pos() const { return _aid_src_gnss_pos; }
-	const auto &aid_src_gnss_vel() const { return _aid_src_gnss_vel; }
+	const estimator_aid_source1d_s &aid_src_gnss_hgt() const;
+	const estimator_aid_source2d_s &aid_src_gnss_pos() const;
+	const estimator_aid_source3d_s &aid_src_gnss_vel() const;
 
 # if defined(CONFIG_EKF2_GNSS_YAW)
-	const auto &aid_src_gnss_yaw() const { return _aid_src_gnss_yaw; }
+	const estimator_aid_source1d_s &aid_src_gnss_yaw() const;
 # endif // CONFIG_EKF2_GNSS_YAW
 
 	// Returns true if the output of the yaw emergency estimator can be used for a reset
@@ -409,31 +358,17 @@ public:
 	// set the magnetic field data returned by the geo library using position
 	bool updateWorldMagneticModel(const double latitude_deg, const double longitude_deg);
 
-	const auto &aid_src_mag() const { return _aid_src_mag; }
+	const estimator_aid_source3d_s &aid_src_mag() const;
 #endif // CONFIG_EKF2_MAGNETOMETER
 
 #if defined(CONFIG_EKF2_AUXVEL)
-	const auto &aid_src_aux_vel() const { return _aid_src_aux_vel; }
+	const estimator_aid_source2d_s &aid_src_aux_vel() const;
 #endif // CONFIG_EKF2_AUXVEL
 
 	bool resetGlobalPosToExternalObservation(double latitude, double longitude, float altitude, float eph, float epv,
 			uint64_t timestamp_observation);
 
-	void resetHeadingToExternalObservation(float heading, float heading_accuracy)
-	{
-		if (_control_status.flags.yaw_align) {
-			resetYawByFusion(heading, heading_accuracy);
-
-		} else {
-			resetQuatStateYaw(heading, heading_accuracy);
-			_control_status.flags.yaw_align = true;
-		}
-
-		// Force the mag consistency check to pass again since an external heading reset is often done to
-		// counter mag disturbances.
-		_control_status.flags.mag_heading_consistent = false;
-		_control_status.flags.yaw_manual = true;
-	}
+	void resetHeadingToExternalObservation(float heading, float heading_accuracy);
 
 	void updateParameters();
 
@@ -719,7 +654,7 @@ private:
 	void resetVelocityTo(const Vector3f &vel, const Vector3f &new_vel_var);
 
 	void resetHorizontalVelocityTo(const Vector2f &new_horz_vel, const Vector2f &new_horz_vel_var);
-	void resetHorizontalVelocityTo(const Vector2f &new_horz_vel, float vel_var) { resetHorizontalVelocityTo(new_horz_vel, Vector2f(vel_var, vel_var)); }
+	void resetHorizontalVelocityTo(const Vector2f &new_horz_vel, float vel_var);
 
 	void resetHorizontalVelocityToZero();
 
@@ -730,7 +665,7 @@ private:
 
 	void resetHorizontalPositionTo(const double &new_latitude, const double &new_longitude,
 				       const Vector2f &new_horz_pos_var);
-	void resetHorizontalPositionTo(const double &new_latitude, const double &new_longitude, const float pos_var = NAN) { resetHorizontalPositionTo(new_latitude, new_longitude, Vector2f(pos_var, pos_var)); }
+	void resetHorizontalPositionTo(const double &new_latitude, const double &new_longitude, const float pos_var = NAN);
 	void resetHorizontalPositionTo(const Vector2f &new_pos, const Vector2f &new_horz_pos_var);
 
 	Vector2f getLocalHorizontalPosition() const;
@@ -761,7 +696,7 @@ private:
 
 #if defined(CONFIG_EKF2_TERRAIN)
 	void initTerrain();
-	float getTerrainVPos() const { return isTerrainEstimateValid() ? _state.terrain : _last_on_ground_posD; }
+	float getTerrainVPos() const;
 	void controlTerrainFakeFusion();
 
 	void updateTerrainValidity();
@@ -864,12 +799,7 @@ private:
 	void stopEvVelFusion();
 	void stopEvYawFusion();
 	bool fuseEvVelocity(estimator_aid_source3d_s &aid_src, const extVisionSample &ev_sample);
-	void fuseBodyVelocity(estimator_aid_source1d_s &aid_src, float &innov_var, VectorState &H)
-	{
-		VectorState Kfusion = P * H / innov_var;
-		measurementUpdate(Kfusion, H, aid_src.observation_variance, aid_src.innovation);
-		aid_src.fused = true;
-	}
+	void fuseBodyVelocity(estimator_aid_source1d_s &aid_src, float &innov_var, VectorState &H);
 #endif // CONFIG_EKF2_EXTERNAL_VISION
 
 #if defined(CONFIG_EKF2_GNSS)
@@ -998,20 +928,11 @@ private:
 
 	void resetGyroBiasZCov();
 
-	bool isTimedOut(uint64_t last_sensor_timestamp, uint64_t timeout_period) const
-	{
-		return (last_sensor_timestamp == 0) || (last_sensor_timestamp + timeout_period < _time_delayed_us);
-	}
+	bool isTimedOut(uint64_t last_sensor_timestamp, uint64_t timeout_period) const;
 
-	bool isRecent(uint64_t sensor_timestamp, uint64_t acceptance_interval) const
-	{
-		return (sensor_timestamp != 0) && (sensor_timestamp + acceptance_interval > _time_delayed_us);
-	}
+	bool isRecent(uint64_t sensor_timestamp, uint64_t acceptance_interval) const;
 
-	bool isNewestSampleRecent(uint64_t sensor_timestamp, uint64_t acceptance_interval) const
-	{
-		return (sensor_timestamp != 0) && (sensor_timestamp + acceptance_interval > _time_latest_us);
-	}
+	bool isNewestSampleRecent(uint64_t sensor_timestamp, uint64_t acceptance_interval) const;
 
 	void resetFakePosFusion();
 	bool runFakePosStateMachine(bool enable_condition_passing, bool status_flag, estimator_aid_source2d_s &aid_src);

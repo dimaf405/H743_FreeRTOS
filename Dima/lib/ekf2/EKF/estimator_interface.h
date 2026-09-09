@@ -97,11 +97,11 @@ public:
 #if defined(CONFIG_EKF2_GNSS)
 	void setGpsData(const gnssSample &gnss_sample);
 
-	const gnssSample &get_gps_sample_delayed() const { return _gps_sample_delayed; }
+	const gnssSample &get_gps_sample_delayed() const;
 
-	float gps_horizontal_position_drift_rate_m_s() const { return _gnss_checks.horizontal_position_drift_rate_m_s(); }
-	float gps_vertical_position_drift_rate_m_s() const { return _gnss_checks.vertical_position_drift_rate_m_s(); }
-	float gps_filtered_horizontal_velocity_m_s() const { return _gnss_checks.filtered_horizontal_velocity_m_s(); }
+	float gps_horizontal_position_drift_rate_m_s() const;
+	float gps_vertical_position_drift_rate_m_s() const;
+	float gps_filtered_horizontal_velocity_m_s() const;
 
 #endif // CONFIG_EKF2_GNSS
 
@@ -115,19 +115,16 @@ public:
 
 #if defined(CONFIG_EKF2_AIRSPEED)
 	void setAirspeedData(const airspeedSample &airspeed_sample);
-	void setSyntheticAirspeed(const bool synthetic_airspeed) { _synthetic_airspeed = synthetic_airspeed; }
+	void setSyntheticAirspeed(const bool synthetic_airspeed);
 #endif // CONFIG_EKF2_AIRSPEED
 
 #if defined(CONFIG_EKF2_RANGE_FINDER)
 	void setRangeData(const estimator::sensor::rangeSample &range_sample);
 
 	// set sensor limitations reported by the rangefinder
-	void set_rangefinder_limits(float min_distance, float max_distance)
-	{
-		_range_sensor.setLimits(min_distance, max_distance);
-	}
+	void set_rangefinder_limits(float min_distance, float max_distance);
 
-	const estimator::sensor::rangeSample &get_rng_sample_delayed() { return *(_range_sensor.getSampleAddress()); }
+	const estimator::sensor::rangeSample &get_rng_sample_delayed();
 #endif // CONFIG_EKF2_RANGE_FINDER
 
 #if defined(CONFIG_EKF2_OPTICAL_FLOW)
@@ -135,12 +132,7 @@ public:
 	void setOpticalFlowData(const flowSample &flow);
 
 	// set sensor limitations reported by the optical flow sensor
-	void set_optical_flow_limits(float max_flow_rate, float min_distance, float max_distance)
-	{
-		_flow_max_rate = max_flow_rate;
-		_flow_min_distance = min_distance;
-		_flow_max_distance = max_distance;
-	}
+	void set_optical_flow_limits(float max_flow_rate, float min_distance, float max_distance);
 #endif // CONFIG_EKF2_OPTICAL_FLOW
 
 #if defined(CONFIG_EKF2_EXTERNAL_VISION)
@@ -156,67 +148,35 @@ public:
 
 	// return a address to the parameters struct
 	// in order to give access to the application
-	parameters *getParamHandle() { return &_params; }
+	parameters *getParamHandle();
 
 	// set vehicle landed status data
-	void set_in_air_status(bool in_air)
-	{
-		if (!in_air) {
-			if (_control_status.flags.in_air) {
-				ECL_DEBUG("no longer in air");
-			}
+	void set_in_air_status(bool in_air);
 
-			_time_last_on_ground_us = _time_delayed_us;
+	void set_vehicle_at_rest(bool at_rest);
 
-		} else {
-			if (!_control_status.flags.in_air) {
-				ECL_DEBUG("in air");
-			}
-
-			_time_last_in_air = _time_delayed_us;
-		}
-
-		_control_status.flags.in_air = in_air;
-	}
-
-	void set_vehicle_at_rest(bool at_rest)
-	{
-		if (!_control_status.flags.vehicle_at_rest && at_rest) {
-			ECL_DEBUG("at rest");
-
-		} else if (_control_status.flags.vehicle_at_rest && !at_rest) {
-			ECL_DEBUG("no longer at rest");
-		}
-
-		_control_status.flags.vehicle_at_rest = at_rest;
-	}
-
-	void set_constant_pos(bool constant_pos) { _control_status.flags.constant_pos = constant_pos; }
+	void set_constant_pos(bool constant_pos);
 
 	// return true if the attitude is usable
-	bool attitude_valid() const { return _control_status.flags.tilt_align; }
+	bool attitude_valid() const;
 
 	// get vehicle landed status data
-	bool get_in_air_status() const { return _control_status.flags.in_air; }
+	bool get_in_air_status() const;
 
 #if defined(CONFIG_EKF2_WIND)
-	bool get_wind_status() const { return _control_status.flags.wind || _external_wind_init; }
+	bool get_wind_status() const;
 #endif // CONFIG_EKF2_WIND
 
 	// set vehicle is fixed wing status
-	void set_is_fixed_wing(bool is_fixed_wing) { _control_status.flags.fixed_wing = is_fixed_wing; }
+	void set_is_fixed_wing(bool is_fixed_wing);
 
 	// set flag if static pressure rise due to ground effect is expected
 	// use _params.ekf2_gnd_eff_dz to adjust for expected rise in static pressure
 	// flag will clear after GNDEFFECT_TIMEOUT uSec
-	void set_gnd_effect()
-	{
-		_control_status.flags.gnd_effect = true;
-		_time_last_gnd_effect_on = _time_delayed_us;
-	}
+	void set_gnd_effect();
 
 	// set air density used by the multi-rotor specific drag force fusion
-	void set_air_density(float air_density) { _air_density = air_density; }
+	void set_air_density(float air_density);
 
 	bool isOnlyActiveSourceOfHorizontalAiding(bool aiding_flag) const;
 	bool isOnlyActiveSourceOfHorizontalPositionAiding(bool aiding_flag) const;
@@ -255,87 +215,63 @@ public:
 	bool isVerticalVelocityAidingActive() const;
 	int getNumberOfActiveVerticalVelocityAidingSources() const;
 
-	const matrix::Quatf &getQuaternion() const { return _output_predictor.getQuaternion(); }
-	Vector3f getAngularVelocityAndResetAccumulator() { return _output_predictor.getAngularVelocityAndResetAccumulator(); }
-	float getUnaidedYaw() const { return _output_predictor.getUnaidedYaw(); }
-	Vector3f getVelocity() const { return _output_predictor.getVelocity(); }
+	const matrix::Quatf &getQuaternion() const;
+	Vector3f getAngularVelocityAndResetAccumulator();
+	float getUnaidedYaw() const;
+	Vector3f getVelocity() const;
 
 	// get the mean velocity derivative in earth frame since last reset (see `resetVelocityDerivativeAccumulation()`)
-	Vector3f getVelocityDerivative() const { return _output_predictor.getVelocityDerivative(); }
-	void resetVelocityDerivativeAccumulation() { return _output_predictor.resetVelocityDerivativeAccumulation(); }
-	float getVerticalPositionDerivative() const { return _output_predictor.getVerticalPositionDerivative(); }
+	Vector3f getVelocityDerivative() const;
+	void resetVelocityDerivativeAccumulation();
+	float getVerticalPositionDerivative() const;
 	Vector3f getPosition() const;
-	LatLonAlt getLatLonAlt() const { return _output_predictor.getLatLonAlt(); }
-	const Vector3f &getOutputTrackingError() const { return _output_predictor.getOutputTrackingError(); }
+	LatLonAlt getLatLonAlt() const;
+	const Vector3f &getOutputTrackingError() const;
 
 #if defined(CONFIG_EKF2_MAGNETOMETER)
 	// Get the value of magnetic declination in degrees to be saved for use at the next startup
 	// Returns true when the declination can be saved
 	// At the next startup, set param.ekf2_mag_decl to the value saved
-	bool get_mag_decl_deg(float &val) const
-	{
-		if (PX4_ISFINITE(_wmm_declination_rad) && (_params.ekf2_decl_type & GeoDeclinationMask::SAVE_GEO_DECL)) {
-			val = math::degrees(_wmm_declination_rad);
-			return true;
+	bool get_mag_decl_deg(float &val) const;
 
-		} else {
-			return false;
-		}
-	}
+	bool get_mag_inc_deg(float &val) const;
 
-	bool get_mag_inc_deg(float &val) const
-	{
-		if (PX4_ISFINITE(_wmm_inclination_rad)) {
-			val = math::degrees(_wmm_inclination_rad);
-			return true;
-
-		} else {
-			return false;
-		}
-	}
-
-	void get_mag_checks(float &inc_deg, float &inc_ref_deg, float &strength_gs, float &strength_ref_gs) const
-	{
-		inc_deg = math::degrees(_mag_inclination);
-		inc_ref_deg = math::degrees(_wmm_inclination_rad);
-		strength_gs = _mag_strength;
-		strength_ref_gs = _wmm_field_strength_gauss;
-	}
+	void get_mag_checks(float &inc_deg, float &inc_ref_deg, float &strength_gs, float &strength_ref_gs) const;
 #endif // CONFIG_EKF2_MAGNETOMETER
 
 	// get EKF mode status
-	const filter_control_status_u &control_status() const { return _control_status; }
-	const decltype(filter_control_status_u::flags) &control_status_flags() const { return _control_status.flags; }
+	const filter_control_status_u &control_status() const;
+	const decltype(filter_control_status_u::flags) &control_status_flags() const;
 
-	const filter_control_status_u &control_status_prev() const { return _control_status_prev; }
-	const decltype(filter_control_status_u::flags) &control_status_prev_flags() const { return _control_status_prev.flags; }
+	const filter_control_status_u &control_status_prev() const;
+	const decltype(filter_control_status_u::flags) &control_status_prev_flags() const;
 
-	void enableControlStatusAuxGpos() { _control_status.flags.aux_gpos = true; }
-	void disableControlStatusAuxGpos() { _control_status.flags.aux_gpos = false; }
+	void enableControlStatusAuxGpos();
+	void disableControlStatusAuxGpos();
 
 	// get EKF internal fault status
-	const fault_status_u &fault_status() const { return _fault_status; }
-	const decltype(fault_status_u::flags) &fault_status_flags() const { return _fault_status.flags; }
+	const fault_status_u &fault_status() const;
+	const decltype(fault_status_u::flags) &fault_status_flags() const;
 
-	const innovation_fault_status_u &innov_check_fail_status() const { return _innov_check_fail_status; }
-	const decltype(innovation_fault_status_u::flags) &innov_check_fail_status_flags() const { return _innov_check_fail_status.flags; }
+	const innovation_fault_status_u &innov_check_fail_status() const;
+	const decltype(innovation_fault_status_u::flags) &innov_check_fail_status_flags() const;
 
-	const information_event_status_u &information_event_status() const { return _information_events; }
-	const decltype(information_event_status_u::flags) &information_event_flags() const { return _information_events.flags; }
-	void clear_information_events() { _information_events.value = 0; }
+	const information_event_status_u &information_event_status() const;
+	const decltype(information_event_status_u::flags) &information_event_flags() const;
+	void clear_information_events();
 
 	// Getter for the average EKF update period in s
-	float get_dt_ekf_avg() const { return _dt_ekf_avg; }
+	float get_dt_ekf_avg() const;
 
 	// Getters for samples on the delayed time horizon
-	const imuSample &get_imu_sample_delayed() const { return _imu_buffer.get_oldest(); }
-	const uint64_t &time_delayed_us() const { return _time_delayed_us; }
+	const imuSample &get_imu_sample_delayed() const;
+	const uint64_t &time_delayed_us() const;
 
-	bool global_origin_valid() const { return _local_origin_lat_lon.isInitialized(); }
-	const MapProjection &global_origin() const { return _local_origin_lat_lon; }
-	float getEkfGlobalOriginAltitude() const { return PX4_ISFINITE(_local_origin_alt) ? _local_origin_alt : 0.f; }
+	bool global_origin_valid() const;
+	const MapProjection &global_origin() const;
+	float getEkfGlobalOriginAltitude() const;
 
-	OutputPredictor &output_predictor() { return _output_predictor; };
+	OutputPredictor &output_predictor();;
 
 protected:
 

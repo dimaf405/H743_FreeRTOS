@@ -144,3 +144,25 @@ void DataValidator::increase_error_density(std::uint32_t increment) noexcept
 }
 
 } // namespace dima::lib::sensors::validation
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::lib::sensors::validation {
+
+bool StreamValidity::healthy() const noexcept
+{
+    return failure_mask == StreamFailureNone && confidence > 0.0F;
+}
+
+std::uint32_t DataValidator::error_count() const noexcept
+{
+    return error_count_;
+}
+
+std::uint32_t DataValidator::error_density() const noexcept
+{
+    return error_density_;
+}
+
+} // namespace dima::lib::sensors::validation

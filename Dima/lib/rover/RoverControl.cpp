@@ -489,3 +489,13 @@ float reduce_speed_for_heading_error(float speed_setpoint_m_s,
 }
 
 } // namespace dima::lib::rover
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::lib::rover {
+
+DrivingState DrivingStateMachine::state() const noexcept
+{ return state_; }
+
+} // namespace dima::lib::rover

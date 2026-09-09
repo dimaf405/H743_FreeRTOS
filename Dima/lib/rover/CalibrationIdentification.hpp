@@ -89,10 +89,7 @@ struct IdentificationResult {
     FirstOrderModel model{};
     ParallelPiCandidate pi{};
 
-    bool valid() const noexcept
-    {
-        return failure == CalibrationAlgorithmFailure::None && model.valid && pi.valid;
-    }
+    bool valid() const noexcept;
 };
 
 // 固定六模型 delay bank；调用方必须输入已经去工作点的 delta input/output。
@@ -106,8 +103,8 @@ public:
                     float output_delta) noexcept;
     IdentificationResult fit(const PiDesignLimits &limits) const noexcept;
 
-    CalibrationAlgorithmFailure sample_failure() const noexcept { return sample_failure_; }
-    std::uint32_t sample_count() const noexcept { return sample_count_; }
+    CalibrationAlgorithmFailure sample_failure() const noexcept;
+    std::uint32_t sample_count() const noexcept;
 
 private:
     IdentificationConfig config_{};
@@ -153,7 +150,7 @@ struct StepValidationResult {
     float allowed_steady_state_error{0.0F};
     float maximum_continuous_saturation_s{0.0F};
 
-    bool valid() const noexcept { return failure == CalibrationAlgorithmFailure::None; }
+    bool valid() const noexcept;
 };
 
 class StepResponseValidator final {
@@ -165,7 +162,7 @@ public:
                     bool saturated) noexcept;
     StepValidationResult result() const noexcept;
 
-    CalibrationAlgorithmFailure sample_failure() const noexcept { return sample_failure_; }
+    CalibrationAlgorithmFailure sample_failure() const noexcept;
 
 private:
     StepValidationConfig config_{};

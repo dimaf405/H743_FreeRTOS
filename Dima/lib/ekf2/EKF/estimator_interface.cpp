@@ -751,3 +751,236 @@ void EstimatorInterface::printBufferAllocationFailed(const char *buffer_name)
 		ECL_ERR("%s buffer allocation failed", buffer_name);
 	}
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+#if defined(CONFIG_EKF2_GNSS)
+const gnssSample & EstimatorInterface::get_gps_sample_delayed() const
+{ return _gps_sample_delayed; }
+#endif
+
+#if defined(CONFIG_EKF2_GNSS)
+float EstimatorInterface::gps_horizontal_position_drift_rate_m_s() const
+{ return _gnss_checks.horizontal_position_drift_rate_m_s(); }
+#endif
+
+#if defined(CONFIG_EKF2_GNSS)
+float EstimatorInterface::gps_vertical_position_drift_rate_m_s() const
+{ return _gnss_checks.vertical_position_drift_rate_m_s(); }
+#endif
+
+#if defined(CONFIG_EKF2_GNSS)
+float EstimatorInterface::gps_filtered_horizontal_velocity_m_s() const
+{ return _gnss_checks.filtered_horizontal_velocity_m_s(); }
+#endif
+
+#if defined(CONFIG_EKF2_AIRSPEED)
+void EstimatorInterface::setSyntheticAirspeed(const bool synthetic_airspeed)
+{ _synthetic_airspeed = synthetic_airspeed; }
+#endif
+
+#if defined(CONFIG_EKF2_RANGE_FINDER)
+void EstimatorInterface::set_rangefinder_limits(float min_distance, float max_distance)
+{
+	_range_sensor.setLimits(min_distance, max_distance);
+}
+#endif
+
+#if defined(CONFIG_EKF2_RANGE_FINDER)
+const estimator::sensor::rangeSample & EstimatorInterface::get_rng_sample_delayed()
+{ return *(_range_sensor.getSampleAddress()); }
+#endif
+
+#if defined(CONFIG_EKF2_OPTICAL_FLOW)
+void EstimatorInterface::set_optical_flow_limits(float max_flow_rate, float min_distance, float max_distance)
+{
+	_flow_max_rate = max_flow_rate;
+	_flow_min_distance = min_distance;
+	_flow_max_distance = max_distance;
+}
+#endif
+
+parameters * EstimatorInterface::getParamHandle()
+{ return &_params; }
+
+void EstimatorInterface::set_in_air_status(bool in_air)
+{
+	if (!in_air) {
+		if (_control_status.flags.in_air) {
+			ECL_DEBUG("no longer in air");
+		}
+
+		_time_last_on_ground_us = _time_delayed_us;
+
+	} else {
+		if (!_control_status.flags.in_air) {
+			ECL_DEBUG("in air");
+		}
+
+		_time_last_in_air = _time_delayed_us;
+	}
+
+	_control_status.flags.in_air = in_air;
+}
+
+void EstimatorInterface::set_vehicle_at_rest(bool at_rest)
+{
+	if (!_control_status.flags.vehicle_at_rest && at_rest) {
+		ECL_DEBUG("at rest");
+
+	} else if (_control_status.flags.vehicle_at_rest && !at_rest) {
+		ECL_DEBUG("no longer at rest");
+	}
+
+	_control_status.flags.vehicle_at_rest = at_rest;
+}
+
+void EstimatorInterface::set_constant_pos(bool constant_pos)
+{ _control_status.flags.constant_pos = constant_pos; }
+
+bool EstimatorInterface::attitude_valid() const
+{ return _control_status.flags.tilt_align; }
+
+bool EstimatorInterface::get_in_air_status() const
+{ return _control_status.flags.in_air; }
+
+#if defined(CONFIG_EKF2_WIND)
+bool EstimatorInterface::get_wind_status() const
+{ return _control_status.flags.wind || _external_wind_init; }
+#endif
+
+void EstimatorInterface::set_is_fixed_wing(bool is_fixed_wing)
+{ _control_status.flags.fixed_wing = is_fixed_wing; }
+
+void EstimatorInterface::set_gnd_effect()
+{
+	_control_status.flags.gnd_effect = true;
+	_time_last_gnd_effect_on = _time_delayed_us;
+}
+
+void EstimatorInterface::set_air_density(float air_density)
+{ _air_density = air_density; }
+
+const matrix::Quatf & EstimatorInterface::getQuaternion() const
+{ return _output_predictor.getQuaternion(); }
+
+Vector3f EstimatorInterface::getAngularVelocityAndResetAccumulator()
+{ return _output_predictor.getAngularVelocityAndResetAccumulator(); }
+
+float EstimatorInterface::getUnaidedYaw() const
+{ return _output_predictor.getUnaidedYaw(); }
+
+Vector3f EstimatorInterface::getVelocity() const
+{ return _output_predictor.getVelocity(); }
+
+Vector3f EstimatorInterface::getVelocityDerivative() const
+{ return _output_predictor.getVelocityDerivative(); }
+
+void EstimatorInterface::resetVelocityDerivativeAccumulation()
+{ return _output_predictor.resetVelocityDerivativeAccumulation(); }
+
+float EstimatorInterface::getVerticalPositionDerivative() const
+{ return _output_predictor.getVerticalPositionDerivative(); }
+
+LatLonAlt EstimatorInterface::getLatLonAlt() const
+{ return _output_predictor.getLatLonAlt(); }
+
+const Vector3f & EstimatorInterface::getOutputTrackingError() const
+{ return _output_predictor.getOutputTrackingError(); }
+
+#if defined(CONFIG_EKF2_MAGNETOMETER)
+bool EstimatorInterface::get_mag_decl_deg(float &val) const
+{
+	if (PX4_ISFINITE(_wmm_declination_rad) && (_params.ekf2_decl_type & GeoDeclinationMask::SAVE_GEO_DECL)) {
+		val = math::degrees(_wmm_declination_rad);
+		return true;
+
+	} else {
+		return false;
+	}
+}
+#endif
+
+#if defined(CONFIG_EKF2_MAGNETOMETER)
+bool EstimatorInterface::get_mag_inc_deg(float &val) const
+{
+	if (PX4_ISFINITE(_wmm_inclination_rad)) {
+		val = math::degrees(_wmm_inclination_rad);
+		return true;
+
+	} else {
+		return false;
+	}
+}
+#endif
+
+#if defined(CONFIG_EKF2_MAGNETOMETER)
+void EstimatorInterface::get_mag_checks(float &inc_deg, float &inc_ref_deg, float &strength_gs, float &strength_ref_gs) const
+{
+	inc_deg = math::degrees(_mag_inclination);
+	inc_ref_deg = math::degrees(_wmm_inclination_rad);
+	strength_gs = _mag_strength;
+	strength_ref_gs = _wmm_field_strength_gauss;
+}
+#endif
+
+const filter_control_status_u & EstimatorInterface::control_status() const
+{ return _control_status; }
+
+const decltype(filter_control_status_u::flags) & EstimatorInterface::control_status_flags() const
+{ return _control_status.flags; }
+
+const filter_control_status_u & EstimatorInterface::control_status_prev() const
+{ return _control_status_prev; }
+
+const decltype(filter_control_status_u::flags) & EstimatorInterface::control_status_prev_flags() const
+{ return _control_status_prev.flags; }
+
+void EstimatorInterface::enableControlStatusAuxGpos()
+{ _control_status.flags.aux_gpos = true; }
+
+void EstimatorInterface::disableControlStatusAuxGpos()
+{ _control_status.flags.aux_gpos = false; }
+
+const fault_status_u & EstimatorInterface::fault_status() const
+{ return _fault_status; }
+
+const decltype(fault_status_u::flags) & EstimatorInterface::fault_status_flags() const
+{ return _fault_status.flags; }
+
+const innovation_fault_status_u & EstimatorInterface::innov_check_fail_status() const
+{ return _innov_check_fail_status; }
+
+const decltype(innovation_fault_status_u::flags) & EstimatorInterface::innov_check_fail_status_flags() const
+{ return _innov_check_fail_status.flags; }
+
+const information_event_status_u & EstimatorInterface::information_event_status() const
+{ return _information_events; }
+
+const decltype(information_event_status_u::flags) & EstimatorInterface::information_event_flags() const
+{ return _information_events.flags; }
+
+void EstimatorInterface::clear_information_events()
+{ _information_events.value = 0; }
+
+float EstimatorInterface::get_dt_ekf_avg() const
+{ return _dt_ekf_avg; }
+
+const imuSample & EstimatorInterface::get_imu_sample_delayed() const
+{ return _imu_buffer.get_oldest(); }
+
+const uint64_t & EstimatorInterface::time_delayed_us() const
+{ return _time_delayed_us; }
+
+bool EstimatorInterface::global_origin_valid() const
+{ return _local_origin_lat_lon.isInitialized(); }
+
+const MapProjection & EstimatorInterface::global_origin() const
+{ return _local_origin_lat_lon; }
+
+float EstimatorInterface::getEkfGlobalOriginAltitude() const
+{ return PX4_ISFINITE(_local_origin_alt) ? _local_origin_alt : 0.f; }
+
+OutputPredictor & EstimatorInterface::output_predictor()
+{ return _output_predictor; }

@@ -658,6 +658,10 @@ DIMA_ROVER_CONTROL_CXX_SOURCES := \
 
 DIMA_COMMON_CXX_SOURCES := \
 	Dima/adapters/mavlink/MavlinkBridge.cpp \
+	Dima/lib/mathlib/math/Functions.cpp \
+	Dima/lib/mathlib/math/Limits.cpp \
+	Dima/lib/mathlib/math/TrajMath.cpp \
+	Dima/lib/matrix/matrix/helper_functions.cpp \
 	Dima/middleware/parameters/ConstLayer.cpp \
 	Dima/middleware/parameters/Crc32.cpp \
 	Dima/middleware/parameters/DynamicSparseLayer.cpp \
@@ -957,11 +961,15 @@ $(DIMA_APPLICATION_CONTEXT_OBJECT): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_PLATFORM_INCLUDES)
 
 $(DIMA_LIB_OBJECTS): DIMA_PRIVATE_INCLUDES += $(DIMA_LIB_INCLUDES)
+
+# 原在 PX4 数学头内展开的普通函数外移后，仅这些数学对象需要兼容 defines 根。
+$(filter $(BUILD_DIR)/Dima/lib/mathlib/% $(BUILD_DIR)/Dima/lib/matrix/%,$(DIMA_LIB_OBJECTS)): DIMA_PRIVATE_INCLUDES += \
+	$(DIMA_MIDDLEWARE_INCLUDES) $(DIMA_MATRIX_INCLUDES)
 # TrajMath 的公开签名使用 Matrix，Matrix 上游头又从 px4_platform_common/defines.h
 # 取得有限值与圆周率宏。该兼容头只有平台无关常量/宏，因此仅向纯 Rover 控制
 # 翻译单元开放 middleware include 根；控制核仍不得引用 uORB、参数、队列或 RTOS。
 $(DIMA_ROVER_CONTROL_LIB_OBJECT): DIMA_PRIVATE_INCLUDES += \
-	$(DIMA_MIDDLEWARE_INCLUDES)
+	$(DIMA_MIDDLEWARE_INCLUDES) $(DIMA_MATRIX_INCLUDES)
 # 固定容量 RLS 仅需已有 Matrix/平台无关 defines；不引入参数、uORB 或 RTOS。
 $(filter $(BUILD_DIR)/Dima/lib/rover/CalibrationIdentification.o,$(DIMA_LIB_OBJECTS)): DIMA_PRIVATE_INCLUDES += \
 	$(DIMA_MATRIX_INCLUDES) $(DIMA_MIDDLEWARE_INCLUDES)

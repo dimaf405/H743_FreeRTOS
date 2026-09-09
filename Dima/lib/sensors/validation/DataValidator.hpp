@@ -24,10 +24,7 @@ struct StreamValidity {
     std::uint32_t failure_mask{StreamFailureNoData};
     float confidence{0.0F};
 
-    constexpr bool healthy() const noexcept
-    {
-        return failure_mask == StreamFailureNone && confidence > 0.0F;
-    }
+    bool healthy() const noexcept;
 };
 
 class DataValidator final {
@@ -51,15 +48,9 @@ public:
     StreamValidity evaluate(std::uint64_t now_us) const noexcept;
     void reset() noexcept;
 
-    constexpr std::uint32_t error_count() const noexcept
-    {
-        return error_count_;
-    }
+    std::uint32_t error_count() const noexcept;
 
-    constexpr std::uint32_t error_density() const noexcept
-    {
-        return error_density_;
-    }
+    std::uint32_t error_density() const noexcept;
 
 private:
     static bool vectors_equal(const float (&left)[3],

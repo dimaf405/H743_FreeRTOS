@@ -60,10 +60,7 @@ int signNoZero(T val)
  * @param[in] positive Truth value to take the sign from
  * @return 1 if positive is true, -1 if positive is false
  */
-inline int signFromBool(bool positive)
-{
-	return positive ? 1 : -1;
-}
+int signFromBool(bool positive);
 
 template<typename T>
 T sq(T val)
@@ -285,19 +282,10 @@ int countSetBits(T n)
 	return count;
 }
 
-inline bool isFinite(const float &value)
-{
-	return PX4_ISFINITE(value);
-}
+bool isFinite(const float &value);
 
-inline bool isFinite(const matrix::Vector2f &value)
-{
-	return value.isAllFinite();
-}
+bool isFinite(const matrix::Vector2f &value);
 
-inline bool isFinite(const matrix::Vector3f &value)
-{
-	return value.isAllFinite();
-}
+bool isFinite(const matrix::Vector3f &value);
 
 } /* namespace math */

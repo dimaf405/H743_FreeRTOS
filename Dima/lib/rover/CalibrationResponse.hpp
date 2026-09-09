@@ -27,7 +27,7 @@ enum class ResponseFailure : std::uint8_t {
 struct ResponseEstimate {
     float value{std::numeric_limits<float>::quiet_NaN()};
     ResponseFailure failure{ResponseFailure::InsufficientSamples};
-    bool valid() const noexcept { return failure == ResponseFailure::None; }
+    bool valid() const noexcept;
 };
 
 // 单变量 Welford；保留真实零方差，不人为补噪声。调用方负责保证停车/稳态、
@@ -36,13 +36,13 @@ class ResponseStatistics final {
 public:
     bool add(std::uint64_t timestamp_us, float value) noexcept;
     void reset() noexcept;
-    std::uint32_t count() const noexcept { return count_; }
+    std::uint32_t count() const noexcept;
     double mean() const noexcept;
     double variance() const noexcept;
     float standard_deviation() const noexcept;
     float maximum() const noexcept;
     float duration_s() const noexcept;
-    ResponseFailure failure() const noexcept { return failure_; }
+    ResponseFailure failure() const noexcept;
 
 private:
     double mean_{};
@@ -60,8 +60,8 @@ class TransientSlope final {
 public:
     bool add(std::uint64_t timestamp_us, float response) noexcept;
     void reset() noexcept;
-    std::uint32_t count() const noexcept { return count_; }
-    ResponseFailure failure() const noexcept { return failure_; }
+    std::uint32_t count() const noexcept;
+    ResponseFailure failure() const noexcept;
     float signed_rate() const noexcept;
     ResponseEstimate lower_confidence_rate(float measurement_noise) const noexcept;
 
@@ -85,7 +85,7 @@ struct ResponsePlateau {
     ResponseStatistics pre_input{};
     ResponseStatistics applied_input{};
     ResponseStatistics raw_speed{};
-    std::uint32_t count() const noexcept { return raw_speed.count(); }
+    std::uint32_t count() const noexcept;
 };
 
 class MotorResponseProfile final {
@@ -104,7 +104,7 @@ public:
     bool replace_direction(std::size_t direction, const MotorResponseProfile &source,
                            std::size_t source_direction) noexcept;
     bool reset_plateau(std::size_t direction, std::size_t level) noexcept;
-    ResponseFailure failure() const noexcept { return failure_; }
+    ResponseFailure failure() const noexcept;
 
     // 速度取已测平台的最大保守响应；增益取至少三档有效平台比值的最小下界。
     // 增益下界不是“整条曲线线性”的证明，不能单独授权 RO_MAX_THR_SPEED 保存。
@@ -146,11 +146,7 @@ struct MotorResponseCandidate {
     ResponseFailure minimum_failure{ResponseFailure::InsufficientSamples};
     ResponseFailure expo_failure{ResponseFailure::InsufficientSamples};
     ResponseFailure asymmetry_failure{ResponseFailure::InsufficientSamples};
-    bool complete() const noexcept
-    {
-        return failure == ResponseFailure::None && global_coverage &&
-               identifiable_mask == kAll;
-    }
+    bool complete() const noexcept;
 };
 
 // 仅设计 MIN/EXPO/ASYM 候选，不触碰参数、输出、MOT_MAX、Arm ramp、换向延时。

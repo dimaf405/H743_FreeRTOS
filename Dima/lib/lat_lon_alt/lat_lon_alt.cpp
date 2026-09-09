@@ -150,3 +150,66 @@ matrix::Vector3f LatLonAlt::operator-(const LatLonAlt &lla) const
 				static_cast<float>(delta_lon * d_lat_lon_to_d_xy(1)),
 				-delta_alt);
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+LatLonAlt::LatLonAlt(const LatLonAlt &lla)
+{
+	_latitude_rad = lla.latitude_rad();
+	_longitude_rad = lla.longitude_rad();
+	_altitude = lla.altitude();
+}
+
+LatLonAlt::LatLonAlt(const double latitude_deg, const double longitude_deg, const float altitude_m)
+{
+	_latitude_rad = math::radians(latitude_deg);
+	_longitude_rad = math::radians(longitude_deg);
+	_altitude = altitude_m;
+}
+
+void LatLonAlt::setZero()
+{ _latitude_rad = 0.0; _longitude_rad = 0.0; _altitude = 0.f; }
+
+double LatLonAlt::latitude_deg() const
+{ return math::degrees(latitude_rad()); }
+
+double LatLonAlt::longitude_deg() const
+{ return math::degrees(longitude_rad()); }
+
+const double & LatLonAlt::latitude_rad() const
+{ return _latitude_rad; }
+
+const double & LatLonAlt::longitude_rad() const
+{ return _longitude_rad; }
+
+float LatLonAlt::altitude() const
+{ return _altitude; }
+
+void LatLonAlt::setLatitudeDeg(const double &latitude_deg)
+{ _latitude_rad = math::radians(latitude_deg); }
+
+void LatLonAlt::setLongitudeDeg(const double &longitude_deg)
+{ _longitude_rad = math::radians(longitude_deg); }
+
+void LatLonAlt::setAltitude(const float altitude)
+{ _altitude = altitude; }
+
+void LatLonAlt::setLatLon(const LatLonAlt &lla)
+{ _latitude_rad = lla.latitude_rad(); _longitude_rad = lla.longitude_rad(); }
+
+void LatLonAlt::setLatLonDeg(const double latitude, const double longitude)
+{ _latitude_rad = math::radians(latitude); _longitude_rad = math::radians(longitude); }
+
+void LatLonAlt::setLatLonRad(const double latitude, const double longitude)
+{ _latitude_rad = latitude; _longitude_rad = longitude; }
+
+void LatLonAlt::print() const
+{ printf("latitude = %f (deg), longitude = %f (deg), altitude = %f (m)\n", _latitude_rad, _longitude_rad, (double)_altitude); }
+
+void LatLonAlt::operator=(const LatLonAlt &lla)
+{
+	_latitude_rad = lla.latitude_rad();
+	_longitude_rad = lla.longitude_rad();
+	_altitude = lla.altitude();
+}

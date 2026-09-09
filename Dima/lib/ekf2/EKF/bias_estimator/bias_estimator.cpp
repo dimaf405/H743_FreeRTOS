@@ -143,3 +143,48 @@ inline BiasEstimator::status BiasEstimator::packStatus(const float innov, const 
 
 	return ret;
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+BiasEstimator::BiasEstimator()
+{}
+
+BiasEstimator::BiasEstimator(float state_init, float state_var_init)
+: _state{state_init}, _state_var{state_var_init}
+{}
+
+void BiasEstimator::reset()
+{
+	_state = 0.f;
+	_state_var = 0.f;
+	_signed_innov_test_ratio_lpf.reset(0.f);
+	_time_since_last_negative_innov = 0.f;
+	_time_since_last_positive_innov = 0.f;
+}
+
+void BiasEstimator::setBias(float bias)
+{ _state = bias; }
+
+void BiasEstimator::setProcessNoiseSpectralDensity(float nsd)
+{
+	_process_psd = nsd * nsd;
+}
+
+void BiasEstimator::setBiasStdDev(float state_noise)
+{ _state_var = state_noise * state_noise; }
+
+void BiasEstimator::setInnovGate(float gate_size)
+{ _gate_size = gate_size; }
+
+void BiasEstimator::setMaxStateNoise(float max_noise)
+{ _state_var_max = math::max(sq(0.01f), max_noise * max_noise); }
+
+float BiasEstimator::getBias() const
+{ return _state; }
+
+float BiasEstimator::getBiasVar() const
+{ return _state_var; }
+
+const BiasEstimator::status & BiasEstimator::getStatus() const
+{ return _status; }

@@ -363,3 +363,13 @@ bool fit_accel_six_side(const Vector3d (&measurements)[6],
 }
 
 } // namespace dima::lib::sensors::calibration
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+namespace dima::lib::sensors::calibration {
+
+std::uint32_t RunningStats3::count() const noexcept
+{ return count_; }
+
+} // namespace dima::lib::sensors::calibration

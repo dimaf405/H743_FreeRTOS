@@ -39,76 +39,46 @@
 #define EKF_POSITION_BIAS_ESTIMATOR_HPP
 
 #include "bias_estimator.hpp"
+#include "../common.h"
 
 class PositionBiasEstimator
 {
 public:
-	PositionBiasEstimator(PositionSensor sensor, const PositionSensor &sensor_ref):
-		_sensor(sensor),
-		_sensor_ref(sensor_ref)
-	{}
+	PositionBiasEstimator(estimator::PositionSensor sensor, const estimator::PositionSensor &sensor_ref);
 	virtual ~PositionBiasEstimator() = default;
 
-	bool fusionActive() const { return _is_sensor_fusion_active; }
+	bool fusionActive() const;
 
-	void setFusionActive() { _is_sensor_fusion_active = true; }
-	void setFusionInactive() { _is_sensor_fusion_active = false; }
+	void setFusionActive();
+	void setFusionInactive();
 
-	void predict(float dt)
-	{
-		if ((_sensor_ref != _sensor) && _is_sensor_fusion_active) {
-			_bias[0].predict(dt);
-			_bias[1].predict(dt);
-		}
-	}
+	void predict(float dt);
 
-	void fuseBias(Vector2f bias, Vector2f bias_var)
-	{
-		if ((_sensor_ref != _sensor) && _is_sensor_fusion_active) {
-			_bias[0].fuseBias(bias(0), bias_var(0));
-			_bias[1].fuseBias(bias(1), bias_var(1));
-		}
-	}
+	void fuseBias(matrix::Vector2f bias, matrix::Vector2f bias_var);
 
-	void setBias(const Vector2f &bias)
-	{
-		_bias[0].setBias(bias(0));
-		_bias[1].setBias(bias(1));
-	}
+	void setBias(const matrix::Vector2f &bias);
 
-	void setProcessNoiseSpectralDensity(float nsd)
-	{
-		_bias[0].setProcessNoiseSpectralDensity(nsd);
-		_bias[1].setProcessNoiseSpectralDensity(nsd);
-	}
+	void setProcessNoiseSpectralDensity(float nsd);
 	// void setBiasStdDev(float state_noise) { _state_var = state_noise * state_noise; }
 	// void setInnovGate(float gate_size) { _gate_size = gate_size; }
 
-	void setMaxStateNoise(const Vector2f &max_noise)
-	{
-		_bias[0].setMaxStateNoise(max_noise(0));
-		_bias[1].setMaxStateNoise(max_noise(1));
-	}
+	void setMaxStateNoise(const matrix::Vector2f &max_noise);
 
-	Vector2f getBias() const { return Vector2f(_bias[0].getBias(), _bias[1].getBias()); }
-	float getBias(int index) const { return _bias[index].getBias(); }
+	matrix::Vector2f getBias() const;
+	float getBias(int index) const;
 
-	Vector2f getBiasVar() const { return Vector2f(_bias[0].getBiasVar(), _bias[1].getBiasVar()); }
-	float getBiasVar(int index) const { return _bias[index].getBiasVar(); }
+	matrix::Vector2f getBiasVar() const;
+	float getBiasVar(int index) const;
 
-	const BiasEstimator::status &getStatus(int index) const { return _bias[index].getStatus(); }
+	const BiasEstimator::status &getStatus(int index) const;
 
-	void reset()
-	{
-		_bias[0].reset();
-		_bias[1].reset();
-	}
+	void reset();
 
 private:
 	BiasEstimator _bias[2] {};
 
-	const PositionSensor _sensor;
-	const PositionSensor &_sensor_ref;
+	const estimator::PositionSensor _sensor;
+	const estimator::PositionSensor &_sensor_ref;
 
 	bool _is_sensor_fusion_active{false}; // TODO: replace by const ref and remove setter when migrating _control_status.flags from union to bool
 };

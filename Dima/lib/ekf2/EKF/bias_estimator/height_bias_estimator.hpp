@@ -44,33 +44,19 @@
 class HeightBiasEstimator: public BiasEstimator
 {
 public:
-	HeightBiasEstimator(HeightSensor sensor, const HeightSensor &sensor_ref):
-		BiasEstimator(0.f, 0.f),
-		_sensor(sensor),
-		_sensor_ref(sensor_ref)
-	{}
+	HeightBiasEstimator(estimator::HeightSensor sensor, const estimator::HeightSensor &sensor_ref);
 	virtual ~HeightBiasEstimator() = default;
 
-	void setFusionActive() { _is_sensor_fusion_active = true; }
-	void setFusionInactive() { _is_sensor_fusion_active = false; }
+	void setFusionActive();
+	void setFusionInactive();
 
-	virtual void predict(float dt) override
-	{
-		if ((_sensor_ref != _sensor) && _is_sensor_fusion_active) {
-			BiasEstimator::predict(dt);
-		}
-	}
+	virtual void predict(float dt) override;
 
-	virtual void fuseBias(float bias, float bias_var) override
-	{
-		if ((_sensor_ref != _sensor) && _is_sensor_fusion_active) {
-			BiasEstimator::fuseBias(bias, bias_var);
-		}
-	}
+	virtual void fuseBias(float bias, float bias_var) override;
 
 private:
-	const HeightSensor _sensor;
-	const HeightSensor &_sensor_ref;
+	const estimator::HeightSensor _sensor;
+	const estimator::HeightSensor &_sensor_ref;
 
 	bool _is_sensor_fusion_active{false}; // TODO: replace by const ref and remove setter when migrating _control_status.flags from union to bool
 };

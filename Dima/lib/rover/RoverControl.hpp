@@ -166,7 +166,7 @@ public:
                               float adjusted_speed_setpoint_m_s,
                               float measured_speed_m_s) noexcept;
     void reset() noexcept;
-    DrivingState state() const noexcept { return state_; }
+    DrivingState state() const noexcept;
 
 private:
     DrivingStateConfig config_{};

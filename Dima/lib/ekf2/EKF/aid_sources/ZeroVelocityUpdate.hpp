@@ -45,7 +45,7 @@ public:
 	void reset() override;
 	bool update(Ekf &ekf, const estimator::imuSample &imu_delayed) override;
 
-	const auto &time_last_fuse() const { return _time_last_fuse; }
+	const uint64_t &time_last_fuse() const;
 
 private:
 

@@ -77,3 +77,9 @@ bool ZeroVelocityUpdate::update(Ekf &ekf, const estimator::imuSample &imu_delaye
 
 	return false;
 }
+
+
+// 普通运行期实现从对应头文件移出；保持原状态、错误分支和计算顺序。
+
+const uint64_t & ZeroVelocityUpdate::time_last_fuse() const
+{ return _time_last_fuse; }

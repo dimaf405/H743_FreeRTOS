@@ -65,36 +65,26 @@ public:
 		float innov_test_ratio{INFINITY};
 	};
 
-	BiasEstimator() {}
-	BiasEstimator(float state_init, float state_var_init): _state{state_init}, _state_var{state_var_init} {};
+	BiasEstimator();
+	BiasEstimator(float state_init, float state_var_init);;
 
 	virtual ~BiasEstimator() = default;
 
-	void reset()
-	{
-		_state = 0.f;
-		_state_var = 0.f;
-		_signed_innov_test_ratio_lpf.reset(0.f);
-		_time_since_last_negative_innov = 0.f;
-		_time_since_last_positive_innov = 0.f;
-	}
+	void reset();
 
 	virtual void predict(float dt);
 	virtual void fuseBias(float measurement, float measurement_var);
 
-	void setBias(float bias) { _state = bias; }
-	void setProcessNoiseSpectralDensity(float nsd)
-	{
-		_process_psd = nsd * nsd;
-	}
-	void setBiasStdDev(float state_noise) { _state_var = state_noise * state_noise; }
-	void setInnovGate(float gate_size) { _gate_size = gate_size; }
+	void setBias(float bias);
+	void setProcessNoiseSpectralDensity(float nsd);
+	void setBiasStdDev(float state_noise);
+	void setInnovGate(float gate_size);
 
-	void setMaxStateNoise(float max_noise) { _state_var_max = math::max(sq(0.01f), max_noise * max_noise); }
+	void setMaxStateNoise(float max_noise);
 
-	float getBias() const { return _state; }
-	float getBiasVar() const { return _state_var; }
-	const status &getStatus() const { return _status; }
+	float getBias() const;
+	float getBiasVar() const;
+	const status &getStatus() const;
 
 private:
 	float _state{0.f};
