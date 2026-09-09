@@ -23,13 +23,13 @@
 
 七路物理 UART 的普通 baud 都由同一 Dima YAML 定义；GPS 已由 UM982 driver 使用，串口 MAVLink 和 RS485 数据服务仍未实现。PB10/PB11 的 I2C2 配置保持不变，PB12/PB13 不再声明为 UART5。
 
-每个实际外部端口固定定义 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前 Function 为 `0=Disabled`、`1=SBUS`、`2=GPS`。SBUS 和 GPS 各自只能有一个 owner，同一个 UART 也不能同时被二者占用；异常存储或冲突写入必须 fail-closed。通过 QGC 把目标端口设为 SBUS 时，固件会在同一参数事务中把旧 SBUS owner 设为 Disabled。`RC_INPUT_PROTO` 再选择 `0=Disabled` 或 `2=SBUS`，默认 SBUS。
+每个实际外部端口固定定义 `SERIALx_BAUD` 和 `SERIALx_FUNCTION`。端口名称永远不随功能变化；当前 Function 为 `0=Disabled`、`1=SBUS`、`2=GPS`。SBUS 和 GPS 各自只能有一个 owner，同一个 UART 也不能同时被二者占用；异常存储或冲突写入必须 fail-closed。通过 QGC 把目标端口设为 SBUS 时，固件会在同一参数事务中把旧 SBUS owner 设为 Disabled。RC 接收固定使用 SBUS 并随 RC 链启动，不再提供协议选择或关闭参数；默认接收端口为 SERIAL6。未分配 SBUS 端口时驱动启动失败，不会自动占用 GPS 或其他串口。
 
 SerialConfig 先应用普通 8N1 配置。被唯一 `SERIALx_FUNCTION=SBUS` 选中的端口随后由 SBUS driver 临时接管为 `100000 bit/s、8E2、RX-only、RXINV enabled、RX pulldown`，释放时恢复普通 UART、FIFO 和 GPIO。GPS owner 由 UM982 driver 保持 8N1，使用 UM982 消息合同生成的固定目标 baud，并在需要时异步扫描接收机当前 baud；`SERIALx_BAUD` 只用于该端口脱离 GPS 所有权后的普通配置。Auto/0 表示最终 baud 交给对应 Function driver；串口 MAVLink 和 RS485 数据服务不会因连接器名称而被虚构。
 
-当前板级固件不定义 `RC_PORT_CONFIG`、迁移版本参数或旧串口键，也不扫描、补全或迁移旧存储目录。持久化快照中出现未知键或类型不符时整份拒绝，重新按当前 `SERIAL1/2/3/4/6/7/8` 物理编号配置。
+当前板级固件不定义 `RC_PORT_CONFIG`、迁移版本参数或旧串口键，也不扫描、补全或迁移旧存储目录。容量内且 CRC/格式有效的持久化快照跳过当前目录已不存在的参数，保留其余有效配置；已知参数类型不符仍整份拒绝。端口继续按当前 `SERIAL1/2/3/4/6/7/8` 物理编号配置。
 
-接管前会保存 UART Init、AdvancedInit、FIFO 模式与阈值以及 RX GPIO 状态。协议禁用、模块停止、Runtime shutdown 或启动失败回滚时，DMA 和 IRQ 先关闭，再恢复保存的普通 UART 配置。恢复失败会保留接管上下文供下一次 stop 重试，并让 Application Runtime 保持 Error、禁止释放相关资源。主动禁用属于正常 Running 生命周期，不产生后端故障事件；Commander 仍会因为没有新鲜 RC 而保持不可解锁。
+接管前会保存 UART Init、AdvancedInit、FIFO 模式与阈值以及 RX GPIO 状态。模块停止、Runtime shutdown 或启动失败回滚时，DMA 和 IRQ 先关闭，再恢复保存的普通 UART 配置。恢复失败会保留接管上下文供下一次 stop 重试，并让 Application Runtime 保持 Error、禁止释放相关资源。固定启用不绕过 RC 失联、接收机 Failsafe 或后端故障处理；手动 Arm 预检只检查左右电机分配，但 Commander 的运行期 RC loss 保护仍会解除 Armed，不能在无新鲜 RC 时保持动力。
 
 UART/DMA ISR 只复制字节、记录 TIM2 HRT 到达时间并唤醒 `wq:io`。格式化状态和故障日志由任务上下文产生；对外原始通道流只能由 MavlinkService 从 `input_rc` 转为 `RC_CHANNELS`，其他模块不得直接写 USB。
 
@@ -45,7 +45,7 @@ SBUS 属于无强 CRC 的弱协议，冷启动、Failsafe 清除、UART/DMA 恢�
 
 MavlinkService 在原始样本新鲜且通道数有效时，从校准前的 `input_rc` 以 5 Hz 发送 `RC_CHANNELS`；接收机 failsafe/lost 标志仍让 `RCUpdate`/Commander 拒绝控制，但不会隐藏同时存在的原始通道，便于 QGC 校准和诊断。完全无帧、零通道或样本超时期间停流，恢复后立即发送。QGC 写回 `RC1..18_MIN/TRIM/MAX/REV`、`RC_CHAN_CNT` 和四个主控制映射；`RCUpdate` 在 `parameter_update` 后重新加载并继续执行范围、方向和通道有效性门禁。
 
-默认只为差速 Rover 的真实运行控制预设 `RC_MAP_THROTTLE=1`、`RC_MAP_YAW=2`。Stock QGC 的 Radio 完成门固定要求四个主轴都非零，因此 `RC_MAP_PITCH=1`、`RC_MAP_ROLL=2` 是不可修改的完成标记；它们不进入 `RCUpdate` 功能映射，`manual_control_setpoint.roll/pitch` 始终为 NaN。真实 `RC_CHANNELS.chancount` 仍来自接收机，不伪造第四路；Rover 的有效性、解锁预检和运动控制只依赖中心双向 Throttle/Yaw。
+默认只为差速 Rover 的真实运行控制预设 `RC_MAP_THROTTLE=1`、`RC_MAP_YAW=2`。Stock QGC 的 Radio 完成门固定要求四个主轴都非零，因此 `RC_MAP_PITCH=1`、`RC_MAP_ROLL=2` 是不可修改的完成标记；它们不进入 `RCUpdate` 功能映射，`manual_control_setpoint.roll/pitch` 始终为 NaN。真实 `RC_CHANNELS.chancount` 仍来自接收机，不伪造第四路；Rover 的输入有效性和运动控制只依赖中心双向 Throttle/Yaw；手动 Arm 不检查摇杆居中，运动校准 Arm 仍检查这两个轴的新鲜度与居中。
 
 Arm 只实现二段开关。启用 QGC Advanced UI 后在 Parameters 页面配置 `RC_MAP_ARM_SW=1..18` 和 `RC_ARMSWITCH_TH=-1..1`；正阈值高端为 ON，负阈值反向。Runtime 启动、RC 恢复或 Arm/Kill 映射及阈值变化后的第一份状态只建立基线，随后 OFF→ON 请求 Arm、ON→OFF 请求 Disarm，配置过程不会合成解锁边沿。
 

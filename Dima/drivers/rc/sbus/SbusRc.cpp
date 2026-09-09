@@ -159,34 +159,24 @@ bool SbusRc::start()
         return false;
     }
     reset_runtime_state();
-    if (!rc_protocol_.bind() || !rc_loss_timeout_.bind()) {
+    if (!rc_loss_timeout_.bind()) {
         invalidate_parameters();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
         PX4_ERR("SBUS parameters unavailable");
         return false;
     }
-    // RC_INPUT_PROTO=0 是明确禁用，不占用串口；=2 才启用 SBUS。端口所有权
-    // 由 SerialConfig 从 Dima 生成参数目录解析后提供，驱动不维护串口参数清单。
-    const std::int32_t protocol = rc_protocol_.get();
+    // 本产品固定启用 SBUS，不提供协议选择或关闭开关；唯一接收端口仍由
+    // SerialConfig 从生成参数目录分配。缺少端口时必须报错，不能抢占其他 UART。
     const std::int32_t port = serial_assignments_.rc_input_port();
     const float loss_timeout_s = rc_loss_timeout_.get();
-    if (protocol == 0) {
-        state_ = dima::middleware::lifecycle::ModuleState::Running;
-        DIMA_LOG_SOURCE(dima::logging::Source::Sbus,
-                        dima::logging::Level::Info,
-                        "disabled protocol=%ld; serial ports remain normal",
-                        static_cast<long>(protocol));
-        return true;
-    }
-    if (protocol != 2 || port <= 0 ||
+    if (port <= 0 ||
         !std::isfinite(loss_timeout_s) || loss_timeout_s < 0.1F ||
         loss_timeout_s > 35.0F ||
         !backend_.configure(port, sbus_line_configuration())) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         ScheduleCancelAndDrain();
-        PX4_ERR("SBUS configuration invalid protocol=%ld port=%ld",
-                static_cast<long>(protocol), static_cast<long>(port));
+        PX4_ERR("SBUS configuration invalid port=%ld", static_cast<long>(port));
         (void)dima::events::report(kEventConfigInvalid, dima::events::Severity::Error);
         return false;
     }
@@ -234,7 +224,6 @@ dima::middleware::lifecycle::ModuleState SbusRc::state() const { return state_; 
 
 void SbusRc::invalidate_parameters() noexcept
 {
-    rc_protocol_.invalidate();
     rc_loss_timeout_.invalidate();
 }
 

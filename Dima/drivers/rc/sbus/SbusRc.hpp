@@ -57,7 +57,6 @@ private:
     dima::lib::serial::SerialPortAssignments &serial_assignments_;
     dima::protocols::sbus::SbusParser parser_{};
     uORB::Publication<input_rc_s> input_rc_pub_{ORB_ID(input_rc)};
-    dima::ParamInt<dima::params::RC_INPUT_PROTO> rc_protocol_{};
     dima::ParamFloat<dima::params::COM_RC_LOSS_T> rc_loss_timeout_{};
     dima::middleware::lifecycle::ModuleState state_{dima::middleware::lifecycle::ModuleState::Stopped};
     // timestamp_last_signal_us_ 记录最近完整协议帧；signal_locked_ 只有连续三帧

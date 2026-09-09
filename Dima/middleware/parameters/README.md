@@ -36,6 +36,8 @@ Dima module_*.yaml
 
 ## 参数精简与展示分类
 
+RC 接收固定启用 SBUS，已删除 `RC_INPUT_PROTO` 及其驱动绑定和协议写入分支；`SERIALx_FUNCTION` 继续唯一分配接收端口，缺少端口仍按配置错误处理。
+
 CAN 磁力计已删除 `MAG1_CAN_NODE`；来源节点号由首个合法磁场广播自动确定，运行时绑定不写回参数，设备 ID 继续使用生成合同，校准仍按设备标识匹配。
 
 第一批精简删除 `GPS_1_PROTOCOL` 和 `RO_CAL_DIST`：前者的 Auto/6 原本使用同一 NMEA/UM982 驱动，后者改为内部 12 m 期望尺度并继续受固定圆、停车余量和超时约束。`COM_LOW_BAT_ACT`、`NAV_DLL_ACT`、`COM_RC_IN_MODE`、`MAV_SYS_ID`、`SYS_AUTOCONFIG` 被官方 QGC 5.1.3 直接读取，保留固定合同，不因缺少可配置动作而删除，也不放开其原取值范围。
@@ -47,7 +49,7 @@ CAN 磁力计已删除 `MAG1_CAN_NODE`；来源节点号由首个合法磁场广
 
 锁定的上游 YAML schema 只允许显式 `Developer/System`，不能因 QGC JSON 支持任意字符串就加入 `Advanced/Calibration` 并绕过校验。类别是标准 Metadata 展示字段，不改变权限、持久化、参数名或数值；QGC 仅特意将 Standard 置首，不会按类别名称自动隐藏、自动中文化或禁止修改。完整目录仍以生成 JSON 为准，决策和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
 
-单枚举或 `min=max` 的参数现由生成器统一标记为标准 `readOnly`；默认值必须等于唯一合法值，矛盾时生成失败。单 bitmask 仍有关闭/开启两种状态，不按单枚举处理。当前 300 项中有 10 项只读，QGC 5.1.3 参数页勾选 **Hide read-only（隐藏只读参数）** 后列表为 290 项，普通浏览与搜索都过滤只读项。该 QGC 开关默认关闭，固件不能替地面站设置它，也不宣称重开页面后仍保持。
+单枚举或 `min=max` 的参数现由生成器统一标记为标准 `readOnly`；默认值必须等于唯一合法值，矛盾时生成失败。单 bitmask 仍有关闭/开启两种状态，不按单枚举处理。当前 299 项中有 10 项只读，QGC 5.1.3 参数页勾选 **Hide read-only（隐藏只读参数）** 后列表为 289 项，普通浏览与搜索都过滤只读项。该 QGC 开关默认关闭，固件不能替地面站设置它，也不宣称重开页面后仍保持。
 
 完整协议目录保留只读 Fact，确保 Radio、Airframe、安全状态等页面仍能读取产品合同。运行时固定约束和持久化加载过滤也使用同一单值识别规则，因此没有 min/max、只有一个枚举值的 `EKF2_HGT_REF` 同样拒绝非 GPS 值；不把只读展示误当作固件端写入校验。
 

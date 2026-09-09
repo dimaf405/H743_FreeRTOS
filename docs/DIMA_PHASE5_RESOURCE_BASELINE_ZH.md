@@ -143,7 +143,7 @@ Signed App 占 768 KiB Primary Slot 约 25.73%，低于 85% 发布控制线。MC
 
 - 架构扫描要求唯一控制链和六路映射，禁止底层反向依赖 `Dima/rover`，并拒绝非零初始 compare、额外执行器消费者及重复 Rover 根。
 - 目标 ELF 要求 HAL PWM、`board_motor_pwm_start/write/stop`、MotorOutput start/safe-off 和平台 `ActuatorPwm` 符号实际链接，同时继续拒绝 Mixer、MixingOutput、FunctionMotors 和通用 ActuatorOutput。
-- SBUS 门禁要求 `RC_INPUT_PROTO=0/2`、自动 `100000/8E2 + RXINV + pulldown`、UART/FIFO/RX GPIO 事务恢复和任务上下文单次故障日志；UART/DMA ISR 后端不得格式化日志或写 USB。
+- SBUS 固定启用且要求唯一接收端口，缺少端口时安全报错；门禁继续要求自动 `100000/8E2 + RXINV + pulldown`、UART/FIFO/RX GPIO 事务恢复和任务上下文单次故障日志；UART/DMA ISR 后端不得格式化日志或写 USB。
 - 启用 SBUS Debug 后，连续数据只能由低优先级 LogService 通过 `input_rc` 输出，周期不得小于 100 ms；最坏 18 路记录为 209 bytes，低于固定 256-byte 格式缓冲。默认 Error 策略不产生该数据，后续传输边界交由 MAVLink 方案收敛。
 - MotorOutput、ApplicationContext 和 BootHealth 热路径没有 `new`、`malloc` 或 `free` 调用。目标文件中编译器为虚析构生成的 deleting-destructor `operator delete` 重定位不在 `Run()` 调用路径。
 - 应用向量保持 `0x08040400`，`.dima_task_pool`、`.dima_dma`、D3 diagnostics、SysTick/TIM2 ISR、TIM12 非 HAL tick 和生命周期符号继续由目标 ELF 门禁检查。

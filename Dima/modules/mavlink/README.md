@@ -53,7 +53,7 @@
 
 ## TX 与连接边界
 
-参数精简后仍提供完整、单一的生成目录，不用虚拟参数或过滤名单伪装数量减少。QGC 直接依赖的固定 Fact 保留在 `System / Compatibility`；校准值、高级项和常用项用上游支持的 category/group 分类。单枚举或 `min=max` 自动经上游 `--readonly-config` 生成标准 `readOnly: true`，并原样传入 Component Metadata，不能仅删除 Metadata 条目或跳过 PARAM_VALUE 索引。当前完整目录 300 项，其中 10 项只读；QGC 5.1.3 勾选 **Hide read-only（隐藏只读参数）** 后普通列表与搜索均隐藏这些项，仍保留其他页面读取 Fact 的能力。该开关默认关闭，需要在地面站选择，固件不能强制隐藏。升级后需让 QGC 获取新的完整参数目录及 Metadata CRC。锁定源码依赖和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
+参数精简后仍提供完整、单一的生成目录，不用虚拟参数或过滤名单伪装数量减少。QGC 直接依赖的固定 Fact 保留在 `System / Compatibility`；校准值、高级项和常用项用上游支持的 category/group 分类。单枚举或 `min=max` 自动经上游 `--readonly-config` 生成标准 `readOnly: true`，并原样传入 Component Metadata，不能仅删除 Metadata 条目或跳过 PARAM_VALUE 索引。当前完整目录 299 项，其中 10 项只读；QGC 5.1.3 勾选 **Hide read-only（隐藏只读参数）** 后普通列表与搜索均隐藏这些项，仍保留其他页面读取 Fact 的能力。该开关默认关闭，需要在地面站选择，固件不能强制隐藏。升级后需让 QGC 获取新的完整参数目录及 Metadata CRC。锁定源码依赖和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
 
 优先级为 ACK、Heartbeat/Version、RC、Metadata FTP、传感器、Onboard Log、参数、STATUSTEXT。物理 USB ready 下降沿会丢弃旧 RX 半帧，重置 parser/channel/FTP/参数/日志传输会话，并恢复 PX4 USB 周期流默认节拍；`ETIMEDOUT/EIO/EPIPE` 保留 FTP 回复等待 QGC 同 sequence 重传。
 

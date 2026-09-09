@@ -437,11 +437,6 @@ bool MavlinkParameters::write_value_allowed(param_t param,
         return dima::generated::parameters::
             flight_mode_slot_value_allowed(value);
     }
-    if (name != nullptr && std::strcmp(name, "RC_INPUT_PROTO") == 0) {
-        std::int32_t protocol = 0;
-        std::memcpy(&protocol, &wire_value, sizeof(protocol));
-        return protocol == 0 || protocol == 2;
-    }
     if (dima::lib::serial::serial_baud_parameter(name)) {
         std::int32_t baudrate = 0;
         std::memcpy(&baudrate, &wire_value, sizeof(baudrate));

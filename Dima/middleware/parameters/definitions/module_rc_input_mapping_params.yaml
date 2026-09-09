@@ -217,16 +217,3 @@ parameters:
       default: 0
       min: 0
       max: 18
-- group: Radio Configuration
-  definitions:
-    RC_INPUT_PROTO:
-      description:
-        short: RC_INPUT_PROTO
-      type: enum
-      values:
-        0: Disabled
-        2: SBUS
-      default: 2
-      min: 0
-      max: 2
-      reboot_required: true
