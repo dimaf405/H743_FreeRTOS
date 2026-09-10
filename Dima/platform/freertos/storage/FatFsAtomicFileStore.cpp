@@ -32,8 +32,8 @@ constexpr const char *kMetadataFilename = "meta.bin";
 constexpr std::size_t kMaximumLogSessions = 999U;
 constexpr std::size_t kRecoveryChunkBytes = 4096U;
 constexpr std::uint64_t kSpaceCorrectionIntervalUs = 60000000ULL;
-constexpr std::uint64_t kMinimumFreeBytes = 64ULL * 1024ULL * 1024ULL;
-constexpr std::uint64_t kMaximumFreeBytes = 512ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kMinimumFreeBytes = 50ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaximumFreeBytes = 300ULL * 1024ULL * 1024ULL;
 constexpr std::uint8_t kUlogMagic[]{
     'U', 'L', 'o', 'g', 0x01U, 0x12U, 0x35U, 0x01U};
 
@@ -786,10 +786,11 @@ public:
         if (space != 0) {
             return space;
         }
-        if (state_.available_bytes_estimate <
-            state_.free_space_threshold_bytes) {
-            const int reclaimed = delete_oldest_session_locked();
-            return new_session_reclaim_result(reclaimed);
+        // 8.3 名称的新会话最多需要 sess 目录、首个 sidecar 和父目录扩展各一簇；
+        // 先为元数据分配留出空间，避免刚创建空文件就越过 50 MiB 停止线。
+        const int reclaimed = reclaim_log_space_locked(3U * state_.cluster_bytes);
+        if (reclaimed != 0) {
+            return reclaimed;
         }
 
         char directory[kMaximumLogPathLength]{};
@@ -890,8 +891,7 @@ public:
          * ENOSPC；任何清理介质错误则优先原样上送。 */
         const int post_create_space = refresh_space_locked(hrt_absolute_time());
         if (post_create_space != 0 ||
-            state_.available_bytes_estimate <
-                state_.free_space_threshold_bytes) {
+            state_.available_bytes_estimate < kMinimumFreeBytes) {
             const int close_result = close_log_writer_locked(false);
             int cleanup_result = 0;
             if (state_.mounted) {
@@ -992,16 +992,11 @@ public:
             state_.cluster_bytes;
         const std::uint64_t allocation_cost =
             (new_clusters - old_clusters) * state_.cluster_bytes;
-        const std::uint64_t minimum_after_write =
-            state_.free_space_threshold_bytes > state_.cluster_bytes
-                ? state_.free_space_threshold_bytes - state_.cluster_bytes
-                : 0U;
-        if (allocation_cost > state_.available_bytes_estimate ||
-            state_.available_bytes_estimate - allocation_cost <
-                minimum_after_write) {
-            /* 以 FAT 分配簇而非 payload 字节扣减估算；在下一次分配会越过保护
-             * 线前拒绝整块，保证关闭后至少保留 threshold-1 cluster。 */
-            return -ENOSPC;
+        // 按下一块真正新增的 FAT 簇提前回收，不能等当前空闲量已经低于门限。
+        // EAGAIN 表示仅删除了一个旧会话，尚未写入本块；consumer 必须保留 Ring。
+        const int reclaimed = reclaim_log_space_locked(allocation_cost);
+        if (reclaimed != 0) {
+            return reclaimed;
         }
         UINT written{};
         const FRESULT result = f_write(
@@ -2034,16 +2029,56 @@ private:
             return result;
         }
         const std::uint64_t total = information.total_bytes;
-        const std::uint64_t five_percent = total / 20U;
-        /* 空闲保护线 = clamp(SD容量*5%, 64 MiB, 512 MiB)，单位为 byte。
-         * 运行中按簇扣减，60 s 才用 f_getfree 校正，避免高频 FAT 扫描。 */
+        /* PX4 v1.17 util::check_free_space 的回收目标为 min(容量*10%, 300 MiB)，
+         * 停止记录门限独立为 50 MiB。小卷的回收目标至少覆盖停止门限，确保
+         * 先尝试清理再停写；不能把回收目标本身当成 ENOSPC 条件。
+         * 常态按簇扣减、60 s 校正，触线决策前另行读取 FatFs 空闲簇计数。 */
         state_.cluster_bytes = cluster_bytes;
         state_.total_bytes = total;
         state_.available_bytes_estimate = information.available_bytes;
         state_.free_space_threshold_bytes = std::max(
-            kMinimumFreeBytes, std::min(five_percent, kMaximumFreeBytes));
+            kMinimumFreeBytes, std::min(total / 10U, kMaximumFreeBytes));
         state_.last_space_correction_us = now_us;
         return total != 0U ? 0 : -ENODEV;
+    }
+
+    int reclaim_log_space_locked(std::uint64_t allocation_cost) noexcept
+    {
+        if (allocation_cost <= state_.available_bytes_estimate &&
+            state_.available_bytes_estimate - allocation_cost >=
+                state_.free_space_threshold_bytes) {
+            return 0;
+        }
+
+        // 估算只用于快速路径。删除历史数据或报告容量不足之前，先校正实际
+        // 空闲簇，避免陈旧估算造成误删/误停；f_getfree 及回收只在 storage 执行。
+        const int refreshed = refresh_space_locked(hrt_absolute_time());
+        if (refreshed != 0) {
+            return refreshed;
+        }
+        if (allocation_cost <= state_.available_bytes_estimate &&
+            state_.available_bytes_estimate - allocation_cost >=
+                state_.free_space_threshold_bytes) {
+            return 0;
+        }
+        const int deleted = delete_oldest_session_locked();
+        if (deleted == 0 || deleted == -EAGAIN) {
+            // 每次只回收一项并让出队列；下一轮重新校正，不丢弃待写字节。
+            return -EAGAIN;
+        }
+        if (deleted != -ENOENT && deleted != -EBUSY) {
+            return deleted;
+        }
+
+        // 无安全候选时仍可使用回收目标与 50 MiB 停止线之间的空间。
+        // allocation_cost=0 的已分配簇尾部允许冲刷，不再消耗任何空闲簇。
+        if (allocation_cost <= state_.available_bytes_estimate &&
+            (state_.available_bytes_estimate - allocation_cost >=
+                 kMinimumFreeBytes ||
+             (allocation_cost == 0U && state_.log_writer_open))) {
+            return 0;
+        }
+        return -ENOSPC;
     }
 
     int service_recovery_crc_locked() noexcept
@@ -2212,17 +2247,7 @@ private:
         if (state_.log_writer_open &&
             state_.available_bytes_estimate <
                 state_.free_space_threshold_bytes) {
-            /* append_log 最多允许本次分配把空闲量推进到 threshold-1 cluster。
-             * 到达保护带后先逐个回收最旧已关闭会话；没有安全候选时才返回
-             * ENOSPC，让 LogWriter 停止接收并同步关闭当前有效前缀。 */
-            const int deleted = delete_oldest_session_locked();
-            if (deleted == 0 || deleted == -EAGAIN) {
-                return -EAGAIN;
-            }
-            if (deleted == -ENOENT || deleted == -EBUSY) {
-                return -ENOSPC;
-            }
-            return deleted;
+            return reclaim_log_space_locked(0U);
         }
         return 0;
     }

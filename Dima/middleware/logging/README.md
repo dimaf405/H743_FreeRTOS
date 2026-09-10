@@ -18,7 +18,9 @@
 - `LogWriter` consumer 独占 `wq:storage`，使用固定 64 KiB SPSC 字节 Ring，每次最多向 FatFs 提交 8192 bytes，并每 1 s 执行 `f_sync`；活动写入与关闭前的 UTC 侧车更新共用代次确认路径，写入失败不推进确认代次。producer 不调用任何 FatFs/SDMMC API；Ring 满时写标准 `O` dropout，而不是静默拼接损坏流。
 - producer/consumer 的立即唤醒与 uORB 回调必须保留各自的 5 ms/20 ms 周期。否则开机记录时 producer 可能先于文件创建执行并返回，consumer 只创建 0-byte 文件后也停止，且没有 I/O 错误可报告；文件缺少 ULog magic 时不会进入 QGC 列表。保留周期后，等待文件、Ring 暂空以及同步/重试分支都能继续推进。
 - 每个新介质/文件都推进 session generation，清空旧 Ring、Topic generation 与 message ID，并从 ULog header 全量重建。普通介质失败在 Mode 仍有记录意图时按 3 s 重试；低空间暂停按 60 s 复查，只停止 SD 副本，不影响实时 STATUSTEXT/Event。
-- `sessNNN/log100.ulg` 使用最多三条 64-byte CRC `meta.bin` 记录保存全局顺序、硬件 UID、关闭/恢复状态、最终文件大小/CRC 和可选 GPS UTC。恢复、`sessNNN -> delNNN` 删除、目录上限及 `clamp(容量×5%, 64 MiB, 512 MiB)` 空间回收均由 `wq:storage` 分步推进；未知文件、当前 writer 和 QGC reader 永不自动删除。
+- `sessNNN/log100.ulg` 使用最多三条 64-byte CRC `meta.bin` 记录保存全局顺序、硬件 UID、关闭/恢复状态、最终文件大小/CRC 和可选 GPS UTC。恢复、`sessNNN -> delNNN` 删除及目录上限均由 `wq:storage` 分步推进。空间策略对照 PX4 v1.17 `logger/util.cpp::check_free_space`：回收目标为 `min(容量×10%, 300 MiB)`，停止记录门限独立为 50 MiB；本地小卷将回收目标抬到至少 50 MiB，以保证先回收再停写。无可删历史时允许使用回收目标与停止门限之间的空间。
+- 写入按下一块新增 FAT 簇提前判断；触线前先校正实际空闲计数、每轮至多回收一个会话并返回 `-EAGAIN`，consumer 保留 Ring 原字节重试。新建会话先预留 sess/sidecar/父目录扩展的三簇预算，创建后再次校正。只有无安全候选且下一次分配会突破 50 MiB 停止线时才因空间暂停。告警带实际 free/total MiB；ENOSPC 也可能表示受保护目录占满名额，不能仅凭提示判断卡的标称容量。
+- 未知文件、当前 writer 和仍在传输的 QGC reader 不自动删除。正常下载完成不依赖地面站发送 `LOG_REQUEST_END`：reader 在请求区间完成后保留 5 s 补传窗口，随后由 `wq:storage` 关闭并解除回收保护；响应 Ring 的独立字节副本不受关闭影响。
 - H743 板没有 card-detect GPIO，无法证明“物理卡在位”。已挂载会话通过最长 500 ms 的 `CTRL_SYNC` 主动命令确认“最近一次探测可用”；失败立即撤销全部 FIL/DIR 与挂载，下一次重试执行完整 SDMMC/FatFs 初始化。
 - sink 不存在或 uORB 发布失败时只推进 `sink_dropped_records`；Critical Event 仍由独立 Event Ring 和故障锁存保存。
 - LogService 在低优先级队列每轮最多转储 4 条 Event；SBUS 连续数据入口仍受 100 ms 最小周期限制。

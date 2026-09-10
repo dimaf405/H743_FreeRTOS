@@ -50,6 +50,7 @@
 - `MavlinkLogHandler` 对照 PX4 v1.17.0 同名实现处理 `LOG_REQUEST_LIST/DATA/END/ERASE`，并复用同一 storage worker/Ring 生成 `STORAGE_INFORMATION`；日志 ID 从 0 开始，`LOG_DATA` 长度直接由 mavgen 字段容量派生。
 - PX4 的文件扫描、稳定列表、按 offset 读取和整树擦除语义保留；平台适配只把 POSIX 调用换成 `LogFileStore`，实际 FatFs/SDMMC 工作固定在 `wq:storage`，通信队列仅消费固定 32 槽响应 Ring。预取每轮最多补 32 片，再让出 storage 队列。
 - 无卡或无文件按 `common.xml` 强制回一条 `id=0,num_logs=0`，使 QGC 结束 Refresh；板上无 RTC，`LOG_ENTRY.time_utc=0`，避免用 FatFs 固定日期伪装真实采集时间。
+- 请求区间读完后保留 5 s reader 空闲窗口供后续区间/补传；窗口结束由 storage worker 关闭，避免 QGC 正常下载未发送 END 时永久阻止旧日志回收。新的 DATA 请求继续按稳定列表打开文件；物理断开、END/ERASE、无效 ID/offset 则及时释放 reader。USB 响应已复制到固定 Ring，不引用 FatFs 文件缓冲。
 
 ### USB 下载批量传输
 

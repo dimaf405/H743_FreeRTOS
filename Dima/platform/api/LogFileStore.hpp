@@ -60,6 +60,7 @@ public:
      * 它当作拔卡故障进入三秒退避。
      */
     virtual int start_log(const LogSessionContext &context) noexcept = 0;
+    /** -EAGAIN 表示仅推进旧日志回收，本次数据尚未写入；调用方须保留原缓冲重试。 */
     virtual int append_log(const std::uint8_t *data,
                            std::size_t size) noexcept = 0;
     virtual int sync_log() noexcept = 0;

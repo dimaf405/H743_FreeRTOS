@@ -126,10 +126,12 @@ private:
     void process_erase() noexcept;
     void process_listing() noexcept;
     void process_data() noexcept;
+    void release_idle_reader() noexcept;
     void process_storage_information(const Request &request) noexcept;
     void enqueue_empty_list() noexcept;
 
     static constexpr std::size_t kRequestQueueCapacity = 4U;
+    static constexpr std::uint32_t kReaderIdleTimeoutUs = 5000000U;
     // 双批预取吸收 storage/USB 调度相位差；每轮最多合并 16 帧，只等待一次
     // USB 完成。100 Hz 下满 LOG_DATA 的载荷预算为 16 * 90 * 100 = 144000 B/s。
     static constexpr std::size_t kMaximumResponsesPerSend = 16U;
@@ -163,6 +165,7 @@ private:
     std::uint32_t current_log_size_{0U};
     std::uint32_t data_offset_{0U};
     std::uint32_t data_end_offset_{0U};
+    std::uint64_t last_data_activity_us_{0U};
     bool logs_listed_{false};
     bool storage_initialized_{false};
 };

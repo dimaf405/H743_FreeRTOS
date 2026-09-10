@@ -330,6 +330,7 @@ void MavlinkLogHandler::reset_worker_state() noexcept
     current_log_size_ = 0U;
     data_offset_ = 0U;
     data_end_offset_ = 0U;
+    last_data_activity_us_ = 0U;
     logs_listed_ = false;
     storage_initialized_ = false;
 }
@@ -380,6 +381,7 @@ void MavlinkLogHandler::process_request(const Request &request) noexcept
     case RequestType::List: {
         clear_responses();
         store_.close_log_transfer();
+        current_log_id_ = 0xffffU;
         number_of_logs_ = 0U;
         list_first_id_ = request.first_id;
         list_last_id_ = request.last_id;
@@ -393,18 +395,23 @@ void MavlinkLogHandler::process_request(const Request &request) noexcept
     case RequestType::Data: {
         clear_responses();
         if (!logs_listed_ || request.id >= number_of_logs_) {
+            store_.close_log_transfer();
+            current_log_id_ = 0xffffU;
             set_worker_state(WorkerState::Idle);
             return;
         }
         dima::platform::LogFileEntry entry{};
         const int opened = store_.open_log(request.id, entry);
         if (opened != 0 || request.offset >= entry.size_bytes) {
+            // open 成功但 offset 越界也必须关闭，否则没有有效 ID 可供空闲回收。
+            store_.close_log_transfer();
             set_worker_state(WorkerState::Idle);
             current_log_id_ = 0xffffU;
             return;
         }
         current_log_id_ = request.id;
         current_log_size_ = entry.size_bytes;
+        last_data_activity_us_ = hrt_absolute_time();
         data_offset_ = request.offset;
         const std::uint64_t requested_end =
             static_cast<std::uint64_t>(request.offset) + request.count;
@@ -594,7 +601,28 @@ void MavlinkLogHandler::process_data() noexcept
             return;
         }
         data_offset_ += static_cast<std::uint32_t>(read_size);
+        last_data_activity_us_ = hrt_absolute_time();
     }
+}
+
+void MavlinkLogHandler::release_idle_reader() noexcept
+{
+    if (worker_state_ != WorkerState::Idle || current_log_id_ == 0xffffU) {
+        return;
+    }
+    // QGC 的正常下载完成路径不保证发送 LOG_REQUEST_END。保留 5 s 供下一段
+    // 请求/补传，之后由 storage 关闭 reader，解除最旧日志的回收保护。
+    // 已预读的响应拥有独立字节副本；关闭 FIL 不会破坏 USB 尚未完成的缓冲。
+    const std::uint64_t now = hrt_absolute_time();
+    if (now < last_data_activity_us_ ||
+        now - last_data_activity_us_ >= kReaderIdleTimeoutUs) {
+        store_.close_log_transfer();
+        current_log_id_ = 0xffffU;
+        last_data_activity_us_ = 0U;
+        return;
+    }
+    (void)ScheduleDelayed(static_cast<std::uint32_t>(
+        kReaderIdleTimeoutUs - (now - last_data_activity_us_)));
 }
 
 void MavlinkLogHandler::Run()
@@ -641,6 +669,9 @@ void MavlinkLogHandler::Run()
     } else if (worker_state_ == WorkerState::Erasing) {
         process_erase();
     }
+    release_idle_reader();
+    // 先安排空闲回收再检查请求：若 RX 在上述过程中已 ScheduleNow，必须
+    // 重新发布立即调度，避免延迟回收覆盖新请求的唤醒；之后到达的 RX 会自行唤醒。
     if (work_pending()) {
         (void)ScheduleNow();
     }

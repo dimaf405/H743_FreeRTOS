@@ -101,6 +101,7 @@ private:
     int append_one_chunk(
         std::uint32_t maximum_bytes = kWriteChunkBytes) noexcept;
     void report_open_failure(int error, std::uint64_t now_us) noexcept;
+    void report_space_failure(const char *state) noexcept;
     void handle_storage_failure(int error, std::uint64_t now_us) noexcept;
     bool open_file(std::uint64_t now_us) noexcept;
     int apply_time_reference(std::uint32_t generation) noexcept;

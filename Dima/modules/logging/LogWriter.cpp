@@ -304,11 +304,29 @@ void LogWriter::report_open_failure(int error, std::uint64_t now_us) noexcept
     /* 文件尚未创建时没有 close/failure 路径可代为告警。首次失败、错误类型
      * 变化及每 60 s 各提示一次，既让无卡和低空间可见，也避免 3 s 重试刷屏。 */
     if (error == -ENOSPC) {
-        PX4_WARN("ULog waiting for SD free space");
+        report_space_failure("waiting");
     } else {
         PX4_WARN("ULog waiting for SD storage (%d)", error);
     }
     last_open_warning_us_ = now_us;
+}
+
+void LogWriter::report_space_failure(const char *state) noexcept
+{
+    // ENOSPC 也可能来自受保护会话占满目录名额。随告警给出当前可读的
+    // free/total，避免把目录占用、预留线与卡的标称容量混为一谈。
+    dima::platform::StorageInformation information{};
+    if (store_.storage_information(information) == 0) {
+        constexpr std::uint64_t kMebibyte = 1024ULL * 1024ULL;
+        PX4_WARN("ULog %s: log space unavailable, free=%lu/%lu MiB",
+                 state,
+                 static_cast<unsigned long>(information.available_bytes /
+                                             kMebibyte),
+                 static_cast<unsigned long>(information.total_bytes /
+                                             kMebibyte));
+    } else {
+        PX4_WARN("ULog %s: log space unavailable; SD capacity unreadable", state);
+    }
 }
 
 void LogWriter::handle_storage_failure(int error,
@@ -317,7 +335,7 @@ void LogWriter::handle_storage_failure(int error,
     accepting_.store(false);
     if (error == -ENOSPC && store_.log_open()) {
         /* 先封住 producer，再逐步缩小写块，把当前已分配 FAT 簇尚可容纳的
-         * Ring 前缀尽量写完。一次分配会被后端限制在 threshold-1 cluster，
+         * Ring 前缀尽量写完。一次新分配会被后端限制在 50 MiB 停止线之上，
          * 因此这里只丢弃确实无法在空间合同内落盘的尾部。 */
         std::uint32_t attempt = kWriteChunkBytes;
         while (pending_bytes() != 0U) {
@@ -360,7 +378,7 @@ void LogWriter::handle_storage_failure(int error,
         retry_interval_us_ = kSpaceRetryIntervalUs;
         last_open_error_ = error;
         last_open_warning_us_ = now_us;
-        PX4_WARN("ULog paused at SD free-space reserve");
+        report_space_failure("paused");
     } else {
         /* I/O 会话一旦失败就不再追加：Ring 尾部只属于旧 ULog，三秒后重挂载
          * 并从 header 开始新文件，绝不把新数据拼接到损坏前缀。 */
@@ -535,8 +553,8 @@ void LogWriter::run_storage() noexcept
         return;
     }
 
-    /* 活动会话每轮先推进一次目录/空间维护。低于保护线时 service 会逐个删除
-     * 最旧已关闭会话并返回 EAGAIN；只有确实没有安全候选才返回 ENOSPC。
+    /* 活动会话每轮先推进一次目录/空间维护。低于回收目标时逐个删除
+     * 最旧已关闭会话并返回 EAGAIN；无候选仍允许记录到独立的停止门限。
      * 因而本轮不会用删除前的保守空闲估算误关当前文件。 */
     const int maintenance = store_.service_log_maintenance();
     if (maintenance == -EAGAIN) {
@@ -554,6 +572,11 @@ void LogWriter::run_storage() noexcept
          * 让锁定/停机调用无需在非 storage 线程触碰 FatFs。 */
         while (pending_bytes() != 0U) {
             const int appended = append_one_chunk();
+            if (appended == -EAGAIN) {
+                // 仅推进旧日志回收，本块尚未写入；保留 Ring 和停止意图再调度。
+                (void)worker_.ScheduleNow();
+                return;
+            }
             if (appended != 0) {
                 handle_storage_failure(appended, now);
                 break;
@@ -579,6 +602,11 @@ void LogWriter::run_storage() noexcept
 
     if (pending_bytes() != 0U) {
         const int appended = append_one_chunk();
+        if (appended == -EAGAIN) {
+            // 预计下一块分配触线时先回收，不能走 I/O 故障关闭/丢 Ring 路径。
+            (void)worker_.ScheduleNow();
+            return;
+        }
         if (appended != 0) {
             handle_storage_failure(appended, now);
             return;
