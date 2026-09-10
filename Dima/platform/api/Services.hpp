@@ -47,6 +47,7 @@ struct Services {
     IndependentWatchdog &watchdog;
     SerialPorts &serial_ports;
     AsyncSerialPort &async_serial_port;
+    AsyncSerialPort &telemetry_serial_port;
     TimestampedSerialInput &timestamped_serial_input;
     InterruptSources &interrupt_sources;
     SpiDevice &spi;

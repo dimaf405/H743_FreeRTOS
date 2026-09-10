@@ -1,6 +1,7 @@
 #include "UartDuplexDmaEndpoint.hpp"
 
 #include "UartResources.hpp"
+#include "UartTimestampedRxEndpoint.hpp"
 #include "stm32h7/HardwareServices.hpp"
 #include <algorithm>
 #include <cstring>
@@ -31,8 +32,6 @@ struct UartDuplexDmaState {
     UART_AdvFeatureInitTypeDef original_advanced_init;
     UartRxPinSnapshot original_rx_pin;
     IsrCallback notification;
-    alignas(8) std::uint8_t receive_ring[kReceiveRingCapacity];
-    alignas(8) std::uint8_t transmit_buffer[kTransmitBufferSize];
     std::uint32_t ring_write_sequence;
     std::uint32_t ring_read_sequence;
     std::uint64_t last_arrival_us;
@@ -43,6 +42,8 @@ struct UartDuplexDmaState {
     std::uint32_t receive_error_flags;
     std::uint32_t transmit_errors;
     std::uint32_t line_changes;
+    std::uint32_t recoveries;
+    std::uint32_t recovery_failures;
     std::uint32_t original_fifo_mode;
     std::uint32_t original_tx_fifo_threshold;
     std::uint32_t original_rx_fifo_threshold;
@@ -59,19 +60,60 @@ struct UartDuplexDmaState {
 // 仍由同一个端点独占，启动/恢复时序、缓冲容量和独立 DMA 段均保持。
 UartDuplexDmaState g_duplex_state{};
 SerialLineConfiguration g_duplex_line_configuration{};
+UartDuplexDmaState g_telemetry_state{};
+SerialLineConfiguration g_telemetry_line_configuration{};
+alignas(8) std::uint8_t g_duplex_rx_ring[kReceiveRingCapacity]{};
+alignas(8) std::uint8_t g_duplex_tx_buffer[kTransmitBufferSize]{};
+alignas(8) std::uint8_t g_telemetry_rx_ring[4096U]{};
+alignas(32) std::uint8_t g_telemetry_rx_dma_buffer[1024U]
+    __attribute__((section(".dima_dma")));
+alignas(32) std::uint8_t g_telemetry_tx_dma_buffer[512U]
+    __attribute__((section(".dima_dma")));
+DMA_HandleTypeDef g_telemetry_rx_dma{};
+DMA_HandleTypeDef g_telemetry_tx_dma{};
+
+// 端点实现共享，缓冲与 DMA 资源按实例独占；第二端点复用同一套线路与收发生命周期。
+struct DuplexResources {
+    std::uint8_t *dma_buffer;
+    std::size_t dma_size;
+    std::uint8_t *receive_ring;
+    std::size_t ring_capacity;
+    std::uint8_t *transmit_buffer;
+    std::size_t transmit_capacity;
+    DMA_HandleTypeDef *rx_dma;
+    DMA_Stream_TypeDef *rx_stream;
+    IRQn_Type rx_irq;
+    DMA_HandleTypeDef *tx_dma;
+    DMA_Stream_TypeDef *tx_stream;
+    IRQn_Type tx_irq;
+};
+const DuplexResources g_duplex_resources{
+    g_duplex_rx_dma_buffer, sizeof(g_duplex_rx_dma_buffer),
+    g_duplex_rx_ring, sizeof(g_duplex_rx_ring),
+    g_duplex_tx_buffer, sizeof(g_duplex_tx_buffer),
+    &g_duplex_rx_dma, DMA1_Stream3, DMA1_Stream3_IRQn,
+    nullptr, nullptr, DMA1_Stream3_IRQn};
+const DuplexResources g_telemetry_resources{
+    g_telemetry_rx_dma_buffer, sizeof(g_telemetry_rx_dma_buffer),
+    g_telemetry_rx_ring, sizeof(g_telemetry_rx_ring),
+    g_telemetry_tx_dma_buffer, sizeof(g_telemetry_tx_dma_buffer),
+    &g_telemetry_rx_dma, DMA1_Stream4, DMA1_Stream4_IRQn,
+    &g_telemetry_tx_dma, DMA1_Stream5, DMA1_Stream5_IRQn};
+
 
 class UartDuplexDmaEndpoint final : public AsyncSerialPort {
 public:
     explicit UartDuplexDmaEndpoint(
         UartDuplexDmaState &state,
-        SerialLineConfiguration &line_configuration) noexcept
-        : uart_(state.uart),
+        SerialLineConfiguration &line_configuration,
+        const DuplexResources &resources) noexcept
+        : resources_(resources), uart_(state.uart),
           original_init_(state.original_init),
           original_advanced_init_(state.original_advanced_init),
           original_rx_pin_(state.original_rx_pin),
           notification_(state.notification),
-          receive_ring_(state.receive_ring),
-          transmit_buffer_(state.transmit_buffer),
+          receive_ring_(resources.receive_ring),
+          transmit_buffer_(resources.transmit_buffer),
           ring_write_sequence_(state.ring_write_sequence),
           ring_read_sequence_(state.ring_read_sequence),
           last_arrival_us_(state.last_arrival_us),
@@ -82,6 +124,8 @@ public:
           receive_error_flags_(state.receive_error_flags),
           transmit_errors_(state.transmit_errors),
           line_changes_(state.line_changes),
+          recoveries_(state.recoveries),
+          recovery_failures_(state.recovery_failures),
           original_fifo_mode_(state.original_fifo_mode),
           original_tx_fifo_threshold_(state.original_tx_fifo_threshold),
           original_rx_fifo_threshold_(state.original_rx_fifo_threshold),
@@ -107,6 +151,8 @@ public:
         UART_HandleTypeDef *const uart = uart_for(port);
         UartRxPinSnapshot rx_pin{};
         if (uart == nullptr || request_for(port) == 0U ||
+            uart_duplex_dma_endpoint_port_in_use(port) ||
+            uart_timestamped_rx_endpoint_port_in_use(port) ||
             !capture_rx_pin(port, rx_pin)) {
             return false;
         }
@@ -122,6 +168,7 @@ public:
         configured_port_ = port;
         uart_ = uart;
         if (!initialize_uart(configuration)) {
+            (void)restore_original_uart();
             uart_ = nullptr;
             configured_port_ = 0;
             return false;
@@ -179,6 +226,8 @@ public:
         return restored;
     }
 
+    bool service() noexcept override { return recover_receive(); }
+
     bool set_line_configuration(
         const SerialLineConfiguration &configuration) noexcept override
     {
@@ -224,21 +273,32 @@ public:
                std::size_t length) noexcept override
     {
         if (!running() || uart_ == nullptr || data == nullptr || length == 0U ||
-            length > sizeof(transmit_buffer_) || !tx_complete()) {
+            length > resources_.transmit_capacity || !tx_complete()) {
             return false;
         }
-        /* 先复制到端点固定缓冲，再交给 HAL 中断发送；tx_complete 为 true 前拒绝
-         * 第二笔写入，避免覆盖仍由 UART 读取的数据。 */
+        // 先复制并发布在途状态，再启动 IT/DMA，避免极短帧完成 IRQ 早于状态置位。
+        // DMA 完成只代表缓冲搬运；真正可复用要等 UART TC 的 TxCplt 回调。
         std::memcpy(transmit_buffer_, data, length);
-        if (HAL_UART_Transmit_IT(
-                uart_, transmit_buffer_, static_cast<std::uint16_t>(length)) !=
-            HAL_OK) {
+        __atomic_store_n(&tx_pending_, true, __ATOMIC_RELEASE);
+        const HAL_StatusTypeDef result = resources_.tx_dma != nullptr
+            ? HAL_UART_Transmit_DMA(uart_, transmit_buffer_, static_cast<std::uint16_t>(length))
+            : HAL_UART_Transmit_IT(uart_, transmit_buffer_, static_cast<std::uint16_t>(length));
+        if (result != HAL_OK) {
+            __atomic_store_n(&tx_pending_, false, __ATOMIC_RELEASE);
             (void)__atomic_add_fetch(&transmit_errors_, 1U,
                                      __ATOMIC_RELAXED);
             return false;
         }
-        __atomic_store_n(&tx_pending_, true, __ATOMIC_RELEASE);
         return true;
+    }
+
+    void on_tx_complete_from_isr() noexcept
+    {
+        // HAL 的 TX 完成回调发生于 UART TC，而非 DMA TC；通知只唤醒 owner。
+        __atomic_store_n(&tx_pending_, false, __ATOMIC_RELEASE);
+        if (notification_.function != nullptr) {
+            notification_.function(notification_.context);
+        }
     }
 
     bool tx_complete() const noexcept override
@@ -246,11 +306,10 @@ public:
         if (uart_ == nullptr) {
             return true;
         }
-        const bool complete = uart_->gState == HAL_UART_STATE_READY;
-        if (complete) {
-            __atomic_store_n(&tx_pending_, false, __ATOMIC_RELEASE);
-        }
-        return complete;
+        // HAL 错误/abort 也可能置 gState=READY，只有 TC 回调或显式恢复才能
+        // 撤销 tx_pending；不能把 DMA 错误造成的 READY 当作正常发送完成。
+        return !__atomic_load_n(&tx_pending_, __ATOMIC_ACQUIRE) &&
+               uart_->gState == HAL_UART_STATE_READY;
     }
 
     std::size_t read(std::uint8_t *destination, std::size_t capacity,
@@ -266,7 +325,7 @@ public:
         /* 单调序号差在固定容量 ring 上可安全处理自然回绕；若差值超过容量说明
          * 状态不一致，清空 RX 而不是读取越界历史数据。 */
         const std::uint32_t available = produced - consumed;
-        if (available > kReceiveRingCapacity) {
+        if (available > resources_.ring_capacity) {
             clear_rx();
             return 0U;
         }
@@ -274,7 +333,7 @@ public:
         for (std::size_t index = 0U; index < count; ++index) {
             destination[index] = receive_ring_[
                 (consumed + static_cast<std::uint32_t>(index)) &
-                (kReceiveRingCapacity - 1U)];
+                (resources_.ring_capacity - 1U)];
         }
         __atomic_store_n(&ring_read_sequence_,
                          consumed + static_cast<std::uint32_t>(count),
@@ -298,9 +357,9 @@ public:
         ring_read_sequence_ = produced;
         if (dma_initialized_ && uart_ != nullptr && uart_->hdmarx != nullptr) {
             const std::uint32_t remaining =
-                __HAL_DMA_GET_COUNTER(&g_duplex_rx_dma);
+                __HAL_DMA_GET_COUNTER(resources_.rx_dma);
             last_dma_position_ = static_cast<std::uint16_t>(
-                (kDmaBufferSize - remaining) % kDmaBufferSize);
+                (resources_.dma_size - remaining) % resources_.dma_size);
         }
         if (primask == 0U) {
             __enable_irq();
@@ -332,6 +391,8 @@ public:
             __atomic_load_n(&transmit_errors_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&line_changes_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&receive_error_flags_, __ATOMIC_ACQUIRE),
+            __atomic_load_n(&recoveries_, __ATOMIC_ACQUIRE),
+            __atomic_load_n(&recovery_failures_, __ATOMIC_ACQUIRE),
         };
     }
 
@@ -342,21 +403,21 @@ public:
 
     void on_rx_position_from_isr(std::uint16_t position) noexcept
     {
-        if (!running() || position == 0U || position > kDmaBufferSize) {
+        if (!running() || position == 0U || position > resources_.dma_size) {
             return;
         }
         /* HAL position 范围为 1..buffer_size，满缓冲位置归一为 0。delta 按圆环
          * 前进距离计算；previous=0/full 的特殊回调表示本轮正好新增完整缓冲。 */
         const std::uint16_t normalized =
-            position == kDmaBufferSize ? 0U : position;
+            position == resources_.dma_size ? 0U : position;
         const std::uint16_t previous = last_dma_position_;
         const std::uint16_t delta =
-            position == kDmaBufferSize && previous == 0U
-                ? static_cast<std::uint16_t>(kDmaBufferSize)
+            position == resources_.dma_size && previous == 0U
+                ? static_cast<std::uint16_t>(resources_.dma_size)
                 : (normalized >= previous
                        ? normalized - previous
                        : static_cast<std::uint16_t>(
-                             kDmaBufferSize - previous + normalized));
+                             resources_.dma_size - previous + normalized));
         if (delta == 0U) {
             return;
         }
@@ -367,12 +428,12 @@ public:
         const std::uint32_t read_sequence = ring_read_sequence_;
         std::uint32_t dropped = 0U;
         for (std::uint16_t offset = 0U; offset < delta; ++offset) {
-            if (write_sequence - read_sequence < kReceiveRingCapacity) {
+            if (write_sequence - read_sequence < resources_.ring_capacity) {
                 const std::size_t dma_index =
                     (static_cast<std::size_t>(previous) + offset) %
-                    kDmaBufferSize;
-                receive_ring_[write_sequence & (kReceiveRingCapacity - 1U)] =
-                    g_duplex_rx_dma_buffer[dma_index];
+                    resources_.dma_size;
+                receive_ring_[write_sequence & (resources_.ring_capacity - 1U)] =
+                    resources_.dma_buffer[dma_index];
                 ++write_sequence;
             } else {
                 ++dropped;
@@ -385,6 +446,8 @@ public:
         if (dropped != 0U) {
             (void)__atomic_add_fetch(&dropped_bytes_, dropped,
                                      __ATOMIC_RELAXED);
+            // 第二端点发生溢出后按一次接收故障恢复，旧 Ring/半帧不能跨丢字节边界使用。
+            if (resources_.tx_dma != nullptr) __atomic_store_n(&receive_fault_, true, __ATOMIC_RELEASE);
         }
         __DMB();
         notification_.invoke();
@@ -482,27 +545,45 @@ private:
         if (uart_ == nullptr || dma_initialized_) {
             return false;
         }
-        /* Stream3 是此端点的板级唯一资源，request 由生成的端口合同映射；DMA IRQ
+        /* DMA stream 由固定实例资源提供，request 来自既有 UART 硬件映射；DMA IRQ
          * 优先于 UART IRQ，保证圆环位置更新先于同拍 IDLE/error 处理。 */
-        g_duplex_rx_dma = DMA_HandleTypeDef{};
-        g_duplex_rx_dma.Instance = DMA1_Stream3;
-        g_duplex_rx_dma.Init.Request = request_for(configured_port_);
-        g_duplex_rx_dma.Init.Direction = DMA_PERIPH_TO_MEMORY;
-        g_duplex_rx_dma.Init.PeriphInc = DMA_PINC_DISABLE;
-        g_duplex_rx_dma.Init.MemInc = DMA_MINC_ENABLE;
-        g_duplex_rx_dma.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
-        g_duplex_rx_dma.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-        g_duplex_rx_dma.Init.Mode = DMA_CIRCULAR;
-        g_duplex_rx_dma.Init.Priority = DMA_PRIORITY_HIGH;
-        g_duplex_rx_dma.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
-        if (HAL_DMA_Init(&g_duplex_rx_dma) != HAL_OK) {
+        *resources_.rx_dma = DMA_HandleTypeDef{};
+        resources_.rx_dma->Instance = resources_.rx_stream;
+        resources_.rx_dma->Init.Request = request_for(configured_port_);
+        resources_.rx_dma->Init.Direction = DMA_PERIPH_TO_MEMORY;
+        resources_.rx_dma->Init.PeriphInc = DMA_PINC_DISABLE;
+        resources_.rx_dma->Init.MemInc = DMA_MINC_ENABLE;
+        resources_.rx_dma->Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+        resources_.rx_dma->Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+        resources_.rx_dma->Init.Mode = DMA_CIRCULAR;
+        resources_.rx_dma->Init.Priority = DMA_PRIORITY_HIGH;
+        resources_.rx_dma->Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+        if (HAL_DMA_Init(resources_.rx_dma) != HAL_OK) {
             return false;
         }
         dma_initialized_ = true;
-        __HAL_LINKDMA(uart_, hdmarx, g_duplex_rx_dma);
-        HAL_NVIC_SetPriority(DMA1_Stream3_IRQn, kDmaIrqPriority, 0U);
-        HAL_NVIC_ClearPendingIRQ(DMA1_Stream3_IRQn);
-        HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
+        __HAL_LINKDMA(uart_, hdmarx, (*resources_.rx_dma));
+        HAL_NVIC_SetPriority(resources_.rx_irq, kDmaIrqPriority, 0U);
+        HAL_NVIC_ClearPendingIRQ(resources_.rx_irq);
+        HAL_NVIC_EnableIRQ(resources_.rx_irq);
+        if (resources_.tx_dma != nullptr) {
+            auto &tx = *resources_.tx_dma;
+            tx = DMA_HandleTypeDef{};
+            tx.Instance = resources_.tx_stream;
+            tx.Init = resources_.rx_dma->Init;
+            tx.Init.Request = tx_request_for(configured_port_);
+            tx.Init.Direction = DMA_MEMORY_TO_PERIPH;
+            tx.Init.Mode = DMA_NORMAL;
+            if (tx.Init.Request == 0U || HAL_DMA_Init(&tx) != HAL_OK) {
+                (void)HAL_DMA_DeInit(&tx);
+                deinitialize_dma();
+                return false;
+            }
+            __HAL_LINKDMA(uart_, hdmatx, tx);
+            HAL_NVIC_SetPriority(resources_.tx_irq, kDmaIrqPriority, 0U);
+            HAL_NVIC_ClearPendingIRQ(resources_.tx_irq);
+            HAL_NVIC_EnableIRQ(resources_.tx_irq);
+        }
         const IRQn_Type uart_irq = irq_for(uart_);
         HAL_NVIC_SetPriority(uart_irq, kUartIrqPriority, 0U);
         HAL_NVIC_ClearPendingIRQ(uart_irq);
@@ -512,11 +593,20 @@ private:
 
     void deinitialize_dma() noexcept
     {
-        HAL_NVIC_DisableIRQ(DMA1_Stream3_IRQn);
-        HAL_NVIC_ClearPendingIRQ(DMA1_Stream3_IRQn);
+        HAL_NVIC_DisableIRQ(resources_.rx_irq);
+        HAL_NVIC_ClearPendingIRQ(resources_.rx_irq);
+        if (resources_.tx_dma != nullptr) {
+            HAL_NVIC_DisableIRQ(resources_.tx_irq);
+            HAL_NVIC_ClearPendingIRQ(resources_.tx_irq);
+            if (uart_ != nullptr && uart_->hdmatx != nullptr) {
+                (void)HAL_UART_AbortTransmit(uart_);
+                (void)HAL_DMA_DeInit(resources_.tx_dma);
+                uart_->hdmatx = nullptr;
+            }
+        }
         if (uart_ != nullptr && dma_initialized_) {
             (void)HAL_UART_AbortReceive(uart_);
-            (void)HAL_DMA_DeInit(&g_duplex_rx_dma);
+            (void)HAL_DMA_DeInit(resources_.rx_dma);
             uart_->hdmarx = nullptr;
         }
         dma_initialized_ = false;
@@ -526,8 +616,8 @@ private:
     {
         return uart_ != nullptr && dma_initialized_ &&
                HAL_UARTEx_ReceiveToIdle_DMA(
-                   uart_, g_duplex_rx_dma_buffer,
-                   static_cast<std::uint16_t>(kDmaBufferSize)) == HAL_OK;
+                   uart_, resources_.dma_buffer,
+                   static_cast<std::uint16_t>(resources_.dma_size)) == HAL_OK;
     }
 
     bool recover_receive() noexcept
@@ -540,12 +630,19 @@ private:
         if (!running() || uart_ == nullptr) {
             return false;
         }
+        if (resources_.tx_dma != nullptr && !tx_complete()) {
+            (void)HAL_UART_AbortTransmit(uart_);
+            __atomic_store_n(&tx_pending_, false, __ATOMIC_RELEASE);
+            (void)__atomic_add_fetch(&transmit_errors_, 1U, __ATOMIC_RELAXED);
+        }
         (void)HAL_UART_AbortReceive(uart_);
         clear_rx();
         if (!arm_receive()) {
+            (void)__atomic_add_fetch(&recovery_failures_, 1U, __ATOMIC_RELAXED);
             __atomic_store_n(&running_, false, __ATOMIC_RELEASE);
             return false;
         }
+        (void)__atomic_add_fetch(&recoveries_, 1U, __ATOMIC_RELAXED);
         return true;
     }
 
@@ -561,13 +658,14 @@ private:
         __atomic_store_n(&receive_error_flags_, 0U, __ATOMIC_RELAXED);
     }
 
+    const DuplexResources &resources_;
     UART_HandleTypeDef *&uart_;
     UART_InitTypeDef &original_init_;
     UART_AdvFeatureInitTypeDef &original_advanced_init_;
     UartRxPinSnapshot &original_rx_pin_;
     IsrCallback &notification_;
-    std::uint8_t (&receive_ring_)[kReceiveRingCapacity];
-    std::uint8_t (&transmit_buffer_)[kTransmitBufferSize];
+    std::uint8_t *const receive_ring_;
+    std::uint8_t *const transmit_buffer_;
     std::uint32_t &ring_write_sequence_;
     std::uint32_t &ring_read_sequence_;
     std::uint64_t &last_arrival_us_;
@@ -578,6 +676,8 @@ private:
     std::uint32_t &receive_error_flags_;
     std::uint32_t &transmit_errors_;
     std::uint32_t &line_changes_;
+    std::uint32_t &recoveries_;
+    std::uint32_t &recovery_failures_;
     std::uint32_t &original_fifo_mode_;
     std::uint32_t &original_tx_fifo_threshold_;
     std::uint32_t &original_rx_fifo_threshold_;
@@ -593,7 +693,14 @@ private:
 UartDuplexDmaEndpoint &instance() noexcept
 {
     static UartDuplexDmaEndpoint value{
-        g_duplex_state, g_duplex_line_configuration};
+        g_duplex_state, g_duplex_line_configuration, g_duplex_resources};
+    return value;
+}
+
+UartDuplexDmaEndpoint &telemetry_instance() noexcept
+{
+    static UartDuplexDmaEndpoint value{
+        g_telemetry_state, g_telemetry_line_configuration, g_telemetry_resources};
     return value;
 }
 
@@ -601,31 +708,52 @@ UartDuplexDmaEndpoint &instance() noexcept
 
 AsyncSerialPort &async_serial_port() noexcept { return instance(); }
 
+AsyncSerialPort &telemetry_serial_port() noexcept { return telemetry_instance(); }
+
+bool uart_duplex_dma_endpoint_port_in_use(std::int32_t port) noexcept
+{
+    return (g_duplex_state.uart != nullptr && g_duplex_state.configured_port == port) ||
+           (g_telemetry_state.uart != nullptr && g_telemetry_state.configured_port == port);
+}
+
 bool uart_duplex_dma_endpoint_allows_line_configuration() noexcept
 {
-    return instance().allows_line_configuration();
+    return instance().allows_line_configuration() &&
+           telemetry_instance().allows_line_configuration();
 }
 
 bool uart_duplex_dma_endpoint_on_rx_event(
     UART_HandleTypeDef *uart, std::uint16_t position) noexcept
 {
-    auto &backend = instance();
-    if (!backend.running() || !backend.handles_uart(uart)) {
-        return false;
+    for (auto *backend : {&instance(), &telemetry_instance()}) {
+        if (backend->running() && backend->handles_uart(uart)) {
+            backend->on_rx_position_from_isr(position);
+            return true;
+        }
     }
-    backend.on_rx_position_from_isr(position);
-    return true;
+    return false;
 }
 
 bool uart_duplex_dma_endpoint_on_error(
     UART_HandleTypeDef *uart, std::uint32_t error) noexcept
 {
-    auto &backend = instance();
-    if (!backend.running() || !backend.handles_uart(uart)) {
-        return false;
+    for (auto *backend : {&instance(), &telemetry_instance()}) {
+        if (backend->running() && backend->handles_uart(uart)) {
+            backend->on_error_from_isr(error);
+            return true;
+        }
     }
-    backend.on_error_from_isr(error);
-    return true;
+    return false;
+}
+
+void uart_duplex_dma_endpoint_on_tx_complete(UART_HandleTypeDef *uart) noexcept
+{
+    for (auto *backend : {&instance(), &telemetry_instance()}) {
+        if (backend->running() && backend->handles_uart(uart)) {
+            backend->on_tx_complete_from_isr();
+            return;
+        }
+    }
 }
 
 } // namespace dima::platform::stm32h7
@@ -633,4 +761,12 @@ bool uart_duplex_dma_endpoint_on_error(
 extern "C" void DMA1_Stream3_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&dima::platform::stm32h7::g_duplex_rx_dma);
+}
+extern "C" void DMA1_Stream4_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&dima::platform::stm32h7::g_telemetry_rx_dma);
+}
+extern "C" void DMA1_Stream5_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&dima::platform::stm32h7::g_telemetry_tx_dma);
 }

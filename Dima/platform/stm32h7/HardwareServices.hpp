@@ -29,6 +29,7 @@ BootControl &boot_control(FlashTransactionManager &transactions,
 SerialPorts &serial_ports() noexcept;
 TimestampedSerialInput &timestamped_serial_input() noexcept;
 AsyncSerialPort &async_serial_port() noexcept;
+AsyncSerialPort &telemetry_serial_port() noexcept;
 InterruptSources &interrupt_sources() noexcept;
 SpiDevice &spi4() noexcept;
 CanTransport &can1() noexcept;

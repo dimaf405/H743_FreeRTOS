@@ -29,6 +29,7 @@ struct UartRxPinResource {
 
 UART_HandleTypeDef *uart_for(std::int32_t port) noexcept;
 std::uint32_t request_for(std::int32_t port) noexcept;
+std::uint32_t tx_request_for(std::int32_t port) noexcept;
 IRQn_Type irq_for(const UART_HandleTypeDef *uart) noexcept;
 std::uint32_t translate_uart_error(std::uint32_t error) noexcept;
 UartRxPinResource rx_pin_for(std::int32_t port) noexcept;

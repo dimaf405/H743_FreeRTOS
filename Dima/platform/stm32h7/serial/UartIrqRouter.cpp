@@ -46,3 +46,8 @@ extern "C" void USART1_IRQHandler(void) { HAL_UART_IRQHandler(&huart1); }
 extern "C" void USART2_IRQHandler(void) { HAL_UART_IRQHandler(&huart2); }
 extern "C" void USART3_IRQHandler(void) { HAL_UART_IRQHandler(&huart3); }
 extern "C" void USART6_IRQHandler(void) { HAL_UART_IRQHandler(&huart6); }
+
+extern "C" void HAL_UART_TxCpltCallback(UART_HandleTypeDef *uart)
+{
+    dima::platform::stm32h7::uart_duplex_dma_endpoint_on_tx_complete(uart);
+}

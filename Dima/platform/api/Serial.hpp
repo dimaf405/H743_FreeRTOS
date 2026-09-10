@@ -53,6 +53,8 @@ struct AsyncSerialPortStats {
     std::uint32_t transmit_errors{0U};
     std::uint32_t line_changes{0U};
     std::uint32_t receive_error_flags{0U};
+    std::uint32_t recoveries{0U};
+    std::uint32_t recovery_failures{0U};
 };
 
 enum SerialInputError : std::uint32_t {
@@ -101,6 +103,7 @@ public:
         const SerialLineConfiguration &configuration) noexcept = 0;
     virtual bool start(IsrCallback notification) noexcept = 0;
     virtual bool stop() noexcept = 0;
+    virtual bool service() noexcept = 0;
     /* 动态改线参数只能由当前端口所有者调用；实现必须先停止 DMA/清错误，再以
      * 新配置恢复，失败时保持可判定的停止状态。 */
     virtual bool set_line_configuration(

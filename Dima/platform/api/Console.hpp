@@ -32,6 +32,7 @@ public:
     virtual bool shutdown() noexcept = 0;
     virtual void service() noexcept = 0;
     virtual bool ready() const noexcept = 0;
+    virtual bool tx_idle() noexcept = 0;
     virtual int write(const std::uint8_t *data, std::size_t length,
                       std::uint32_t timeout_ms) noexcept = 0;
     virtual std::size_t read(std::uint8_t *data,

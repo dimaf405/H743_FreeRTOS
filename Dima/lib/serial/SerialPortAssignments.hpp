@@ -21,6 +21,7 @@ struct SerialParameterIdentity {
 inline constexpr std::int32_t kSerialFunctionDisabled = 0;
 inline constexpr std::int32_t kSerialFunctionSbus = 1;
 inline constexpr std::int32_t kSerialFunctionGps = 2;
+inline constexpr std::int32_t kSerialFunctionMavlink = 3;
 
 bool serial_function_supported(
     std::int32_t function) noexcept;
@@ -39,6 +40,9 @@ bool serial_function_parameter(const char *name) noexcept;
 class SerialPortAssignments {
 public:
     virtual ~SerialPortAssignments() = default;
+    virtual std::int32_t telemetry_port() const noexcept = 0;
+    virtual std::uint32_t telemetry_baudrate() const noexcept = 0;
+    virtual bool telemetry_configuration_valid() const noexcept = 0;
     virtual std::int32_t rc_input_port() const noexcept = 0;
     virtual std::int32_t gps_port() const noexcept = 0;
     virtual std::uint32_t gps_target_baudrate() const noexcept = 0;

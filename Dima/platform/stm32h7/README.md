@@ -51,3 +51,7 @@ SPI 分频选择和板级启动请求操作的运行期逻辑位于源文件；B
 ## UART 零初始化状态
 
 双向 UART 端点将非零默认值的 `SerialLineConfiguration` 与 `UartDuplexDmaState` 分开保存。大块 RX Ring、TX 缓冲和零状态由普通 `.bss` 启动清零，线路默认值仍完整保留；端点独占、原配置恢复、原子序号、DMA 段和容量均不改变。此项释放的是 Flash 初始化载荷，不能当成运行期 RAM 缩容。
+
+## 第二个双向 UART 端点
+
+`UartDuplexDmaEndpoint` 复用同一实现和两个固定资源描述。原端点保持 Stream3 RX / IT TX；第二端点使用 DMA1 Stream4 RX（1024 B）、Stream5 TX（512 B），软件 RX Ring 为 4096 B。DMA 缓冲全部位于原非缓存区，发送缓冲只在 UART TC 后复用。RX/TX/error 全局回调按 HAL 句柄唯一归属路由，普通串口配置必须等两个双向端点和时间戳端点都释放线路。溢出、错误、恢复/恢复失败使用累计计数；不增加 RTOS 任务或堆缓冲。

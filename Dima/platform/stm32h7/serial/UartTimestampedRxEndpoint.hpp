@@ -11,6 +11,7 @@ namespace dima::platform::stm32h7 {
  * HAL/引脚配置；它与通用 duplex 端点互斥拥有线路。 */
 TimestampedSerialInput &timestamped_serial_input() noexcept;
 
+bool uart_timestamped_rx_endpoint_port_in_use(std::int32_t port) noexcept;
 bool uart_timestamped_rx_endpoint_allows_line_configuration() noexcept;
 bool uart_timestamped_rx_endpoint_reset_configuration() noexcept;
 bool uart_timestamped_rx_endpoint_on_rx_event(

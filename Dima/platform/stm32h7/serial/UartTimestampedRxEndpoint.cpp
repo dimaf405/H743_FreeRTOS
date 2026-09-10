@@ -1,6 +1,7 @@
 #include "UartTimestampedRxEndpoint.hpp"
 
 #include "UartResources.hpp"
+#include "UartDuplexDmaEndpoint.hpp"
 #include "stm32h7/HardwareServices.hpp"
 
 #include "usart.h"
@@ -77,7 +78,8 @@ public:
         reset_statistics();
         const std::int32_t selected = port;
         auto *const uart = uart_for(selected);
-        if (uart == nullptr || request_for(selected) == 0U) {
+        if (uart == nullptr || request_for(selected) == 0U ||
+            uart_duplex_dma_endpoint_port_in_use(selected)) {
             return false;
         }
         UartRxPinSnapshot rx_pin{};
@@ -477,6 +479,11 @@ UartTimestampedRxEndpoint &instance() noexcept
 TimestampedSerialInput &timestamped_serial_input() noexcept
 {
     return instance();
+}
+
+bool uart_timestamped_rx_endpoint_port_in_use(std::int32_t port) noexcept
+{
+    return uart_for(port) != nullptr && instance().handles_uart(uart_for(port));
 }
 
 bool uart_timestamped_rx_endpoint_allows_line_configuration() noexcept

@@ -103,6 +103,14 @@ public:
         return initialized() && transport_online() && transport_.ready();
     }
 
+    bool tx_idle() noexcept override
+    {
+        // 非阻塞吸收迟到完成；发送超时不能被误认为已经释放 staging。
+        if (!initialized() || execution_.in_interrupt()) return false;
+        platform::MutexGuard guard{tx_mutex_, platform::Timeout::no_wait()};
+        return guard && complete_previous_transfer(now_ms(), 0U) == 0;
+    }
+
     int write(const std::uint8_t *data, std::size_t length,
               std::uint32_t timeout_ms) noexcept override
     {

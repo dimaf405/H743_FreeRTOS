@@ -8,7 +8,8 @@ parameters:
           short: SERIAL1（USART1 PA9/PA10）波特率
           long: |-
             SERIAL1 直接映射到物理串口 USART1，引脚为 PA9/PA10。
-            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率。
+            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率；
+            0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 921600
         values: &serial_baud_values
@@ -32,21 +33,23 @@ parameters:
         description:
           short: SERIAL1（USART1 PA9/PA10）功能分配
           long: |-
-            选择物理串口 USART1 的唯一运行期使用者。可用功能仅限 SBUS 和 GPS；
-            每种功能最多只能占用一个端口。
+            选择物理串口 USART1 的唯一运行期使用者。可用功能为 SBUS、GPS 和 MAVLink 数传；
+            每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
         values: &serial_function_values
           0: Disabled
           1: SBUS
           2: GPS
+          3: MAVLink
 
       SERIAL2_BAUD:
         description:
           short: SERIAL2（USART2 PD5/PD6）波特率
           long: |-
             SERIAL2 直接映射到物理串口 USART2，引脚为 PD5/PD6。
-            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率。
+            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率；
+            0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 0
         values: *serial_baud_values
@@ -54,8 +57,8 @@ parameters:
         description:
           short: SERIAL2（USART2 PD5/PD6）功能分配
           long: |-
-            选择物理串口 USART2 的唯一运行期使用者。可用功能仅限 SBUS 和 GPS；
-            每种功能最多只能占用一个端口。
+            选择物理串口 USART2 的唯一运行期使用者。可用功能为 SBUS、GPS 和 MAVLink 数传；
+            每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
         values: *serial_function_values
@@ -65,7 +68,8 @@ parameters:
           short: SERIAL3（USART3 PD8/PD9）波特率
           long: |-
             SERIAL3 直接映射到物理串口 USART3，引脚为 PD8/PD9。
-            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率。
+            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率；
+            0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 0
         values: *serial_baud_values
@@ -73,8 +77,8 @@ parameters:
         description:
           short: SERIAL3（USART3 PD8/PD9）功能分配
           long: |-
-            选择物理串口 USART3 的唯一运行期使用者。可用功能仅限 SBUS 和 GPS；
-            每种功能最多只能占用一个端口。
+            选择物理串口 USART3 的唯一运行期使用者。可用功能为 SBUS、GPS 和 MAVLink 数传；
+            每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
         values: *serial_function_values
@@ -84,7 +88,8 @@ parameters:
           short: SERIAL4（UART4 PB9/PB8）波特率
           long: |-
             SERIAL4 直接映射到物理串口 UART4，引脚为 PB9/PB8。
-            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率。
+            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率；
+            0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 115200
         values: *serial_baud_values
@@ -92,8 +97,8 @@ parameters:
         description:
           short: SERIAL4（UART4 PB9/PB8）功能分配
           long: |-
-            选择物理串口 UART4 的唯一运行期使用者。可用功能仅限 SBUS 和 GPS；
-            每种功能最多只能占用一个端口。
+            选择物理串口 UART4 的唯一运行期使用者。可用功能为 SBUS、GPS 和 MAVLink 数传；
+            每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
         values: *serial_function_values
@@ -111,7 +116,7 @@ parameters:
         description:
           short: SERIAL6（USART6 PC6/PC7）功能分配
           long: |-
-            选择物理串口 USART6 的唯一运行期使用者。可用功能仅限 SBUS 和 GPS；
+            选择物理串口 USART6 的唯一运行期使用者。可用功能为 SBUS、GPS 和 MAVLink 数传；
             本产品默认将 USART6 分配给 SBUS。
         type: enum
         default: 1
@@ -122,7 +127,8 @@ parameters:
           short: SERIAL7（UART7 PE8/PE7）波特率
           long: |-
             SERIAL7 直接映射到物理串口 UART7，引脚为 PE8/PE7。
-            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率。
+            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率；
+            0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 57600
         values: *serial_baud_values
@@ -130,8 +136,8 @@ parameters:
         description:
           short: SERIAL7（UART7 PE8/PE7）功能分配
           long: |-
-            选择物理串口 UART7 的唯一运行期使用者。可用功能仅限 SBUS 和 GPS；
-            每种功能最多只能占用一个端口。
+            选择物理串口 UART7 的唯一运行期使用者。可用功能为 SBUS、GPS 和 MAVLink 数传；
+            每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
         values: *serial_function_values
@@ -141,7 +147,8 @@ parameters:
           short: SERIAL8（UART8 PE1/PE0）波特率
           long: |-
             SERIAL8 直接映射到物理串口 UART8，引脚为 PE1/PE0。
-            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率。
+            此值是在没有协议驱动占用端口时使用的普通 8N1 波特率；
+            0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 115200
         values: *serial_baud_values
@@ -149,8 +156,8 @@ parameters:
         description:
           short: SERIAL8（UART8 PE1/PE0）功能分配
           long: |-
-            选择物理串口 UART8 的唯一运行期使用者。可用功能仅限 SBUS 和 GPS；
-            每种功能最多只能占用一个端口。
+            选择物理串口 UART8 的唯一运行期使用者。可用功能为 SBUS、GPS 和 MAVLink 数传；
+            每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
         values: *serial_function_values

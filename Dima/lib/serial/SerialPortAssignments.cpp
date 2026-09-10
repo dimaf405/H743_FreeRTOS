@@ -9,7 +9,7 @@ bool serial_function_supported(
     std::int32_t function) noexcept
 {
     return function >= kSerialFunctionDisabled &&
-           function <= kSerialFunctionGps;
+           function <= kSerialFunctionMavlink;
 }
 
 SerialParameterIdentity identify_serial_parameter(

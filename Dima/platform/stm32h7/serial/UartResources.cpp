@@ -9,13 +9,13 @@ namespace {
  * PX4 参数定义。这里一一对应 CubeMX 生成的 usart.c/MSP 配置；硬件没有
  * UART5，因此映射保持 1/2/3/4/6/7/8 的稀疏物理编号。 */
 #define DIMA_H743_UART_RESOURCE_LIST(X) \
-    X(1, huart1, DMA_REQUEST_USART1_RX, USART1_IRQn, GPIOA, GPIO_PIN_10, GPIO_AF7_USART1, 10) \
-    X(2, huart2, DMA_REQUEST_USART2_RX, USART2_IRQn, GPIOD, GPIO_PIN_6, GPIO_AF7_USART2, 6) \
-    X(3, huart3, DMA_REQUEST_USART3_RX, USART3_IRQn, GPIOD, GPIO_PIN_9, GPIO_AF7_USART3, 9) \
-    X(4, huart4, DMA_REQUEST_UART4_RX, UART4_IRQn, GPIOB, GPIO_PIN_8, GPIO_AF8_UART4, 8) \
-    X(6, huart6, DMA_REQUEST_USART6_RX, USART6_IRQn, GPIOC, GPIO_PIN_7, GPIO_AF7_USART6, 7) \
-    X(7, huart7, DMA_REQUEST_UART7_RX, UART7_IRQn, GPIOE, GPIO_PIN_7, GPIO_AF7_UART7, 7) \
-    X(8, huart8, DMA_REQUEST_UART8_RX, UART8_IRQn, GPIOE, GPIO_PIN_0, GPIO_AF8_UART8, 0)
+    X(1, huart1, DMA_REQUEST_USART1_RX, DMA_REQUEST_USART1_TX, USART1_IRQn, GPIOA, GPIO_PIN_10, GPIO_AF7_USART1, 10) \
+    X(2, huart2, DMA_REQUEST_USART2_RX, DMA_REQUEST_USART2_TX, USART2_IRQn, GPIOD, GPIO_PIN_6, GPIO_AF7_USART2, 6) \
+    X(3, huart3, DMA_REQUEST_USART3_RX, DMA_REQUEST_USART3_TX, USART3_IRQn, GPIOD, GPIO_PIN_9, GPIO_AF7_USART3, 9) \
+    X(4, huart4, DMA_REQUEST_UART4_RX, DMA_REQUEST_UART4_TX, UART4_IRQn, GPIOB, GPIO_PIN_8, GPIO_AF8_UART4, 8) \
+    X(6, huart6, DMA_REQUEST_USART6_RX, DMA_REQUEST_USART6_TX, USART6_IRQn, GPIOC, GPIO_PIN_7, GPIO_AF7_USART6, 7) \
+    X(7, huart7, DMA_REQUEST_UART7_RX, DMA_REQUEST_UART7_TX, UART7_IRQn, GPIOE, GPIO_PIN_7, GPIO_AF7_UART7, 7) \
+    X(8, huart8, DMA_REQUEST_UART8_RX, DMA_REQUEST_UART8_TX, UART8_IRQn, GPIOE, GPIO_PIN_0, GPIO_AF8_UART8, 0)
 
 } // namespace
 
@@ -39,7 +39,7 @@ std::uint32_t translate_uart_error(std::uint32_t error) noexcept
 UartRxPinResource rx_pin_for(std::int32_t port) noexcept
 {
     switch (port) {
-#define DIMA_RX_PIN_CASE(id, handle, request, irq, gpio, pin, af, index) \
+#define DIMA_RX_PIN_CASE(id, handle, request, tx_request, irq, gpio, pin, af, index) \
     case id: return {gpio, pin, af, index##U};
     DIMA_H743_UART_RESOURCE_LIST(DIMA_RX_PIN_CASE)
 #undef DIMA_RX_PIN_CASE
@@ -51,7 +51,7 @@ UartRxPinResource rx_pin_for(std::int32_t port) noexcept
 UART_HandleTypeDef *uart_for(std::int32_t port) noexcept
 {
     switch (port) {
-#define DIMA_UART_CASE(id, handle, request, irq, gpio, pin, af, index) \
+#define DIMA_UART_CASE(id, handle, request, tx_request, irq, gpio, pin, af, index) \
     case id: return &handle;
     DIMA_H743_UART_RESOURCE_LIST(DIMA_UART_CASE)
 #undef DIMA_UART_CASE
@@ -62,8 +62,19 @@ UART_HandleTypeDef *uart_for(std::int32_t port) noexcept
 std::uint32_t request_for(std::int32_t port) noexcept
 {
     switch (port) {
-#define DIMA_REQUEST_CASE(id, handle, request, irq, gpio, pin, af, index) \
+#define DIMA_REQUEST_CASE(id, handle, request, tx_request, irq, gpio, pin, af, index) \
     case id: return request;
+    DIMA_H743_UART_RESOURCE_LIST(DIMA_REQUEST_CASE)
+#undef DIMA_REQUEST_CASE
+    default: return 0U;
+    }
+}
+
+std::uint32_t tx_request_for(std::int32_t port) noexcept
+{
+    switch (port) {
+#define DIMA_REQUEST_CASE(id, handle, request, tx_request, irq, gpio, pin, af, index) \
+    case id: return tx_request;
     DIMA_H743_UART_RESOURCE_LIST(DIMA_REQUEST_CASE)
 #undef DIMA_REQUEST_CASE
     default: return 0U;
@@ -72,7 +83,7 @@ std::uint32_t request_for(std::int32_t port) noexcept
 
 IRQn_Type irq_for(const UART_HandleTypeDef *uart) noexcept
 {
-#define DIMA_IRQ_IF(id, handle, request, irq, gpio, pin, af, index) \
+#define DIMA_IRQ_IF(id, handle, request, tx_request, irq, gpio, pin, af, index) \
     if (uart == &handle) return irq;
     DIMA_H743_UART_RESOURCE_LIST(DIMA_IRQ_IF)
 #undef DIMA_IRQ_IF

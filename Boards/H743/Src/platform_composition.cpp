@@ -103,6 +103,7 @@ extern "C" bool dima_platform_early_init(void)
         stm32h7::independent_watchdog(),
         stm32h7::serial_ports(),
         stm32h7::async_serial_port(),
+        stm32h7::telemetry_serial_port(),
         stm32h7::timestamped_serial_input(),
         stm32h7::interrupt_sources(),
         stm32h7::spi4(),
