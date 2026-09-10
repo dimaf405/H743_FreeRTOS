@@ -85,7 +85,8 @@ def main() -> int:
 
     image = arguments.image.resolve()
     digest = image_hash(arguments.imgtool.resolve(), image)
-    stage("SIGN_VERIFY", f"signed image hash={digest}")
+    # 这里只读取 MCUboot TEST 请求需要的镜像摘要；主机签名复验由显式 Make 目标执行。
+    stage("IMAGE_HASH", f"signed image hash={digest}")
     port, initial_list, initial_identity, initial_binding = wait_for_recovery(
         runtime,
         codec,

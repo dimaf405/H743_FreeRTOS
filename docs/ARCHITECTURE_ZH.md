@@ -82,7 +82,7 @@ docs/                         计划、架构、ADR、来源和维护文档
 - `Core/Src/stm32h7xx_hal_msp.c` 与 `USB_DEVICE/Target/usbd_conf.c` 分别由唯一 `H743_FreeRTOS.ioc` 的 MCU MSP/USB Device 配置集中生成，是当前单文件 600 行上限的必要生成区例外；禁止为追求行数而手工分源，也禁止借此例外加入业务逻辑。
 - `Core/Inc/FreeRTOSConfig.h` 只是 CubeMX/FreeRTOS 查找约定所需的转发头，唯一配置实现为 `Dima/platform/freertos/FreeRTOSConfig.h`；STM32H7 capability 工厂统一由 `HardwareServices.hpp` 声明。
 - 根目录 `H743_FreeRTOS.ioc` 是唯一 CubeMX 配置源；禁止第二份 `.ioc`、README-only 源码目录、Dima 同名源码文件和未列入 `make/project.mk` 的翻译单元。
-- `make check-architecture` 检查底层 include/API、cache/DMA/Flash 操作所有权、依赖方向和私有 include 集，并是 `firmware/verify/dima_rover` 的强制前置条件。
+- `make check-architecture` 显式检查底层 include/API、cache/DMA/Flash 操作所有权、依赖方向和私有 include 集；`verify/app-check` 包含该检查。日常 `firmware/dima_rover/upload-ready/upload` 只构建或上传，不自动执行架构扫描或独立产物校验。
 - 上游移植文件必须保留原始版权头，并在 Source Manifest 中记录原始路径、版本和本地修改。
 - 项目内不新建名称包含大小写不敏感 `px4` 的目录；该规则不适用于源码符号、许可证和来源说明。
 

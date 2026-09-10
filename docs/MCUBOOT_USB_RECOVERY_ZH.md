@@ -184,11 +184,12 @@ WSL 的 `make -j4 NO_COLOR=1 upload-ready` 与 `make -n upload MCUMGR_PORT=COM5 
 均成功，后者使用 `python3`、Linux 缓存及 `build-linux/H743_FreeRTOS_signed.bin`。
 这是当前共享工作区的生成/编译/签名/命令展开证据，本次未执行实际串口上传或板端复位。
 
-日常 OTA 会进入快速调度：只执行一次真实 Make 依赖图，不再为了构建进度条额外执行“生成物稳定化 +
-全量 dry-run 规划”。这不会跳过生成器、源码重编译、ELF 生命周期检查、签名或上传镜像验证；任何输入
-过期仍会在打开设备前完成重建和校验。架构门禁使用源码与配置内容指纹缓存：相关文件新增、删除或内容
-变化会自动失效并重新执行完整架构检查；单独执行 `make dima_rover`、`make verify`、`make firmware`、
-`make app-check` 或 `make check-architecture` 时仍强制实时检查。完整 Factory 发布流程不走快速调度。
+日常编译和 OTA 均直接执行真实 Make 依赖图，保留编译前的权威生成物准备，不再为进度计数执行
+全量 dry-run 规划。`make dima_rover`、`make firmware`、`make upload-ready`、`make upload` 均不自动
+执行架构扫描、Metadata/Logger 复验、ELF、主机签名复验或 Factory 布局校验；发生输入变化时仍正常
+生成、编译和签名。需要完整检查时显式运行 `make verify`，只检查上传包可运行 `make upload-verify`
+（支持 `UPLOAD_IMAGE=...`）；单项检查继续使用 `make app-check`、`make check-architecture` 或相应
+`*-verify` 目标。同时请求 `verify upload` 时仍执行完整检查。
 
 上传日志的每个 `[STAGE]` 现在同时打印 `t=`（从上传器启动开始的累计耗时）和 `delta=`（距上一个阶段的
 耗时），可直接区分主机准备、Recovery/应用重枚举和镜像传输。当前开发阶段的主机上传流程不再等待或
@@ -196,9 +197,9 @@ WSL 的 `make -j4 NO_COLOR=1 upload-ready` 与 `make -n upload MCUMGR_PORT=COM5 
 
 该命令在用户未显式传入 `-jN` 时按 CPU/可用内存选择 1～8 路并行；未知内存回退最多 4 路。
 初始预算预留 768 MiB、每任务按 384 MiB 计算，不是实测单任务峰值；显式 `-jN` 或
-`DIMA_DEFAULT_JOBS=N` 优先。只构建上传必需的应用 ELF/BIN、签名镜像并缓存
-应用 ELF 与签名校验结果；不会为日常 OTA 重建 MCUboot、Factory HEX 或重跑完整 Factory 布局验收。
-`make dima_rover` 单独执行时仍保留完整发布验收。C 源码的 GCC 汇编 listing 默认关闭；需底层排查时
+`DIMA_DEFAULT_JOBS=N` 优先。日常 OTA 只构建上传必需的应用 ELF/BIN 和签名镜像，
+不会重建 MCUboot、Factory HEX，也不执行独立校验。
+`make dima_rover` 单独执行时生成完整发布产物；完整发布验收改为显式 `make verify`。C 源码的 GCC 汇编 listing 默认关闭；需底层排查时
 先执行 `make clean`，再设置 `DIMA_LISTINGS=1` 完整重建。上传器默认选择
 `build/H743_FreeRTOS_signed.bin`，解析本地签名镜像 SHA-256，
 扫描并识别应用或 Recovery 串口；主机工具只解析一次，设备探测不再在构建前额外重复一轮独立
@@ -212,7 +213,7 @@ USB 预检。板上已运行相同 active/confirmed hash 时默认跳过重写�
 隔离在 `host-python-envs`，与旧版可整体替换的 `host-python` 并列，安装使用跨进程锁。
 完整改动范围、无缓存/缓存重建与未授权板测的证据边界见 `BUILD_SPEED_OPTIMIZATION_ZH.md`。
 当前开发阶段不会因 Primary 仍是 active 但未 confirmed 的测试镜像而阻止上传；再次上传会直接覆盖
-Secondary，因此旧镜像的回滚副本也会随之丢失。签名校验、必要的 TEST 请求、复位和应用身份闭环不变。
+Secondary，因此旧镜像的回滚副本也会随之丢失。板端镜像验证、必要的 TEST 请求、复位和应用身份闭环不变。
 
 需要更新时，状态机依次执行 `UPLOAD_SECONDARY`、`TEST`、`RESET` 和 MAVLink 应用身份校验。
 `image test <hash>` 仍是请求 MCUboot 在下次启动交换 Secondary 的必要动作；主机只要求该命令成功，

@@ -1,6 +1,35 @@
 # 构建到上传四批优化记录
 
-## 执行范围
+## 当前构建策略：只做显式验证
+
+自 2026-09-09 本轮调整起，日常命令不自动执行独立检查，以下历史记录中的强制门禁策略不再适用。
+
+| 命令 | 当前行为 |
+|---|---|
+| `make dima_rover` / `make firmware` | 生成、编译、签名并生成 MCUboot/Factory 产物，不做独立校验 |
+| `make dima_rover upload` / `make upload` | 仅准备 OTA 镜像并执行上传协议，不做主机独立校验 |
+| `make upload-ready` | 准备所选 OTA 镜像和主机依赖，不访问串口、不校验镜像 |
+| `make verify` | 显式运行架构、Metadata/Logger、ELF、签名及 Factory 完整校验 |
+| `make upload-verify` | 显式检查本地上传 ELF 和签名；外部 `UPLOAD_IMAGE` 只检查该包签名 |
+| `make app-check` / `make check-architecture` / 对应 `*-verify` | 显式执行相应单项检查 |
+
+日常编译沿用上传的直接调度方式，跳过进度 dry-run 预演。编译前仍先运行权威生成工具，避免身份或参数等生成输出更新时间戳后漏编译消费者。镜像签名、生成器自身的输入合法性约束、工具缓存身份和板端 MCUboot 验证属于产物生成或运行机制，保持原流程；不手写参数或消息列表。上传日志以 `IMAGE_HASH` 表示读取 TEST 请求所需摘要，不再把读取摘要标为主机签名验证。
+
+并行标志改在配方执行时求值，保留 GNU Make 此时才补齐的显式 `-jN` 和 jobserver，避免自动并行度覆盖用户参数。Linux 使用原生 Python/GCC 和独立 Linux 输出目录，Windows 使用其本机工具链及 `build/`。
+
+### 本轮验证边界
+
+在原生 WSL/Linux 下使用独立 `BUILD_DIR=build-linux-explicit-validation-20260909` 执行 `make -j4 NO_COLOR=1 dima_rover`，完整生成、Application/MCUboot 编译、签名与 Factory 合并通过；实际日志没有 `ARCH`、`META_VERIFY`、`LOG_VERIFY`、`ELF` 或 `VERIFY` 独立检查阶段。该目录从空产物开始，本次会话耗时 409.49 s；不能与前述 Windows 增量数据或不同源码/缓存状态比较。
+
+日常组合 `make -n dima_rover firmware upload-ready upload` 的独立检查集合为空；显式 `make -n verify upload-verify upload` 包含全部五类检查。外部 `UPLOAD_IMAGE` 的 `upload-verify` 只展开指定包签名检查。显式检查通过前，上传目标不会开始访问设备。
+
+共享 `build-linux/` 中检测到其他会话的编译上传，本轮基线已主动停止，未停止其他会话；因此不提供优化前后的百分比结论。未访问板端串口或执行刷机，没有新增或修改测试基础设施。
+
+首次完整构建之后，共享 Mission 源码继续变化。后续 `upload-ready` 先因 `ApplicationContext` 调用三参数构造函数、`MissionService` 已改为两参数而失败；调用在其他会话中收敛后复跑，又因 `MissionStorage.cpp` 的 `load_initial_state/load_next_item` 等定义与头文件不匹配而失败。本轮没有改动这些源码，也没有把失败耗时记作增量性能数据。错误分别保存在 `/tmp/h743-upload-ready-after.log` 和 `/tmp/h743-upload-ready-retry.log`；当前最新共享源码不能据此前的构建结果宣称通过。
+
+对首次成功构建留下的应用 ELF 显式运行 `tools/verify_application_elf.py` 已通过，向量为 `0x08040400`；对其 signed BIN 显式运行项目 `imgtool.py verify` 也通过。`upload-verify` 的本地/外部包入口已通过命令展开核对，但其后续实际 Make 运行未到达，因为前序上传准备被上述并发源码错误阻断。本轮修改文件的 Python AST 和 `git diff --check` 均通过。
+
+## 原四批优化范围（历史记录）
 
 保留 `make dima_rover upload`、Windows 原生执行、权威参数/消息生成及全部架构、ELF、签名和设备身份门禁。不新增测试文件、框架、runner 或仿真，不执行上传/刷机，不自动结束其他会话。
 

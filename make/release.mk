@@ -31,19 +31,10 @@ KEY_IDENTITY_WILL_CHANGE := $(if $(filter current,$(KEY_IDENTITY_STATUS)),0,1)
 KEY_ID_FORCE_PREREQUISITE := $(if $(filter 1,$(KEY_IDENTITY_WILL_CHANGE)),FORCE_KEY_IDENTITY_CHECK,)
 ARCHITECTURE_CACHE_TOOL = tools/architecture_cache.py
 ARCHITECTURE_VERIFY_STAMP = $(BUILD_DIR)/.architecture-verified
-# Full application/release goals keep their historical live gate.  Upload is
-# deliberately excluded when present so `make dima_rover upload` remains the
-# application-only OTA spelling; a changed architecture input still invalidates
-# the content identity and runs the complete checker before any rebuild.
-# architecture stamp 是对受控源码/manifest/生成器输入的内容寻址证明；上传可复用
-# 当前 stamp，但任一输入哈希漂移都会先完整重跑架构门禁。
-DIMA_ARCHITECTURE_FULL_GOALS := check-architecture app-check firmware verify dima_rover
-# 空目标列表必须 strip；续行缩进留下的空格也会被 Make 的 if 当作真，
-# 否则 upload-ready 即使指纹 current 仍强制全扫描，缓存永远无法命中。
-DIMA_ARCHITECTURE_FORCE_GOALS := $(strip $(if $(filter upload,$(MAKECMDGOALS)),\
-	$(filter check-architecture,$(MAKECMDGOALS)),\
-	$(filter $(DIMA_ARCHITECTURE_FULL_GOALS),$(MAKECMDGOALS))))
-DIMA_ARCHITECTURE_CACHE_GOALS := architecture-ready upload upload-ready
+# 架构审计只由显式检查目标触发；普通构建和上传连源码指纹查询也不执行。
+# 同时请求 verify 和 upload 时仍完整检查，不再由 upload 隐式放宽验证范围。
+DIMA_ARCHITECTURE_FORCE_GOALS := $(filter check-architecture app-check verify,$(MAKECMDGOALS))
+DIMA_ARCHITECTURE_CACHE_GOALS := architecture-ready
 # Avoid hashing the architecture surface in generated-output preparation,
 # summaries, preflight, and full goals that will force the checker anyway.
 ARCHITECTURE_IDENTITY_STATUS := $(if $(DIMA_ARCHITECTURE_FORCE_GOALS),stale,\
@@ -64,7 +55,6 @@ MCUMGR_MAX_WINDOW ?= 1
 UPLOAD_WAIT_SECONDS ?= 60
 UPLOAD_FORCE ?= 0
 UPLOAD_IMAGE ?= $(SIGNED_BIN)
-UPLOAD_VERIFY_STAMP = $(BUILD_DIR)/.upload-image-verified
 UPLOAD_TOOL = tools/mcumgr_upload.py
 MCUMGR_BOOTSTRAP_TOOL = tools/bootstrap_mcumgr.py
 UPLOAD_FORCE_FLAG = $(if $(filter 1,$(UPLOAD_FORCE)),--force,)
@@ -73,7 +63,7 @@ ifneq ($(filter-out 0 1,$(UPLOAD_FORCE)),)
 $(error UPLOAD_FORCE must be 0 or 1)
 endif
 .PHONY: architecture-ready check-architecture app-check intellisense mavlink firmware mcuboot host-tools verify dima_rover \
-		upload-ready upload-preflight upload \
+		upload-ready upload-verify upload-preflight upload \
 		__dima_clean_progress __dima_prepare_make_includes \
 		__dima_prepare_generated __dima_summary \
 		FORCE_ARCHITECTURE_CHECK FORCE_MCUBOOT_BUILD FORCE_KEY_IDENTITY_CHECK
@@ -116,8 +106,8 @@ check-architecture: architecture-ready
 # Fast application-only gate for local iterations.  It deliberately excludes
 # image signing, MCUboot and Factory HEX generation; `verify` remains the full
 # incremental image gate.
-# app-check 仅证明 Application ELF；firmware/verify 才覆盖签名、MCUboot 与
-# Factory HEX。两者的证据层级不可互换。
+# app-check 显式检查架构和 Application ELF；firmware 只生成发布产物，
+# verify 才检查签名、MCUboot 与 Factory HEX，构建成功不等于验证通过。
 app-check: check-architecture $(BUILD_DIR)/$(TARGET).elf
 	$(DIMA_PROGRESS_RUN) --label ELF --target "$(BUILD_DIR)/$(TARGET).elf" -- \
 		$(PYTHON) $(APPLICATION_ELF_CHECK_TOOL) \
@@ -131,7 +121,7 @@ intellisense: $(COMPILE_COMMANDS_TOOL)
 		--make-variable "DIMA_BUILD_PROFILE=$(DIMA_BUILD_PROFILE)" \
 		--make-variable "DEBUG=$(DEBUG)"
 
-firmware: mavlink check-architecture \
+firmware: mavlink \
           $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex \
           $(BUILD_DIR)/$(TARGET).bin $(SIGNED_BIN) \
           $(MCUBOOT_BUILD_DIR)/mcuboot.hex $(FACTORY_HEX)
@@ -191,34 +181,22 @@ $(SIGNED_BIN): $(BUILD_DIR)/$(TARGET).bin $(KEY_ID_STAMP) \
 		sign -k "$(KEY_FILE)" --align 32 --max-align 32 \
 		-v $(IMAGE_VERSION) -H 0x400 --pad-header -S 0xC0000 $< $@
 
-# Routine MCUboot OTA only consumes the signed application.  Cache its two
-# direct gates so an unchanged image does not rebuild MCUboot/Factory HEX or
-# rerun the full release-layout verification on every upload.
-# 默认 OTA 只消费 signed Application；缓存的是本地 ELF 布局与签名验证结果，
-# 不是板端成功。上传工具仍执行 MCUboot TEST、reset 与应用身份闭环。
-$(UPLOAD_VERIFY_STAMP): $(BUILD_DIR)/$(TARGET).elf $(SIGNED_BIN) \
-                        $(ARCHITECTURE_VERIFY_STAMP) \
-                        $(APPLICATION_ELF_CHECK_TOOL) $(IMGTOOL) | $(BUILD_DIR)
+# 上传准备只生成所选镜像并准备 imgtool 依赖，不执行主机验证。
+# 本地镜像仍沿 BIN、密钥、版本的正式依赖链签名；外部镜像按用户指定路径使用。
+upload-ready: $(UPLOAD_IMAGE) $(HOST_TOOLS_STAMP) $(IMGTOOL)
+
+# 需要核对上传包时显式调用 upload-verify；本地产物可同时检查其 ELF，
+# 外部包没有可信的本地 ELF 对应关系，因此只验证所选包的签名。
+upload-verify: upload-ready $(if $(filter $(SIGNED_BIN),$(UPLOAD_IMAGE)),$(BUILD_DIR)/$(TARGET).elf,)
+ifeq ($(UPLOAD_IMAGE),$(SIGNED_BIN))
 	$(DIMA_PROGRESS_RUN) --label ELF --target "$@" \
 		--display "$(BUILD_DIR)/$(TARGET).elf" -- \
 		$(PYTHON) $(APPLICATION_ELF_CHECK_TOOL) \
 		--elf $(BUILD_DIR)/$(TARGET).elf
-	$(DIMA_PROGRESS_RUN) --label VERIFY --target "$@" \
-		--display "$(SIGNED_BIN)" -- \
-		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
-		verify -k "$(KEY_FILE)" $(SIGNED_BIN)
-	@touch "$@"
-
-ifeq ($(UPLOAD_IMAGE),$(SIGNED_BIN))
-upload-ready: $(UPLOAD_VERIFY_STAMP)
-else
-# An external package has no trustworthy relationship to the local ELF stamp.
-# Verify the exact file on every invocation before the uploader may consume it.
-upload-ready: $(UPLOAD_IMAGE) $(HOST_TOOLS_STAMP) $(IMGTOOL)
+endif
 	$(DIMA_PROGRESS_RUN) --label VERIFY --target "$(UPLOAD_IMAGE)" -- \
 		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(IMGTOOL) \
 		verify -k "$(KEY_FILE)" "$(UPLOAD_IMAGE)"
-endif
 
 # signed BIN 的地址域从 Primary slot 基址开始，绝不能按 0x08000000 写入。
 $(SIGNED_HEX): $(SIGNED_BIN) | $(BUILD_DIR)
@@ -247,15 +225,12 @@ verify: check-architecture firmware
 		--signed $(SIGNED_BIN) --factory $(FACTORY_HEX) \
 		--nm $(if $(GCC_PATH),$(GCC_PATH)/$(PREFIX)nm,$(PREFIX)nm)
 
-# `make dima_rover` remains the full release-image gate.  When upload is also
-# requested, the long-standing `make dima_rover upload` spelling is normalized
-# to the cached application-only OTA gate instead of rebuilding Factory HEX.
-# 单独 dima_rover 是完整发布镜像门禁；与 upload 联用时仅归一化构建范围，
-# 不放宽签名与上传协议验证。
+# 单独 dima_rover 生成完整发布产物，与 upload 联用时只准备 OTA 镜像。
+# 两种日常入口均不隐式验证，需要完整审计时显式运行 make verify。
 ifneq ($(filter upload,$(MAKECMDGOALS)),)
 dima_rover: upload-ready
 else
-dima_rover: check-architecture verify
+dima_rover: firmware
 endif
 
 upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) \
@@ -268,7 +243,10 @@ upload-preflight: $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) \
 		--baud "$(MCUMGR_BAUD)" --mtu "$(MCUMGR_MTU)" \
 		--wait-seconds "$(UPLOAD_WAIT_SECONDS)"
 
-upload: dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) \
+# 用户同时请求检查与上传时，检查必须先成功；并行 Make 也不得提前打开设备。
+# 单独 upload 的检查前置列表为空，日常路径不增加隐式验证。
+upload: $(filter verify app-check check-architecture architecture-ready %-verify,$(MAKECMDGOALS)) \
+		dima_rover $(UPLOAD_TOOL) $(MCUMGR_BOOTSTRAP_TOOL) $(MAVLINK_BOOTSTRAP) \
 		$(MAVLINK_LOCK) $(FIRMWARE_IDENTITY_UPLOAD_CONTRACT)
 	$(DIMA_PROGRESS_RUN) --label UPLOAD --target "$(UPLOAD_IMAGE)" -- \
 		env PYTHONPATH=$(HOST_PYTHON_DIR) $(PYTHON) $(UPLOAD_TOOL) \

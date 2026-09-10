@@ -2,6 +2,8 @@
 
 本文件补充父目录 `AGENTS.md` 的项目指引。
 
+- 构建策略以本仓库为准：`make dima_rover`、`make firmware`、`make upload-ready`、`make upload` 只构建或上传，不自动执行架构、Metadata/Logger、ELF、签名复验或 Factory 校验。需要检查时显式运行 `make verify`、`make app-check`、`make check-architecture`、`make upload-verify` 或对应的 `*-verify` 目标；不再沿用父目录“日常构建强制前置检查”的要求。权威工具生成、镜像签名及必要上传协议流程仍正常执行。
+
 - 不新增测试文件、测试框架，也不修改测试基础设施。
 - 参数、消息及其派生列表必须使用项目正式工具生成，禁止手写列表或直接修改生成物。
 - 实现功能时，必须在关键函数、控制逻辑、算法公式及安全边界添加对应的中文说明。

@@ -40,34 +40,23 @@ include make/project.mk
 
 else
 
-# Release-oriented public invocations first enumerate the exact work with an
-# output-synchronized dry-run.  The upload-only exception below executes one
-# recursive dependency graph because its protocol stages already report
-# progress and an extra planning pass is measurable overhead.
-# 公共目标先用 dry-run 固化真实依赖图，再按该图显示进度并执行一次；上传是唯一
-# 例外，因为 mcumgr 已有阶段进度，且正常只复用已签名 Application。
+# 日常编译和上传直接执行依赖图，不为进度计数额外预演整次构建；
+# 显式检查目标仍可使用下方的计划进度，检查只由用户请求的目标触发。
 DIMA_REQUESTED_GOALS := $(if $(strip $(MAKECMDGOALS)),$(MAKECMDGOALS),firmware)
 DIMA_SUMMARY_GOALS := $(if $(filter upload,$(DIMA_REQUESTED_GOALS)),,$(filter firmware mcuboot verify dima_rover,$(DIMA_REQUESTED_GOALS)))
 DIMA_SHORT_MAKEFLAGS := $(filter-out --% %=%,$(firstword $(MAKEFLAGS)))
 DIMA_DRY_RUN := $(findstring n,$(DIMA_SHORT_MAKEFLAGS))
 DIMA_NO_COLOR_FLAG := $(if $(strip $(NO_COLOR)),--no-color,)
 DIMA_OUTPUT_SYNC_FLAG := $(if $(findstring output-sync,$(.FEATURES)),--output-sync=target,)
-DIMA_TOOLCHAIN_GOALS := $(filter app-check firmware mcuboot verify dima_rover upload upload-ready intellisense,$(DIMA_REQUESTED_GOALS))
-DIMA_PARALLEL_FLAG := $(if $(filter -j% --jobs%,$(MAKEFLAGS)),,-j$(DIMA_DEFAULT_JOBS))
+DIMA_TOOLCHAIN_GOALS := $(filter app-check firmware mcuboot verify dima_rover upload upload-ready upload-verify intellisense,$(DIMA_REQUESTED_GOALS))
+# GNU Make 在配方执行阶段才补齐命令行并行选项；延迟求值才能保留显式 -jN，
+# 避免解析期误判后用自动并行度覆盖用户设置并重置 jobserver。
+DIMA_PARALLEL_FLAG = $(if $(filter -j% --jobs%,$(MAKEFLAGS)),,-j$(DIMA_DEFAULT_JOBS))
 DIMA_STABILIZE_GENERATED_GOALS := $(filter app-check firmware verify \
-	dima_rover upload upload-ready intellisense check-architecture \
+	dima_rover upload upload-ready upload-verify intellisense check-architecture \
 	parameter-metadata-verify,$(DIMA_REQUESTED_GOALS))
-DIMA_UPLOAD_FLOW_GOALS := $(filter upload upload-ready upload-preflight,$(DIMA_REQUESTED_GOALS))
-DIMA_FAST_UPLOAD_ALLOWED_GOALS := dima_rover upload upload-ready upload-preflight
-DIMA_FAST_UPLOAD_EXTRA_GOALS := $(filter-out $(DIMA_FAST_UPLOAD_ALLOWED_GOALS),$(DIMA_REQUESTED_GOALS))
-# The legacy `dima_rover upload` spelling is fast only when upload is actually
-# present.  Any additional verification/build goal keeps the planned release
-# dispatcher below.
-DIMA_FAST_UPLOAD_DISPATCH := $(and \
-	$(DIMA_UPLOAD_FLOW_GOALS),\
-	$(if $(DIMA_FAST_UPLOAD_EXTRA_GOALS),,1),\
-	$(if $(filter dima_rover,$(DIMA_REQUESTED_GOALS)),\
-		$(filter upload,$(DIMA_REQUESTED_GOALS)),1))
+DIMA_DIRECT_BUILD_GOALS := firmware mcuboot dima_rover upload upload-ready upload-preflight
+DIMA_DIRECT_BUILD_DISPATCH := $(if $(filter-out $(DIMA_DIRECT_BUILD_GOALS),$(DIMA_REQUESTED_GOALS)),,1)
 
 # 同一会话计时覆盖主机准备到上传结束；不通过 Python 包装递归 Make，保留
 # GNU Make jobserver。逐对象计时仅在 TRACE=1 时启用，日常 OTA 不增加编译包装进程。
@@ -113,15 +102,10 @@ __dima_dispatch:
 
 else
 
-ifneq ($(DIMA_FAST_UPLOAD_DISPATCH),)
+ifneq ($(DIMA_DIRECT_BUILD_DISPATCH),)
 
-# Upload already has protocol-level stages and normally reuses a signed image.
-# Prepare the shared firmware identity before dependency scanning, then execute
-# the upload graph once. Any stale source, generated contract, key, ELF or
-# signature still rebuilds before the uploader can start.
-# 先在独立 Make 阶段收敛身份头，防止本轮读取到旧 mtime 后漏编译消费者。
-# 快速 OTA 保留这个准备阶段，仍省略进度计划和 Factory/MCUboot 非必要重建；签名、哈希、
-# Application ELF、Secondary/pending/reset/identity 等安全证明仍由依赖链保留。
+# 先在独立 Make 阶段收敛生成物，防止本轮读取到旧 mtime 后漏编译消费者。
+# 此阶段只生成编译输入，不执行独立审计；随后直接编译/签名或上传。
 __dima_dispatch:
 	+@set -eu; \
 		$(DIMA_START_SESSION) \
@@ -130,19 +114,28 @@ __dima_dispatch:
 			toolchain_path=$$($(PYTHON) $(DIMA_ARM_GCC_BOOTSTRAP) \
 				--cache-root "$(HOST_TOOLS_CACHE_ROOT)" --quiet-cache); \
 		fi; \
-		printf '[FAST OTA] Dependency checks\n  Progress plan: skipped\n\n'; \
+		printf '[BUILD] Direct execution (validation is explicit)\n\n'; \
 		if test -n "$$toolchain_path"; then \
 			printf '[TOOLCHAIN] Build\n  Arm GCC    : %s\n\n' "$$toolchain_path"; \
 		fi; \
 		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -s -f GNUmakefile \
 			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE= \
 			DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
-			GCC_PATH="$$toolchain_path" firmware-identity-generated; \
+			GCC_PATH="$$toolchain_path" \
+			$(if $(DIMA_STABILIZE_GENERATED_GOALS),__dima_prepare_generated,__dima_prepare_make_includes); \
 		$(MAKE) $(DIMA_PARALLEL_FLAG) --no-print-directory -s -f GNUmakefile \
 			DIMA_BUILD_INTERNAL=1 DIMA_PROGRESS_STATE= \
 			DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
 			GCC_PATH="$$toolchain_path" \
-			$(DIMA_REQUESTED_GOALS)
+			$(DIMA_REQUESTED_GOALS); \
+		if test -n "$(strip $(DIMA_SUMMARY_GOALS))"; then \
+			$(MAKE) --no-print-directory -s -f GNUmakefile \
+				DIMA_BUILD_INTERNAL=1 \
+				DIMA_BUILD_PROFILE="$(DIMA_BUILD_PROFILE)" \
+				GCC_PATH="$$toolchain_path" \
+				DIMA_SUMMARY_GOALS="$(DIMA_REQUESTED_GOALS)" \
+				__dima_summary; \
+		fi
 
 else
 
