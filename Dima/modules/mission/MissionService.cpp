@@ -2,149 +2,50 @@
 #include "MissionService.hpp"
 
 #include "MissionCodec.hpp"
+#include "api/Services.hpp"
+#include "api/TaskRuntime.hpp"
 
 #include "logging/logging.hpp"
 
 #include <cerrno>
 
 namespace dima::modules::mission {
-namespace {
-
-bool storage_failure(int error) noexcept
-{
-    return error == -ENODEV || error == -EIO || error == -ENXIO ||
-           error == -ETIMEDOUT;
-}
-
-} // namespace
-
 MissionService::MissionService(
-    dima::parameters::FlashFS &flashfs,
     dima::platform::Synchronization &synchronization,
     dima::platform::ArmedFlashCoordinator &armed) noexcept
     : ScheduledWorkItem("mission", px4::wq_configurations::storage),
-      flashfs_(flashfs), synchronization_(synchronization), armed_(armed)
+      synchronization_(synchronization), armed_(armed)
 {
-}
-
-bool MissionService::backend_supported(std::int32_t value) noexcept
-{
-    // 数值严格对应 PX4 SYS_DM_BACKEND：-1 禁用、0 板级默认持久存储、1 RAM。
-    return value == static_cast<std::int32_t>(Backend::Disabled) ||
-           value == static_cast<std::int32_t>(Backend::Persistent) ||
-           value == static_cast<std::int32_t>(Backend::Ram);
-}
-
-bool MissionService::state_valid(
-    const DatamanMissionState &state) noexcept
-{
-    if (state.active_bank >= kBankCount || state.count > kMissionCapacity) {
-        return false;
-    }
-    if (state.count == 0U) {
-        return state.current == 0U && state.mission_id == 0U;
-    }
-    return state.current < state.count && state.mission_id != 0U;
-}
-
-dima::parameters::flash_file_token_t MissionService::item_token(
-    std::uint8_t bank, std::uint16_t sequence) noexcept
-{
-    // PX4 的 (DM_KEY_WAYPOINTS_OFFBOARD_0/1, index) 二维键映射为 FlashFS
-    // 4-byte token。bank/index 直接进入 token，不维护第二份手写条目清单。
-    dima::parameters::flash_file_token_t token{};
-    token.bytes[0] = static_cast<std::uint8_t>('d');
-    token.bytes[1] = static_cast<std::uint8_t>('m');
-    token.bytes[2] = bank;
-    token.bytes[3] = static_cast<std::uint8_t>(sequence);
-    return token;
-}
-
-MissionService::DatamanMissionItem MissionService::encode_item(
-    const MissionItem &item) noexcept
-{
-    DatamanMissionItem stored{};
-    stored.latitude_e7 = item.latitude_e7;
-    stored.longitude_e7 = item.longitude_e7;
-    stored.altitude_m = item.altitude_m;
-    stored.acceptance_radius_m = item.acceptance_radius_m;
-    stored.sequence = item.sequence;
-    stored.frame = item.frame;
-    return stored;
-}
-
-MissionItem MissionService::decode_item(
-    const DatamanMissionItem &item) noexcept
-{
-    MissionItem restored{};
-    restored.sequence = item.sequence;
-    restored.latitude_e7 = item.latitude_e7;
-    restored.longitude_e7 = item.longitude_e7;
-    restored.altitude_m = item.altitude_m;
-    restored.acceptance_radius_m = item.acceptance_radius_m;
-    restored.frame = item.frame;
-    return restored;
 }
 
 bool MissionService::start() noexcept
 {
-    static_assert(kMissionIdWorkspaceCapacity >= codec::kFileCapacity,
-                  "Mission ID workspace is smaller than codec output");
+    static_assert(kStorageWorkspaceCapacity >= codec::kFileCapacity + snapshot::kOverhead,
+                  "Mission storage workspace is too small");
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
         return true;
     }
-    if (!backend_parameter_.bind() ||
-        !backend_supported(backend_parameter_.get())) {
-        backend_parameter_.invalidate();
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
-        return false;
-    }
     if (!mutex_.valid() && !mutex_.initialize(synchronization_)) {
-        backend_parameter_.invalidate();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
-
     {
         dima::platform::MutexGuard guard{mutex_};
         if (!guard) {
-            backend_parameter_.invalidate();
             state_ = dima::middleware::lifecycle::ModuleState::Error;
             return false;
         }
         reset_runtime_locked();
-        backend_ = static_cast<Backend>(backend_parameter_.get());
-
-        if (backend_ == Backend::Disabled) {
-            // 与 PX4 rcS 不启动 Dataman 等价：回读为空，所有变更被拒绝。
-            initial_load_complete_ = true;
-            storage_available_ = false;
-            operation_ = Operation::Idle;
-        } else if (backend_ == Backend::Ram) {
-            // RAM backend 每次模块启动都从 bank 0 的空 Mission State 开始，
-            // 与 PX4 dataman start -r 的非持久生命周期一致。
-            ram_banks_ = {};
-            ram_state_ = {};
-            active_bank_ = 0U;
-            transfer_bank_ = 1U;
-            initial_load_complete_ = true;
-            storage_available_ = true;
-            operation_ = Operation::Idle;
-        } else {
-            // 默认 backend 先只读取 Mission State；其引用的 active bank 随后按
-            // index 分周期恢复，任何 inactive bank 残留都不会进入运行快照。
-            operation_ = Operation::LoadState;
-        }
+        // 仅从 SD 恢复任务；无卡时 RAM 仓库为空，不读取任何旧 Flash 任务。
+        // 文件 I/O 留给 storage worker，启动线程不阻塞在 SD 初始化上。
+        operation_ = Operation::LoadSd;
     }
-
-    if (!ScheduleEnable() ||
-        !ScheduleOnInterval(kRunIntervalUs, kRunIntervalUs)) {
+    if (!ScheduleEnable() || !ScheduleOnInterval(kRunIntervalUs, kRunIntervalUs)) {
         ScheduleCancelAndDrain();
         dima::platform::MutexGuard guard{mutex_};
         if (guard) {
             reset_runtime_locked();
         }
-        backend_parameter_.invalidate();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
@@ -155,25 +56,47 @@ bool MissionService::start() noexcept
 void MissionService::stop() noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
+    bool pending = false;
+    if (mutex_.valid()) {
+        dima::platform::MutexGuard guard{mutex_};
+        if (guard) {
+            if (sd_operation_owned_) {
+                operation_ = Operation::CancelPersistence;
+                pending = true;
+            } else {
+                // Run 可能已读取旧阶段并通过 Running 检查；在同一互斥区撤销
+                // 待执行阶段并关闭后台探测，避免 drain 期间再次借出 SD 缓冲。
+                operation_ = Operation::Idle;
+                initial_load_complete_ = false;
+            }
+        }
+    }
+    if (pending) {
+        // 关闭/回滚 SD 文件也可能执行 I/O，必须交给 storage worker；停止
+        // 调用者只等待借出的缓冲归还，不能从 appMain 或 MAVLink 越界取消文件事务。
+        (void)ScheduleNow();
+        while (pending) {
+            {
+                dima::platform::MutexGuard guard{mutex_};
+                pending = !guard || operation_ == Operation::CancelPersistence;
+            }
+            if (pending) {
+                dima::platform::services().tasks.delay(dima::platform::Timeout::from_ms(1U));
+            }
+        }
+    }
     ScheduleCancelAndDrain();
     if (mutex_.valid()) {
         dima::platform::MutexGuard guard{mutex_};
         if (guard) {
-            // 只有 begin_write_entry 成功后才拥有 FlashFS 在途操作；停止时禁止
-            // cancel 其他模块刚取得的 Parameter/DroneCAN 写事务。
-            if (flash_operation_owned_) {
-                flashfs_.cancel_operation();
-                flash_operation_owned_ = false;
-            }
             reset_runtime_locked();
         }
     }
-    backend_parameter_.invalidate();
 }
 
 dima::middleware::lifecycle::ModuleState MissionService::state() const noexcept
 {
-    return state_;
+    return state_.load();
 }
 
 std::uint32_t MissionService::allocate_token_locked() noexcept
@@ -186,7 +109,7 @@ std::uint32_t MissionService::allocate_token_locked() noexcept
 bool MissionService::mutation_allowed_locked() const noexcept
 {
     return state_ == dima::middleware::lifecycle::ModuleState::Running &&
-           backend_ != Backend::Disabled && initial_load_complete_ &&
+           initial_load_complete_ &&
            storage_available_ && !armed_.armed() &&
            operation_ == Operation::Idle && !stage_result_valid_ &&
            !commit_result_valid_;
@@ -208,14 +131,14 @@ int MissionService::begin_upload(std::uint16_t count,
         if (armed_.armed()) {
             return -EPERM;
         }
-        if (backend_ == Backend::Disabled || !storage_available_) {
+        if (!storage_available_) {
             return -ENODEV;
         }
         return -EBUSY;
     }
 
-    // 从第一项到 Mission State commit 始终持有 maintenance 门，确保整个
-    // inactive-bank 事务期间 Commander 无法跨 WorkQueue 突然 Arm。
+    // 从第一项到 Mission State commit 始终持有 maintenance 门，确保
+    // 整份任务事务期间 Commander 无法跨 WorkQueue 突然 Arm。
     if (!armed_.begin_maintenance()) {
         return armed_.armed() ? -EPERM : -EBUSY;
     }
@@ -227,7 +150,6 @@ int MissionService::begin_upload(std::uint16_t count,
 
     active_token_ = allocate_token_locked();
     token = active_token_;
-    transfer_bank_ = static_cast<std::uint8_t>(active_bank_ ^ 1U);
     commit_kind_ = count == 0U ? CommitKind::Clear : CommitKind::Upload;
     operation_ = count == 0U ? Operation::PrepareState
                              : Operation::Receiving;
@@ -247,8 +169,9 @@ int MissionService::stage_item(std::uint32_t token,
         operation_ != Operation::Receiving || stage_result_valid_) {
         return -EBUSY;
     }
+    pending_item_sequence_ = item.sequence;
     if (armed_.armed()) {
-        // 与异步 Flash 写错误走同一个完成槽，MAVLink 会在 WaitingItemWrite
+        // 与持久事务错误走同一个完成槽，MAVLink 会在 WaitingItemWrite
         // 消费错误；不能一边同步返回错误，一边遗留无人消费的 commit result。
         fail_transaction_locked(-EPERM, true);
         return 0;
@@ -257,16 +180,8 @@ int MissionService::stage_item(std::uint32_t token,
         return -EINVAL;
     }
 
-    pending_item_ = encode_item(item);
-    if (backend_ == Backend::Ram) {
-        ram_banks_[transfer_bank_][item.sequence] = pending_item_;
-        complete_item_write_locked(0);
-    } else if (backend_ == Backend::Persistent) {
-        operation_ = Operation::BeginItemWrite;
-    } else {
-        fail_transaction_locked(-ENODEV, true);
-        return 0;
-    }
+    // 单项完成槽只推进上传序列；最终 ACK 等待完整 SD 保存或 RAM 任务发布。
+    complete_stage_locked(0);
     return 0;
 }
 
@@ -286,8 +201,8 @@ int MissionService::poll_stage_result(
     stage_result_ = {};
     stage_result_valid_ = false;
     if (result.error == 0 && operation_ == Operation::AwaitItemResult) {
-        // 协议层确认已经观察到当前 dm_write 结果后，才允许请求下一项或提交
-        // Mission State；链路在此之前断开仍可完整 abort 当前 inactive bank。
+        // 协议层确认已经观察到当前 staging 结果后，才请求下一项或开始完整
+        // 快照提交；链路中断只丢弃 staging，现役 RAM 任务仍保持完整。
         operation_ = result.complete ? Operation::PrepareState
                                      : Operation::Receiving;
     }
@@ -296,25 +211,26 @@ int MissionService::poll_stage_result(
 
 void MissionService::abort_upload(std::uint32_t token) noexcept
 {
-    // 取消只回收尚未提交的 inactive bank；active bank 和 Mission State 不变。
-    // mutex 覆盖 cancel，避免 Run() 在取消后继续推进其他模块新取得的 FlashFS 操作。
+    // 取消只回收尚未发布的 staging/SD 事务，现役 RAM 任务保持不变。
+    // mutex 覆盖取消请求，文件 I/O 留给 storage worker，防止误取消另一文件域。
     dima::platform::MutexGuard guard{mutex_};
     if (!guard || token == 0U || token != active_token_ ||
         (commit_kind_ != CommitKind::Upload &&
          commit_kind_ != CommitKind::Clear)) {
         return;
     }
-    if (flash_operation_owned_) {
-        flashfs_.cancel_operation();
-        flash_operation_owned_ = false;
+    if (sd_operation_owned_) {
+        // 请求者可能位于 MAVLink 队列；等待 worker 归还事务缓冲前不释放维护门。
+        operation_ = Operation::CancelPersistence;
+        (void)ScheduleNow();
+        return;
     }
     repository_.abort_staging();
     stage_result_ = {};
     commit_result_ = {};
     stage_result_valid_ = false;
     commit_result_valid_ = false;
-    pending_item_ = {};
-    pending_state_ = {};
+    pending_item_sequence_ = 0U;
     commit_plan_ = {};
     active_token_ = 0U;
     operation_ = Operation::Idle;
@@ -340,7 +256,7 @@ int MissionService::set_current(std::uint16_t sequence,
         if (armed_.armed()) {
             return -EPERM;
         }
-        if (backend_ == Backend::Disabled || !storage_available_) {
+        if (!storage_available_) {
             return -ENODEV;
         }
         return -EBUSY;
@@ -355,11 +271,10 @@ int MissionService::set_current(std::uint16_t sequence,
         return armed_.armed() ? -EPERM : -EBUSY;
     }
 
-    // PX4 MISSION_SET_CURRENT 更新 DM_KEY_MISSION_STATE，而不改 waypoint bank。
-    // RAM active 只有 state commit 成功后才切换 current，失败仍保留旧执行入口。
+    // 持久 current 与同一完整快照提交；航点内容 ID 不变。
+    // RAM active 只有本次 SD/RAM 提交完成后才切换入口，拒绝时保留旧入口。
     maintenance_interlock_acquired_ = true;
     commit_plan_.current = sequence;
-    transfer_bank_ = active_bank_;
     active_token_ = allocate_token_locked();
     token = active_token_;
     commit_kind_ = CommitKind::SetCurrent;
@@ -518,329 +433,80 @@ int MissionService::advance_current(std::uint32_t mission_id,
                : -ERANGE;
 }
 
-void MissionService::finish_initial_load_locked(int error) noexcept
-{
-    if (error == 0 && !repository_.activate(load_plan_)) {
-        error = -EBADMSG;
-    }
-    if (error != 0) {
-        repository_.clear_active();
-        load_plan_ = {};
-        active_bank_ = 0U;
-    }
-
-    initial_load_complete_ = true;
-    // 格式损坏只使当前任务为空，Flash backend 本身仍可接收下一次 PX4 bank
-    // 事务；物理 Flash 错误才关闭 storage_available 并拒绝修改。
-    storage_available_ = !storage_failure(error);
-    operation_ = Operation::Idle;
-    load_sequence_ = 0U;
-    execution_state_ = repository_.committed()
-                           ? MissionExecutionState::NotStarted
-                           : MissionExecutionState::NoMission;
-
-    if (error == 0 && repository_.committed()) {
-        PX4_INFO("mission: loaded bank=%u count=%u id=%lu",
-                 static_cast<unsigned int>(active_bank_),
-                 static_cast<unsigned int>(repository_.active_count()),
-                 static_cast<unsigned long>(repository_.mission_id()));
-    } else if (error != 0) {
-        PX4_WARN("mission: Dataman state invalid: %d", error);
-    }
-}
-
-void MissionService::load_initial_state() noexcept
-{
-    DatamanMissionState restored{};
-    dima::platform::MutexGuard guard{mutex_};
-    if (!guard || backend_ != Backend::Persistent ||
-        operation_ != Operation::LoadState) {
-        return;
-    }
-
-    const int loaded = flashfs_.read_entry(
-        kMissionStateToken, &restored, sizeof(restored));
-    if (loaded == -EDEADLK || loaded == -EBUSY) {
-        return;
-    }
-    if (loaded == -ENOENT) {
-        // PX4 Dataman 的初始 Mission State 指向 bank 0、count=0。FlashFS 首次
-        // 使用可直接采用同一逻辑默认值，第一次修改会写入正式 state 记录。
-        load_plan_ = {};
-        active_bank_ = 0U;
-        transfer_bank_ = 1U;
-        finish_initial_load_locked(0);
-        return;
-    }
-    if (loaded != static_cast<int>(sizeof(restored)) ||
-        !state_valid(restored)) {
-        finish_initial_load_locked(
-            loaded < 0 ? loaded : -EBADMSG);
-        return;
-    }
-
-    active_bank_ = restored.active_bank;
-    transfer_bank_ = static_cast<std::uint8_t>(active_bank_ ^ 1U);
-    load_plan_ = {};
-    load_plan_.count = restored.count;
-    load_plan_.current = restored.current;
-    load_plan_.mission_id = restored.mission_id;
-    if (restored.count == 0U) {
-        finish_initial_load_locked(0);
-    } else {
-        load_sequence_ = 0U;
-        operation_ = Operation::LoadItems;
-    }
-}
-
-void MissionService::load_next_item() noexcept
-{
-    dima::platform::MutexGuard guard{mutex_};
-    if (!guard || backend_ != Backend::Persistent ||
-        operation_ != Operation::LoadItems ||
-        load_sequence_ >= load_plan_.count) {
-        return;
-    }
-
-    DatamanMissionItem stored{};
-    const int loaded = flashfs_.read_entry(
-        item_token(active_bank_, load_sequence_),
-        &stored, sizeof(stored));
-    if (loaded == -EDEADLK || loaded == -EBUSY) {
-        return;
-    }
-    if (loaded != static_cast<int>(sizeof(stored)) ||
-        stored.reserved != 0U || stored.sequence != load_sequence_) {
-        finish_initial_load_locked(
-            loaded < 0 ? loaded : -EBADMSG);
-        return;
-    }
-
-    load_plan_.items[load_sequence_] = decode_item(stored);
-    ++load_sequence_;
-    if (load_sequence_ == load_plan_.count) {
-        finish_initial_load_locked(0);
-    }
-}
-
-void MissionService::begin_item_write() noexcept
-{
-    dima::platform::MutexGuard guard{mutex_};
-    if (!guard || backend_ != Backend::Persistent ||
-        operation_ != Operation::BeginItemWrite ||
-        flash_operation_owned_) {
-        return;
-    }
-    if (armed_.armed()) {
-        fail_transaction_locked(-EPERM, true);
-        return;
-    }
-
-    const int result = flashfs_.begin_write_entry(
-        item_token(transfer_bank_, pending_item_.sequence),
-        &pending_item_, sizeof(pending_item_));
-    if (result == -EBUSY || result == -EDEADLK) {
-        return;
-    }
-    if (result != 0) {
-        fail_transaction_locked(result, true);
-        return;
-    }
-    flash_operation_owned_ = true;
-    operation_ = Operation::ContinueItemWrite;
-}
-
-void MissionService::continue_item_write() noexcept
-{
-    dima::platform::MutexGuard guard{mutex_};
-    if (!guard || backend_ != Backend::Persistent ||
-        operation_ != Operation::ContinueItemWrite ||
-        !flash_operation_owned_) {
-        return;
-    }
-    if (armed_.armed()) {
-        flashfs_.cancel_operation();
-        flash_operation_owned_ = false;
-        fail_transaction_locked(-EPERM, true);
-        return;
-    }
-
-    const int result = flashfs_.continue_operation();
-    if (result == -EAGAIN || result == -EBUSY || result == -EDEADLK) {
-        return;
-    }
-    flash_operation_owned_ = false;
-    complete_item_write_locked(result);
-}
-
-void MissionService::complete_item_write_locked(int error) noexcept
+void MissionService::complete_stage_locked(int error) noexcept
 {
     if (error != 0) {
         fail_transaction_locked(error, true);
         return;
     }
 
-    // PX4 在 dm_write(index) 成功后才推进 _transfer_seq。这里把完成槽交给
-    // MAVLink，下一条 MISSION_REQUEST_INT 只能在该槽被消费后发送。
+    // 下一条 MISSION_REQUEST_INT 仍由完成槽驱动；整份任务完成 SD 保存
+    // 或 RAM 发布后才另发最终 commit result，中途取消保留现役 RAM 任务。
     stage_result_.token = active_token_;
-    stage_result_.sequence = pending_item_.sequence;
+    stage_result_.sequence = pending_item_sequence_;
     stage_result_.complete = repository_.staging_complete();
     stage_result_.error = 0;
     stage_result_valid_ = true;
-    pending_item_ = {};
+    pending_item_sequence_ = 0U;
     operation_ = Operation::AwaitItemResult;
-}
-
-void MissionService::prepare_state_commit() noexcept
-{
-    dima::platform::MutexGuard guard{mutex_};
-    if (!guard || operation_ != Operation::PrepareState ||
-        active_token_ == 0U) {
-        return;
-    }
-    if (armed_.armed()) {
-        fail_transaction_locked(-EPERM, false);
-        return;
-    }
-
-    if (commit_kind_ == CommitKind::Upload ||
-        commit_kind_ == CommitKind::Clear) {
-        if (!repository_.copy_staging(commit_plan_)) {
-            fail_transaction_locked(-EINVAL, false);
-            return;
-        }
-        std::size_t encoded_size{};
-        std::uint32_t mission_id{};
-        const int encoded = codec::encode(
-            commit_plan_, mission_id_workspace_.data(),
-            mission_id_workspace_.size(), encoded_size, mission_id);
-        if (encoded != 0) {
-            fail_transaction_locked(encoded, false);
-            return;
-        }
-        commit_plan_.mission_id = mission_id;
-    } else if (commit_kind_ != CommitKind::SetCurrent) {
-        fail_transaction_locked(-EINVAL, false);
-        return;
-    }
-
-    pending_state_ = {};
-    pending_state_.active_bank = transfer_bank_;
-    pending_state_.count = commit_plan_.count;
-    pending_state_.current = commit_plan_.current;
-    pending_state_.mission_id = commit_plan_.mission_id;
-    if (!state_valid(pending_state_)) {
-        fail_transaction_locked(-EINVAL, false);
-        return;
-    }
-
-    if (backend_ == Backend::Ram) {
-        complete_state_write_locked(0);
-    } else if (backend_ == Backend::Persistent) {
-        operation_ = Operation::BeginStateWrite;
-    } else {
-        fail_transaction_locked(-ENODEV, false);
-    }
-}
-
-void MissionService::begin_state_write() noexcept
-{
-    dima::platform::MutexGuard guard{mutex_};
-    if (!guard || backend_ != Backend::Persistent ||
-        operation_ != Operation::BeginStateWrite ||
-        flash_operation_owned_) {
-        return;
-    }
-    if (armed_.armed()) {
-        fail_transaction_locked(-EPERM, false);
-        return;
-    }
-
-    // Mission State 是唯一原子切换点。此前写入 inactive bank 的 item 即使完整，
-    // 在该 FlashFS 记录 commit marker 成功前也不会成为 active 任务。
-    const int result = flashfs_.begin_write_entry(
-        kMissionStateToken, &pending_state_, sizeof(pending_state_));
-    if (result == -EBUSY || result == -EDEADLK) {
-        return;
-    }
-    if (result != 0) {
-        fail_transaction_locked(result, false);
-        return;
-    }
-    flash_operation_owned_ = true;
-    operation_ = Operation::ContinueStateWrite;
-}
-
-void MissionService::continue_state_write() noexcept
-{
-    dima::platform::MutexGuard guard{mutex_};
-    if (!guard || backend_ != Backend::Persistent ||
-        operation_ != Operation::ContinueStateWrite ||
-        !flash_operation_owned_) {
-        return;
-    }
-    if (armed_.armed()) {
-        flashfs_.cancel_operation();
-        flash_operation_owned_ = false;
-        fail_transaction_locked(-EPERM, false);
-        return;
-    }
-
-    const int result = flashfs_.continue_operation();
-    if (result == -EAGAIN || result == -EBUSY || result == -EDEADLK) {
-        return;
-    }
-    flash_operation_owned_ = false;
-    complete_state_write_locked(result);
 }
 
 void MissionService::complete_state_write_locked(int error) noexcept
 {
-    if (error == 0 && !repository_.activate(commit_plan_)) {
+    const bool background = commit_kind_ == CommitKind::MediaSync;
+    if (error == 0 && !background && !repository_.activate(commit_plan_)) {
         error = -EINVAL;
     }
     if (error == 0) {
-        active_bank_ = pending_state_.active_bank;
-        transfer_bank_ = static_cast<std::uint8_t>(active_bank_ ^ 1U);
-        if (backend_ == Backend::Ram) {
-            ram_state_ = pending_state_;
+        identity_ = pending_identity_;
+        have_ram_snapshot_ = true;
+        persisted_current_ = commit_plan_.current;
+        sd_copy_current_ = destination_ == Backend::Sd;
+        if (sd_copy_current_) {
+            last_persistence_error_ = 0;
         }
-        execution_state_ = repository_.committed()
-                               ? MissionExecutionState::NotStarted
-                               : MissionExecutionState::NoMission;
+        if (!background) {
+            execution_state_ = repository_.committed()
+                ? MissionExecutionState::NotStarted : MissionExecutionState::NoMission;
+        }
+        // RAM 提交是明确的非持久语义；成功 ACK 表示车辆已接收整份任务，
+        // 不把无卡时的成功回包描述成掉电保存成功。
+        PX4_INFO("mission: accepted in %s count=%u",
+                 sd_copy_current_ ? "SD" : "RAM (volatile)",
+                 static_cast<unsigned>(commit_plan_.count));
     } else {
-        // State commit 失败时 active bank 从未切换；只丢弃 staging，运行任务保持
-        // 上一代。inactive bank 的已写 item 与 PX4 Dataman 一样可被下一次覆盖。
         repository_.abort_staging();
-        if (storage_failure(error)) {
-            storage_available_ = false;
-        }
+        last_persistence_error_ = error;
+        PX4_WARN("mission: commit rejected: %d", error);
     }
-
-    commit_result_.token = active_token_;
-    commit_result_.error = error;
-    commit_result_.mission_id = error == 0 ? repository_.mission_id() : 0U;
-    commit_result_.count = error == 0 ? repository_.active_count() : 0U;
-    commit_result_valid_ = true;
+    if (!background) {
+        commit_result_.token = active_token_;
+        commit_result_.error = error;
+        commit_result_.mission_id = error == 0 ? repository_.mission_id() : 0U;
+        commit_result_.count = error == 0 ? repository_.active_count() : 0U;
+        commit_result_valid_ = true;
+    }
     active_token_ = 0U;
     operation_ = Operation::Idle;
     commit_kind_ = CommitKind::None;
     commit_plan_ = {};
-    pending_state_ = {};
+    pending_identity_ = {};
+    snapshot_size_ = 0U;
     release_maintenance_locked();
 }
 
 void MissionService::fail_transaction_locked(
     int error, bool report_stage_result) noexcept
 {
-    if (storage_failure(error)) {
-        storage_available_ = false;
+    if (commit_kind_ == CommitKind::MediaSync) {
+        complete_state_write_locked(error);
+        return;
     }
     repository_.abort_staging();
 
     if (report_stage_result) {
         stage_result_.token = active_token_;
-        stage_result_.sequence = pending_item_.sequence;
+        stage_result_.sequence = pending_item_sequence_;
         stage_result_.complete = false;
         stage_result_.error = error;
         stage_result_valid_ = true;
@@ -855,10 +521,9 @@ void MissionService::fail_transaction_locked(
     active_token_ = 0U;
     operation_ = Operation::Idle;
     commit_kind_ = CommitKind::None;
-    pending_item_ = {};
-    pending_state_ = {};
+    pending_item_sequence_ = 0U;
     commit_plan_ = {};
-    flash_operation_owned_ = false;
+    sd_operation_owned_ = false;
     release_maintenance_locked();
 }
 
@@ -875,68 +540,56 @@ void MissionService::reset_runtime_locked() noexcept
     release_maintenance_locked();
     repository_.abort_staging();
     repository_.clear_active();
-    load_plan_ = {};
     commit_plan_ = {};
-    ram_banks_ = {};
-    ram_state_ = {};
-    pending_state_ = {};
-    pending_item_ = {};
+    media_plan_ = {};
+    identity_ = {};
+    pending_identity_ = {};
+    media_identity_ = {};
+    pending_item_sequence_ = 0U;
     stage_result_ = {};
     commit_result_ = {};
     active_token_ = 0U;
-    load_sequence_ = 0U;
-    active_bank_ = 0U;
-    transfer_bank_ = 1U;
-    backend_ = Backend::Disabled;
+    snapshot_size_ = 0U;
+    last_storage_poll_us_ = 0U;
+    last_persistence_error_ = 0;
+    persisted_current_ = 0U;
+    destination_ = Backend::Ram;
     operation_ = Operation::Idle;
     commit_kind_ = CommitKind::None;
     stage_result_valid_ = false;
     commit_result_valid_ = false;
     initial_load_complete_ = false;
     storage_available_ = false;
-    flash_operation_owned_ = false;
+    sd_operation_owned_ = false;
+    have_ram_snapshot_ = false;
+    media_snapshot_valid_ = false;
+    sd_available_ = false;
+    sd_copy_current_ = false;
     execution_state_ = MissionExecutionState::NoMission;
 }
 
 void MissionService::Run()
 {
-    if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
-        return;
-    }
-
     Operation operation = Operation::Idle;
     {
-        dima::platform::MutexGuard guard{
-            mutex_, dima::platform::Timeout::no_wait()};
+        dima::platform::MutexGuard guard{mutex_, dima::platform::Timeout::no_wait()};
         if (!guard) {
             return;
         }
         operation = operation_;
     }
-
+    if (state_ != dima::middleware::lifecycle::ModuleState::Running &&
+        operation != Operation::CancelPersistence) {
+        return;
+    }
+    // 每轮最多推进一个持久化阶段；运行任务不因介质变化直接切换 RAM 航线。
     switch (operation) {
-    case Operation::LoadState:
-        load_initial_state();
-        break;
-    case Operation::LoadItems:
-        load_next_item();
-        break;
-    case Operation::BeginItemWrite:
-        begin_item_write();
-        break;
-    case Operation::ContinueItemWrite:
-        continue_item_write();
-        break;
-    case Operation::PrepareState:
-        prepare_state_commit();
-        break;
-    case Operation::BeginStateWrite:
-        begin_state_write();
-        break;
-    case Operation::ContinueStateWrite:
-        continue_state_write();
-        break;
-    case Operation::Idle:
+    case Operation::LoadSd: load_sd_state(); break;
+    case Operation::PrepareState: prepare_state_commit(); break;
+    case Operation::BeginSnapshotWrite: begin_snapshot_write(); break;
+    case Operation::ContinueSdWrite: continue_sd_write(); break;
+    case Operation::CancelPersistence: cancel_persistence(); break;
+    case Operation::Idle: poll_storage(); break;
     case Operation::Receiving:
     case Operation::AwaitItemResult:
         break;

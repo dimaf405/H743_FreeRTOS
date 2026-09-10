@@ -515,8 +515,7 @@ void MavlinkMission::handle_item_int(
         msg.sysid == upload_system_ && msg.compid == upload_component_;
     if (upload_state_ == UploadState::WaitingItemWrite &&
         same_upload_partner) {
-        // 单线程 PX4 Mission Manager 在同步 dm_write 期间不会处理重复 item；
-        // H743 异步 Flash 期间等价地忽略伙伴重发，不提前请求或重复写 index。
+        // 等待当前 staging 完成槽期间忽略伙伴重发，不提前请求或重复写 index。
         last_upload_activity_us_ = hrt_absolute_time();
         return;
     }
@@ -524,7 +523,7 @@ void MavlinkMission::handle_item_int(
          upload_state_ == UploadState::FinalAckPending) &&
         same_upload_partner && next_sequence_ > 0U &&
         item.seq + 1U == next_sequence_) {
-        // 最后一项已经写入 inactive bank，当前只等待 Mission State 或最终 ACK。
+        // 全部项目已进入 staging，当前等待 SD 原子保存或 RAM 发布及最终 ACK。
         // PX4 会把该帧视作“最终 ACK 丢失后的重复项”，绝不能回复 DENIED。
         last_upload_activity_us_ = hrt_absolute_time();
         return;
@@ -578,7 +577,7 @@ void MavlinkMission::handle_item_int(
         reset_upload(false);
         return;
     }
-    // 与 PX4 的 writeSync 顺序相同：当前 index 的 Dataman 写完成前不推进
+    // 当前 index 的 staging 完成槽被消费前不推进
     // next_sequence，也不发送下一条 MISSION_REQUEST_INT。
     upload_state_ = UploadState::WaitingItemWrite;
 }

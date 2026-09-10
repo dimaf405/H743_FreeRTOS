@@ -21,12 +21,12 @@
 
 - `lib/protocols/sbus/` 只解析 SBUS 字节与帧；`drivers/rc/sbus/` 负责串口线路配置、调度和原始 Topic 发布，`modules/rc/` 负责产品级 RC 转换。
 - `middleware/logging/` 提供日志宏与过滤策略；`modules/logging/` 发布实时 STATUSTEXT 来源，并由 `wq:lp_default` producer 自动遍历生成的 uORB catalog，把 `F/P/Q/A/D/L/S/O` 发布到固定 64 KiB Ring，`wq:storage` consumer 只负责 FatFs 分片写入、同步、关闭和介质恢复。
-- `middleware/parameters/` 提供 Parameter Core、生成输入、Autosave、FlashFS 和参数 SD 镜像；Mission 直接复用唯一 FlashFS，并按 PX4 `SYS_DM_BACKEND` 在板载 Flash/RAM/Disabled 三种 backend 间选择。
+- `middleware/parameters/` 提供 Parameter Core、生成输入、Autosave、FlashFS 和参数 SD 镜像；Mission 通过公共 FileStorage 的独立域优先保存到 SD，无卡时仅使用非持久 RAM，不再读写任务 Flash。
 - `modules/rc/RcManualInput.*` 只拥有 RC 来源转换；`rover/modes/ManualMode.*` 才是 Rover Manual 模式。二者通过 `manual_control_setpoint` 解耦，未来 MAVLink 不反向依赖 RC。
 - `lib/rover/` 提供 Pure Pursuit、Speed PI、Heading P、YawRate PI、停车/原地转向状态机和差速混控纯算法；`rover/modes/AutoMode` 与 `rover/control/RoverDifferential` 只负责把任务、估计、参数、消息和安全状态接入这些算法。
 - `modules/motor/` 拥有输出策略与安全生命周期，`platform/api` 定义 capability，`platform/stm32h7/pwm/ActuatorPwm.cpp` 适配 capability，`Boards/H743/Src/motor_pwm.c` 才拥有具体定时器和引脚。
 - `platform/freertos/Backend.*` 是 RTOS Backend 类；`platform/stm32h7/HardwareServices.hpp` 只声明各硬件 capability 的工厂，不再使用第二个含糊的 `Backend.hpp`。
-- `platform/freertos/storage/` 连接 Parameter `AtomicFileStore`、日志 `LogFileStore` 与 FatFs/FreeRTOS；`Boards/H743/Src/fatfs_diskio.c` 才连接 FatFs disk ABI 与 SDMMC/HAL。Mission 运行链不依赖该目录。
+- `platform/freertos/storage/` 连接 Parameter/Mission `AtomicFileStore`、日志 `LogFileStore` 与 FatFs/FreeRTOS；`Boards/H743/Src/fatfs_diskio.c` 才连接 FatFs disk ABI 与 SDMMC/HAL。Mission 通过公共存储接口访问独立文件域。
 - MAVLink 接入时，纯协议编解码与 byte-stream 适配放在 `adapters/mavlink/`，uORB/Parameter/调度生命周期放在 `modules/mavlink/`，MCU UART/DMA 只留在 `platform/stm32h7/serial/`；在实现前不创建空目录或把 MAVLink 塞入 RC、Logging 或 Rover control。
 
 ## 边界规则

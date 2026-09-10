@@ -100,9 +100,9 @@ ApplicationContext::ApplicationContext(
                          services.armed_flash,
                          services.synchronization, services.critical,
                          maintenance_),
-      // SYS_DM_BACKEND=0 的 PX4 Dataman 默认后端复用组合根唯一 FlashFS；
-      // Parameter、DroneCAN 与 Mission 不得各自创建板载 Flash owner。
-      mission_service_(flashfs_, services.synchronization,
+      // Mission 仅通过公共 FileStorage 的 Mission 域保存到 SD；无卡使用 RAM。
+      // 这里只提供同步与 arming interlock，不向任务模块注入 Flash 存储后端。
+      mission_service_(services.synchronization,
                        services.armed_flash),
       mavlink_service_(services.console, services.boot_control,
                        mission_service_, services.log_files),
@@ -309,8 +309,8 @@ bool ApplicationContext::start() noexcept
     PX4_INFO("Parameter service started");
 
     // Mission 失败只锁闭 AUTO，不得拖垮 Manual、参数、恢复和安全输出链。
-    // PX4 Dataman 的 Mission State/bank 恢复在 wq:storage 异步执行；loaded 前
-    // MAVLink 回读只报告空 RAM 快照，上传/清空仍由 backend readiness 门控。
+    // SD 快照恢复在 wq:storage 异步执行；loaded 前回读为空，完成一次探测后
+    // 即使没有 SD 也开放 RAM 任务上传/清空，不依赖任务 Flash 后端。
     mission_started_ = module_manager_.start(mission_service_);
     if (!mission_started_) {
         PX4_ERR("Mission service unavailable; AUTO remains locked");
