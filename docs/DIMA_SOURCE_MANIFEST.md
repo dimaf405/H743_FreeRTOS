@@ -416,3 +416,7 @@ Windows 原生 `E:\freertos\H743_FreeRTOS` 已通过 `git diff --check`、`make 
 ## 2026-09-09 初始化数据、消息缓存与统计实体精简
 
 本批本地适配将 UART 线路默认配置与零初始化状态分开，恢复 param_handle 的单行 constexpr 转换，使用既有 uORB Subscription::copy 直接更新 MAVLink 自有缓存，并共享 VehicleImu 双通道统计实体。保留两路独立状态、计算及复位顺序、原队列消费和 Runtime/USB 重置边界；不改上游快照、消息/参数权威输入或浮点选项。固件身份合同由原生成器维护，普通发布与快速上传准备均在依赖扫描前收敛身份。固定源码的逐项资源、身份切换和 Windows 验收记录见 `CODE_SIZE_NEXT_OPTIMIZATIONS_ZH.md`。
+
+## 2026-09-10 UART MAVLink Normal 适配
+
+基于 PX4 v1.17.0 `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 的 `src/modules/mavlink/mavlink_main.cpp`（Normal 默认流、`update_rate_mult`、baud/20）和 `module.yaml`（`MAV_${i}_RATE` 语义），将现有协议模块扩展为 USB Config/COMM_0 与 UART Normal/COMM_1 两个固定上下文。参数权威为 `module_serial.yaml`、`module_mavlink.yaml`；运行策略权威为 `mavlink_runtime.yaml`，wire ID/字段/CRC/codec 继续由原锁定 mavgen 生成。`MavlinkLink`、`MavlinkManager`、`MavlinkSharedState` 和 `MavlinkTransport` 为本地固定内存/异步线路适配；共享 Mission token 和文件 reader 租约不复制存储实现。UART 使用现有端点实现的第二固定资源实例（DMA1 Stream4/5）。没有新增上游快照或许可文件。软件及板端验收边界见 `docs/MAVLINK_UART_ZH.md`。

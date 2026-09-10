@@ -87,8 +87,8 @@ private:
     dima::modules::logging::LogService &log_service_;
     dima::modules::parameters::ParameterService parameter_service_;
     dima::modules::mission::MissionService mission_service_;
-    dima::modules::mavlink::MavlinkService mavlink_service_;
     dima::modules::serial::SerialConfig serial_config_;
+    dima::modules::mavlink::MavlinkService mavlink_service_;
     dima::drivers::gps::Um982Gps um982_gps_;
     dima::drivers::imu::ICM42688P icm42688p_;
     // 高频 CPU 对象由独立 DTCM 存储持有；引用保持原模块依赖和构造顺序。
@@ -140,6 +140,7 @@ private:
         // 参数签名变化后：Idle -> WaitForApproval -> Apply -> Idle。应用前停止 GPS/
         // RC 串口消费者，且只在未武装、无其他 maintenance 事务时执行。
         Idle,
+        DrainTelemetry,
         WaitForApproval,
         Apply,
     };

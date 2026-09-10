@@ -104,9 +104,10 @@ ApplicationContext::ApplicationContext(
       // 这里只提供同步与 arming interlock，不向任务模块注入 Flash 存储后端。
       mission_service_(services.synchronization,
                        services.armed_flash),
-      mavlink_service_(services.console, services.boot_control,
-                       mission_service_, services.log_files),
       serial_config_(services.serial_ports),
+      mavlink_service_(services.console, services.boot_control,
+                       mission_service_, services.log_files,
+                       services.telemetry_serial_port, serial_config_),
       um982_gps_(services.async_serial_port, services.clock, serial_config_,
                  services.armed_flash, maintenance_),
       icm42688p_(services.spi, services.interrupt_sources),
@@ -435,7 +436,7 @@ bool ApplicationContext::start() noexcept
     if (!auto_calibration_started_) PX4_WARN("Auto calibration unavailable");
 
     runtime_state_ = RuntimeState::Running;
-    active_serial_signature_ = serial_config_.configuration_signature();
+    active_serial_signature_ = serial_config_.applied_configuration_signature();
     PX4_INFO("Application Runtime running");
     return true;
 }
@@ -461,7 +462,13 @@ bool ApplicationContext::apply_serial_configuration() noexcept
         return false;
     }
 
-    const bool configured = serial_config_.reconfigure();
+    bool configured = serial_config_.reconfigure();
+    if (configured && !mavlink_service_.apply_serial_configuration()) {
+        configured = false;
+        if (!serial_config_.rollback_configuration() || !mavlink_service_.apply_serial_configuration()) {
+            PX4_ERR("UART MAVLink configuration rollback failed; USB remains active");
+        }
+    }
     if (!start_rc_chain()) {
         PX4_WARN("RC chain unavailable after serial reconfiguration");
     }
@@ -473,7 +480,7 @@ bool ApplicationContext::apply_serial_configuration() noexcept
         PX4_ERR("runtime serial reconfiguration rejected; restored active ports");
         return false;
     }
-    active_serial_signature_ = serial_config_.configuration_signature();
+    active_serial_signature_ = serial_config_.applied_configuration_signature();
     return active_serial_signature_ != 0U;
 }
 
@@ -497,6 +504,19 @@ void ApplicationContext::service() noexcept
             serial_retry_after_us_ = now_us + 1000000ULL;
             return;
         }
+        serial_reconfigure_phase_ = SerialReconfigurePhase::DrainTelemetry;
+    }
+
+    if (serial_reconfigure_phase_ == SerialReconfigurePhase::DrainTelemetry) {
+        // 低波特率排空可能超过维护许可期限；先异步排空参数回应，再申请票据。
+        // appMain 持续返回主循环喂狗，USB 和实时控制队列继续工作。
+        if (commander_.armed() || mavlink_service_.serial_reconfigure_failed()) {
+            mavlink_service_.resume_serial();
+            serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
+            serial_retry_after_us_ = now_us + 1000000ULL;
+            return;
+        }
+        if (!mavlink_service_.prepare_serial_reconfigure()) return;
         serial_maintenance_ticket_ = maintenance_.request(now_us);
         if (serial_maintenance_ticket_ == 0U) return;
         serial_reconfigure_phase_ =
@@ -516,6 +536,7 @@ void ApplicationContext::service() noexcept
         if (permit == dima::middleware::maintenance::
                           RuntimeMaintenanceCoordinator::Permit::Denied) {
             maintenance_.cancel(serial_maintenance_ticket_);
+            mavlink_service_.resume_serial();
             serial_maintenance_ticket_ = 0U;
             serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
             serial_retry_after_us_ = now_us + 1000000ULL;
@@ -534,6 +555,7 @@ void ApplicationContext::service() noexcept
             maintenance_.cancel(serial_maintenance_ticket_);
             serial_retry_after_us_ = services_.clock.now_us() + 1000000ULL;
         }
+        mavlink_service_.resume_serial();
         serial_maintenance_ticket_ = 0U;
         serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
     }

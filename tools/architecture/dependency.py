@@ -455,6 +455,9 @@ def scan_usb_console_owner(violations: list[Violation]) -> None:
     owners = {
         "Dima/modules/mavlink/MavlinkService.cpp",
         "Dima/modules/mavlink/MavlinkService.hpp",
+        "Dima/modules/mavlink/MavlinkManager.cpp",
+        "Dima/modules/mavlink/MavlinkTransport.cpp",
+        "Dima/modules/mavlink/MavlinkTransport.hpp",
     }
     data_plane_re = re.compile(
         r"\b(?:console_|console|services_\.console)\."

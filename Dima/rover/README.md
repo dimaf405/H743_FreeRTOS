@@ -8,3 +8,5 @@
 - **禁止事项：** 不在装配层复制控制算法，不绕过参数、消息总线、安全状态和执行器链。
 - **上游 API 保留：** 以适配和组合方式复用上游公开 API；自有产品代码使用 `dima::rover` 命名空间，不改写上游标识。
 - **编译边界：** `ApplicationContext.hpp` 对独立存储、仅以引用持有的 LogService、VehicleImu、Ekf2、RoverDifferential 使用前置声明，完整实现由装配 `.cpp` 引入；不更改静态对象布局、首次构造顺序、owner 或 watchdog 调用路径。
+
+- **UART 数传维护：** SerialConfig 先于双链路 MavlinkService 构造。appMain 在请求维护票据前异步排空 UART 的参数回应，许可内停止串口消费者、应用/回滚配置，再恢复 UART 调度。等待期间持续返回主循环喂狗，USB 协议上下文继续工作。
