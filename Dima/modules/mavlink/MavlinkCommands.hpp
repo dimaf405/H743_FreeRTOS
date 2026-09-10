@@ -7,8 +7,8 @@
  * handle_request_message_command.
  *
  * 架构保持 PX4 的所有权边界：接收器只做目标过滤和协议转换；需要安全裁决的命令发布
- * vehicle_command 交给 Commander，链路本地即可完成的请求发布 vehicle_command_ack；
- * MavlinkService 最终把 ACK Topic 编码成 COMMAND_ACK 帧。
+ * vehicle_command 通过共享入口交给 Commander；本地请求直接走来源链路 ACK 回调。
+ * MavlinkService 仅消费一次 Commander ACK，并按链路及连接代次发送。
  *
  * Dima adaptations:
  *   - COMMAND_INT is accepted: handle_message_command_int is ported
@@ -54,9 +54,13 @@ public:
     using GetMessageIntervalFn = std::uint8_t (*)(
         void *ctx, std::uint16_t message_id);
 
+    using DispatchFn = std::uint8_t (*)(void *, const vehicle_command_s &) noexcept;
+    using AcknowledgeFn = void (*)(void *, const vehicle_command_ack_s &) noexcept;
+
     MavlinkCommands(RequestMessageFn request_message,
                     SetMessageIntervalFn set_message_interval,
                     GetMessageIntervalFn get_message_interval,
+                    DispatchFn dispatch, AcknowledgeFn acknowledge,
                     void *callback_ctx) noexcept;
 
     void handle_message(const mavlink_message_t *msg) noexcept;
@@ -93,15 +97,14 @@ private:
                                      const vehicle_command_s &vehicle_command)
         noexcept;
 
+    DispatchFn dispatch_{nullptr};
+    AcknowledgeFn acknowledge_{nullptr};
     RequestMessageFn request_message_{nullptr};
     SetMessageIntervalFn set_message_interval_{nullptr};
     GetMessageIntervalFn get_message_interval_{nullptr};
     void *callback_ctx_{nullptr};
     uORB::Publication<action_request_s> action_request_publication_{
         ORB_ID(action_request)};
-    uORB::Publication<vehicle_command_s> _cmd_pub{ORB_ID(vehicle_command)};
-    uORB::Publication<vehicle_command_ack_s> _cmd_ack_pub{
-        ORB_ID(vehicle_command_ack)};
 };
 
 }  // namespace dima::modules::mavlink

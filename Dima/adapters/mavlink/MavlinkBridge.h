@@ -20,15 +20,15 @@
  *   - Single communication buffer: the USB CDC link is the only
  *     MAVLink channel, owned exclusively by MavlinkService.
  *   - No signing, no convenience send functions: TX builds frames
- *     with mavlink_msg_*_encode() + mavlink_msg_to_send_buffer()
+ *     with mavlink_msg_*_encode_chan() + mavlink_msg_to_send_buffer()
  *     and writes the bytes through the platform Console.
  */
 /* 中文边界：MAVLink ID、CRC extra、payload 和 codec 只来自 dima.xml 与
- * 锁定 mavgen.py；本适配头只配置单路 USB channel 和生成库编译开关，禁止复制
+ * 锁定 mavgen.py；本适配头只配置USB/UART 独立 channel 和生成库编译开关，禁止复制
  * 或手写第二份消息表。MavlinkService 是该 parser/sequence 状态的唯一所有者。 */
 
 #ifndef MAVLINK_COMM_NUM_BUFFERS
-#define MAVLINK_COMM_NUM_BUFFERS 1
+#define MAVLINK_COMM_NUM_BUFFERS 2
 #endif
 
 /* MAVLink v2 only, matching MAVLINK_STX 253 in the generated code. */

@@ -39,243 +39,207 @@ constexpr MavlinkMetadataFtp::VirtualFile kMetadataFiles[]{
 
 } // namespace
 
-MavlinkService::MavlinkService(
-    dima::platform::Console &console,
+MavlinkEndpoint::MavlinkEndpoint(
+    MavlinkTransport &transport, MavlinkSharedState &shared, std::uint8_t channel,
     dima::platform::BootControl &boot_control,
     dima::modules::mission::MissionService &mission_service,
     dima::platform::LogFileStore &log_files) noexcept
-    : px4::ScheduledWorkItem("mavlink", px4::wq_configurations::lp_default),
-      console_(console), boot_control_(boot_control),
-      mission_(mission_service, &MavlinkService::send_frame, this),
-      log_handler_(log_files, &MavlinkService::send_log_batch, this)
+    : channel_(channel), shared_(shared), transport_(transport), boot_control_(boot_control),
+      mission_(mission_service, &MavlinkEndpoint::send_frame, this, channel),
+      log_handler_(log_files, shared.log_lease, &MavlinkEndpoint::send_log_batch, this, channel)
 {
-    metadata_ftp_.init(
-        kMetadataFiles,
-        static_cast<std::uint8_t>(sizeof(kMetadataFiles) /
-                                  sizeof(kMetadataFiles[0])));
+    metadata_ftp_.init(kMetadataFiles, static_cast<std::uint8_t>(
+        sizeof(kMetadataFiles) / sizeof(kMetadataFiles[0])));
 }
 
-bool MavlinkService::start() noexcept
+bool MavlinkEndpoint::start() noexcept
 {
-    if (state_ == dima::middleware::lifecycle::ModuleState::Running) {
-        return true;
-    }
+    if (state_ == dima::middleware::lifecycle::ModuleState::Running) return true;
     reset_runtime_state();
-    if (!ScheduleEnable() || !log_handler_.start()) {
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
-        ScheduleCancelAndDrain();
-        log_handler_.stop();
-        return false;
-    }
-
-    // PX4/QGC compatibility identity is generated independently of MCUboot's
-    // product image version; board version and UID remain hardware identity.
-    identity_.configure(
-        dima::generated::firmware_identity::kFlightSoftwareVersion,
-        dima::platform::board_version(),
-        dima::platform::board_hardware_uid());
-    identity_.set_state(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, MAV_STATE_BOOT);
-    // 协议参数使用生成枚举句柄；MAVLink 层不维护参数名或目录副本。
+    identity_.configure(dima::generated::firmware_identity::kFlightSoftwareVersion,
+        dima::platform::board_version(), dima::platform::board_hardware_uid());
     rc_loss_timeout_handle_ = param_handle(dima::params::COM_RC_LOSS_T);
     mav_system_id_handle_ = param_handle(dima::params::MAV_SYS_ID);
-    if (rc_loss_timeout_handle_ == PARAM_INVALID ||
-        mav_system_id_handle_ == PARAM_INVALID ||
-        !refresh_protocol_parameters() ||
-        !parameters_.prepare_parameter_catalogue()) {
-        state_ = dima::middleware::lifecycle::ModuleState::Error;
-        ScheduleCancelAndDrain();
-        // 日志 handler 已独立启用；主服务启动失败时必须同步回收其 storage worker。
+    rate_handle_ = param_handle(dima::params::MAV_0_RATE);
+    if (rc_loss_timeout_handle_ == PARAM_INVALID || mav_system_id_handle_ == PARAM_INVALID ||
+        rate_handle_ == PARAM_INVALID || !refresh_protocol_parameters() ||
+        !parameters_.prepare_parameter_catalogue() || !log_handler_.start()) {
         log_handler_.stop();
-        reset_runtime_state();
-        PX4_ERR("MAVLink protocol parameters unavailable");
-        return false;
-    }
-
-    if (!ScheduleOnInterval(kRunIntervalUs, kRunIntervalUs)) {
         state_ = dima::middleware::lifecycle::ModuleState::Error;
-        ScheduleCancelAndDrain();
-        log_handler_.stop();
-        reset_runtime_state();
         return false;
     }
     state_ = dima::middleware::lifecycle::ModuleState::Running;
-    PX4_INFO("MAVLink service owns USB transport");
     return true;
 }
 
-void MavlinkService::stop() noexcept
+void MavlinkEndpoint::stop() noexcept
 {
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
-    ScheduleCancelAndDrain();
     log_handler_.stop();
     reset_runtime_state();
 }
 
-dima::middleware::lifecycle::ModuleState MavlinkService::state()
-    const noexcept
+dima::middleware::lifecycle::ModuleState MavlinkEndpoint::state() const noexcept
 {
     return state_;
 }
 
-void MavlinkService::reset_runtime_state() noexcept
+void MavlinkEndpoint::reset_runtime_state() noexcept
 {
-    reset_parser_state();
+    reset_link();
     identity_.set_state(MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, MAV_STATE_BOOT);
-    heartbeat_pacer_.reset();
-    parameters_.reset();
     mission_.reset();
-    timesync_.reset();
-    metadata_ftp_.reset();
-    pending_ack_ = mavlink_command_ack_t{};
-    pending_ack_valid_ = false;
-    pending_ack_is_reboot_ = false;
-    ack_retry_ = 0U;
-    statustext_id_ = 0U;
-    was_link_ready_ = false;
     reboot_mode_pending_ = 0;
     reboot_deadline_us_ = 0U;
-    latest_input_rc_ = input_rc_s{};
+    wait_reboot_completion_ = false;
+    latest_input_rc_ = {};
     reset_sensor_streams();
-    rc_loss_timeout_handle_ = PARAM_INVALID;
-    mav_system_id_handle_ = PARAM_INVALID;
+    rc_loss_timeout_handle_ = mav_system_id_handle_ = rate_handle_ = PARAM_INVALID;
     rc_loss_timeout_s_ = 0.0F;
-    have_input_rc_ = false;
-    rc_stream_active_ = false;
-    rc_loss_timeout_valid_ = false;
-    transport_was_ready_ = false;
+    have_input_rc_ = rc_loss_timeout_valid_ = false;
 }
 
-void MavlinkService::reset_parser_state() noexcept
+void MavlinkEndpoint::reset_link() noexcept
 {
-    // 官方 MAVLink C 库还维护 channel 全局状态；本地解析器和 channel 状态必须一起清零。
-    *mavlink_get_channel_status(MAVLINK_COMM_0) = mavlink_status_t{};
-    *mavlink_get_channel_buffer(MAVLINK_COMM_0) = mavlink_message_t{};
-    parse_message_ = mavlink_message_t{};
-    parse_status_ = mavlink_status_t{};
-    std::memset(rx_buffer_, 0, sizeof(rx_buffer_));
-    std::memset(tx_buffer_, 0, sizeof(tx_buffer_));
+    // 连接代次同时保护 Commander ACK 路由；只撤销本链路的 Mission token/日志租约。
+    // storage 复位异步执行，LP worker 不等待文件关闭，也不触碰另一条链路的 channel。
+    shared_.reset_link(channel_, epoch_++);
+    reset_parser_state();
+    parameters_.reset();
+    mission_.reset_link();
+    log_handler_.reset_link();
+    metadata_ftp_.reset();
+    timesync_.reset();
+    heartbeat_pacer_.reset();
+    reset_sensor_link_state();
+    tx_head_ = tx_count_ = 0U;
+    wait_reboot_completion_ = false;
+    tx_class_ = TxClass::Reply;
+    statustext_id_ = 0U;
+    was_link_ready_ = transport_was_ready_ = false;
+    rate_window_us_ = 0U;
+    transaction_bytes_ = stream_attempts_ = stream_blocked_ = 0U;
+    rate_multiplier_ = 1.0F;
 }
 
-void MavlinkService::discard_rx() noexcept
+void MavlinkEndpoint::reset_parser_state() noexcept
 {
-    while (console_.available() != 0U) {
-        if (console_.read(rx_buffer_, sizeof(rx_buffer_)) == 0U) {
-            break;
-        }
+    *mavlink_get_channel_status(channel_) = mavlink_status_t{};
+    *mavlink_get_channel_buffer(channel_) = mavlink_message_t{};
+    parse_message_ = {};
+    parse_status_ = {};
+    rx_position_ = rx_size_ = 0U;
+    rx_message_pending_ = false;
+}
+
+void MavlinkEndpoint::discard_rx() noexcept
+{
+    // RX 每轮有界；故障后的其余字节由官方 parser 重新同步帧头。
+    (void)transport_.read(rx_buffer_, sizeof(rx_buffer_));
+    rx_position_ = rx_size_ = 0U;
+    rx_message_pending_ = false;
+}
+
+void MavlinkEndpoint::Run(bool quiescing)
+{
+    if (state_ != dima::middleware::lifecycle::ModuleState::Running) return;
+    usb_deadline_us_ = hrt_absolute_time() + kTxTimeoutMs * 1000ULL;
+    transport_.service();
+    const bool ready = transport_.ready();
+    const auto errors = transport_.error_generation();
+    if ((!ready && transport_was_ready_) || errors != error_generation_) {
+        discard_rx();
+        reset_link();
     }
-    std::memset(rx_buffer_, 0, sizeof(rx_buffer_));
-}
-
-void MavlinkService::Run()
-{
-    if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
+    error_generation_ = errors;
+    transport_was_ready_ = ready;
+    flush_tx();
+    maybe_perform_reboot(hrt_absolute_time());
+    if (quiescing || reboot_mode_pending_ != 0 || shared_.reboot_pending() || !ready) {
+        mission_.update(hrt_absolute_time(), false);
         return;
     }
-    console_.service();
-    const bool transport_ready = console_.ready();
-    if (!transport_ready && transport_was_ready_) {
-        // USB 物理断开边沿独立于“首帧发送成功”：握手重试期间也可能已收到 FTP 请求，
-        // 因此断开时必须同时清解析器、参数快照、FTP 会话和各流节拍。
-        discard_rx();
-        reset_parser_state();
-        parameters_.reset();
-        mission_.reset_link();
-        log_handler_.reset_link();
-        metadata_ftp_.reset();
-        reset_sensor_link_state();
-    }
-    transport_was_ready_ = transport_ready;
-    if (!transport_ready) {
-        was_link_ready_ = false;
-    }
+
     update_rc_input();
     update_sensor_topics();
-    if (parameter_update_subscription_.update() &&
-        !refresh_protocol_parameters()) {
+    if (parameter_update_subscription_.update() && !refresh_protocol_parameters()) {
         PX4_ERR("MAVLink protocol parameters invalid");
     }
-    flush_pending_ack();
-    std::uint64_t now = hrt_absolute_time();
-    maybe_perform_reboot(now);
-    if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
-        return;
-    }
-
-    // RX 处理器只冻结回复状态，真实写出仍由固定优先级 TX 路径统一拥有；物理链路
-    // 未就绪时不消费残留字节，避免上一 USB 会话的数据进入新会话。
-    if (transport_ready) {
-        drain_rx();
-    }
-
-    /* TX priority: ACK -> Heartbeat -> RC -> Metadata FTP -> Sensors -> Onboard Log
-     * -> Params -> STATUSTEXT。日志每轮有固定分片上限，不得独占 USB。 */
-    process_command_acks();
-    now = hrt_absolute_time();
-    maybe_perform_reboot(now);
-    // ACK 重试和批准重启拥有最高优先级；存在时本轮不发送低优先级数据。
-    if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
-        return;
-    }
-
-    const bool link_ready = transport_ready;
-    if (link_ready && !was_link_ready_) {
+    tx_class_ = TxClass::Reply;
+    drain_rx();
+    flush_tx();
+    const auto now = hrt_absolute_time();
+    update_rate_mult(now);
+    if (!was_link_ready_ && tx_count_ == 0U) {
         mavlink_message_t heartbeat{};
         heartbeat_pacer_.pack_now(now, heartbeat);
-        const bool heartbeat_sent = send_message(heartbeat);
-        if (!heartbeat_sent) {
-            heartbeat_pacer_.reset();
-        }
-        const bool version_sent = send_autopilot_version();
-        if (heartbeat_sent && version_sent) {
+        if (send_message(heartbeat) && send_autopilot_version()) {
             was_link_ready_ = true;
-            last_highres_imu_timestamp_us_ = 0U;
-            last_highres_mag_timestamp_us_ = 0U;
-            last_scaled_imu_timestamp_us_ = 0U;
-            last_scaled_mag_timestamp_us_ = 0U;
-            rc_stream_active_ = false;
-            PX4_INFO("MAVLink USB link ready");
+            // UART 配置成功只表示端点可用，不表示无线端/GCS 已连接。
             report_sensor_link_summary();
-        }
-    }
-
-    mission_.update(now, link_ready && was_link_ready_);
-    if (!link_ready || !was_link_ready_) {
-        return;
-    }
-
-    mavlink_message_t message{};
-    if (heartbeat_pacer_.tick(now, message)) {
-        if (!send_message(message)) {
+        } else {
             heartbeat_pacer_.reset();
         }
     }
-    stream_available_modes();
-    stream_configured_messages(
-        now, dima::generated::mavlink_streams::TxStage::PreMetadata);
-    if (!metadata_ftp_.service(now)) {
-        return;
+    if (!was_link_ready_) return;
+    mavlink_message_t heartbeat{};
+    if (tx_count_ < kTxQueueCapacity && heartbeat_pacer_.tick(now, heartbeat)) {
+        if (!send_message(heartbeat)) heartbeat_pacer_.reset();
     }
-    stream_configured_messages(
-        now, dima::generated::mavlink_streams::TxStage::PostMetadata);
-    log_handler_.send();
-    parameters_.send();
-    stream_statustext();
+    // ACK/心跳先入队；已编码帧保持 FIFO 顺序，后台只允许预排一帧。
+    if (tx_count_ == 0U) mission_.update(now, true);
+    flush_tx();
+    tx_class_ = TxClass::Bulk;
+    if (background_space()) stream_available_modes();
+    tx_class_ = TxClass::Stream;
+    stream_configured_messages(now, stream_contract::TxStage::PreMetadata);
+    tx_class_ = TxClass::Bulk;
+    if (background_space()) (void)metadata_ftp_.service(now);
+    tx_class_ = TxClass::Stream;
+    stream_configured_messages(now, stream_contract::TxStage::PostMetadata);
+    flush_tx();
+    tx_class_ = TxClass::Bulk;
+    if (background_space()) log_handler_.send(channel_ == MAVLINK_COMM_0 ? 16U : 1U);
+    if (background_space()) parameters_.send();
+    // 一条诊断记录可能含多个片，给整条记录预留回复队列容量。
+    if (tx_count_ == 0U && transport_.tx_free_bytes() != 0U) {
+        tx_class_ = TxClass::Reply;
+        stream_statustext();
+    }
+    flush_tx();
+    tx_class_ = TxClass::Reply;
 }
 
-    // 接收路径：官方解析器完成帧校验后，才按生成方言允许的消息分派。
-
-void MavlinkService::drain_rx() noexcept
+void MavlinkEndpoint::drain_rx() noexcept
 {
-    const std::size_t count = console_.read(rx_buffer_, sizeof(rx_buffer_));
-    for (std::size_t i = 0U; i < count; ++i) {
-        if (mavlink_parse_char(MAVLINK_COMM_0, rx_buffer_[i],
-                               &parse_message_, &parse_status_)) {
-            dispatch(parse_message_);
+    // 解析完成后若暂时无回应容量，保留消息和余下字节。恢复时只 dispatch 一次，
+    // 参数原子写入及 Commander 发布不会因 EAGAIN 重做。空队列可容纳端口迁移回显。
+    std::size_t processed = 0U;
+    while (processed < kRxBatchBytes) {
+        if (rx_message_pending_) {
+            if (tx_count_ != 0U) return;
+            if (!dispatch(parse_message_)) return;
+            rx_message_pending_ = false;
+            if (tx_count_ != 0U) return;
+        }
+        if (rx_position_ == rx_size_) {
+            rx_size_ = transport_.read(rx_buffer_, sizeof(rx_buffer_));
+            rx_position_ = 0U;
+            if (rx_size_ == 0U) return;
+        }
+        ++processed;
+        if (mavlink_parse_char(channel_, rx_buffer_[rx_position_++],
+                &parse_message_, &parse_status_) != 0) {
+            rx_message_pending_ = true;
+            // 任意完整合法帧（含被静默忽略的 GCS 心跳）都是波特率匹配的证据。
+            ++parsed_frames_;
+        } else {
+            rx_message_pending_ = false;
         }
     }
 }
 
-void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
+bool MavlinkEndpoint::dispatch(const mavlink_message_t &msg) noexcept
 {
     // 接收路由由 mavlink.lock.json 生成；源码只实现 handler 行为，不维护
     // msgid/consumer 的第二份 switch 清单。
@@ -283,7 +247,7 @@ void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
         stream_contract::find_inbound_message(msg.msgid);
     if (inbound == nullptr) {
         // GCS HEARTBEAT 及当前消费集合之外的消息静默忽略。
-        return;
+        return true;
     }
 
     switch (inbound->handler) {
@@ -303,8 +267,7 @@ void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
         break;
 
     case stream_contract::InboundHandler::LogTransfer:
-        log_handler_.handle_message(msg);
-        break;
+        return log_handler_.handle_message(msg);
 
     case stream_contract::InboundHandler::MetadataFtp:
         metadata_ftp_.handle_message(&msg, hrt_absolute_time());
@@ -318,9 +281,10 @@ void MavlinkService::dispatch(const mavlink_message_t &msg) noexcept
         handle_ping(msg);
         break;
     }
+    return true;
 }
 
-void MavlinkService::handle_ping(const mavlink_message_t &msg) noexcept
+void MavlinkEndpoint::handle_ping(const mavlink_message_t &msg) noexcept
 {
     mavlink_ping_t ping;
     mavlink_msg_ping_decode(&msg, &ping);
@@ -338,53 +302,42 @@ void MavlinkService::handle_ping(const mavlink_message_t &msg) noexcept
     reply.target_component = msg.compid;
 
     mavlink_message_t frame{};
-    mavlink_msg_ping_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_ping_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                             &frame, &reply);
     (void)send_message(frame);
 }
 
 /* ── TX path ─────────────────────────────────────────────────────── */
 
-bool MavlinkService::send_message(mavlink_message_t &msg,
-                                  std::uint32_t timeout_ms) noexcept
+bool MavlinkEndpoint::send_message(mavlink_message_t &msg, std::uint32_t) noexcept
 {
-    // 只有整帧字节全部写入才算成功；短写保留给上层按各自策略重试。
-    const std::uint16_t length =
-        mavlink_msg_to_send_buffer(tx_buffer_, &msg);
-    const int written = console_.write(tx_buffer_, length, timeout_ms);
-    return written == static_cast<int>(length);
+    const auto length = mavlink_msg_to_send_buffer(tx_buffer_, &msg);
+    return enqueue_frame(tx_buffer_, length);
 }
 
-bool MavlinkService::send_frame(void *ctx, mavlink_message_t &msg) noexcept
+bool MavlinkEndpoint::send_frame(void *ctx, mavlink_message_t &msg) noexcept
 {
-    if (ctx == nullptr) {
-        return false;
-    }
-    return static_cast<MavlinkService *>(ctx)->send_message(msg);
+    return ctx != nullptr && static_cast<MavlinkEndpoint *>(ctx)->send_message(msg);
 }
 
-bool MavlinkService::send_log_batch(
-    void *ctx, const std::uint8_t *data, std::size_t length) noexcept
+bool MavlinkEndpoint::send_log_batch(void *ctx, const std::uint8_t *data, std::size_t length) noexcept
 {
-    if (ctx == nullptr) {
-        return false;
-    }
-    // 日志完整帧共用一次有界 USB 写；沿用 5 ms 整笔截止，不按帧累加等待，
-    // 并保持 ACK/心跳在 Run 中先于日志发送，避免下载压住控制面。
-    auto &self = *static_cast<MavlinkService *>(ctx);
-    return self.console_.write(data, length, kTxTimeoutMs) ==
-           static_cast<int>(length);
+    if (ctx == nullptr) return false;
+    auto &self = *static_cast<MavlinkEndpoint *>(ctx);
+    if (self.channel_ != MAVLINK_COMM_0) return self.enqueue_frame(data, length);
+    // USB 仍保留 16 帧完整日志聚合；它与其他写共享本轮 5 ms 总等待预算。
+    if (self.tx_count_ != 0U || self.usb_timeout_remaining() == 0U) { errno = EAGAIN; return false; }
+    const bool sent = self.transport_.write(data, length, self.usb_timeout_remaining()) == static_cast<int>(length);
+    if (sent) self.transaction_bytes_ += length;
+    return sent;
 }
 
-void MavlinkService::send_frame_void(void *ctx,
-                                     mavlink_message_t &msg) noexcept
+void MavlinkEndpoint::send_frame_void(void *ctx, mavlink_message_t &msg) noexcept
 {
-    if (ctx != nullptr) {
-        (void)static_cast<MavlinkService *>(ctx)->send_message(msg);
-    }
+    if (ctx != nullptr) (void)static_cast<MavlinkEndpoint *>(ctx)->send_message(msg);
 }
 
-void MavlinkService::reset_configured_streams() noexcept
+void MavlinkEndpoint::reset_configured_streams() noexcept
 {
     std::size_t index = 0U;
     for (const stream_contract::MessageContract &contract :
@@ -394,7 +347,7 @@ void MavlinkService::reset_configured_streams() noexcept
         }
         if (index < configured_streams_.size()) {
             configured_streams_[index].interval_us =
-                contract.default_interval_us;
+                default_interval(contract);
             configured_streams_[index].last_tx_us = 0U;
         }
         ++index;
@@ -405,7 +358,7 @@ void MavlinkService::reset_configured_streams() noexcept
     have_current_mode_tx_ = false;
 }
 
-bool MavlinkService::send_contract_message(
+bool MavlinkEndpoint::send_contract_message(
     stream_contract::MessageHandler handler, std::uint64_t now,
     bool refresh_topics) noexcept
 {
@@ -467,7 +420,7 @@ bool MavlinkService::send_contract_message(
     return false;
 }
 
-void MavlinkService::stream_configured_messages(
+void MavlinkEndpoint::stream_configured_messages(
     std::uint64_t now, stream_contract::TxStage stage) noexcept
 {
     std::size_t index = 0U;
@@ -490,14 +443,21 @@ void MavlinkService::stream_configured_messages(
         // 立即发送；SET_MESSAGE_INTERVAL 停流仍由上面的负间隔门禁统一处理。
         const bool mode_changed = contract.handler ==
             stream_contract::MessageHandler::CurrentMode && current_mode_changed();
-        if ((stream_due(now, state.last_tx_us, state.interval_us) || mode_changed) &&
-            send_contract_message(contract.handler, now, false)) {
+        // PX4 按倍率延长实际周期，保存的间隔仍用于 GET 原样回报。
+        const auto effective = static_cast<std::int32_t>(std::min<double>(
+            std::numeric_limits<std::int32_t>::max(), state.interval_us / rate_multiplier_));
+        if (!(stream_due(now, state.last_tx_us, effective) || mode_changed)) continue;
+        ++stream_attempts_;
+        if (!background_space()) { ++stream_blocked_; continue; }
+        if (send_contract_message(contract.handler, now, false)) {
             state.last_tx_us = now;
+            // UART 空闲时立即异步提交，避免同轮多个到期流仅因软件槽位互相阻塞。
+            if (channel_ != MAVLINK_COMM_0) flush_tx();
         }
     }
 }
 
-std::uint8_t MavlinkService::request_message(void *ctx,
+std::uint8_t MavlinkEndpoint::request_message(void *ctx,
                                              std::uint16_t message_id,
                                              float param2, float param3,
                                              float param4, float param5,
@@ -506,7 +466,7 @@ std::uint8_t MavlinkService::request_message(void *ctx,
     if (ctx == nullptr) {
         return vehicle_command_ack_s::VEHICLE_CMD_RESULT_UNSUPPORTED;
     }
-    auto &self = *static_cast<MavlinkService *>(ctx);
+    auto &self = *static_cast<MavlinkEndpoint *>(ctx);
     const stream_contract::MessageContract *contract =
         stream_contract::find_message(message_id);
     if (contract == nullptr || !contract->requestable) {
@@ -543,7 +503,7 @@ std::uint8_t MavlinkService::request_message(void *ctx,
         : vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
 }
 
-std::uint8_t MavlinkService::set_message_interval(
+std::uint8_t MavlinkEndpoint::set_message_interval(
     void *ctx, std::uint16_t message_id, float interval_us,
     float param3, float param4, float param7) noexcept
 {
@@ -558,7 +518,7 @@ std::uint8_t MavlinkService::set_message_interval(
         return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
     }
 
-    auto &self = *static_cast<MavlinkService *>(ctx);
+    auto &self = *static_cast<MavlinkEndpoint *>(ctx);
     const stream_contract::MessageContract *contract =
         stream_contract::find_message(message_id);
     if (contract == nullptr || !contract->interval_configurable ||
@@ -572,7 +532,7 @@ std::uint8_t MavlinkService::set_message_interval(
 
     // MAV_CMD_SET_MESSAGE_INTERVAL：负值禁用，0 恢复产品默认值，正值按微秒四舍五入，
     // HEARTBEAT 不允许关闭；param3/4/7 当前未实现，非零时明确拒绝。
-    std::int32_t selected_interval = contract->default_interval_us;
+    std::int32_t selected_interval = self.default_interval(*contract);
     if (interval_us < -0.00001F) {
         selected_interval = -1;
     } else if (interval_us > 0.00001F) {
@@ -594,16 +554,16 @@ std::uint8_t MavlinkService::set_message_interval(
     return vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
 }
 
-std::uint8_t MavlinkService::get_message_interval(
+std::uint8_t MavlinkEndpoint::get_message_interval(
     void *ctx, std::uint16_t message_id) noexcept
 {
     if (ctx == nullptr) return vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED;
-    auto &self = *static_cast<MavlinkService *>(ctx);
+    auto &self = *static_cast<MavlinkEndpoint *>(ctx);
     std::int32_t interval_us = -1;
     const stream_contract::MessageContract *contract =
         stream_contract::find_message(message_id);
     if (contract != nullptr) {
-        interval_us = contract->default_interval_us;
+        interval_us = self.default_interval(*contract);
         if (contract->scheduler == stream_contract::Scheduler::Service) {
             const std::size_t index =
                 stream_contract::service_index(contract->handler);
@@ -617,142 +577,88 @@ std::uint8_t MavlinkService::get_message_interval(
     report.message_id = message_id;
     report.interval_us = interval_us;
     mavlink_message_t message{};
-    mavlink_msg_message_interval_encode(MAVLINK_SYSTEM_ID,
-                                        MAVLINK_COMPONENT_ID,
+    mavlink_msg_message_interval_encode_chan(MAVLINK_SYSTEM_ID,
+                                        MAVLINK_COMPONENT_ID, self.channel_,
                                         &message, &report);
     return self.send_message(message)
         ? vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED
         : vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED;
 }
 
-void MavlinkService::process_command_acks() noexcept
+std::uint8_t MavlinkEndpoint::dispatch_command(void *context, const vehicle_command_s &command) noexcept
 {
-    // pending 单槽未清空时不继续消费深度 4 的 uORB FIFO，保持 Commander ACK 顺序。
-    if (pending_ack_valid_ || reboot_mode_pending_ != 0) {
-        return;
-    }
-
-    while (command_ack_subscription_.update()) {
-        const vehicle_command_ack_s ack = command_ack_subscription_.get();
-        if (!ack.from_external) {
-            continue;
-        }
-
-        mavlink_command_ack_t command_ack{};
-        command_ack.command = ack.command;
-        command_ack.result = ack.result;
-        // 按 PX4 原生 ACK 投影 result_param1/progress 与 result_param2，
-        // 不丢弃生成消息恢复的进度和附加结果字段。
-        command_ack.progress = ack.result_param1;
-        command_ack.result_param2 = ack.result_param2;
-        command_ack.target_system = ack.target_system;
-        command_ack.target_component = ack.target_component;
-
-        const bool is_reboot =
-            ack.command ==
-                vehicle_command_s::VEHICLE_CMD_PREFLIGHT_REBOOT_SHUTDOWN &&
-            ack.result == vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED &&
-            (ack.result_param2 == 1U || ack.result_param2 == 3U);
-        if (is_reboot) {
-            // 重启 mode 只接受 Commander 在 ACK.result_param2 中批准的 1/3。
-            reboot_mode_pending_ = static_cast<int>(ack.result_param2);
-            reboot_deadline_us_ = hrt_absolute_time() + kRebootDeadlineUs;
-        }
-        send_command_ack(command_ack, is_reboot);
-        break;
-    }
+    auto &self = *static_cast<MavlinkEndpoint *>(context);
+    return self.shared_.submit(self.channel_, self.epoch_, command);
 }
 
-void MavlinkService::send_command_ack(
-    const mavlink_command_ack_t &ack, bool reboot_ack) noexcept
+void MavlinkEndpoint::acknowledge_local(void *context, const vehicle_command_ack_s &ack) noexcept
+{
+    auto &self = *static_cast<MavlinkEndpoint *>(context);
+    (void)self.queue_command_ack(ack, self.epoch_);
+}
+
+bool MavlinkEndpoint::queue_command_ack(const vehicle_command_ack_s &ack, std::uint32_t epoch) noexcept
+{
+    if (epoch != epoch_) return true;
+    if (tx_count_ >= kTxQueueCapacity) return false;
+    mavlink_command_ack_t reply{};
+    reply.command = ack.command;
+    reply.result = ack.result;
+    reply.progress = ack.result_param1;
+    reply.result_param2 = ack.result_param2;
+    reply.target_system = ack.target_system;
+    reply.target_component = ack.target_component;
+    const bool reboot = ack.command == vehicle_command_s::VEHICLE_CMD_PREFLIGHT_REBOOT_SHUTDOWN &&
+        ack.result == vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED &&
+        (ack.result_param2 == 1U || (channel_ == MAVLINK_COMM_0 && ack.result_param2 == 3U));
+    if (reboot) {
+        reboot_mode_pending_ = static_cast<int>(ack.result_param2);
+        reboot_deadline_us_ = hrt_absolute_time() + drain_timeout_us();
+        shared_.mark_reboot_pending();
+    }
+    send_command_ack(reply, reboot);
+    return true;
+}
+
+void MavlinkEndpoint::send_command_ack(const mavlink_command_ack_t &ack, bool reboot_ack) noexcept
 {
     mavlink_message_t message{};
-    mavlink_msg_command_ack_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
-                                   &message, &ack);
-
-    if (send_message(message)) {
-        // 重启 ACK 整帧写入成功后立即复位；无需再等待低优先级流。
-        if (reboot_ack) {
-            perform_reboot();
-        }
-        return;
-    }
-
-    const int error = errno;
-    if (error == EAGAIN || error == ETIMEDOUT) {
-        // 仅暂态拥塞/超时进入有界重试槽，其他错误直接丢弃并记录。
-        pending_ack_ = ack;
-        pending_ack_valid_ = true;
-        pending_ack_is_reboot_ = reboot_ack;
-        ack_retry_ = 0U;
-    } else {
-        PX4_ERR("COMMAND_ACK tx errno %d, dropped", error);
-    }
+    mavlink_msg_command_ack_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &ack);
+    const auto length = mavlink_msg_to_send_buffer(tx_buffer_, &message);
+    const auto previous = tx_class_;
+    tx_class_ = TxClass::Reply;
+    (void)enqueue_frame(tx_buffer_, length, reboot_ack);
+    tx_class_ = previous;
 }
 
-void MavlinkService::flush_pending_ack() noexcept
+void MavlinkEndpoint::maybe_perform_reboot(std::uint64_t now) noexcept
 {
-    if (!pending_ack_valid_) {
-        return;
-    }
-
-    mavlink_message_t message{};
-    mavlink_msg_command_ack_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
-                                   &message, &pending_ack_);
-
-    if (send_message(message)) {
-        const bool reboot_ack = pending_ack_is_reboot_;
-        pending_ack_valid_ = false;
-        pending_ack_is_reboot_ = false;
-        ack_retry_ = 0U;
-        if (reboot_ack) {
-            perform_reboot();
-        }
-        return;
-    }
-
-    const int error = errno;
-    if (error == EAGAIN || error == ETIMEDOUT) {
-        ++ack_retry_;
-        if (ack_retry_ >= kMaxAckRetries) {
-            PX4_ERR("COMMAND_ACK retries exhausted, dropped");
-            pending_ack_valid_ = false;
-            pending_ack_is_reboot_ = false;
-            ack_retry_ = 0U;
-        }
-    } else {
-        PX4_ERR("COMMAND_ACK tx errno %d, dropped", error);
-        pending_ack_valid_ = false;
-        pending_ack_is_reboot_ = false;
-        ack_retry_ = 0U;
-    }
-}
-
-void MavlinkService::maybe_perform_reboot(std::uint64_t now) noexcept
-{
-    // ACK 无法在 400 ms 内送达时仍执行已批准重启，避免链路拥塞永久卡住 Recovery。
-    if (reboot_mode_pending_ != 0 && reboot_deadline_us_ != 0U &&
-        now >= reboot_deadline_us_) {
-        pending_ack_valid_ = false;
-        pending_ack_is_reboot_ = false;
-        ack_retry_ = 0U;
-        PX4_ERR("Reboot ACK deadline expired; executing approved reboot");
-        perform_reboot();
+    if (reboot_mode_pending_ == 0) return;
+    // 提交成功只代表 DMA/CDC 拥有缓冲；最后一个停止位/USB 完成才允许正常复位。
+    if (wait_reboot_completion_ && tx_drained()) perform_reboot();
+    if (now >= reboot_deadline_us_) {
+        // 无物理完成证据时取消本次复位，不能在低波特率截断 ACK。
+        PX4_ERR("Reboot ACK completion timeout; reboot cancelled");
+        reboot_mode_pending_ = 0;
+        wait_reboot_completion_ = false;
+        shared_.cancel_reboot();
+        reset_link();
     }
 }
 
 /* ── STATUSTEXT stream (ported from streams/STATUSTEXT.hpp) ──────── */
 
-void MavlinkService::stream_statustext() noexcept
+void MavlinkEndpoint::stream_statustext() noexcept
 {
     // USB 断开时不消费日志 Topic，尽量保留记录给下一次连接。
-    if (!console_.ready()) {
+    if (!transport_.ready()) {
         return;
     }
 
     std::size_t sent_records = 0U;
 
     while (sent_records < kMaxStatusTextPerRun &&
+           tx_count_ <= kTxQueueCapacity - 4U &&
            mavlink_log_subscription_.update()) {
         const mavlink_log_s &mavlink_log = mavlink_log_subscription_.get();
 
@@ -791,8 +697,8 @@ void MavlinkService::stream_statustext() noexcept
             }
 
             mavlink_message_t frame{};
-            mavlink_msg_statustext_encode(MAVLINK_SYSTEM_ID,
-                                          MAVLINK_COMPONENT_ID,
+            mavlink_msg_statustext_encode_chan(MAVLINK_SYSTEM_ID,
+                                          MAVLINK_COMPONENT_ID, channel_,
                                           &frame, &msg);
             if (!send_message(frame)) {
                 send_ok = false;
@@ -818,8 +724,8 @@ void MavlinkService::stream_statustext() noexcept
             msg.text[0] = ' ';
             msg.chunk_seq += 1;
             mavlink_message_t frame{};
-            mavlink_msg_statustext_encode(MAVLINK_SYSTEM_ID,
-                                          MAVLINK_COMPONENT_ID,
+            mavlink_msg_statustext_encode_chan(MAVLINK_SYSTEM_ID,
+                                          MAVLINK_COMPONENT_ID, channel_,
                                           &frame, &msg);
             send_ok = send_message(frame);
         }
@@ -833,7 +739,7 @@ void MavlinkService::stream_statustext() noexcept
 
 /* ── Deferred reboot ─────────────────────────────────────────────── */
 
-void MavlinkService::perform_reboot() noexcept
+void MavlinkEndpoint::perform_reboot() noexcept
 {
     // mode=3 进入 MCUboot Recovery，其余已批准 mode 走普通平台复位。
     PX4_INFO("Executing deferred reboot (mode %d)", reboot_mode_pending_);

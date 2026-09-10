@@ -1,12 +1,10 @@
 #pragma once
 /*
- * MavlinkService 是 USB CDC 的唯一 MAVLink RX/TX 所有者。
- *
- * 帧协议来自官方生成的裁剪方言；接收侧分派给 Commands/Parameters/Mission/Timesync，
- * 发送侧固定优先级为 COMMAND_ACK/HEARTBEAT -> 原始 RC -> Metadata FTP 待发响应
- * -> 传感器 -> 板载日志分片 -> 参数 -> STATUSTEXT。板载日志每轮限量发送，不能
- * 挤占心跳、命令确认和传感器通道；批准重启后优先送达 ACK，最迟在固定期限执行。
- * 模块运行在低优先级 WorkQueue，热路径只用定长缓冲和有界 USB 写，不动态分配。
+ * 一个 MavlinkService 在 lp_default 调度两个固定端点：USB Config/COMM_0、
+ * UART Normal/COMM_1。每条链路独占 parser、序号、协议会话和发送 FIFO；
+ * Commander 路由与单 reader 日志租约由 SharedState 仲裁。
+ * ACK/心跳优先入队，已编码帧保持线序。USB 所有写共享每轮 5 ms 等待预算，
+ * UART 异步提交；普通复位必须等待来源链路的物理完成证据。
  */
 
 #include "input_rc.hpp"
@@ -34,6 +32,10 @@
 #include "api/Boot.hpp"
 #include "api/Console.hpp"
 #include "api/LogFileStore.hpp"
+#include "MavlinkTransport.hpp"
+#include "MavlinkSharedState.hpp"
+#include "serial/SerialPortAssignments.hpp"
+#include <atomic>
 #include "parameters/param.h"
 #include "uORB/SubscriptionData.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
@@ -53,22 +55,24 @@
 
 namespace dima::modules::mavlink {
 
-class MavlinkService final : public dima::middleware::lifecycle::ModuleBase,
-                             public px4::ScheduledWorkItem {
-public:
-    MavlinkService(dima::platform::Console &console,
-                   dima::platform::BootControl &boot_control,
-                   dima::modules::mission::MissionService &mission_service,
-                   dima::platform::LogFileStore &log_files)
-        noexcept;
+class MavlinkService;
 
-    bool start() noexcept override;
-    void stop() noexcept override;
-    dima::middleware::lifecycle::ModuleState state() const noexcept override;
+class MavlinkEndpoint final {
+    friend class MavlinkService;
+public:
+    MavlinkEndpoint(MavlinkTransport &transport, MavlinkSharedState &shared,
+                    std::uint8_t channel, dima::platform::BootControl &boot_control,
+                    dima::modules::mission::MissionService &mission_service,
+                    dima::platform::LogFileStore &log_files) noexcept;
+    bool start() noexcept;
+    void stop() noexcept;
+    dima::middleware::lifecycle::ModuleState state() const noexcept;
+    void Run(bool quiescing = false);
+    void reset_link() noexcept;
+    bool tx_drained() noexcept;
+    bool queue_command_ack(const vehicle_command_ack_s &ack, std::uint32_t epoch) noexcept;
 
 private:
-    // 100 Hz 是协议调度节拍，不等于任一消息的发布频率；各流有独立间隔门。
-    static constexpr std::uint32_t kRunIntervalUs = 10000U;
     static constexpr std::size_t kRxBatchBytes = 256U;
     static constexpr std::size_t kMaxStatusTextPerRun = 2U;
     static constexpr std::uint32_t kTxTimeoutMs = 5U;
@@ -79,8 +83,6 @@ private:
     static constexpr std::uint64_t kGpsFreshnessUs = 1000000ULL;
     static constexpr std::uint64_t kGpsStatusFreshnessUs = 1000000ULL;
     static constexpr std::uint64_t kEstimatorOutputFreshnessUs = 1000000ULL;
-    /* COMMAND_ACK 重试槽上限（首次发送失败后最多再试 4 次）。 */
-    static constexpr std::uint8_t kMaxAckRetries = 4U;
 
     // 协议处理器只通过这些 trampoline 回到唯一链路所有者，不能直接操作 USB。
     static bool send_frame(void *ctx, mavlink_message_t &msg) noexcept;
@@ -100,17 +102,14 @@ private:
     static bool stream_due(std::uint64_t now, std::uint64_t last_tx,
                            std::int32_t interval_us) noexcept;
 
-    void Run() override;
     void reset_runtime_state() noexcept;
     void reset_parser_state() noexcept;
     void discard_rx() noexcept;
     void drain_rx() noexcept;
-    void dispatch(const mavlink_message_t &msg) noexcept;
+    bool dispatch(const mavlink_message_t &msg) noexcept;
     void handle_ping(const mavlink_message_t &msg) noexcept;
-    void process_command_acks() noexcept;
     void send_command_ack(const mavlink_command_ack_t &ack,
                           bool reboot_ack) noexcept;
-    void flush_pending_ack() noexcept;
     void maybe_perform_reboot(std::uint64_t now) noexcept;
     bool refresh_protocol_parameters() noexcept;
     void update_rc_input() noexcept;
@@ -150,25 +149,45 @@ private:
     bool send_component_information() noexcept;
     [[noreturn]] void perform_reboot() noexcept;
 
-    dima::platform::Console &console_;
+    enum class TxClass : std::uint8_t { Reply, Stream, Bulk };
+    struct TxFrame {
+        std::uint8_t bytes[MAVLINK_MAX_PACKET_LEN]{};
+        std::uint16_t length{0U};
+        TxClass kind{TxClass::Reply};
+        bool reboot_ack{false};
+    };
+    static constexpr std::size_t kTxQueueCapacity = 8U;
+    static std::uint8_t dispatch_command(void *, const vehicle_command_s &) noexcept;
+    static void acknowledge_local(void *, const vehicle_command_ack_s &) noexcept;
+    bool enqueue_frame(const std::uint8_t *, std::size_t, bool reboot_ack = false) noexcept;
+    bool background_space() const noexcept;
+    void flush_tx() noexcept;
+    std::uint32_t usb_timeout_remaining() const noexcept;
+    void update_rate_mult(std::uint64_t now) noexcept;
+    std::int32_t default_interval(const dima::generated::mavlink_streams::MessageContract &) const noexcept;
+    std::uint64_t drain_timeout_us() const noexcept;
+
+    std::uint8_t channel_;
+    MavlinkSharedState &shared_;
+    MavlinkTransport &transport_;
     dima::platform::BootControl &boot_control_;
 
     mavlink_message_t parse_message_{};
     mavlink_status_t parse_status_{};
 
     MavlinkIdentity identity_{};
-    HeartbeatPacer heartbeat_pacer_{identity_};
-    MavlinkParameters parameters_{&MavlinkService::send_frame, this};
-    MavlinkTimesync timesync_{&MavlinkService::send_frame_void, this};
-    MavlinkCommands commands_{&MavlinkService::request_message,
-                              &MavlinkService::set_message_interval,
-                              &MavlinkService::get_message_interval, this};
+    HeartbeatPacer heartbeat_pacer_{identity_, channel_};
+    MavlinkParameters parameters_{&MavlinkEndpoint::send_frame, this, channel_};
+    MavlinkTimesync timesync_{&MavlinkEndpoint::send_frame_void, this, channel_};
+    MavlinkCommands commands_{&MavlinkEndpoint::request_message,
+                              &MavlinkEndpoint::set_message_interval,
+                              &MavlinkEndpoint::get_message_interval,
+                              &MavlinkEndpoint::dispatch_command,
+                              &MavlinkEndpoint::acknowledge_local, this};
     MavlinkMission mission_;
     MavlinkLogHandler log_handler_;
-    MavlinkMetadataFtp metadata_ftp_{&MavlinkService::send_frame, this};
+    MavlinkMetadataFtp metadata_ftp_{&MavlinkEndpoint::send_frame, this, channel_};
 
-    uORB::SubscriptionData<vehicle_command_ack_s>
-        command_ack_subscription_{ORB_ID(vehicle_command_ack)};
     uORB::SubscriptionData<mavlink_log_s>
         mavlink_log_subscription_{ORB_ID(mavlink_log)};
     uORB::SubscriptionData<input_rc_s>
@@ -207,12 +226,25 @@ private:
 
     std::uint8_t rx_buffer_[kRxBatchBytes]{};
     std::uint8_t tx_buffer_[MAVLINK_MAX_PACKET_LEN]{};
-    /* COMMAND_ACK 发送失败单重试槽；pending 时不继续消费 uORB ACK，
-     * 因此其深度 4 队列继续保持 FIFO。 */
-    mavlink_command_ack_t pending_ack_{};
-    bool pending_ack_valid_{false};
-    bool pending_ack_is_reboot_{false};
-    std::uint8_t ack_retry_{0U};
+    TxFrame tx_queue_[kTxQueueCapacity]{};
+    std::uint8_t tx_head_{0U};
+    std::uint8_t tx_count_{0U};
+    TxClass tx_class_{TxClass::Reply};
+    std::uint16_t rx_position_{0U};
+    std::uint16_t rx_size_{0U};
+    bool rx_message_pending_{false};
+    // 完整通过 CRC/签名校验的接收帧计数；Auto 波特率扫描用它作为锁定证据。
+    std::uint32_t parsed_frames_{0U};
+    std::uint32_t epoch_{1U};
+    std::uint32_t error_generation_{0U};
+    std::uint64_t usb_deadline_us_{0U};
+    std::uint64_t rate_window_us_{0U};
+    std::uint32_t transaction_bytes_{0U};
+    std::uint32_t stream_attempts_{0U};
+    std::uint32_t stream_blocked_{0U};
+    float rate_multiplier_{1.0F};
+    param_t rate_handle_{PARAM_INVALID};
+    bool wait_reboot_completion_{false};
 
     std::uint16_t statustext_id_{0U};
     std::uint16_t cpu_load_permille_{0U};
@@ -269,6 +301,51 @@ private:
     // 0=无请求，1=普通复位，3=MCUboot Recovery；仅来自 Commander 已批准 ACK。
     int reboot_mode_pending_{0};
     std::uint64_t reboot_deadline_us_{0U};
+    dima::middleware::lifecycle::ModuleState state_{
+        dima::middleware::lifecycle::ModuleState::Stopped};
+};
+
+// 对外只有一个生命周期和 WorkQueue；两条链路共享业务执行者，独立持有协议上下文。
+class MavlinkService final : public dima::middleware::lifecycle::ModuleBase,
+                             public px4::ScheduledWorkItem {
+public:
+    MavlinkService(dima::platform::Console &console,
+                   dima::platform::BootControl &boot_control,
+                   dima::modules::mission::MissionService &mission_service,
+                   dima::platform::LogFileStore &log_files,
+                   dima::platform::AsyncSerialPort &serial,
+                   const dima::lib::serial::SerialPortAssignments &assignments) noexcept;
+    bool start() noexcept override;
+    void stop() noexcept override;
+    dima::middleware::lifecycle::ModuleState state() const noexcept override;
+    bool prepare_serial_reconfigure() noexcept;
+    void resume_serial() noexcept;
+    bool serial_reconfigure_failed() const noexcept;
+    bool apply_serial_configuration() noexcept;
+private:
+    void Run() override;
+    static void notify_from_isr(void *context) noexcept;
+    static bool deliver_ack(void *, std::uint8_t, std::uint32_t,
+                            const vehicle_command_ack_s &) noexcept;
+    void service_uart_scan(std::uint64_t now) noexcept;
+    MavlinkSharedState shared_{};
+    UsbMavlinkTransport usb_transport_;
+    SerialMavlinkTransport uart_transport_;
+    MavlinkEndpoint usb_;
+    MavlinkEndpoint uart_;
+    const dima::lib::serial::SerialPortAssignments &assignments_;
+    std::atomic<bool> quiesce_requested_{false};
+    std::atomic<bool> uart_quiesced_{false};
+    std::atomic<bool> quiesce_failed_{false};
+    std::uint64_t quiesce_deadline_us_{0U};
+    std::uint32_t quiesce_error_generation_{0U};
+    std::uint64_t retry_uart_after_us_{0U};
+    /* Auto 波特率扫描状态：SERIALx_BAUD=0 时逐档尝试常见速率，窗口内收到
+     * 足量完整 MAVLink 帧即锁定；锁定结果只保留在本 Runtime 的线配置中。 */
+    std::uint8_t scan_index_{0U};
+    std::uint64_t scan_window_started_us_{0U};
+    std::uint32_t scan_frames_baseline_{0U};
+    bool scan_locked_{false};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
 };

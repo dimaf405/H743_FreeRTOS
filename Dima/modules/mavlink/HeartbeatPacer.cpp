@@ -4,8 +4,8 @@
 
 namespace dima::modules::mavlink {
 
-HeartbeatPacer::HeartbeatPacer(MavlinkIdentity &identity) noexcept
-    : identity_(identity)
+HeartbeatPacer::HeartbeatPacer(MavlinkIdentity &identity, std::uint8_t channel) noexcept
+    : channel_(channel), identity_(identity)
 {
 }
 
@@ -35,8 +35,8 @@ void HeartbeatPacer::pack_now(std::uint64_t now_us,
     heartbeat.system_status = identity_.system_status();
     heartbeat.mavlink_version = MAVLINK_VERSION;
 
-    mavlink_msg_heartbeat_encode(MavlinkIdentity::SYSTEM_ID,
-                                 MavlinkIdentity::COMPONENT_ID,
+    mavlink_msg_heartbeat_encode_chan(MavlinkIdentity::SYSTEM_ID,
+                                 MavlinkIdentity::COMPONENT_ID, channel_,
                                  &msg, &heartbeat);
 }
 
@@ -61,8 +61,8 @@ void HeartbeatPacer::pack_autopilot_version(
     // 当前硬件合同只有 64-bit uid；uid2 全零表示“不提供”，不是未知随机值。
     std::memset(version.uid2, 0, sizeof(version.uid2));
 
-    mavlink_msg_autopilot_version_encode(MavlinkIdentity::SYSTEM_ID,
-                                         MavlinkIdentity::COMPONENT_ID,
+    mavlink_msg_autopilot_version_encode_chan(MavlinkIdentity::SYSTEM_ID,
+                                         MavlinkIdentity::COMPONENT_ID, channel_,
                                          &msg, &version);
 }
 

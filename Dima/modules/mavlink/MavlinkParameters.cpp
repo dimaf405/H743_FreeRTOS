@@ -9,8 +9,8 @@
 
 namespace dima::modules::mavlink {
 
-MavlinkParameters::MavlinkParameters(SendFn send, void *send_ctx) noexcept
-    : send_(send), send_ctx_(send_ctx)
+MavlinkParameters::MavlinkParameters(SendFn send, void *send_ctx, std::uint8_t channel) noexcept
+    : channel_(channel), send_(send), send_ctx_(send_ctx)
 {
 }
 
@@ -274,9 +274,13 @@ bool MavlinkParameters::set_serial_function(
     unsigned owner_count = 0U;
     {
         // QGC 常先在新端口启用独占功能，再关闭旧端口。整个交接放进参数原子事务：
-        // 读者只能看到旧状态或完成后的新状态，不能看到两个 SBUS/GPS owner。
+        // 读者只能看到旧状态或完成后的新状态，不能看到两个同功能 owner。
         px4::AtomicTransaction transaction;
         if (!serial_function_write_allowed(name, value)) {
+            // 拒绝原因必须可区分：超出产品支持的枚举值（旧固件无 3=MAVLink 等）
+            // 会走到这里，只回显参数会让上层误判。
+            PX4_WARN("rejected %s=%ld: function value not supported by this firmware",
+                     name, static_cast<long>(value));
             return false;
         }
         if (value == dima::lib::serial::kSerialFunctionDisabled) {
@@ -623,8 +627,8 @@ int MavlinkParameters::send_param(param_t param, std::uint16_t count,
     }
 
     mavlink_message_t packet{};
-    mavlink_msg_param_value_encode(MAVLINK_SYSTEM_ID,
-                                   MAVLINK_COMPONENT_ID, &packet, &msg);
+    mavlink_msg_param_value_encode_chan(MAVLINK_SYSTEM_ID,
+                                   MAVLINK_COMPONENT_ID, channel_, &packet, &msg);
     if (send_ != nullptr && send_(send_ctx_, packet)) {
         return 0;
     }

@@ -40,15 +40,69 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <limits>
 
 namespace dima::modules::mavlink {
 
+bool MavlinkLogLease::acquire(std::uint8_t channel, std::uint64_t now) noexcept
+{
+    dima::platform::CriticalGuard guard;
+    if (releasing_ || (owner_ != UINT8_MAX && owner_ != channel)) return false;
+    owner_ = channel;
+    activity_us_ = now;
+    return true;
+}
+
+bool MavlinkLogLease::owns(std::uint8_t channel) const noexcept
+{
+    dima::platform::CriticalGuard guard;
+    return owner_ == channel;
+}
+
+void MavlinkLogLease::touch(std::uint8_t channel, std::uint64_t now) noexcept
+{
+    dima::platform::CriticalGuard guard;
+    if (owner_ == channel && !releasing_) activity_us_ = now;
+}
+
+void MavlinkLogLease::begin_close(std::uint8_t channel) noexcept
+{
+    dima::platform::CriticalGuard guard;
+    if (owner_ == channel) releasing_ = true;
+}
+
+bool MavlinkLogLease::begin_expiry(std::uint8_t channel, std::uint64_t now,
+                                  std::uint32_t timeout_us) noexcept
+{
+    dima::platform::CriticalGuard guard;
+    if (owner_ != channel || releasing_ ||
+        (now >= activity_us_ && now - activity_us_ < timeout_us)) return false;
+    releasing_ = true;
+    return true;
+}
+
+std::uint64_t MavlinkLogLease::activity() const noexcept
+{
+    dima::platform::CriticalGuard guard;
+    return activity_us_;
+}
+
+void MavlinkLogLease::release(std::uint8_t channel) noexcept
+{
+    dima::platform::CriticalGuard guard;
+    if (owner_ == channel) {
+        owner_ = UINT8_MAX;
+        releasing_ = false;
+        activity_us_ = 0U;
+    }
+}
+
 MavlinkLogHandler::MavlinkLogHandler(
-    dima::platform::LogFileStore &store, SendCallback sender,
-    void *sender_context) noexcept
+    dima::platform::LogFileStore &store, MavlinkLogLease &lease, SendCallback sender,
+    void *sender_context, std::uint8_t channel) noexcept
     : ScheduledWorkItem("mav_log", px4::wq_configurations::storage),
-      store_(store), sender_(sender), sender_context_(sender_context)
+      channel_(channel), lease_(lease), store_(store), sender_(sender), sender_context_(sender_context)
 {
 }
 
@@ -67,7 +121,9 @@ bool MavlinkLogHandler::start() noexcept
         response_head_ = response_tail_ = response_count_ = 0U;
         next_response_sequence_ = 0U;
         reset_requested_ = false;
+        release_on_reset_ = false;
         stop_requested_ = false;
+        last_busy_warning_us_ = 0U;
         running_ = true;
     }
     return true;
@@ -87,6 +143,8 @@ void MavlinkLogHandler::stop() noexcept
              * running_ 要等 Run 完成 close 后才清零，等价于专用线程 join。 */
             stop_requested_ = true;
             reset_requested_ = true;
+            release_on_reset_ = true;
+            lease_.begin_close(channel_);
         }
         request_head_ = request_tail_ = request_count_ = 0U;
         response_head_ = response_tail_ = response_count_ = 0U;
@@ -113,28 +171,35 @@ void MavlinkLogHandler::stop() noexcept
         reset_requested_ = false;
     }
     ScheduleCancelAndDrain();
+    lease_.release(channel_);
     reset_worker_state();
 }
 
 void MavlinkLogHandler::reset_link() noexcept
 {
+    lease_.begin_close(channel_);
     {
         dima::platform::CriticalGuard guard;
         request_head_ = request_tail_ = request_count_ = 0U;
         response_head_ = response_tail_ = response_count_ = 0U;
         reset_requested_ = true;
+        release_on_reset_ = true;
     }
     (void)ScheduleNow();
 }
 
-void MavlinkLogHandler::handle_message(
+bool MavlinkLogHandler::handle_message(
     const mavlink_message_t &message) noexcept
 {
     Request request{};
+    std::uint8_t target_system = 0U;
+    std::uint8_t target_component = 0U;
     switch (message.msgid) {
     case MAVLINK_MSG_ID_LOG_REQUEST_LIST: {
         mavlink_log_request_list_t decoded{};
         mavlink_msg_log_request_list_decode(&message, &decoded);
+        target_system = decoded.target_system;
+        target_component = decoded.target_component;
         request.type = RequestType::List;
         request.first_id = decoded.start;
         request.last_id = decoded.end;
@@ -143,22 +208,66 @@ void MavlinkLogHandler::handle_message(
     case MAVLINK_MSG_ID_LOG_REQUEST_DATA: {
         mavlink_log_request_data_t decoded{};
         mavlink_msg_log_request_data_decode(&message, &decoded);
+        target_system = decoded.target_system;
+        target_component = decoded.target_component;
         request.type = RequestType::Data;
         request.id = decoded.id;
         request.offset = decoded.ofs;
         request.count = decoded.count;
         break;
     }
-    case MAVLINK_MSG_ID_LOG_REQUEST_END:
+    case MAVLINK_MSG_ID_LOG_REQUEST_END: {
+        mavlink_log_request_end_t decoded{};
+        mavlink_msg_log_request_end_decode(&message, &decoded);
+        target_system = decoded.target_system;
+        target_component = decoded.target_component;
         request.type = RequestType::End;
         break;
-    case MAVLINK_MSG_ID_LOG_ERASE:
+    }
+    case MAVLINK_MSG_ID_LOG_ERASE: {
+        mavlink_log_erase_t decoded{};
+        mavlink_msg_log_erase_decode(&message, &decoded);
+        target_system = decoded.target_system;
+        target_component = decoded.target_component;
         request.type = RequestType::Erase;
         break;
-    default:
-        return;
     }
-    (void)enqueue_request(request);
+    default:
+        return true;
+    }
+    if (target_system != MAVLINK_SYSTEM_ID ||
+        (target_component != 0U && target_component != MAVLINK_COMPONENT_ID)) return true;
+    const std::uint64_t now = hrt_absolute_time();
+    bool allowed = false;
+    {
+        dima::platform::CriticalGuard guard;
+        // 断线关闭屏障解除前不接纳新日志租约，防止 storage 复位释放新会话的 owner。
+        if (!running_ || stop_requested_) return true;
+        if (reset_requested_ && release_on_reset_) return false;
+        allowed = request.type == RequestType::End
+            ? lease_.owns(channel_) && lease_.acquire(channel_, now)
+            : lease_.acquire(channel_, now);
+        if (allowed) lease_.touch(channel_, now);
+    }
+    if (!allowed) {
+        // LOG_* 没有标准 BUSY ACK：只向请求链路发限速文本，不伪造空列表。
+        if (request.type != RequestType::End &&
+            (last_busy_warning_us_ == 0U || now - last_busy_warning_us_ >= 1000000U)) {
+            mavlink_statustext_t text{};
+            text.severity = MAV_SEVERITY_WARNING;
+            constexpr char message_text[] = "Log transfer busy on another link";
+            std::memcpy(text.text, message_text, sizeof(message_text));
+            mavlink_message_t message{};
+            mavlink_msg_statustext_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+                                               channel_, &message, &text);
+            std::uint8_t frame[MAVLINK_MAX_PACKET_LEN]{};
+            const auto size = mavlink_msg_to_send_buffer(frame, &message);
+            (void)sender_(sender_context_, frame, size);
+            last_busy_warning_us_ = now;
+        }
+        return true;
+    }
+    return enqueue_request(request);
 }
 
 bool MavlinkLogHandler::request_storage_information(
@@ -180,7 +289,7 @@ bool MavlinkLogHandler::enqueue_request(const Request &request) noexcept
     bool accepted = false;
     {
         dima::platform::CriticalGuard guard;
-        if (!running_ || stop_requested_) {
+        if (!running_ || stop_requested_ || (reset_requested_ && release_on_reset_)) {
             return false;
         }
         const bool terminal_request = request.type == RequestType::End ||
@@ -189,7 +298,18 @@ bool MavlinkLogHandler::enqueue_request(const Request &request) noexcept
             /* PX4 在接收线程中立即处理 END/ERASE；本平台把文件操作搬到 storage
              * worker 后，必须用同等的抢占屏障丢弃旧请求和待发分片。reset 标志会
              * 让正在运行的预读循环尽快退出，但随后到达的 ERASE -> LIST 仍按序保留。 */
-            request_head_ = request_tail_ = request_count_ = 0U;
+            // 已 ACK 接受的只读容量查询也不能被 LOG_END/ERASE 清除。
+            const auto original_count = request_count_;
+            for (std::uint8_t index = 0U; index < original_count; ++index) {
+                const Request queued = request_queue_[request_head_];
+                request_head_ = (request_head_ + 1U) % kRequestQueueCapacity;
+                --request_count_;
+                if (queued.type == RequestType::StorageInformation) {
+                    request_queue_[request_tail_] = queued;
+                    request_tail_ = (request_tail_ + 1U) % kRequestQueueCapacity;
+                    ++request_count_;
+                }
+            }
             clear_log_responses_locked();
             reset_requested_ = true;
         }
@@ -363,6 +483,7 @@ void MavlinkLogHandler::process_request(const Request &request) noexcept
         store_.close_log_transfer();
         set_worker_state(WorkerState::Idle);
         current_log_id_ = 0xffffU;
+        logs_listed_ = false;
         return;
 
     case RequestType::Erase:
@@ -445,6 +566,7 @@ void MavlinkLogHandler::process_list_preparation() noexcept
         storage_initialized_ = true;
     }
     const int listed = store_.create_log_list(number_of_logs_);
+    lease_.touch(channel_, hrt_absolute_time());
     if (listed == -EAGAIN) {
         /* 恢复、CRC 或 delNNN 清理每轮只推进有限 FatFs 操作；保持本状态并
          * 立即重调度，避免一次 LOG_REQUEST_LIST 长时间独占 storage worker。 */
@@ -467,6 +589,7 @@ void MavlinkLogHandler::process_list_preparation() noexcept
 void MavlinkLogHandler::process_erase() noexcept
 {
     const int maintained = store_.service_log_maintenance();
+    lease_.touch(channel_, hrt_absolute_time());
     if (maintained == -EAGAIN) {
         return;
     }
@@ -565,6 +688,7 @@ void MavlinkLogHandler::process_listing() noexcept
             --list_current_id_;
             return;
         }
+        lease_.touch(channel_, hrt_absolute_time());
     }
 }
 
@@ -602,27 +726,27 @@ void MavlinkLogHandler::process_data() noexcept
         }
         data_offset_ += static_cast<std::uint32_t>(read_size);
         last_data_activity_us_ = hrt_absolute_time();
+        lease_.touch(channel_, last_data_activity_us_);
     }
 }
 
 void MavlinkLogHandler::release_idle_reader() noexcept
 {
-    if (worker_state_ != WorkerState::Idle || current_log_id_ == 0xffffU) {
-        return;
-    }
-    // QGC 的正常下载完成路径不保证发送 LOG_REQUEST_END。保留 5 s 供下一段
-    // 请求/补传，之后由 storage 关闭 reader，解除最旧日志的回收保护。
-    // 已预读的响应拥有独立字节副本；关闭 FIL 不会破坏 USB 尚未完成的缓冲。
+    if (!lease_.owns(channel_)) return;
     const std::uint64_t now = hrt_absolute_time();
-    if (now < last_data_activity_us_ ||
-        now - last_data_activity_us_ >= kReaderIdleTimeoutUs) {
+    const std::uint64_t activity = lease_.activity();
+    if (lease_.begin_expiry(channel_, now, kReaderIdleTimeoutUs)) {
+        // 先封住新 LOG 请求，再关闭 reader/撤销旧分片，最后开放另一链路租约。
+        // STORAGE_INFORMATION 独立响应在 clear_responses 中继续保留。
         store_.close_log_transfer();
-        current_log_id_ = 0xffffU;
-        last_data_activity_us_ = 0U;
+        clear_responses();
+        reset_worker_state();
+        lease_.release(channel_);
         return;
     }
+    const std::uint64_t elapsed = now >= activity ? now - activity : 0U;
     (void)ScheduleDelayed(static_cast<std::uint32_t>(
-        kReaderIdleTimeoutUs - (now - last_data_activity_us_)));
+        elapsed < kReaderIdleTimeoutUs ? kReaderIdleTimeoutUs - elapsed : 1000U));
 }
 
 void MavlinkLogHandler::Run()
@@ -639,15 +763,19 @@ void MavlinkLogHandler::Run()
             /* reset_link 已在置位标志的同一临界区清空所有 Ring；
              * END/ERASE 则只清理日志分片并保留独立存储响应。此处只消费
              * worker reset 边沿，禁止再次无区别清空响应。 */
-            reset_requested_ = false;
+            // close 完成前保持 reset 屏障，不能发布旧事务的预读响应。
         }
     }
     if (!active) {
         return;
     }
     if (reset) {
-        store_.close_log_transfer();
+        if (lease_.owns(channel_)) store_.close_log_transfer();
         reset_worker_state();
+        dima::platform::CriticalGuard guard;
+        reset_requested_ = false;
+        if (release_on_reset_ || stop) lease_.release(channel_);
+        release_on_reset_ = false;
     }
     if (stop) {
         dima::platform::CriticalGuard guard;
@@ -677,32 +805,34 @@ void MavlinkLogHandler::Run()
     }
 }
 
-void MavlinkLogHandler::send() noexcept
+void MavlinkLogHandler::send(std::size_t maximum_responses) noexcept
 {
     std::uint32_t sequences[kMaximumResponsesPerSend]{};
     std::size_t response_count = 0U;
     std::size_t batch_size = 0U;
+    bool log_progress = false;
     // PX4 按 TX 可用空间连续发 LOG_DATA；本地 Console 是有完成确认的同步接口，
     // 因此先用官方 codec 合并完整帧，再一次提交。预留生成库的最大帧空间，
     // 不手写 payload/CRC/消息列表，也不在 lp_default 的任务栈上放大块缓冲。
-    while (response_count < kMaximumResponsesPerSend &&
+    while (response_count < std::min(maximum_responses, kMaximumResponsesPerSend) &&
            sizeof(tx_batch_) - batch_size >= MAVLINK_MAX_PACKET_LEN) {
         Response response{};
         if (!peek_response(response, response_count, sequences[0])) {
             break;
         }
+        log_progress = log_progress || response.type != ResponseType::StorageInformation;
         mavlink_message_t message{};
         if (response.type == ResponseType::Entry) {
-            mavlink_msg_log_entry_encode(MAVLINK_SYSTEM_ID,
-                                         MAVLINK_COMPONENT_ID,
+            mavlink_msg_log_entry_encode_chan(MAVLINK_SYSTEM_ID,
+                                         MAVLINK_COMPONENT_ID, channel_,
                                          &message, &response.entry);
         } else if (response.type == ResponseType::Data) {
-            mavlink_msg_log_data_encode(MAVLINK_SYSTEM_ID,
-                                        MAVLINK_COMPONENT_ID,
+            mavlink_msg_log_data_encode_chan(MAVLINK_SYSTEM_ID,
+                                        MAVLINK_COMPONENT_ID, channel_,
                                         &message, &response.data);
         } else {
-            mavlink_msg_storage_information_encode(
-                MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+            mavlink_msg_storage_information_encode_chan(
+                MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                 &message, &response.storage_information);
         }
         batch_size += mavlink_msg_to_send_buffer(
@@ -713,6 +843,7 @@ void MavlinkLogHandler::send() noexcept
     // 整批 USB 完成才消费响应；超时/断线保留分片供协议重试，Console staging
     // 继续保护尚在传输的字节。逐项核对 sequence，禁止误弹 storage 新事务的响应。
     if (batch_size != 0U && sender_(sender_context_, tx_batch_, batch_size)) {
+        if (log_progress) lease_.touch(channel_, hrt_absolute_time());
         for (std::size_t index = 0U; index < response_count; ++index) {
             pop_response(sequences[index]);
         }

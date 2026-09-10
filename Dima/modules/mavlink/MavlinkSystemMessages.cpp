@@ -13,14 +13,14 @@ namespace metadata = dima::generated::parameter_metadata;
 
 } // namespace
 
-bool MavlinkService::send_autopilot_version() noexcept
+bool MavlinkEndpoint::send_autopilot_version() noexcept
 {
     mavlink_message_t message{};
     heartbeat_pacer_.pack_autopilot_version(message);
     return send_message(message);
 }
 
-bool MavlinkService::send_protocol_version() noexcept
+bool MavlinkEndpoint::send_protocol_version() noexcept
 {
     // version 字段单位为 100：100=MAVLink1，200=MAVLink2。当前未生成规范库与
     // MAVLink C 库各自的 8-byte hash，因此两个 hash 数组必须明确置零。
@@ -33,13 +33,13 @@ bool MavlinkService::send_protocol_version() noexcept
                 sizeof(version.library_version_hash));
 
     mavlink_message_t message{};
-    mavlink_msg_protocol_version_encode(MAVLINK_SYSTEM_ID,
-                                        MAVLINK_COMPONENT_ID,
+    mavlink_msg_protocol_version_encode_chan(MAVLINK_SYSTEM_ID,
+                                        MAVLINK_COMPONENT_ID, channel_,
                                         &message, &version);
     return send_message(message);
 }
 
-bool MavlinkService::send_component_metadata() noexcept
+bool MavlinkEndpoint::send_component_metadata() noexcept
 {
     // URI 与 CRC 来自参数 metadata 生成物；二者必须同代，QGC 才能安全复用缓存。
     mavlink_component_metadata_t metadata_message{};
@@ -50,13 +50,13 @@ bool MavlinkService::send_component_metadata() noexcept
                  sizeof(metadata_message.uri) - 1U);
 
     mavlink_message_t message{};
-    mavlink_msg_component_metadata_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_component_metadata_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
         &message, &metadata_message);
     return send_message(message);
 }
 
-bool MavlinkService::send_component_information() noexcept
+bool MavlinkEndpoint::send_component_information() noexcept
 {
     // COMPONENT_INFORMATION 提供兼容旧 QGC 的同一 general metadata 入口。
     mavlink_component_information_t information{};
@@ -67,8 +67,8 @@ bool MavlinkService::send_component_information() noexcept
                  sizeof(information.general_metadata_uri) - 1U);
 
     mavlink_message_t message{};
-    mavlink_msg_component_information_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_component_information_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
         &message, &information);
     return send_message(message);
 }

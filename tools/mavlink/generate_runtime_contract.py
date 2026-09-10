@@ -37,6 +37,7 @@ OUTBOUND_KEYS = frozenset({
     "scheduler",
     "tx_stage",
     "default_interval_us",
+    "normal_interval_us",
     "interval_configurable",
 })
 INBOUND_KEYS = frozenset({"message", "handler"})
@@ -224,6 +225,12 @@ def normalize_outbound(
             or default_interval > 0x7FFFFFFF
         ):
             raise ContractError(f"{field}.default_interval_us is invalid")
+        # UART Normal 只启用权威策略显式声明的周期流；USB 仍使用原默认间隔。
+        normal_interval = raw.get("normal_interval_us", default_interval if scheduler == "heartbeat" else -1)
+        if (type(normal_interval) is not int or normal_interval == 0 or
+                normal_interval < -1 or normal_interval > 0x7FFFFFFF or
+                (scheduler == "none" and normal_interval != -1)):
+            raise ContractError(f"{field}.normal_interval_us is invalid")
         if scheduler == "heartbeat":
             heartbeat_count += 1
             if handler != "Heartbeat" or configurable:
@@ -239,6 +246,7 @@ def normalize_outbound(
                 "scheduler": scheduler,
                 "tx_stage": tx_stage,
                 "default_interval_us": default_interval,
+                "normal_interval_us": normal_interval,
                 "interval_configurable": configurable,
             }
         )
@@ -385,6 +393,8 @@ def render_contract(
         f"Scheduler::{scheduler_names[entry['scheduler']]}, "
         f"TxStage::{stage_names[entry['tx_stage']]}, "
         f"{entry['default_interval_us']}, "
+        f"{entry['normal_interval_us']}, "
+        f"MAVLINK_MSG_ID_{entry['message']}_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES, "
         f"{'true' if entry['requestable'] else 'false'}, "
         f"{'true' if entry['interval_configurable'] else 'false'}"
         "}"
@@ -440,6 +450,8 @@ struct MessageContract {{
     Scheduler scheduler;
     TxStage tx_stage;
     std::int32_t default_interval_us;
+    std::int32_t normal_interval_us;
+    std::uint16_t wire_size;
     bool requestable;
     bool interval_configurable;
 }};
@@ -501,10 +513,10 @@ constexpr std::size_t service_index(MessageHandler handler) noexcept
     return kInvalidServiceIndex;
 }}
 
-constexpr std::int32_t default_interval_us(MessageHandler handler) noexcept
+constexpr std::int32_t default_interval_us(MessageHandler handler, bool normal = false) noexcept
 {{
     const MessageContract *message = find_handler(handler);
-    return message != nullptr ? message->default_interval_us : -1;
+    return message != nullptr ? (normal ? message->normal_interval_us : message->default_interval_us) : -1;
 }}
 
 }} // namespace dima::generated::mavlink_streams

@@ -1,6 +1,6 @@
 # MAVLink 服务合同
 
-`MavlinkService` 是 Application Runtime 唯一的 USB CDC 数据面所有者。它使用固定缓冲、无动态分配，负责 MAVLink v2 RX/TX、参数、只读 Component Metadata FTP、命令 ACK、任务、Onboard Log、`STORAGE_INFORMATION`、TIMESYNC、RC、传感器流和 STATUSTEXT。
+`MavlinkService` 是 Application Runtime 唯一的 USB CDC 与一路 UART MAVLink 数据面所有者。USB Config 使用 COMM_0，UART Normal 使用 COMM_1；两个固定端点分别持有 parser、序号、参数/FTP/Mission 会话与流配置，共用 Commander ACK 路由和日志单 reader 租约。配置、内存与手动验收见 [双链路合同](../../../docs/MAVLINK_UART_ZH.md)。它使用固定缓冲、无动态分配，负责 MAVLink v2 RX/TX、参数、只读 Component Metadata FTP、命令 ACK、任务、Onboard Log、`STORAGE_INFORMATION`、TIMESYNC、RC、传感器流和 STATUSTEXT。
 
 传感器与估计器流合同固定对照 PX4 v1.17.0 commit `d6f12ad1c4f70ad3230afd7d86e971421e02fef4` 的 `MAVLINK_MODE_CONFIG` 以及 `HIGHRES_IMU`、`SCALED_IMU`、`ATTITUDE`、`LOCAL_POSITION_NED`、`GLOBAL_POSITION_INT`、`ESTIMATOR_STATUS` stream；本地适配只保留实际存在的单套传感器/EKF2 实例和固定内存发送路径。
 
@@ -23,7 +23,7 @@
 - `ESTIMATOR_STATUS`：5 Hz，逐项映射 PX4 `estimator_status` 的 innovation ratio、accuracy 和 `solution_status_flags`，MAVLink 层不重建第二套估计器健康模型。
 - `STORAGE_INFORMATION`：对照 PX4 v1.17 只响应 `MAV_CMD_REQUEST_MESSAGE`（并保留 deprecated `MAV_CMD_REQUEST_STORAGE_INFORMATION`）；索引 0/1 返回第一块 SD，可用时上报 `READY` 及 MiB 容量，不可用时上报 `EMPTY/count=0`。`f_getfree` 只在 `wq:storage` 执行，MAVLink owner 仅处理固定 Ring 中的响应。
 
-全部已配置周期流都支持 `MAV_CMD_REQUEST_MESSAGE`。与 PX4 `MavlinkStream::request_message()` 一致，一次请求是独立 one-shot，不受周期流 `last_send` 节拍限制；由 topic 更新驱动的 IMU 流在没有新样本时仍可拒绝本次请求。`HEARTBEAT` one-shot 直接发送；RC 保持 5 Hz、GPS 保持 5 Hz、`SYS_STATUS` 保持 1 Hz。GPS 可见性由持续的 `GPS_RAW_INT`/`SYS_STATUS` 表达，不再重复输出 detected/healthy/stale/not-detected 文本摘要。
+上述 Config 频率描述 USB；UART Normal 的频率来自同一 YAML 的 `normal_interval_us`，由 `MAV_0_RATE` 与线路拥塞进一步调整。全部已配置周期流都支持 `MAV_CMD_REQUEST_MESSAGE`。与 PX4 `MavlinkStream::request_message()` 一致，一次请求是独立 one-shot，不受周期流 `last_send` 节拍限制；由 topic 更新驱动的 IMU 流在没有新样本时仍可拒绝本次请求。`HEARTBEAT` one-shot 直接发送；RC 保持 5 Hz、GPS 保持 5 Hz、`SYS_STATUS` 保持 1 Hz。GPS 可见性由持续的 `GPS_RAW_INT`/`SYS_STATUS` 表达，不再重复输出 detected/healthy/stale/not-detected 文本摘要。
 
 ## 校准命令
 
@@ -50,7 +50,7 @@
 - `MavlinkLogHandler` 对照 PX4 v1.17.0 同名实现处理 `LOG_REQUEST_LIST/DATA/END/ERASE`，并复用同一 storage worker/Ring 生成 `STORAGE_INFORMATION`；日志 ID 从 0 开始，`LOG_DATA` 长度直接由 mavgen 字段容量派生。
 - PX4 的文件扫描、稳定列表、按 offset 读取和整树擦除语义保留；平台适配只把 POSIX 调用换成 `LogFileStore`，实际 FatFs/SDMMC 工作固定在 `wq:storage`，通信队列仅消费固定 32 槽响应 Ring。预取每轮最多补 32 片，再让出 storage 队列。
 - 无卡或无文件按 `common.xml` 强制回一条 `id=0,num_logs=0`，使 QGC 结束 Refresh；板上无 RTC，`LOG_ENTRY.time_utc=0`，避免用 FatFs 固定日期伪装真实采集时间。
-- 请求区间读完后保留 5 s reader 空闲窗口供后续区间/补传；窗口结束由 storage worker 关闭，避免 QGC 正常下载未发送 END 时永久阻止旧日志回收。新的 DATA 请求继续按稳定列表打开文件；物理断开、END/ERASE、无效 ID/offset 则及时释放 reader。USB 响应已复制到固定 Ring，不引用 FatFs 文件缓冲。
+- 日志列表、下载与擦除由来源链路独占；非 owner 收到限速 busy 文本且不能用 END/ERASE 取消 owner。请求区间读完后保留 5 s reader 空闲窗口供后续区间/补传；窗口结束由 storage worker 关闭，避免 QGC 正常下载未发送 END 时永久阻止旧日志回收。新的 DATA 请求继续按稳定列表打开文件；物理断开、END/ERASE、无效 ID/offset 则及时释放 reader。USB 响应已复制到固定 Ring，不引用 FatFs 文件缓冲。
 
 ### USB 下载批量传输
 
@@ -59,7 +59,7 @@
 此前每 10 ms 最多发送 4 个 90-byte 分片，理想载荷上限为 `4 * 90 / 0.01 = 36000 B/s`；每帧单独等待 USB 完成，以及遥测和错过周期，会进一步降低吞吐，这与 QGC 约 27 KB/s 的现象相符。现在每轮上限为 16 片，理想载荷预算为 `144000 B/s`，它是软件调度预算，不是实测或保证速度。
 
 - Console 与日志组包共用 2048-byte 静态容量；普通 MAVLink v2 满 `LOG_DATA` 帧为 109 bytes，16 帧为 1744 bytes。组包空间检查使用生成库的 `MAVLINK_MAX_PACKET_LEN`，wire 长度和 CRC 全部由 mavgen 生成接口处理。
-- 单次日志批量写仍使用原有 5 ms 整笔截止，ACK/心跳/遥测仍先发送。发送缓冲属于对象，USB staging 在超时后继续保持，直到迟到完成或连接 epoch 失效，不能复用在途字节。
+- 单次日志批量写与本轮其他 USB 写共用 5 ms 总截止，ACK/心跳/遥测仍先发送。发送缓冲属于对象，USB staging 在超时后继续保持，直到迟到完成或连接 epoch 失效，不能复用在途字节。
 - 只有整批完成才逐项按 sequence 消费响应；请求切换、END/ERASE、USB 断开仍使旧分片失效，并保留独立的 `STORAGE_INFORMATION` 回复。失败可能重发相同 offset，接收方仍按标准日志 offset 补洞/去重。
 - 当前物理控制器仍是 PA11/PA12 上的 OTG FS、12 Mbit/s、64-byte bulk endpoint；ST USB 栈自动切分整批数据并处理必要的 ZLP。FS HAL 会清除 `dma_enable`，此修复使用现有 FS 硬件能力。
 
@@ -67,7 +67,7 @@
 
 ## TX 与连接边界
 
-参数精简后仍提供完整、单一的生成目录，不用虚拟参数或过滤名单伪装数量减少。QGC 直接依赖的固定 Fact 保留在 `System / Compatibility`；校准值、高级项和常用项用上游支持的 category/group 分类。单枚举或 `min=max` 自动经上游 `--readonly-config` 生成标准 `readOnly: true`，并原样传入 Component Metadata，不能仅删除 Metadata 条目或跳过 PARAM_VALUE 索引。当前完整目录 299 项，其中 10 项只读；QGC 5.1.3 勾选 **Hide read-only（隐藏只读参数）** 后普通列表与搜索均隐藏这些项，仍保留其他页面读取 Fact 的能力。该开关默认关闭，需要在地面站选择，固件不能强制隐藏。升级后需让 QGC 获取新的完整参数目录及 Metadata CRC。锁定源码依赖和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
+参数精简后仍提供完整、单一的生成目录，不用虚拟参数或过滤名单伪装数量减少。QGC 直接依赖的固定 Fact 保留在 `System / Compatibility`；校准值、高级项和常用项用上游支持的 category/group 分类。单枚举或 `min=max` 自动经上游 `--readonly-config` 生成标准 `readOnly: true`，并原样传入 Component Metadata，不能仅删除 Metadata 条目或跳过 PARAM_VALUE 索引。目录数量及只读属性以正式生成 Metadata 为准；QGC 5.1.3 勾选 **Hide read-only（隐藏只读参数）** 后普通列表与搜索均隐藏这些项，仍保留其他页面读取 Fact 的能力。该开关默认关闭，需要在地面站选择，固件不能强制隐藏。升级后需让 QGC 获取新的完整参数目录及 Metadata CRC。锁定源码依赖和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
 
 优先级为 ACK、Heartbeat/Version、RC、Metadata FTP、传感器、Onboard Log、参数、STATUSTEXT。物理 USB ready 下降沿会丢弃旧 RX 半帧，重置 parser/channel/FTP/参数/日志传输会话，并恢复 PX4 USB 周期流默认节拍；`ETIMEDOUT/EIO/EPIPE` 保留 FTP 回复等待 QGC 同 sequence 重传。
 

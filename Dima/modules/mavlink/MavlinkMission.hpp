@@ -21,7 +21,7 @@ public:
     using SendFn = bool (*)(void *ctx, mavlink_message_t &msg) noexcept;
 
     MavlinkMission(dima::modules::mission::MissionService &service,
-                   SendFn send, void *send_ctx) noexcept;
+                   SendFn send, void *send_ctx, std::uint8_t channel = MAVLINK_COMM_0) noexcept;
 
     void handle_message(const mavlink_message_t *msg) noexcept;
     void update(std::uint64_t now, bool link_ready) noexcept;
@@ -29,6 +29,8 @@ public:
     void reset_link() noexcept;
 
 private:
+    std::uint8_t channel_{MAVLINK_COMM_0};
+    bool detached_upload_{false};
     enum class UploadState : std::uint8_t {
         Idle,
         Receiving,

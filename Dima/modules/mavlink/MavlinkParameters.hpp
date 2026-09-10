@@ -23,7 +23,7 @@ public:
     /** 发送回调；false 表示传输层暂时未接收该帧，当前参数索引必须保留待重试。 */
     using SendFn = bool (*)(void *ctx, mavlink_message_t &msg);
 
-    MavlinkParameters(SendFn send, void *send_ctx) noexcept;
+    MavlinkParameters(SendFn send, void *send_ctx, std::uint8_t channel = MAVLINK_COMM_0) noexcept;
 
     void reset() noexcept;
 
@@ -38,6 +38,7 @@ public:
     void send() noexcept;
 
 private:
+    std::uint8_t channel_{MAVLINK_COMM_0};
     using FixedParameterConstraint =
         dima::generated::parameters::FixedParameterConstraint;
     using FlightModeSlotParameter =

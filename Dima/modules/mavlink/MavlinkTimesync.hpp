@@ -19,7 +19,7 @@ public:
     /** 发送回调：由链路所有者完成帧封装与写出。 */
     using SendFn = void (*)(void *ctx, mavlink_message_t &msg);
 
-    MavlinkTimesync(SendFn send, void *send_ctx) noexcept;
+    MavlinkTimesync(SendFn send, void *send_ctx, std::uint8_t channel = MAVLINK_COMM_0) noexcept;
 
     /**
      * Handle an incoming TIMESYNC message (PX4 semantics).
@@ -36,6 +36,7 @@ public:
     void reset() noexcept;
 
 private:
+    std::uint8_t channel_{MAVLINK_COMM_0};
     dima::lib::timesync::Timesync timesync_{};
     SendFn send_{nullptr};
     void *send_ctx_{nullptr};

@@ -71,6 +71,7 @@ outbound:
     scheduler: service
     tx_stage: pre_metadata
     default_interval_us: 2000000
+    normal_interval_us: 2000000
     interval_configurable: true
 
   - message: COMPONENT_METADATA
@@ -94,6 +95,7 @@ outbound:
     scheduler: service
     tx_stage: pre_metadata
     default_interval_us: 200000
+    normal_interval_us: 200000
     interval_configurable: true
 
   - message: HIGHRES_IMU
@@ -118,6 +120,7 @@ outbound:
     scheduler: service
     tx_stage: post_metadata
     default_interval_us: 200000
+    normal_interval_us: 200000
     interval_configurable: true
 
   - message: SYS_STATUS
@@ -126,6 +129,7 @@ outbound:
     scheduler: service
     tx_stage: post_metadata
     default_interval_us: 1000000
+    normal_interval_us: 1000000
     interval_configurable: true
 
   - message: ATTITUDE
@@ -134,6 +138,7 @@ outbound:
     scheduler: service
     tx_stage: post_metadata
     default_interval_us: 20000
+    normal_interval_us: 66667
     interval_configurable: true
 
   - message: LOCAL_POSITION_NED
@@ -142,6 +147,7 @@ outbound:
     scheduler: service
     tx_stage: post_metadata
     default_interval_us: 33333
+    normal_interval_us: 1000000
     interval_configurable: true
 
   - message: GLOBAL_POSITION_INT
@@ -150,6 +156,7 @@ outbound:
     scheduler: service
     tx_stage: post_metadata
     default_interval_us: 100000
+    normal_interval_us: 200000
     interval_configurable: true
 
   - message: ESTIMATOR_STATUS
@@ -158,6 +165,7 @@ outbound:
     scheduler: service
     tx_stage: post_metadata
     default_interval_us: 200000
+    normal_interval_us: 2000000
     interval_configurable: true
 
 inbound:

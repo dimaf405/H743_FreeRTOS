@@ -6,8 +6,8 @@
 namespace dima::modules::mavlink {
 
 MavlinkMetadataFtp::MavlinkMetadataFtp(
-    SendFn send, void *send_context) noexcept
-    : send_(send), send_context_(send_context)
+    SendFn send, void *send_context, std::uint8_t channel) noexcept
+    : channel_(channel), send_(send), send_context_(send_context)
 {
 }
 
@@ -94,8 +94,8 @@ bool MavlinkMetadataFtp::flush_pending() noexcept
     }
 
     mavlink_message_t message{};
-    mavlink_msg_file_transfer_protocol_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_file_transfer_protocol_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
         &message, &reply_.response);
     if (send_(send_context_, message)) {
         reply_.pending = false;

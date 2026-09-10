@@ -103,8 +103,8 @@ void MavlinkParameters::send_param_ext_reply(
     // 正常/未找到回复只共用标准编码和发送；各自的 count/index/type 保持不变。
     // 保留先编码、再检查回调的顺序，不改变 MAVLink 序号推进或失败后的重试策略。
     mavlink_message_t packet{};
-    mavlink_msg_param_ext_value_encode(MAVLINK_SYSTEM_ID,
-                                       MAVLINK_COMPONENT_ID,
+    mavlink_msg_param_ext_value_encode_chan(MAVLINK_SYSTEM_ID,
+                                       MAVLINK_COMPONENT_ID, channel_,
                                        &packet, &reply);
     if (send_ != nullptr) {
         send_(send_ctx_, packet);

@@ -41,8 +41,8 @@ bool normalize_global_frame(std::uint8_t received,
 
 MavlinkMission::MavlinkMission(
     dima::modules::mission::MissionService &service,
-    SendFn send, void *send_ctx) noexcept
-    : service_(service), send_(send), send_ctx_(send_ctx)
+    SendFn send, void *send_ctx, std::uint8_t channel) noexcept
+    : channel_(channel), service_(service), send_(send), send_ctx_(send_ctx)
 {
 }
 
@@ -137,8 +137,8 @@ bool MavlinkMission::send_ack(std::uint8_t target_system,
     ack.mission_type = MAV_MISSION_TYPE_MISSION;
     ack.opaque_id = mission_id;
     mavlink_message_t message{};
-    mavlink_msg_mission_ack_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &ack);
+    mavlink_msg_mission_ack_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &ack);
     return send_message(message);
 }
 
@@ -150,8 +150,8 @@ bool MavlinkMission::send_request(std::uint16_t sequence) noexcept
     request.target_component = upload_component_;
     request.mission_type = MAV_MISSION_TYPE_MISSION;
     mavlink_message_t message{};
-    mavlink_msg_mission_request_int_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &request);
+    mavlink_msg_mission_request_int_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &request);
     return send_message(message);
 }
 
@@ -184,8 +184,8 @@ bool MavlinkMission::send_count(std::uint8_t target_system,
     count.mission_type = MAV_MISSION_TYPE_MISSION;
     count.opaque_id = recovery_pending ? 0U : status.mission_id;
     mavlink_message_t message{};
-    mavlink_msg_mission_count_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &count);
+    mavlink_msg_mission_count_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &count);
     return send_message(message);
 }
 
@@ -219,8 +219,8 @@ int MavlinkMission::send_item(std::uint8_t target_system,
     item.autocontinue = 1U;
     item.mission_type = MAV_MISSION_TYPE_MISSION;
     mavlink_message_t message{};
-    mavlink_msg_mission_item_int_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &item);
+    mavlink_msg_mission_item_int_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &item);
     return send_message(message) ? 0 : -EIO;
 }
 
@@ -255,8 +255,8 @@ bool MavlinkMission::send_current() noexcept
     current.fence_id = 0U;
     current.rally_points_id = 0U;
     mavlink_message_t message{};
-    mavlink_msg_mission_current_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &current);
+    mavlink_msg_mission_current_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &current);
     if (!send_message(message)) {
         return false;
     }
@@ -273,8 +273,8 @@ bool MavlinkMission::send_reached(std::uint16_t sequence) noexcept
     mavlink_mission_item_reached_t reached{};
     reached.seq = sequence;
     mavlink_message_t message{};
-    mavlink_msg_mission_item_reached_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &reached);
+    mavlink_msg_mission_item_reached_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &reached);
     return send_message(message);
 }
 
@@ -392,6 +392,7 @@ void MavlinkMission::reset_upload(bool abort_receiving) noexcept
         upload_token_ != 0U) {
         service_.abort_upload(upload_token_);
     }
+    detached_upload_ = false;
     upload_state_ = UploadState::Idle;
     upload_token_ = 0U;
     upload_count_ = 0U;
@@ -428,6 +429,8 @@ void MavlinkMission::reset_link() noexcept
         upload_state_ == UploadState::WaitingItemWrite) {
         reset_upload(true);
     }
+    // 已提交存储的事务仍须消费完成槽，但旧连接的最终 ACK 不能流入新会话。
+    if (upload_state_ != UploadState::Idle) detached_upload_ = true;
     last_current_us_ = 0U;
 }
 
@@ -705,6 +708,7 @@ void MavlinkMission::handle_message(
 
 void MavlinkMission::update(std::uint64_t now, bool link_ready) noexcept
 {
+    link_ready = link_ready && !detached_upload_;
     if (upload_state_ == UploadState::WaitingItemWrite) {
         dima::modules::mission::MissionStageResult result{};
         const int polled = service_.poll_stage_result(
@@ -776,10 +780,11 @@ void MavlinkMission::update(std::uint64_t now, bool link_ready) noexcept
         }
     }
 
+    if (upload_state_ == UploadState::FinalAckPending && detached_upload_) reset_upload(false);
     if (upload_state_ == UploadState::FinalAckPending && link_ready) {
         mavlink_message_t message{};
-        mavlink_msg_mission_ack_encode(
-            MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+        mavlink_msg_mission_ack_encode_chan(
+            MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
             &message, &pending_final_ack_);
         if (send_message(message)) {
             reset_upload(false);

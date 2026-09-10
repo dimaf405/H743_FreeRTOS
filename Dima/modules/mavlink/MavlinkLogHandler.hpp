@@ -43,6 +43,23 @@
 
 namespace dima::modules::mavlink {
 
+// 单个 LogFileStore reader 的跨链路租约；释放期间仍保持独占，直到 storage 完成 close。
+class MavlinkLogLease {
+public:
+    bool acquire(std::uint8_t channel, std::uint64_t now) noexcept;
+    bool owns(std::uint8_t channel) const noexcept;
+    void touch(std::uint8_t channel, std::uint64_t now) noexcept;
+    void begin_close(std::uint8_t channel) noexcept;
+    bool begin_expiry(std::uint8_t channel, std::uint64_t now,
+                      std::uint32_t timeout_us) noexcept;
+    std::uint64_t activity() const noexcept;
+    void release(std::uint8_t channel) noexcept;
+private:
+    std::uint8_t owner_{UINT8_MAX};
+    bool releasing_{false};
+    std::uint64_t activity_us_{0U};
+};
+
 /**
  * PX4 v1.17 MavlinkLogHandler 的 FreeRTOS/FatFs 薄适配。
  *
@@ -54,20 +71,23 @@ public:
     using SendCallback = bool (*)(void *context, const std::uint8_t *data,
                                   std::size_t length) noexcept;
 
-    MavlinkLogHandler(dima::platform::LogFileStore &store,
-                      SendCallback sender, void *sender_context) noexcept;
+    MavlinkLogHandler(dima::platform::LogFileStore &store, MavlinkLogLease &lease,
+                      SendCallback sender, void *sender_context, std::uint8_t channel = MAVLINK_COMM_0) noexcept;
 
     bool start() noexcept;
     void stop() noexcept;
     void reset_link() noexcept;
-    void handle_message(const mavlink_message_t &message) noexcept;
+    bool handle_message(const mavlink_message_t &message) noexcept;
     bool request_storage_information(std::uint8_t storage_id) noexcept;
-    void send() noexcept;
+    void send(std::size_t maximum_responses = 16U) noexcept;
 
 protected:
     void Run() override;
 
 private:
+    std::uint8_t channel_{MAVLINK_COMM_0};
+    MavlinkLogLease &lease_;
+    std::uint64_t last_busy_warning_us_{0U};
     enum class RequestType : std::uint8_t {
         List,
         Data,
@@ -153,6 +173,7 @@ private:
     std::uint8_t response_count_{0U};
     std::uint32_t next_response_sequence_{0U};
     bool reset_requested_{false};
+    bool release_on_reset_{false};
     bool stop_requested_{false};
     bool running_{false};
 

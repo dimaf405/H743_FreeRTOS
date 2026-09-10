@@ -5,7 +5,7 @@
 
 mavlink_status_t * mavlink_get_channel_status(uint8_t channel)
 {
-    /* 生成代码只会传 MAVLINK_COMM_0；数组容量为 1，调用侧不得传任意 channel。 */
+    /* 固定调用域为 USB COMM_0、UART COMM_1；生成库和所有编码器共用这两份状态。 */
     return &dima_mavlink_channel_status[channel];
 }
 

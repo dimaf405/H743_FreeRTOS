@@ -28,8 +28,9 @@ bool message_id_from_float(float value, std::uint16_t &message_id) noexcept
 MavlinkCommands::MavlinkCommands(RequestMessageFn request_message,
                                  SetMessageIntervalFn set_message_interval,
                                  GetMessageIntervalFn get_message_interval,
+                                 DispatchFn dispatch, AcknowledgeFn acknowledge,
                                  void *callback_ctx) noexcept
-    : request_message_(request_message),
+    : dispatch_(dispatch), acknowledge_(acknowledge), request_message_(request_message),
       set_message_interval_(set_message_interval),
       get_message_interval_(get_message_interval),
       callback_ctx_(callback_ctx)
@@ -139,7 +140,7 @@ void MavlinkCommands::acknowledge(std::uint8_t sysid, std::uint8_t compid,
     command_ack.target_component = compid;
     command_ack.result_param2 = result_param2;
 
-    _cmd_ack_pub.publish(command_ack);
+    acknowledge_(callback_ctx_, command_ack);
 }
 
 std::uint8_t MavlinkCommands::handle_request_message_command(
@@ -350,7 +351,8 @@ void MavlinkCommands::handle_message_command_both(
             return;
         }
 
-        _cmd_pub.publish(vehicle_command);
+        result = dispatch_(callback_ctx_, vehicle_command);
+        send_ack = result != vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
     }
 
     if (send_ack) {

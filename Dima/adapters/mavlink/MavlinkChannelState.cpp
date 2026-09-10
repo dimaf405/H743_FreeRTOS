@@ -1,6 +1,6 @@
 #include "mavlink/MavlinkBridge.h"
 
-/* 单路 USB data plane 只有一份 parser buffer 与 RX/TX sequence 状态；
+/* USB/UART 各自拥有 parser buffer 与 RX/TX sequence 状态；
  * 分源后的消息编码器不得各自持有生成库的函数局部 static。 */
 extern "C" {
 

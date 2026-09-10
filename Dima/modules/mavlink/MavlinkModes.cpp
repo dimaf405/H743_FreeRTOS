@@ -9,7 +9,7 @@
 namespace dima::modules::mavlink {
 namespace modes = dima::generated::mavlink_streams;
 
-std::uint8_t MavlinkService::request_available_modes(float index) noexcept
+std::uint8_t MavlinkEndpoint::request_available_modes(float index) noexcept
 {
     // common.xml：0 请求全部，1..N 请求目录中的一项。先检查有限性、整数性
     // 与范围，再收窄，不能让负数/小数经 round 或 uint8 转换变成有效索引。
@@ -28,7 +28,7 @@ std::uint8_t MavlinkService::request_available_modes(float index) noexcept
     return vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
 }
 
-void MavlinkService::stream_available_modes() noexcept
+void MavlinkEndpoint::stream_available_modes() noexcept
 {
     if (available_modes_next_ == 0U) return;
     const auto &mode = modes::kModes[available_modes_next_ - 1U];
@@ -44,7 +44,7 @@ void MavlinkService::stream_available_modes() noexcept
         std::strncpy(available.mode_name, mode.name, sizeof(available.mode_name) - 1U);
     }
     mavlink_message_t message{};
-    mavlink_msg_available_modes_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_available_modes_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                       &message, &available);
     // 每轮只发一项，保留 ACK/HEARTBEAT 优先级；失败保留索引，断链统一清除。
     if (send_message(message)) {
@@ -53,7 +53,7 @@ void MavlinkService::stream_available_modes() noexcept
     }
 }
 
-bool MavlinkService::current_mode_snapshot(mavlink_current_mode_t &mode) noexcept
+bool MavlinkEndpoint::current_mode_snapshot(mavlink_current_mode_t &mode) noexcept
 {
     (void)vehicle_status_subscription_.update();
     const auto &status = vehicle_status_subscription_.get();
@@ -74,7 +74,7 @@ bool MavlinkService::current_mode_snapshot(mavlink_current_mode_t &mode) noexcep
     return true;
 }
 
-bool MavlinkService::current_mode_changed() noexcept
+bool MavlinkEndpoint::current_mode_changed() noexcept
 {
     mavlink_current_mode_t current{};
     return current_mode_snapshot(current) &&
@@ -83,12 +83,12 @@ bool MavlinkService::current_mode_changed() noexcept
          current.standard_mode != last_current_mode_.standard_mode);
 }
 
-bool MavlinkService::send_current_mode() noexcept
+bool MavlinkEndpoint::send_current_mode() noexcept
 {
     mavlink_current_mode_t current{};
     if (!current_mode_snapshot(current)) return false;
     mavlink_message_t message{};
-    mavlink_msg_current_mode_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_current_mode_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                    &message, &current);
     if (!send_message(message)) return false;
     last_current_mode_ = current;

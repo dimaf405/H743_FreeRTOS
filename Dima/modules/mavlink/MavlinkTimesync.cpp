@@ -4,8 +4,8 @@
 
 namespace dima::modules::mavlink {
 
-MavlinkTimesync::MavlinkTimesync(SendFn send, void *send_ctx) noexcept
-    : send_(send), send_ctx_(send_ctx)
+MavlinkTimesync::MavlinkTimesync(SendFn send, void *send_ctx, std::uint8_t channel) noexcept
+    : channel_(channel), send_(send), send_ctx_(send_ctx)
 {
 }
 
@@ -23,7 +23,7 @@ void MavlinkTimesync::handle_message(const mavlink_message_t *msg) noexcept
         rsync.ts1 = tsync.ts1;
 
         mavlink_message_t reply{};
-        mavlink_msg_timesync_encode(1, 1, &reply, &rsync);
+        mavlink_msg_timesync_encode_chan(1, 1, channel_, &reply, &rsync);
         if (send_ != nullptr) {
             send_(send_ctx_, reply);
         }

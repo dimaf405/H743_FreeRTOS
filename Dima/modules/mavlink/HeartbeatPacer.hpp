@@ -44,7 +44,7 @@ public:
     static constexpr std::uint32_t kPx4CustomModeTermination = dima::generated::mavlink_streams::kPx4CustomModeTermination;
     static constexpr std::uint32_t kPx4CustomModeAutoCalibration = dima::generated::mavlink_streams::kPx4CustomModeAutoCalibration;
 
-    explicit HeartbeatPacer(MavlinkIdentity &identity) noexcept;
+    explicit HeartbeatPacer(MavlinkIdentity &identity, std::uint8_t channel = MAVLINK_COMM_0) noexcept;
 
     /**
      * Periodic tick: packs a HEARTBEAT message if the interval elapsed.
@@ -67,6 +67,7 @@ public:
     void reset() noexcept;
 
 private:
+    std::uint8_t channel_{MAVLINK_COMM_0};
     /**
      * Project vehicle_status_s into HEARTBEAT base_mode/system_status
      * via MavlinkIdentity.

@@ -1,0 +1,17 @@
+module_name: MAVLink
+
+parameters:
+  - group: MAVLink
+    definitions:
+      MAV_0_RATE:
+        description:
+          short: 串口 MAVLink 实例 0 的发送速率预算
+          long: |-
+            对照 PX4 MAVLink Normal 模式设置串口发送预算，单位为字节每秒。
+            0 使用串口波特率除以 20，即普通 8N1 理论带宽的一半。
+            周期流根据事务占用及实际发送空间自动降频。只作用于串口数传，USB 不受影响。
+        type: int32
+        default: 0
+        min: 0
+        max: 10000000
+        unit: B/s

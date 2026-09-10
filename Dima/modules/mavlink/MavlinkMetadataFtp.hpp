@@ -89,7 +89,7 @@ public:
 
     using SendFn = bool (*)(void *context, mavlink_message_t &message);
 
-    MavlinkMetadataFtp(SendFn send, void *send_context) noexcept;
+    MavlinkMetadataFtp(SendFn send, void *send_context, std::uint8_t channel = MAVLINK_COMM_0) noexcept;
 
     void init(const VirtualFile *files, std::uint8_t count) noexcept;
 
@@ -101,6 +101,7 @@ public:
     bool service(std::uint64_t now_us) noexcept;
 
 private:
+    std::uint8_t channel_{MAVLINK_COMM_0};
     bool flush_pending() noexcept;
     static constexpr std::uint8_t kMaxFiles = 4U;
     static constexpr std::uint8_t kSessionId = 0U;

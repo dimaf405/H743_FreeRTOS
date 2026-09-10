@@ -6,7 +6,7 @@
 
 namespace dima::modules::mavlink {
 
-void MavlinkService::update_rc_input() noexcept
+void MavlinkEndpoint::update_rc_input() noexcept
 {
     if (input_rc_subscription_.update()) {
         latest_input_rc_ = input_rc_subscription_.get();
@@ -14,7 +14,7 @@ void MavlinkService::update_rc_input() noexcept
     }
 }
 
-bool MavlinkService::refresh_protocol_parameters() noexcept
+bool MavlinkEndpoint::refresh_protocol_parameters() noexcept
 {
     // RC 可见性超时与系统 ID 作为同一协议快照校验；本产品身份固定为生成合同中的 1。
     float timeout_s = 0.0F;
@@ -31,7 +31,7 @@ bool MavlinkService::refresh_protocol_parameters() noexcept
     return rc_loss_timeout_valid_;
 }
 
-bool MavlinkService::rc_sample_streamable(std::uint64_t now) const noexcept
+bool MavlinkEndpoint::rc_sample_streamable(std::uint64_t now) const noexcept
 {
     /* Failsafe/lost 只禁止控制，不能隐藏仍然新鲜的原始通道；否则 QGC
      * 在诊断或校准时会把“信号不允许控制”误判为“接收机完全无数据”。 */
@@ -58,7 +58,7 @@ bool MavlinkService::rc_sample_streamable(std::uint64_t now) const noexcept
     return timeout_us > 0U && now - sample_time <= timeout_us;
 }
 
-bool MavlinkService::send_rc_channels(std::uint64_t now) noexcept
+bool MavlinkEndpoint::send_rc_channels(std::uint64_t now) noexcept
 {
     const std::uint8_t channel_count = latest_input_rc_.channel_count;
     const auto value = [this, channel_count](std::size_t index) {
@@ -99,7 +99,7 @@ bool MavlinkService::send_rc_channels(std::uint64_t now) noexcept
         : std::numeric_limits<std::uint8_t>::max();
 
     mavlink_message_t message{};
-    mavlink_msg_rc_channels_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_rc_channels_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                    &message, &channels);
     return send_message(message);
 }

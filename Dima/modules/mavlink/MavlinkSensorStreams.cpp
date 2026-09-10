@@ -137,7 +137,7 @@ std::uint16_t clamp_error_count(std::uint64_t value) noexcept
 
 } // namespace
 
-bool MavlinkService::stream_due(std::uint64_t now, std::uint64_t last_tx,
+bool MavlinkEndpoint::stream_due(std::uint64_t now, std::uint64_t last_tx,
                                 std::int32_t interval_us) noexcept
 {
     // 负间隔表示禁用；时钟回退时立即允许一次发送，以重建新的单调节拍基线。
@@ -146,7 +146,7 @@ bool MavlinkService::stream_due(std::uint64_t now, std::uint64_t last_tx,
             now - last_tx >= static_cast<std::uint64_t>(interval_us));
 }
 
-void MavlinkService::reset_sensor_streams() noexcept
+void MavlinkEndpoint::reset_sensor_streams() noexcept
 {
     latest_sensor_accel_ = sensor_accel_s{};
     latest_sensor_gyro_ = sensor_gyro_s{};
@@ -175,7 +175,7 @@ void MavlinkService::reset_sensor_streams() noexcept
     gps_healthy_ = false;
 }
 
-void MavlinkService::reset_sensor_link_state() noexcept
+void MavlinkEndpoint::reset_sensor_link_state() noexcept
 {
     reset_configured_streams();
     last_highres_imu_timestamp_us_ = 0U;
@@ -184,7 +184,7 @@ void MavlinkService::reset_sensor_link_state() noexcept
     last_scaled_mag_timestamp_us_ = 0U;
 }
 
-void MavlinkService::update_sensor_topics() noexcept
+void MavlinkEndpoint::update_sensor_topics() noexcept
 {
     // 每路只保留 latest_* 一份缓存，复用 Subscription::copy 的 epoch 和逐代
     // 读取合同。无新消息/读取失败不改缓存；Runtime start/stop 仍统一清零，
@@ -297,7 +297,7 @@ void MavlinkService::update_sensor_topics() noexcept
     gps_healthy_ = gps_now;
 }
 
-void MavlinkService::report_imu_fault(std::uint64_t now) noexcept
+void MavlinkEndpoint::report_imu_fault(std::uint64_t now) noexcept
 {
     PX4_ERR("IMU unhealthy raw_ms=%lu/%lu out_ms=%lu err=%lu/%lu",
             static_cast<unsigned long>(sample_age_ms(now, latest_sensor_accel_.timestamp)),
@@ -307,7 +307,7 @@ void MavlinkService::report_imu_fault(std::uint64_t now) noexcept
             static_cast<unsigned long>(latest_sensor_gyro_.error_count));
 }
 
-void MavlinkService::report_sensor_link_summary() noexcept
+void MavlinkEndpoint::report_sensor_link_summary() noexcept
 {
     if (imu_fault_reported_) {
         // USB 重连重新提供尚未恢复的故障摘要，保留同一启动周期的传感器证据。
@@ -323,7 +323,7 @@ void MavlinkService::report_sensor_link_summary() noexcept
     }
 }
 
-bool MavlinkService::send_highres_imu(std::uint64_t) noexcept
+bool MavlinkEndpoint::send_highres_imu(std::uint64_t) noexcept
 {
     // HIGHRES_IMU 由选中的 vehicle_imu 驱动；仅磁力计更新不能伪造新的 IMU 时间戳。
     if (!imu_streamable_ || latest_vehicle_imu_.timestamp ==
@@ -371,7 +371,7 @@ bool MavlinkService::send_highres_imu(std::uint64_t) noexcept
     }
 
     mavlink_message_t message{};
-    mavlink_msg_highres_imu_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_highres_imu_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                    &message, &imu);
     const bool sent = send_message(message);
     if (sent) {
@@ -384,7 +384,7 @@ bool MavlinkService::send_highres_imu(std::uint64_t) noexcept
     return sent;
 }
 
-bool MavlinkService::send_scaled_imu(std::uint64_t) noexcept
+bool MavlinkEndpoint::send_scaled_imu(std::uint64_t) noexcept
 {
     const bool raw_mag_streamable = latest_sensor_mag_.device_id != 0U &&
         latest_sensor_mag_.timestamp != 0U &&
@@ -460,7 +460,7 @@ bool MavlinkService::send_scaled_imu(std::uint64_t) noexcept
     imu.temperature = temperature_cdeg(temperature);
 
     mavlink_message_t message{};
-    mavlink_msg_scaled_imu_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_scaled_imu_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                   &message, &imu);
     const bool sent = send_message(message);
     if (sent) {
@@ -474,7 +474,7 @@ bool MavlinkService::send_scaled_imu(std::uint64_t) noexcept
     return sent;
 }
 
-bool MavlinkService::send_gps_raw_int(std::uint64_t now) noexcept
+bool MavlinkEndpoint::send_gps_raw_int(std::uint64_t now) noexcept
 {
     if (!gps_seen_) return false;
     const auto &gps = latest_vehicle_gps_;
@@ -513,12 +513,12 @@ bool MavlinkService::send_gps_raw_int(std::uint64_t now) noexcept
     raw.yaw = gps_streamable_ ? heading_cdeg(gps.heading) : 0U;
 
     mavlink_message_t message{};
-    mavlink_msg_gps_raw_int_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_gps_raw_int_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                    &message, &raw);
     return send_message(message);
 }
 
-bool MavlinkService::send_attitude(std::uint64_t now) noexcept
+bool MavlinkEndpoint::send_attitude(std::uint64_t now) noexcept
 {
     const auto &attitude = latest_vehicle_attitude_;
     if (!fresh(now, attitude.timestamp, kEstimatorOutputFreshnessUs) ||
@@ -546,12 +546,12 @@ bool MavlinkService::send_attitude(std::uint64_t now) noexcept
     }
 
     mavlink_message_t message{};
-    mavlink_msg_attitude_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_attitude_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                 &message, &output);
     return send_message(message);
 }
 
-bool MavlinkService::send_local_position_ned(std::uint64_t now) noexcept
+bool MavlinkEndpoint::send_local_position_ned(std::uint64_t now) noexcept
 {
     const auto &position = latest_vehicle_local_position_;
     if (!fresh(now, position.timestamp, kEstimatorOutputFreshnessUs) ||
@@ -571,12 +571,12 @@ bool MavlinkService::send_local_position_ned(std::uint64_t now) noexcept
     output.vy = position.vy;
     output.vz = position.vz;
     mavlink_message_t message{};
-    mavlink_msg_local_position_ned_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &output);
+    mavlink_msg_local_position_ned_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &output);
     return send_message(message);
 }
 
-bool MavlinkService::send_global_position_int(std::uint64_t now) noexcept
+bool MavlinkEndpoint::send_global_position_int(std::uint64_t now) noexcept
 {
     const auto &global = latest_vehicle_global_position_;
     const auto &local = latest_vehicle_local_position_;
@@ -606,12 +606,12 @@ bool MavlinkService::send_global_position_int(std::uint64_t now) noexcept
     output.hdg = course_cdeg(local.heading);
 
     mavlink_message_t message{};
-    mavlink_msg_global_position_int_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &output);
+    mavlink_msg_global_position_int_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &output);
     return send_message(message);
 }
 
-bool MavlinkService::send_estimator_status(std::uint64_t now) noexcept
+bool MavlinkEndpoint::send_estimator_status(std::uint64_t now) noexcept
 {
     const auto &status = latest_estimator_status_;
     if (!fresh(now, status.timestamp, kEstimatorOutputFreshnessUs)) {
@@ -632,12 +632,12 @@ bool MavlinkService::send_estimator_status(std::uint64_t now) noexcept
     output.pos_vert_accuracy = status.pos_vert_accuracy;
     output.flags = status.solution_status_flags;
     mavlink_message_t message{};
-    mavlink_msg_estimator_status_encode(
-        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &message, &output);
+    mavlink_msg_estimator_status_encode_chan(
+        MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_, &message, &output);
     return send_message(message);
 }
 
-bool MavlinkService::send_system_status(std::uint64_t) noexcept
+bool MavlinkEndpoint::send_system_status(std::uint64_t) noexcept
 {
     const std::uint32_t gyro = MAV_SYS_STATUS_SENSOR_3D_GYRO;
     const std::uint32_t accel = MAV_SYS_STATUS_SENSOR_3D_ACCEL;
@@ -681,7 +681,7 @@ bool MavlinkService::send_system_status(std::uint64_t) noexcept
     status.errors_count3 = clamp_error_count(latest_vehicle_gps_.system_error);
 
     mavlink_message_t message{};
-    mavlink_msg_sys_status_encode(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
+    mavlink_msg_sys_status_encode_chan(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, channel_,
                                   &message, &status);
     return send_message(message);
 }
