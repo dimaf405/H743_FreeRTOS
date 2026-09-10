@@ -120,12 +120,15 @@ def request_application_recovery(
         f"{PX4_REBOOT_ATTEMPTS * 2}"
     )
     if sequence.disconnected:
-        sequence_details += "; application USB port disappeared during reboot"
+        # 旧会话关闭时同名 COM 可能已重枚举；这里只说明断开，成功仍须 Recovery 握手。
+        sequence_details += "; application serial session disconnected during reboot"
     elif sequence.error:
         sequence_details += f"; serial sequence ended with {sequence.error}"
     if accepted is True:
         return True, f"{details}; {sequence_details}"
-    return False, f"{details}; {sequence_details}"
+    # 应用可能在主机读到 ACK 前就复位。未收到 ACK 不是拒绝，也不是切换成功；
+    # 只记录等待状态，继续由同一物理设备的 MCUboot SMP 握手确认结果。
+    return False, f"{sequence_details}; waiting for MCUboot Recovery handshake (ACK optional)"
 
 
 def request_explicit_port_recovery(
@@ -155,7 +158,7 @@ def request_explicit_port_recovery(
         f"{PX4_REBOOT_ATTEMPTS * 2}"
     )
     if sequence.disconnected:
-        details += "; application USB port disappeared during reboot"
+        details += "; application serial session disconnected during reboot"
     elif sequence.error:
         details += f"; serial sequence ended with {sequence.error}"
     return details

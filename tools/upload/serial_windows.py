@@ -86,7 +86,7 @@ def windows_serial_sequence_bytes(
     stages: tuple[SerialWriteStage, ...],
     read_seconds: float,
 ) -> SerialSequenceResult:
-    """Run all staged writes through one PowerShell SerialPort instance."""
+    """在同一个 Windows 串口会话内收发；复位断开后交由上层重新绑定设备。"""
     if re.fullmatch(r"COM[0-9]+", port, re.IGNORECASE) is None:
         return SerialSequenceResult(
             False, 0, False, b"", f"invalid Windows COM port: {port}"
@@ -113,6 +113,8 @@ def windows_serial_sequence_bytes(
         json.dumps({"stages": plan}, separators=(",", ":")).encode("utf-8")
     ).decode("ascii")
     read_milliseconds = max(0, int(round(read_seconds * 1000.0)))
+    # ACK 可能紧邻 USB 复位，必须在重试间隔内持续收集，不能睡满 350 ms 后才读。
+    # IsOpen 描述本次旧句柄是否仍有效；同名 COM 已重枚举不代表旧句柄还能继续写。
     script = (
         "$ErrorActionPreference='Stop';"
         f"$serial=[System.IO.Ports.SerialPort]::new('{port.upper()}',115200,"
@@ -125,10 +127,19 @@ def windows_serial_sequence_bytes(
         "$planJson=[Text.Encoding]::UTF8.GetString("
         f"[Convert]::FromBase64String('{encoded_plan}'));"
         "$plan=(ConvertFrom-Json -InputObject $planJson).stages;"
-        "function ReadAvailable{while($serial.IsOpen){"
+        "function ReadAvailable{while($true){"
+        "if(-not $serial.IsOpen){"
+        "throw [System.InvalidOperationException]::new('serial session closed')};"
         "$available=$serial.BytesToRead;if($available -le 0){break};"
         "$count=$serial.Read($buffer,0,[Math]::Min($buffer.Length,$available));"
         "if($count -gt 0){$received.Write($buffer,0,$count)}}};"
+        "function ReadFor([int]$milliseconds){"
+        "$timer=[Diagnostics.Stopwatch]::StartNew();"
+        "while($true){ReadAvailable;"
+        "$remaining=$milliseconds-$timer.Elapsed.TotalMilliseconds;"
+        "if($remaining -le 0){break};"
+        "Start-Sleep -Milliseconds ([int][Math]::Min(10,"
+        "[Math]::Ceiling($remaining)))}};"
         "try{$serial.Open();foreach($stage in $plan){"
         "if([bool]$stage.reset){$serial.DiscardInBuffer();"
         "$serial.DiscardOutBuffer()};"
@@ -137,18 +148,15 @@ def windows_serial_sequence_bytes(
         "if($payload.Length -gt 0){$serial.Write($payload,0,$payload.Length);"
         "$serial.BaseStream.Flush()};"
         "$completed+=1;"
-        "$delay=[int]$stage.delay_ms;"
-        "if($delay -gt 0){Start-Sleep -Milliseconds $delay};"
-        "ReadAvailable};"
-        f"$deadline=[DateTime]::UtcNow.AddMilliseconds({read_milliseconds});"
-        "while([DateTime]::UtcNow -lt $deadline){ReadAvailable;"
-        "Start-Sleep -Milliseconds 10}"
+        "ReadFor ([int]$stage.delay_ms)};"
+        f"ReadFor {read_milliseconds}"
         "}catch{$failure=$_.Exception.Message;"
-        "if($attempted){try{Start-Sleep -Milliseconds 50;"
+        "if($attempted){$disconnected=-not $serial.IsOpen;"
+        "if(-not $disconnected){try{Start-Sleep -Milliseconds 50;"
         "$present=@([System.IO.Ports.SerialPort]::GetPortNames()|"
         "ForEach-Object{$_.ToUpperInvariant()});"
         f"$disconnected=-not ($present -contains '{port.upper()}')"
-        "}catch{$disconnected=$false}}}"
+        "}catch{$disconnected=$false}}}}"
         "finally{try{ReadAvailable}catch{};"
         "try{if($serial.IsOpen){$serial.Close()}}catch{};$serial.Dispose()};"
         "$result=[ordered]@{attempted=$attempted;completed=$completed;"

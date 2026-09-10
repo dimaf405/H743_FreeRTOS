@@ -105,6 +105,13 @@ DENIED/REJECTED ACK 立即终止。无论 ACK 是否到达，只有相同物理 
 枚举且 `image list` 得到有效 MCUboot SMP 响应，才判定 Recovery 切换成功。软件入口无效时命令返回
 非零，不把仅完成串口写入误报为复位成功。
 
+Windows 在每轮重试间隔内持续接收 ACK；串口会话关闭时立即结束旧会话，由上层等待同一物理设备的
+Recovery 握手。同名 COM 可能已快速重枚举，不能仅凭端口名仍在列表中就继续向旧句柄写入。
+`PX4 MAVLink reboot writes=2/6` 表示六次计划重启写入中已完成两次，不是固件上传进度；
+旧日志 `no matching MAVLink reboot ACK was received` 本身也不表示上传失败，现改为等待 Recovery
+握手的状态提示，明确 ACK 可缺省。切换结果应以随后的
+`SMP_LIST` 为准；若最终出现 `USB_REENUM` 或 `PORT_BUSY`，需保留对应阶段及退出前日志定位原因。
+
 普通上电且没有软件 Recovery 请求时仍保留原有 3 秒 SMP 窗口。Primary 镜像缺失、签名无效或
 向量表无效时，MCUboot 也会持续停留在 Recovery。正在运行但不提供上述 MAVLink 身份与重启命令的
 应用无法安全授权软件切换；首次迁移必须通过现有工厂/调试通道写入
