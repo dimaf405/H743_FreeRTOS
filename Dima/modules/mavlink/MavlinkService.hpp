@@ -84,6 +84,8 @@ private:
 
     // 协议处理器只通过这些 trampoline 回到唯一链路所有者，不能直接操作 USB。
     static bool send_frame(void *ctx, mavlink_message_t &msg) noexcept;
+    static bool send_log_batch(void *ctx, const std::uint8_t *data,
+                               std::size_t length) noexcept;
     static void send_frame_void(void *ctx, mavlink_message_t &msg) noexcept;
     static std::uint8_t request_message(void *ctx,
                                         std::uint16_t message_id,

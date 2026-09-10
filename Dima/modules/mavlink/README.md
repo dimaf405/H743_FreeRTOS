@@ -48,8 +48,21 @@
 ## Onboard Log
 
 - `MavlinkLogHandler` 对照 PX4 v1.17.0 同名实现处理 `LOG_REQUEST_LIST/DATA/END/ERASE`，并复用同一 storage worker/Ring 生成 `STORAGE_INFORMATION`；日志 ID 从 0 开始，`LOG_DATA` 长度直接由 mavgen 字段容量派生。
-- PX4 的文件扫描、稳定列表、按 offset 读取和整树擦除语义保留；平台适配只把 POSIX 调用换成 `LogFileStore`，实际 FatFs/SDMMC 工作固定在 `wq:storage`，通信队列仅发送固定 8 槽响应 Ring。
+- PX4 的文件扫描、稳定列表、按 offset 读取和整树擦除语义保留；平台适配只把 POSIX 调用换成 `LogFileStore`，实际 FatFs/SDMMC 工作固定在 `wq:storage`，通信队列仅消费固定 32 槽响应 Ring。预取每轮最多补 32 片，再让出 storage 队列。
 - 无卡或无文件按 `common.xml` 强制回一条 `id=0,num_logs=0`，使 QGC 结束 Refresh；板上无 RTC，`LOG_ENTRY.time_utc=0`，避免用 FatFs 固定日期伪装真实采集时间。
+
+### USB 下载批量传输
+
+对照固定 PX4 v1.17.0 的 `mavlink_log_handler.cpp::state_sending_data()`：上游根据 `get_free_tx_buf()` 连续发送，达到缓冲或 burst 上限才让出。Dima 的 Console 是等待 CDC 完成的同步接口，因此将最多 16 个官方 codec 编码的完整帧合并为一次写入，以适配同一批量发送原则。协议仍为标准 `LOG_DATA`，没有私有大包、参数或消息定义变化。
+
+此前每 10 ms 最多发送 4 个 90-byte 分片，理想载荷上限为 `4 * 90 / 0.01 = 36000 B/s`；每帧单独等待 USB 完成，以及遥测和错过周期，会进一步降低吞吐，这与 QGC 约 27 KB/s 的现象相符。现在每轮上限为 16 片，理想载荷预算为 `144000 B/s`，它是软件调度预算，不是实测或保证速度。
+
+- Console 与日志组包共用 2048-byte 静态容量；普通 MAVLink v2 满 `LOG_DATA` 帧为 109 bytes，16 帧为 1744 bytes。组包空间检查使用生成库的 `MAVLINK_MAX_PACKET_LEN`，wire 长度和 CRC 全部由 mavgen 生成接口处理。
+- 单次日志批量写仍使用原有 5 ms 整笔截止，ACK/心跳/遥测仍先发送。发送缓冲属于对象，USB staging 在超时后继续保持，直到迟到完成或连接 epoch 失效，不能复用在途字节。
+- 只有整批完成才逐项按 sequence 消费响应；请求切换、END/ERASE、USB 断开仍使旧分片失效，并保留独立的 `STORAGE_INFORMATION` 回复。失败可能重发相同 offset，接收方仍按标准日志 offset 补洞/去重。
+- 当前物理控制器仍是 PA11/PA12 上的 OTG FS、12 Mbit/s、64-byte bulk endpoint；ST USB 栈自动切分整批数据并处理必要的 ZLP。FS HAL 会清除 `dma_enable`，此修复使用现有 FS 硬件能力。
+
+板端验收应使用同一个已关闭、足够大的日志比较下载速度与总耗时，并核对完整下载后的文件大小和 SHA-256；同时观察心跳/ACK、取消后重下、指定 offset 补传和拔插 USB 后重新下载。主机源码/构建检查无法替代这些 QGC/SD/USB 动态结果。
 
 ## TX 与连接边界
 

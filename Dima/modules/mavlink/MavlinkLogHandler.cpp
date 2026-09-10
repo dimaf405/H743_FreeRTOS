@@ -235,13 +235,22 @@ bool MavlinkLogHandler::enqueue_response(const Response &response) noexcept
     return true;
 }
 
-bool MavlinkLogHandler::peek_response(Response &response) noexcept
+bool MavlinkLogHandler::peek_response(
+    Response &response, std::size_t index,
+    std::uint32_t first_sequence) noexcept
 {
     dima::platform::CriticalGuard guard;
-    if (reset_requested_ || response_count_ == 0U) {
+    if (reset_requested_ || index >= response_count_) {
         return false;
     }
-    response = response_queue_[response_head_];
+    // 批编码期间 storage 可能替换请求；首项 sequence 改变后立即停止取片，
+    // 避免把新旧请求的 Ring 索引拼成同一批。临界区只复制一项，不含编码/USB。
+    if (index != 0U &&
+        response_queue_[response_head_].sequence != first_sequence) {
+        return false;
+    }
+    response = response_queue_[
+        (response_head_ + index) % kResponseQueueCapacity];
     return true;
 }
 
@@ -554,8 +563,12 @@ void MavlinkLogHandler::process_listing() noexcept
 
 void MavlinkLogHandler::process_data() noexcept
 {
-    while (worker_state_ == WorkerState::SendingData &&
-           response_space_available()) {
+    // 即使 USB 在本轮读取期间持续消费，也只补一整个 Ring，随后让出 storage
+    // 队列给日志写入和参数持久化；不能因扩大预取窗口而形成无限读循环。
+    for (std::size_t count = 0U;
+         count < kResponseQueueCapacity &&
+         worker_state_ == WorkerState::SendingData &&
+         response_space_available(); ++count) {
         if (data_offset_ >= data_end_offset_ ||
             data_offset_ >= current_log_size_) {
             set_worker_state(WorkerState::Idle);
@@ -635,9 +648,16 @@ void MavlinkLogHandler::Run()
 
 void MavlinkLogHandler::send() noexcept
 {
-    for (std::size_t count = 0U; count < kMaximumResponsesPerSend; ++count) {
+    std::uint32_t sequences[kMaximumResponsesPerSend]{};
+    std::size_t response_count = 0U;
+    std::size_t batch_size = 0U;
+    // PX4 按 TX 可用空间连续发 LOG_DATA；本地 Console 是有完成确认的同步接口，
+    // 因此先用官方 codec 合并完整帧，再一次提交。预留生成库的最大帧空间，
+    // 不手写 payload/CRC/消息列表，也不在 lp_default 的任务栈上放大块缓冲。
+    while (response_count < kMaximumResponsesPerSend &&
+           sizeof(tx_batch_) - batch_size >= MAVLINK_MAX_PACKET_LEN) {
         Response response{};
-        if (!peek_response(response)) {
+        if (!peek_response(response, response_count, sequences[0])) {
             break;
         }
         mavlink_message_t message{};
@@ -654,10 +674,17 @@ void MavlinkLogHandler::send() noexcept
                 MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID,
                 &message, &response.storage_information);
         }
-        if (!sender_(sender_context_, message)) {
-            break;
+        batch_size += mavlink_msg_to_send_buffer(
+            tx_batch_ + batch_size, &message);
+        sequences[response_count++] = response.sequence;
+    }
+
+    // 整批 USB 完成才消费响应；超时/断线保留分片供协议重试，Console staging
+    // 继续保护尚在传输的字节。逐项核对 sequence，禁止误弹 storage 新事务的响应。
+    if (batch_size != 0U && sender_(sender_context_, tx_batch_, batch_size)) {
+        for (std::size_t index = 0U; index < response_count; ++index) {
+            pop_response(sequences[index]);
         }
-        pop_response(response.sequence);
     }
 
     // TX Ring 腾出空间后唤醒 storage worker，继续按 PX4 burst 语义预取下一批。

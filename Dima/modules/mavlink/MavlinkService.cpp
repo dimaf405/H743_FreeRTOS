@@ -47,7 +47,7 @@ MavlinkService::MavlinkService(
     : px4::ScheduledWorkItem("mavlink", px4::wq_configurations::lp_default),
       console_(console), boot_control_(boot_control),
       mission_(mission_service, &MavlinkService::send_frame, this),
-      log_handler_(log_files, &MavlinkService::send_frame, this)
+      log_handler_(log_files, &MavlinkService::send_log_batch, this)
 {
     metadata_ftp_.init(
         kMetadataFiles,
@@ -361,6 +361,19 @@ bool MavlinkService::send_frame(void *ctx, mavlink_message_t &msg) noexcept
         return false;
     }
     return static_cast<MavlinkService *>(ctx)->send_message(msg);
+}
+
+bool MavlinkService::send_log_batch(
+    void *ctx, const std::uint8_t *data, std::size_t length) noexcept
+{
+    if (ctx == nullptr) {
+        return false;
+    }
+    // 日志完整帧共用一次有界 USB 写；沿用 5 ms 整笔截止，不按帧累加等待，
+    // 并保持 ACK/心跳在 Run 中先于日志发送，避免下载压住控制面。
+    auto &self = *static_cast<MavlinkService *>(ctx);
+    return self.console_.write(data, length, kTxTimeoutMs) ==
+           static_cast<int>(length);
 }
 
 void MavlinkService::send_frame_void(void *ctx,

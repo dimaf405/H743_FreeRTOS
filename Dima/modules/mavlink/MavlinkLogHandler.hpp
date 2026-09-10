@@ -34,6 +34,7 @@
 #pragma once
 
 #include "mavlink/MavlinkBridge.h"
+#include "api/Console.hpp"
 #include "api/LogFileStore.hpp"
 #include "work_queue/ScheduledWorkItem.hpp"
 
@@ -50,8 +51,8 @@ namespace dima::modules::mavlink {
  */
 class MavlinkLogHandler final : public px4::ScheduledWorkItem {
 public:
-    using SendCallback = bool (*)(void *context,
-                                  mavlink_message_t &message) noexcept;
+    using SendCallback = bool (*)(void *context, const std::uint8_t *data,
+                                  std::size_t length) noexcept;
 
     MavlinkLogHandler(dima::platform::LogFileStore &store,
                       SendCallback sender, void *sender_context) noexcept;
@@ -110,7 +111,8 @@ private:
     bool enqueue_request(const Request &request) noexcept;
     bool pop_request(Request &request) noexcept;
     bool enqueue_response(const Response &response) noexcept;
-    bool peek_response(Response &response) noexcept;
+    bool peek_response(Response &response, std::size_t index,
+                       std::uint32_t first_sequence) noexcept;
     void pop_response(std::uint32_t expected_sequence) noexcept;
     void clear_responses() noexcept;
     void clear_log_responses_locked() noexcept;
@@ -128,8 +130,11 @@ private:
     void enqueue_empty_list() noexcept;
 
     static constexpr std::size_t kRequestQueueCapacity = 4U;
-    static constexpr std::size_t kResponseQueueCapacity = 8U;
-    static constexpr std::size_t kMaximumResponsesPerSend = 4U;
+    // 双批预取吸收 storage/USB 调度相位差；每轮最多合并 16 帧，只等待一次
+    // USB 完成。100 Hz 下满 LOG_DATA 的载荷预算为 16 * 90 * 100 = 144000 B/s。
+    static constexpr std::size_t kMaximumResponsesPerSend = 16U;
+    static constexpr std::size_t kResponseQueueCapacity =
+        2U * kMaximumResponsesPerSend;
 
     dima::platform::LogFileStore &store_;
     SendCallback sender_{nullptr};
@@ -137,6 +142,7 @@ private:
 
     Request request_queue_[kRequestQueueCapacity]{};
     Response response_queue_[kResponseQueueCapacity]{};
+    std::uint8_t tx_batch_[dima::platform::Console::kWriteCapacity]{};
     std::uint8_t request_head_{0U};
     std::uint8_t request_tail_{0U};
     std::uint8_t request_count_{0U};

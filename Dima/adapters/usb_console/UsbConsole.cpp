@@ -9,9 +9,9 @@ namespace {
 
 constexpr std::size_t kRxCapacity = 1024U;
 /* RX 是 ISR 单生产者/任务单消费者的 2^n 环形缓冲；幂次容量允许用 mask 取模。
- * TX staging 覆盖未签名 MAVLink2 FILE_TRANSFER_PROTOCOL 的 266 B 最大帧并留余量，
- * 同时避免 Console 适配器反向依赖协议头。 */
-constexpr std::size_t kTxCapacity = 280U;
+ * TX staging 与 Console 公共写入容量同源，可容纳完整的 MAVLink 日志批次。
+ * FS 仍由 ST USB 栈按 64-byte 端点包切分，多帧共用一次提交/完成等待。 */
+constexpr std::size_t kTxCapacity = platform::Console::kWriteCapacity;
 static_assert((kRxCapacity & (kRxCapacity - 1U)) == 0U);
 
 class UsbConsole final : public platform::Console {
