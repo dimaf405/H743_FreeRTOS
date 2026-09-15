@@ -9,4 +9,6 @@
 - **上游 API 保留：** 以适配和组合方式复用上游公开 API；自有产品代码使用 `dima::rover` 命名空间，不改写上游标识。
 - **编译边界：** `ApplicationContext.hpp` 对独立存储、仅以引用持有的 LogService、VehicleImu、Ekf2、RoverDifferential 使用前置声明，完整实现由装配 `.cpp` 引入；不更改静态对象布局、首次构造顺序、owner 或 watchdog 调用路径。
 
-- **UART 数传维护：** SerialConfig 先于双链路 MavlinkService 构造。appMain 在请求维护票据前异步排空 UART 的参数回应，许可内停止串口消费者、应用/回滚配置，再恢复 UART 调度。等待期间持续返回主循环喂狗，USB 协议上下文继续工作。
+- **UART 数传装配：** SerialConfig 先于双链路 MavlinkService 构造。串口映射为重启生效合同（对齐 ArduPilot/PX4）：参数写入只做原子迁移，端口接管在启动时执行；运行期没有串口维护事务、排空或热重配，USB 配置入口始终可用。
+
+- **参数保存装配：** ParameterService 不再依赖 RuntimeMaintenanceCoordinator，后台按 PX4 合并请求并连续保存整份快照；仅注入 Flash、文件存储和原子的 Armed/Flash 互锁。设备重配置仍使用原维护协调器。

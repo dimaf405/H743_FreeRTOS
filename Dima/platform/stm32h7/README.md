@@ -55,3 +55,12 @@ SPI 分频选择和板级启动请求操作的运行期逻辑位于源文件；B
 ## 第二个双向 UART 端点
 
 `UartDuplexDmaEndpoint` 复用同一实现和两个固定资源描述。原端点保持 Stream3 RX / IT TX；第二端点使用 DMA1 Stream4 RX（1024 B）、Stream5 TX（512 B），软件 RX Ring 为 4096 B。DMA 缓冲全部位于原非缓存区，发送缓冲只在 UART TC 后复用。RX/TX/error 全局回调按 HAL 句柄唯一归属路由，普通串口配置必须等两个双向端点和时间戳端点都释放线路。溢出、错误、恢复/恢复失败使用累计计数；不增加 RTOS 任务或堆缓冲。
+
+`AsyncSerialPortStats::transmit_completions` 仅在存在在途发送的 UART TC 回调中
+递增，先发布完成代数再释放缓冲；DMA 搬运完成、恢复中止、重复回调与重新打开
+端点均不计成功。带在途发送的 stop 和接收恢复中的 TX abort 计入
+`transmit_errors`，两个累计计数跨端点启停保留，使上层可区分正常完成与中止后空闲。
+
+启动诊断的只读 `StartupDiagnostics::reset_info()` 由 Board 组合根适配现有 D3 记录：校验头后提供 boot_count、原始 reset_flags、IWDG/WWDG 指示与 previous fault/PC。上层仅打印证据，不直接读 RCC；不改变 MCUboot 桥接、清除复位标志或故障持久化路径。真实重启原因和 QGC 启动日志显示仍需板端确认。
+
+PWM Board 后端读取运行寄存器和 GPIO AF 作为接受命令的条件，覆盖 TIMPRE 时钟分支、PWM1/预装载、N-only 与普通通道极性/使能、主从同步和 CEN/MOE。异常停波使用本板固定外设地址，先 GPIO 低电平再停止/清空定时器，不依赖已损坏的 HAL Instance。有效句柄的 HAL Stop 仍负责恢复通道状态。短临界区只覆盖寄存器写入/读回，不在其中等待硬件周期；实际 PWM 边沿尚未由捕获或示波器确认。
