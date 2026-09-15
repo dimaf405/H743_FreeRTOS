@@ -15,7 +15,7 @@ void AutoCalibrationMode::identify_speed(std::uint64_t now) noexcept
     if (!exercise_running_) {
         longitudinal_ = steering_ = 0.0F;
         if (!stopped() || !tuning_feedback(now) || !feedback_unmasked() ||
-            now - arm_started_ < static_cast<std::uint64_t>((tuning_motor_.arm_ramp_s + 0.25F) * 1000000.0F)) return;
+            now - arm_started_ < static_cast<std::uint64_t>((tuning_arm_ramp_ + 0.25F) * 1000000.0F)) return;
         exercise_running_ = true;
         exercise_started_ = now;
         tuning_sample_ = 0U;
@@ -25,12 +25,12 @@ void AutoCalibrationMode::identify_speed(std::uint64_t now) noexcept
     }
     const unsigned phase = static_cast<unsigned>((now - exercise_started_) / 4000000ULL) % 4U;
     const float fraction = phase == 1U ? 1.0F : phase == 3U ? 0.75F : 0.5F;
-    const float desired = fraction * tuning_config_.speed_limit / status_.maximum_speed_m_s;
+    const float desired = config_.motor_maximum * fraction * tuning_config_.speed_limit / status_.maximum_speed_m_s;
     // 已验证前馈确定安全激励量；周期变化与稳态 FF/磁样本窗口隔离。保持原
     // 0.15/s 请求斜率，模型输入是最终执行器命令，另存整形前后的比例供
     // PI 坐标转换；输出是 EKF 车速，不拿执行器命令冒充物理响应。
-    const float step = 0.02F * (tuning_motor_.throttle_slew_rate > 0.0F
-        ? std::min(0.05F, 0.5F * tuning_motor_.throttle_slew_rate) : 0.05F);
+    const float step = 0.02F * (tuning_motor_slew_ > 0.0F
+        ? std::min(0.05F, 0.5F * tuning_motor_slew_) : 0.05F);
     longitudinal_ += std::clamp(desired - longitudinal_, -step, step);
     steering_ = std::clamp(0.5F * math::wrap_pi(leg_heading_ - rtk_sub_.get().array_heading_rad), -0.10F, 0.10F);
     if (now - exercise_started_ > 8000000ULL && ground_speed() < 0.08F) {
@@ -75,7 +75,7 @@ void AutoCalibrationMode::identify_rate(std::uint64_t now) noexcept
     if (!exercise_running_) {
         steering_ = 0.0F;
         if (!stopped() || !tuning_feedback(now) || !feedback_unmasked() ||
-            now - arm_started_ < static_cast<std::uint64_t>((tuning_motor_.arm_ramp_s + 0.25F) * 1000000.0F)) return;
+            now - arm_started_ < static_cast<std::uint64_t>((tuning_arm_ramp_ + 0.25F) * 1000000.0F)) return;
         exercise_running_ = true;
         exercise_started_ = now;
         tuning_sample_ = 0U;
@@ -133,7 +133,9 @@ bool AutoCalibrationMode::calculate_inner_gains() noexcept
         math::PiDesignLimits limits{};
         // 元数据的 0..100 不是自动搜索范围；按本次激励的实际 FF 余量预留
         // 一半给模型误差，PI 最坏项还须在该余量内，永不放宽硬输出上限。
-        const float ceiling = rate ? std::min(0.35F, config_.steering) : std::min(0.40F, config_.throttle);
+        // 纵向 PI 上限为冻结包络，转向 PI 使用完整归一化轴；前面的 FF
+        // 余量门禁仍独立判可行，不能在这里重新引入转向固定输出顶。
+        const float ceiling = rate ? 1.0F : config_.motor_maximum;
         limits.output_headroom = 0.5F * (ceiling - feedforward) * shaping;
         limits.maximum_proportional_gain = limits.maximum_integral_gain = 100.0F * shaping;
         limits.maximum_error = range;

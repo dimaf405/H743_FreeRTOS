@@ -6,7 +6,6 @@
 #include "rover/CalibrationFence.hpp"
 #include "rover/CalibrationIdentification.hpp"
 #include "rover/CalibrationResponse.hpp"
-#include "rover/DifferentialDrive.hpp"
 #include "rover/SegmentGuidance.hpp"
 #include "calibration/SensorCalibrationAlgorithms.hpp"
 #include "lifecycle/module_base.hpp"
@@ -108,10 +107,8 @@ private:
     void run_response_profile(std::uint64_t now) noexcept;
     void finish_response_window(bool rate) noexcept;
     void reset_response_tail() noexcept;
-    void finish_slew_window(bool rate) noexcept;
-    bool slew_evidence_valid() const noexcept;
-    bool select_slew_candidate(std::uint64_t now) noexcept;
-    bool finish_slew_trial(std::uint64_t now) noexcept;
+    void begin_profile_window(std::uint64_t now, bool rate) noexcept;
+    void record_response_sample(std::uint64_t timestamp, float value, bool usable) noexcept;
     bool calculate_runtime_candidates(std::uint64_t now) noexcept;
     bool begin_runtime_transaction(std::uint64_t now) noexcept;
     void begin_identification(std::uint64_t now) noexcept;
@@ -214,38 +211,23 @@ private:
     dima::lib::rover::calibration::CircleFence fence_{};
     Status status_{};
     TuningConfig tuning_config_{};
-    dima::lib::rover::DifferentialDriveConfig tuning_motor_{};
-    dima::lib::rover::calibration::MotorResponseProfile response_speed_{}, response_rate_{}, response_full_{};
+    float tuning_motor_slew_{}, tuning_arm_ramp_{};
+    dima::lib::rover::calibration::MotorResponseProfile response_speed_{}, response_rate_{};
     dima::lib::rover::calibration::ResponseStatistics noise_speed_{}, noise_rate_{}, response_tail_{};
-    struct ResponseSample { std::uint64_t timestamp{}; float value{}; bool usable{}; bool motor_slew{}; };
+    struct ResponseSample { std::uint64_t timestamp{}; float value{}; bool usable{}; };
     ResponseSample response_samples_[256]{};
     std::size_t response_sample_count_{};
     float response_rate_lower_[4]{}, response_noise_[2]{}, response_initial_{};
-    float profile_forward_gain_{}, profile_input_ceiling_{}, profile_rate_gain_{};
+    float profile_input_floor_{}, profile_input_ceiling_{};
     float response_settle_s_{};
     float runtime_ff_speed_{}, runtime_ff_yaw_{};
     std::uint64_t response_phase_started_{}, response_last_sample_{}, response_stop_started_{};
-    std::uint64_t response_tail_timestamp_{}, response_profile_deadline_{};
+    std::uint64_t response_tail_timestamp_{}, profile_motion_deadline_{}, profile_phase_deadline_{};
+    std::uint64_t profile_stable_since_{}, response_sample_interval_{};
     std::uint64_t tuning_reference_{};
     std::uint8_t profile_motion_{}, profile_level_{}, tuning_xy_reset_{}, tuning_vxy_reset_{}, tuning_yaw_reset_{}, tuning_odom_reset_{};
-    bool profile_started_{}, profile_braking_{}, profile_noise_ready_{}, runtime_cohort_{}, motor_candidate_changed_{};
+    bool profile_started_{}, profile_braking_{}, profile_noise_ready_{}, runtime_cohort_{};
     bool runtime_fully_observed_{}, path_gain_sensitive_{};
-    bool motor_reprofiled_{};
-    dima::lib::rover::calibration::MotorResponseCandidate motor_profile_reference_{};
-    bool motor_profile_verified_{}, profile_speed_only_{}, slew_probe_eligible_{}, slew_reprofile_pending_{};
-    bool motor_slew_verified_{}, motor_slew_changed_{};
-    enum class SlewTrial : std::uint8_t { Baseline, Candidate, Restore, Complete };
-    struct SlewEvidence {
-        // 普通正向/反向/满输出各七个窗口；只存比较指标，不再复制原始时序。
-        float target[21]{}, input[21]{}, error[21]{};
-        float active_min[2]{}, active_max[2]{};
-        float peak_overshoot{}, noise_ratio{}, noise{};
-        std::uint32_t observed_mask{}, failed_mask{};
-        std::uint8_t active_directions{};
-    };
-    SlewEvidence slew_evidence_{}, slew_baseline_{};
-    SlewTrial slew_trial_{SlewTrial::Baseline};
-    float slew_original_{}, slew_input_ceiling_[2]{};
     dima::lib::rover::calibration::FirstOrderDelayIdentifier identifiers_[4]{};
     dima::lib::rover::calibration::FirstOrderModel identified_models_[4]{};
     dima::lib::rover::calibration::StepResponseValidator validator_{};
@@ -297,6 +279,8 @@ private:
     float leg_distance_{};
     float leg_heading_{}, turn_heading_{}, last_turn_heading_{}, turn_integral_{}, turn_remaining_{};
     float longitudinal_{}, steering_{};
+    float straight_start_floor_{};
+    std::uint64_t drive_envelope_since_{};
     float candidate_mag_[3]{};
     float bootstrap_offset_[3]{};
     std::uint32_t mag_device_id_{}, gps_device_id_{}, imu_device_id_{};

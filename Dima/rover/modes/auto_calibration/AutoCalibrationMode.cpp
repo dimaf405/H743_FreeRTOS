@@ -238,10 +238,9 @@ bool AutoCalibrationMode::is_motion_state() const noexcept
     case Status::STATE_STOP_IDENTIFICATION: case Status::STATE_VALIDATE_SPEED:
     case Status::STATE_VALIDATE_RATE: case Status::STATE_VALIDATE_HEADING:
     case Status::STATE_VALIDATE_PATH: case Status::STATE_STOP_VALIDATION: return true;
-    case Status::STATE_PROFILE_FORWARD: case Status::STATE_PROFILE_REVERSE:
+    case Status::STATE_PROFILE_FORWARD:
     case Status::STATE_PROFILE_RATE_CW: case Status::STATE_PROFILE_RATE_CCW:
-    case Status::STATE_PROFILE_FULL: case Status::STATE_STOP_PROFILE:
-    case Status::STATE_VALIDATE_REVERSE: return true;
+    case Status::STATE_STOP_PROFILE:
     case Status::STATE_VALIDATE_DRIVING: return true;
     default: return false;
     }
@@ -318,7 +317,12 @@ void AutoCalibrationMode::transition(std::uint8_t next, std::uint64_t now) noexc
     turn_started_ = false;
     turn_braking_ = false;
     steady_level_ = 3U;
+    straight_start_floor_ = 0.0F;
+    drive_envelope_since_ = 0U;
     last_report_ = 0U;
+    status_.excitation_phase = Status::EXCITATION_NONE;
+    status_.excitation_samples = 0U;
+    status_.excitation_target = status_.excitation_remaining_s = 0.0F;
     PX4_INFO("[autocal] %s", dima::generated::uorb_labels::auto_calibration_status_state_name(next));
 }
 
@@ -345,14 +349,16 @@ void AutoCalibrationMode::begin(std::uint64_t now) noexcept
     status_.session_id = session_id_;
     status_.active = true;
     status_.result = Status::RESULT_RUNNING;
+    // 本模式只采前进/CW/CCW，无法证明 Manual 共用电机整形的完整正反域。
+    // 明确报告能力范围外跳过，不写这些参数，也不把它计作已尝试失败。
+    status_.skipped_stages = Status::STAGE_MOTOR_PROFILE;
     session_started_ = now;
     last_resume_request_ = 0U;
     longitudinal_ = steering_ = 0.0F;
     pending_termination_ = cancel_requested_ = bootstrap_applied_ = mag_ready_ = false;
     tuning_started_ = exercise_running_ = validation_passed_ = false;
     imu_bias_attempted_ = imu_bias_accel_ = imu_bias_gyro_ = imu_bias_finalizing_ = false;
-    runtime_cohort_ = motor_candidate_changed_ = false;
-    motor_reprofiled_ = false;
+    runtime_cohort_ = false;
     tuning_reference_ = 0U;
     physical_speed_ = physical_rate_ = 0.0F;
     turn_resume_state_ = Status::STATE_STRAIGHT_BACK;
@@ -377,6 +383,7 @@ void AutoCalibrationMode::begin(std::uint64_t now) noexcept
     // 圆心只能在本会话入口抓取一次。后续定位恢复、Level、Disarm 或 RTK
     // 重锁都不能把当前坐标替换成新圆心；入口无定位则本会话仅做静态项。
     capture_fence(now);
+    PX4_INFO_RAW("[autocal] session=%lu begin\n", static_cast<unsigned long>(status_.session_id));
     transition(Status::STATE_PREFLIGHT_CHECK, now);
     if (!config_valid_) terminate(Status::FAILURE_PARAMETER, false, now);
 }
@@ -391,6 +398,8 @@ void AutoCalibrationMode::terminate(std::uint8_t reason, bool cancelled, std::ui
     status_.awaiting_arm = false;
     status_.session_authorized = false;
     longitudinal_ = steering_ = 0.0F;
+    if (status_.excitation_phase != Status::EXCITATION_NONE) status_.excitation_phase = Status::EXCITATION_BRAKE;
+    status_.excitation_target = status_.excitation_remaining_s = 0.0F;
     request(auto_calibration_request_s::REQUEST_EXIT, now);
     PX4_WARN("[autocal] stopping: %s", dima::generated::uorb_labels::auto_calibration_status_failure_name(reason));
 }
@@ -409,6 +418,8 @@ void AutoCalibrationMode::finish(std::uint64_t now) noexcept
         ? Status::RESULT_SUCCESS : status_.completed_stages != 0U ? Status::RESULT_PARTIAL : Status::RESULT_FAILED;
     status_.active = status_.motion_allowed = status_.awaiting_arm = false;
     status_.session_authorized = false;
+    status_.excitation_phase = Status::EXCITATION_NONE;
+    status_.excitation_target = status_.excitation_remaining_s = 0.0F;
     // 未最终保存的关联证据在回滚/退出后不再代表当前 RAM 配置；终态只展示
     // 已保存阶段，避免“validated RAM / awaiting checks”在会话结束后继续误导。
     status_.provisional_validated_stages = 0U;
@@ -424,7 +435,8 @@ void AutoCalibrationMode::finish(std::uint64_t now) noexcept
     }
     status_.progress = complete ? 100U : status_.progress;
     request(auto_calibration_request_s::REQUEST_EXIT, now);
-    PX4_INFO("[autocal] %s: %s", dima::generated::uorb_labels::auto_calibration_status_result_name(status_.result),
+    PX4_INFO("[autocal] session=%lu %s: %s", static_cast<unsigned long>(status_.session_id),
+        dima::generated::uorb_labels::auto_calibration_status_result_name(status_.result),
         dima::generated::uorb_labels::auto_calibration_status_failure_name(status_.failure_reason));
 }
 
