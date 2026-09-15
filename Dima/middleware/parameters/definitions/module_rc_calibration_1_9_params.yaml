@@ -44,8 +44,11 @@ parameters:
       category: System
       description:
         short: 遥控通道 1 的中位死区
+        long: |-
+          默认控制通道按 APM Rover 使用 30 微秒中位死区，抑制回中偏差引发的微动和误判倒车。
+          若修改油门或转向映射，应为新控制通道配置适当死区；0 表示明确关闭死区。
       type: float
-      default: 0.0
+      default: 30.0
       unit: us
       min: 0
       max: 500
@@ -91,8 +94,11 @@ parameters:
       category: System
       description:
         short: 遥控通道 2 的中位死区
+        long: |-
+          默认控制通道按 APM Rover 使用 30 微秒中位死区，抑制回中偏差引发的微动和误判倒车。
+          若修改油门或转向映射，应为新控制通道配置适当死区；0 表示明确关闭死区。
       type: float
-      default: 0.0
+      default: 30.0
       unit: us
       min: 0
       max: 500

@@ -52,3 +52,13 @@ Arm 只实现二段开关。启用 QGC Advanced UI 后在 Parameters 页面配�
 `RC_MAP_FLTMODE=0..18` 选择主模式通道，0 为禁用；同一校准通道按 PX4 v1.17 公式分为六槽，标准三段开关的低/中/高对应槽 1/4/6。`COM_FLTMODE1..6` 由一个多实例 YAML 定义生成，每槽只允许 `-1=Calibration Reserved/Unassigned`、`0=Manual`、`3=Mission`，默认均为 -1。推荐三段配置为槽 1 Manual、槽 4 Mission、槽 6 Calibration Reserved；预留槽不发布动作，Mission 仍通过 Commander 完整的 Armed、任务、参数、AutoMode 和 EKF readiness 事务，拒绝后不会自动重试。瞬时模式按键、长按 Toggle 和其他飞行模式不在本阶段。
 
 `COM_RC_IN_MODE` 只允许 `0=RC only`，其他控制源模式在协议写入时拒绝、在存储加载时 fail-closed。Gear、Loiter、Offboard、Return、固定翼 Flaps 与通用 Aux 均不定义 QGC 映射或阈值参数；保留的 Throttle、Yaw、Arm、Kill 和主模式通道仍具有完整 `0..18` 范围。`PARAM_MAP_RC` 在线参数调节不在本阶段。
+
+## 默认控制通道中位死区
+
+默认 `RC_MAP_THROTTLE=1`、`RC_MAP_YAW=2` 对应的 `RC1_DZ/RC2_DZ` 在权威 YAML 中设为 30 us，对照 APM Rover `radio.cpp::init_rc_in()` 的控制通道默认值。其余通道不改，显式设置 0 仍表示关闭死区。映射到其他通道时，应配置新通道的 TRIM/DZ，不把开关通道整体加死区，也不在运行时擅自覆盖用户值。
+
+RC 输入必须先经过死区归零再进入 Manual 和倒车转向判断。实车日志中稳定 `T=-0.012` 会产生负纵向输出，并在 `RD_REV_STEER=1` 时让本应原地转向的操作误走倒车转向分支；放大电机数值零阈值不能替代 RC 域校准。使用默认 1000/1500/2000 时，1494 us 在 30 us 死区内归零，1000/2000 us 仍映射到 -1/+1。
+
+已保存的旧零死区不会被固件升级自动覆盖；已有车辆需显式修改对应 RC_DZ。默认值与生成结果、本机构建不等于板端杆位方向、停车效果或 PWM 波形验收。
+
+本轮已用实际 normalize/Manual deadzone/差速算法复现日志 n=10 的错误倒车转向路径，并核对 30 us 中位区、双 REV 端点和 MIN=0.15 的 1000 个零输出周期。正式生成后 RC1_DZ/RC2_DZ 默认值为 30，RC3_DZ 仍为 0；Linux 原生正常构建通过（129.11 s，exit=0，签名镜像 604386 B）。未新增测试文件/框架，未执行独立 verify 或设备操作。
