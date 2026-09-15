@@ -20,9 +20,11 @@ Commander 只维护安全状态和 uORB 投影，不直接拥有传感器、串�
 
 回调部分注册失败、正常 stop 和运行期 Error 共用逆注册顺序的注销与调度排空；未注册回调不会移除其他订阅者。公共清理函数不修改 Arm、会话授权或公开状态，调用者仍负责原有 Disarm/撤销时序、Error/Stopped 区分和逐项启动失败原因。
 
-手动模式的 `pre_flight_checks_pass` 只以 MotorOutput 已应用的有效左右电机分配为预检条件：状态新鲜、没有待应用的映射更新，左右各至少一路且掩码一致；不要求 RC 新鲜、摇杆居中、Commander 参数有效或当前 PWM 已处于 Neutral。运动校准仍保留原来的参数、RC、居中和 Neutral 预检；`COM_ARM_STICK_DZ` 仅约束运动校准解锁。
+手动模式的基础预检只以 MotorOutput 已应用的有效左右电机分配为条件：状态新鲜、没有待应用的映射更新，左右各至少一路且掩码一致；不要求 RC 新鲜、摇杆居中、Commander 参数有效或当前 PWM 已处于 Neutral。运动校准仍保留原来的参数、RC、居中和 Neutral 预检；`COM_ARM_STICK_DZ` 仅约束运动校准解锁。
 
 Kill/Termination、RC/传感器校准及活动的自动校准会话仍与手动 Arm 互锁，维护/Flash 仍经过最终原子门。解锁后的 RC loss、Commander 参数故障和执行器故障继续触发 Disarm，因此无有效 RC 时即使手动 Arm 命令通过预检，也不能保持 Armed 或输出动力；GCS loss 不触发导航动作。传感器是否检测到目前是可观测健康信息，不会静默改变手动驾驶或 BootHealth 的既有策略。
+
+对外 `pre_flight_checks_pass` 与 `ready_to_arm` 在 Disarmed 时还包含维护/Flash 忙状态，避免后台写入期间显示可解锁。实际 Arm 仍重新检查基础预检、读取同一维护诊断快照并经过 `try_arm()` 原子门。维护拒绝提示包含 owner、阶段、毫秒年龄和首个撤销原因；启动或改参后的短暂拒绝是正常保护，不缓存 Manual Arm。自动校准内部续行只等待下一条仍匹配会话、参数代次和时效的新请求，取消后不能恢复旧授权。
 
 源码/构建验证不等于车辆安全验证；校准中负向动作、参数应用竞争、看门狗、PWM safe-off 和真实解锁边沿均保持 `BOARD PENDING`。
 

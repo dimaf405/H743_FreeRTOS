@@ -104,6 +104,9 @@ bool Commander::resume_auto_calibration(std::uint64_t now) noexcept
         !auto_calibration_fresh(now) || !auto_calibration_status_.active ||
         !auto_calibration_status_.awaiting_arm || actuator_armed_.armed) return false;
     if (param_set_count() != request.parameter_set_count) return false;
+    // 保存收尾期间安静等待协调器下一条新鲜请求；本轮请求已消费，不能缓存
+    // Manual Arm，也不能在外部取消后靠旧请求自动解锁。
+    if (maintenance_.in_progress() || armed_flash_.arming_blocked()) return false;
     // 和首次人工 Arm 完全相同的 preflight/Flash 原子门，不支持 force Arm。
     return arm(vehicle_status_s::ARM_DISARM_REASON_COMMAND_INTERNAL, now, true) == TransitionResult::Changed;
 }

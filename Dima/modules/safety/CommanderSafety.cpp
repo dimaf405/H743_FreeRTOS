@@ -352,7 +352,10 @@ bool Commander::evaluate_navigation(std::uint64_t now) noexcept
 
 bool Commander::update_public_projection(std::uint64_t now) noexcept
 {
-    const bool checks_pass = preflight_checks_pass(now);
+    // 对外“可解锁”包含短暂维护互锁；预检函数仍保留 Manual 的电机映射合同。
+    // 同时投影 pre_flight/ready，保证安全三 Topic 的逐字段一致性。
+    const bool checks_pass = preflight_checks_pass(now) &&
+        !maintenance_.in_progress() && !armed_flash_.arming_blocked();
     // 已 Armed 时保持 ready_to_arm，避免健康状态瞬变让投影自相矛盾；真实故障仍由
     // evaluate_safety 执行强制 Disarm，再由下一投影发布实际解除结果。
     const bool ready_to_arm = checks_pass || actuator_armed_.armed;
@@ -427,8 +430,12 @@ Commander::TransitionResult Commander::arm(
         return TransitionResult::Denied;
     }
     // 维护事务和 Flash 擦写都与 Armed 互斥；try_arm() 是最终原子门，防止检查后竞态。
-    if (maintenance_.in_progress()) {
-        PX4_WARN("Arming denied: runtime maintenance in progress");
+    const auto maintenance = maintenance_.snapshot(now);
+    if (maintenance.busy) {
+        PX4_WARN("Arming denied: maintenance %s %s %lums reason=%u",
+                 maintenance.owner, maintenance.stage,
+                 static_cast<unsigned long>(maintenance.age_ms),
+                 static_cast<unsigned>(maintenance.failure));
         return TransitionResult::Denied;
     }
     if (!armed_flash_.try_arm()) {
