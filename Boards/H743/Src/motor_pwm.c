@@ -16,50 +16,74 @@ _Static_assert(DIMA_ACTUATOR_PWM_MAX_PULSE_US <= MOTOR_PWM_PERIOD_TICKS,
 
 static bool motor_pwm_started;
 
-static uint32_t timer_input_clock_hz(uint32_t pclk, bool divided)
+static uint32_t timer_input_clock_hz(uint32_t pclk, uint32_t apb_code)
 {
-    /* STM32H7 的 APB 预分频不为 1 时，定时器内核时钟为对应 PCLK 的 2 倍。 */
-    return divided ? pclk * 2U : pclk;
+    /* RM0433 TIMPRE：0 时 APB 分频后的定时器为 2*PCLK；1 时 APB<=4
+     * 取 HCLK，否则取 4*PCLK。不能无条件按两倍 PCLK 判断 PWM 周期。 */
+    if (apb_code < 4U) return pclk;
+    if ((RCC->CFGR & RCC_CFGR_TIMPRE) == 0U) return pclk * 2U;
+    return apb_code <= 5U ? HAL_RCC_GetHCLKFreq() : pclk * 4U;
+}
+
+static bool pwm_channel_mode_valid(uint32_t ccmr, uint32_t shift)
+{
+    /* 两个 CCMR 的通道字段位置相同：必须是输出/PWM1/预装载开启。
+     * 快速模式或外部清除不能偷偷改变脉宽；只读 HAL Init 无法证明这些位。 */
+    const uint32_t mask = (TIM_CCMR1_CC1S | TIM_CCMR1_OC1M |
+        TIM_CCMR1_OC1PE | TIM_CCMR1_OC1FE | TIM_CCMR1_OC1CE) << shift;
+    const uint32_t expected = (TIM_OCMODE_PWM1 | TIM_CCMR1_OC1PE) << shift;
+    return (ccmr & mask) == expected;
 }
 
 static bool timer_configuration_valid(void)
 {
-    /* TIM8 以更新事件输出 TRGO，TIM5 以 ITR3 的 reset 模式跟随，保证两组输出
-     * 共用 20 ms 帧边界；S1/S2 使用互补通道，故同时核对其反相极性位。 */
-    RCC_ClkInitTypeDef clocks = {0};
-    uint32_t flash_latency = 0U;
-    HAL_RCC_GetClockConfig(&clocks, &flash_latency);
+    if (htim5.Instance != TIM5 || htim8.Instance != TIM8) return false;
+    const uint32_t tim5_clock = timer_input_clock_hz(HAL_RCC_GetPCLK1Freq(),
+        (RCC->D2CFGR & RCC_D2CFGR_D2PPRE1) >> RCC_D2CFGR_D2PPRE1_Pos);
+    const uint32_t tim8_clock = timer_input_clock_hz(HAL_RCC_GetPCLK2Freq(),
+        (RCC->D2CFGR & RCC_D2CFGR_D2PPRE2) >> RCC_D2CFGR_D2PPRE2_Pos);
+    const uint32_t incompatible_mode = TIM_CR1_DIR | TIM_CR1_CMS |
+        TIM_CR1_CKD | TIM_CR1_OPM | TIM_CR1_UDIS;
+    const uint32_t enabled5 = TIM_CCER_CC1E | TIM_CCER_CC2E |
+        TIM_CCER_CC3E | TIM_CCER_CC4E;
+    const uint32_t enabled8 = TIM_CCER_CC2NE | TIM_CCER_CC3NE;
 
-    const uint32_t tim5_clock =
-        timer_input_clock_hz(HAL_RCC_GetPCLK1Freq(),
-                             clocks.APB1CLKDivider != RCC_APB1_DIV1);
-    const uint32_t tim8_clock =
-        timer_input_clock_hz(HAL_RCC_GetPCLK2Freq(),
-                             clocks.APB2CLKDivider != RCC_APB2_DIV1);
-    const uint32_t tim5_slave = htim5.Instance != NULL
-                                    ? htim5.Instance->SMCR
-                                    : 0U;
-    const uint32_t tim8_master = htim8.Instance != NULL
-                                     ? htim8.Instance->CR2
-                                     : 0U;
-    const uint32_t tim8_polarity = htim8.Instance != NULL
-                                       ? htim8.Instance->CCER
-                                       : 0U;
+    /* APM ChibiOS 的 N-only ACTIVE_HIGH 对应 NE=1、NP=0、主输出 E=0。
+     * S1/S2 与 S3..S6 均应高电平宽度=CCR；读回模式/极性/使能/时钟，
+     * 不把缓存配置正确当作硬件寄存器仍然正确。低 16 位覆盖前四通道。 */
+    return tim5_clock == MOTOR_PWM_TIMER_CLOCK_HZ && tim8_clock == MOTOR_PWM_TIMER_CLOCK_HZ &&
+        TIM5->PSC == MOTOR_PWM_PRESCALER && TIM8->PSC == MOTOR_PWM_PRESCALER &&
+        TIM5->ARR == MOTOR_PWM_PERIOD_TICKS && TIM8->ARR == MOTOR_PWM_PERIOD_TICKS && TIM8->RCR == 0U &&
+        (TIM5->CR1 & incompatible_mode) == 0U && (TIM8->CR1 & incompatible_mode) == 0U &&
+        (TIM5->CR1 & TIM_CR1_CEN) == (motor_pwm_started ? TIM_CR1_CEN : 0U) &&
+        (TIM8->CR1 & TIM_CR1_CEN) == (motor_pwm_started ? TIM_CR1_CEN : 0U) &&
+        (TIM5->SMCR & (TIM_SMCR_SMS | TIM_SMCR_TS)) == (TIM_SLAVEMODE_RESET | TIM_TS_ITR3) &&
+        (TIM8->SMCR & TIM_SMCR_SMS) == 0U &&
+        (TIM8->CR2 & TIM_CR2_MMS) == TIM_TRGO_UPDATE &&
+        pwm_channel_mode_valid(TIM5->CCMR1, 0U) && pwm_channel_mode_valid(TIM5->CCMR1, 8U) &&
+        pwm_channel_mode_valid(TIM5->CCMR2, 0U) && pwm_channel_mode_valid(TIM5->CCMR2, 8U) &&
+        pwm_channel_mode_valid(TIM8->CCMR1, 8U) && pwm_channel_mode_valid(TIM8->CCMR2, 0U) &&
+        (TIM5->CCER & 0xFFFFU) == (motor_pwm_started ? enabled5 : 0U) &&
+        (TIM8->CCER & 0xFFFFU) == (motor_pwm_started ? enabled8 : 0U) &&
+        (TIM8->BDTR & (TIM_BDTR_MOE | TIM_BDTR_DTG | TIM_BDTR_BKE | TIM_BDTR_BK2E | TIM_BDTR_AOE)) ==
+            (motor_pwm_started ? TIM_BDTR_MOE : 0U);
+}
 
-    return htim5.Instance == TIM5 && htim8.Instance == TIM8 &&
-           tim5_clock == MOTOR_PWM_TIMER_CLOCK_HZ &&
-           tim8_clock == MOTOR_PWM_TIMER_CLOCK_HZ &&
-           htim5.Init.Prescaler == MOTOR_PWM_PRESCALER &&
-           htim8.Init.Prescaler == MOTOR_PWM_PRESCALER &&
-           htim5.Init.Period == MOTOR_PWM_PERIOD_TICKS &&
-           htim8.Init.Period == MOTOR_PWM_PERIOD_TICKS &&
-           htim5.Init.CounterMode == TIM_COUNTERMODE_UP &&
-           htim8.Init.CounterMode == TIM_COUNTERMODE_UP &&
-           (tim5_slave & TIM_SMCR_SMS) == TIM_SLAVEMODE_RESET &&
-           (tim5_slave & TIM_SMCR_TS) == TIM_TS_ITR3 &&
-           (tim8_master & TIM_CR2_MMS) == TIM_TRGO_UPDATE &&
-           (tim8_polarity & (TIM_CCER_CC2NP | TIM_CCER_CC3NP)) ==
-               (TIM_CCER_CC2NP | TIM_CCER_CC3NP);
+static bool pins_in_mode(GPIO_TypeDef *port, uint32_t pins, uint32_t mode, uint32_t alternate)
+{
+    if ((port->OTYPER & pins) != 0U) return false;
+    for (uint32_t pin = 0U; pin < 16U; ++pin) {
+        if ((pins & (1U << pin)) == 0U) continue;
+        if (((port->MODER >> (pin * 2U)) & 3U) != mode) return false;
+        if (mode == 2U && ((port->AFR[pin / 8U] >> ((pin % 8U) * 4U)) & 15U) != alternate) return false;
+    }
+    return true;
+}
+
+static bool pins_alternate_valid(void)
+{
+    return pins_in_mode(GPIOA, S3_Pin | S4_Pin | S5_Pin | S6_Pin, 2U, GPIO_AF2_TIM5) &&
+        pins_in_mode(GPIOB, S1_Pin | S2_Pin, 2U, GPIO_AF3_TIM8);
 }
 
 static void configure_pins_low(void)
@@ -105,111 +129,110 @@ static void configure_pins_alternate(void)
 
 static void clear_compare_registers(void)
 {
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2, 0U); /* S1: PB0, TIM8_CH2N */
-    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_3, 0U); /* S2: PB1, TIM8_CH3N */
-    __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, 0U); /* S3: PA0 */
-    __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 0U); /* S4: PA1 */
-    __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 0U); /* S5: PA2 */
-    __HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 0U); /* S6: PA3 */
+    /* 固定地址仅限本板后端；故障时不能通过可能已损坏的 HAL Instance 访问。 */
+    TIM8->CCR2 = 0U;
+    TIM8->CCR3 = 0U;
+    TIM5->CCR1 = 0U;
+    TIM5->CCR2 = 0U;
+    TIM5->CCR3 = 0U;
+    TIM5->CCR4 = 0U;
 }
 
-static void stop_outputs(void)
+static bool stop_outputs(void)
 {
-    (void)HAL_TIMEx_PWMN_Stop(&htim8, TIM_CHANNEL_2);
-    (void)HAL_TIMEx_PWMN_Stop(&htim8, TIM_CHANNEL_3);
-    (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_1);
-    (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_2);
-    (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_3);
-    (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_4);
-}
-
-static void prepare_zero_frame(void)
-{
-    /* 清空 CCR 和计数器后强制更新，使预装载寄存器中的零值在开放引脚前生效。 */
+    /* 停波不依赖原 PWM 配置有效：先把六个引脚变成低电平 GPIO，再停计数、
+     * 禁用输出/DMA/IRQ、清除 CCR。即使 PSC/ARR/模式已异常也不能只拉低引脚
+     * 却留下正在运行的定时器。HAL 调用只负责恢复合法句柄的通道状态。 */
+    configure_pins_low();
+    __HAL_RCC_TIM5_CLK_ENABLE();
+    __HAL_RCC_TIM8_CLK_ENABLE();
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    motor_pwm_started = false;
+    TIM8->BDTR &= ~TIM_BDTR_MOE;
+    TIM8->CCER = 0U;
+    TIM5->CCER = 0U;
+    TIM8->CR1 &= ~(TIM_CR1_CEN | TIM_CR1_UDIS);
+    TIM5->CR1 &= ~(TIM_CR1_CEN | TIM_CR1_UDIS);
+    TIM8->DIER = 0U;
+    TIM5->DIER = 0U;
     clear_compare_registers();
-    __HAL_TIM_SET_COUNTER(&htim5, 0U);
-    __HAL_TIM_SET_COUNTER(&htim8, 0U);
-    htim5.Instance->EGR = TIM_EGR_UG;
-    htim8.Instance->EGR = TIM_EGR_UG;
-    __HAL_TIM_CLEAR_FLAG(&htim5, TIM_FLAG_UPDATE);
-    __HAL_TIM_CLEAR_FLAG(&htim8, TIM_FLAG_UPDATE);
+    TIM8->CNT = 0U;
+    TIM5->CNT = 0U;
+    TIM5->EGR = TIM_EGR_UG;
+    TIM8->EGR = TIM_EGR_UG;
+    TIM5->SR = 0U;
+    TIM8->SR = 0U;
+    __DSB();
+    __set_PRIMASK(primask);
+    if (htim8.Instance == TIM8) {
+        (void)HAL_TIMEx_PWMN_Stop(&htim8, TIM_CHANNEL_2);
+        (void)HAL_TIMEx_PWMN_Stop(&htim8, TIM_CHANNEL_3);
+    }
+    if (htim5.Instance == TIM5) {
+        (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_1);
+        (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_2);
+        (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_3);
+        (void)HAL_TIM_PWM_Stop(&htim5, TIM_CHANNEL_4);
+    }
+    const uint32_t pins_a = S3_Pin | S4_Pin | S5_Pin | S6_Pin;
+    const uint32_t pins_b = S1_Pin | S2_Pin;
+    return (TIM8->CR1 & TIM_CR1_CEN) == 0U && (TIM5->CR1 & TIM_CR1_CEN) == 0U &&
+        (TIM8->BDTR & TIM_BDTR_MOE) == 0U && TIM8->CCER == 0U && TIM5->CCER == 0U &&
+        TIM8->CCR2 == 0U && TIM8->CCR3 == 0U && TIM5->CCR1 == 0U && TIM5->CCR2 == 0U &&
+        TIM5->CCR3 == 0U && TIM5->CCR4 == 0U &&
+        pins_in_mode(GPIOA, pins_a, 1U, 0U) && pins_in_mode(GPIOB, pins_b, 1U, 0U) &&
+        ((GPIOA->ODR | GPIOA->IDR) & pins_a) == 0U && ((GPIOB->ODR | GPIOB->IDR) & pins_b) == 0U;
+}
+
+static board_motor_pwm_result_t output_fault(void)
+{
+    (void)stop_outputs();
+    return BOARD_MOTOR_PWM_FAULT;
 }
 
 board_motor_pwm_result_t board_motor_pwm_start(void)
 {
-    if (motor_pwm_started) {
-        if (timer_configuration_valid()) {
-            return BOARD_MOTOR_PWM_APPLIED;
-        }
-        motor_pwm_started = false;
-        configure_pins_low();
-        return BOARD_MOTOR_PWM_FAULT;
-    }
-    if (!timer_configuration_valid()) {
-        configure_pins_low();
-        return BOARD_MOTOR_PWM_FAULT;
-    }
+    if (!timer_configuration_valid()) return output_fault();
+    if (motor_pwm_started) return pins_alternate_valid() ? BOARD_MOTOR_PWM_APPLIED : output_fault();
+    if (!stop_outputs()) return BOARD_MOTOR_PWM_FAULT;
 
-    /* 启动顺序保持失效安全：GPIO 拉低 -> 停止通道 -> 零帧 -> 切复用 -> 启动。
-     * 任一 HAL 启动失败都回退到 GPIO 低电平，并返回 RETRY 供上层决定重试。 */
-    configure_pins_low();
-    stop_outputs();
-    prepare_zero_frame();
-    configure_pins_alternate();
+    /* 引脚保持低电平期间启动六路零 CCR，主定时器 UG 同步零帧；确认寄存器
+     * 后才开放 AF，避免逐个 HAL Start 期间把半初始化输出暴露给电调。 */
     if (HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2) != HAL_OK ||
         HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_3) != HAL_OK ||
         HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_1) != HAL_OK ||
         HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_2) != HAL_OK ||
         HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_3) != HAL_OK ||
         HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4) != HAL_OK) {
-        clear_compare_registers();
-        stop_outputs();
-        configure_pins_low();
-        motor_pwm_started = false;
-        return BOARD_MOTOR_PWM_RETRY;
+        return stop_outputs() ? BOARD_MOTOR_PWM_RETRY : BOARD_MOTOR_PWM_FAULT;
     }
-
-    htim8.Instance->EGR = TIM_EGR_UG;
-    __HAL_TIM_CLEAR_FLAG(&htim5, TIM_FLAG_UPDATE);
-    __HAL_TIM_CLEAR_FLAG(&htim8, TIM_FLAG_UPDATE);
+    TIM8->EGR = TIM_EGR_UG;
+    TIM5->SR = 0U;
+    TIM8->SR = 0U;
     motor_pwm_started = true;
-    return BOARD_MOTOR_PWM_APPLIED;
+    if (!timer_configuration_valid()) return output_fault();
+    configure_pins_alternate();
+    return pins_alternate_valid() ? BOARD_MOTOR_PWM_APPLIED : output_fault();
 }
 
 board_motor_pwm_result_t board_motor_pwm_stop(void)
 {
-    motor_pwm_started = false;
-    if (!timer_configuration_valid()) {
-        configure_pins_low();
-        return BOARD_MOTOR_PWM_FAULT;
-    }
-
-    stop_outputs();
-    prepare_zero_frame();
-    configure_pins_low();
-    return BOARD_MOTOR_PWM_APPLIED;
+    return stop_outputs() ? BOARD_MOTOR_PWM_APPLIED : BOARD_MOTOR_PWM_FAULT;
 }
 
 board_motor_pwm_result_t board_motor_pwm_write(
     const uint16_t pulse_us[BOARD_MOTOR_PWM_COUNT], uint8_t valid_mask)
 {
-    if (pulse_us == NULL) {
-        return BOARD_MOTOR_PWM_FAULT;
-    }
-    if (!timer_configuration_valid()) {
-        motor_pwm_started = false;
-        configure_pins_low();
-        return BOARD_MOTOR_PWM_FAULT;
-    }
-    if (!motor_pwm_started) {
-        return BOARD_MOTOR_PWM_RETRY;
-    }
+    if (pulse_us == NULL || !timer_configuration_valid()) return output_fault();
+    if (!motor_pwm_started) return BOARD_MOTOR_PWM_RETRY;
+    if (!pins_alternate_valid()) return output_fault();
 
     const uint32_t tim5_period = __HAL_TIM_GET_AUTORELOAD(&htim5);
     const uint32_t tim8_period = __HAL_TIM_GET_AUTORELOAD(&htim8);
     const uint8_t supported_mask = (uint8_t)((1U << BOARD_MOTOR_PWM_COUNT) - 1U);
     if ((valid_mask & (uint8_t)~supported_mask) != 0U) {
-        return BOARD_MOTOR_PWM_FAULT;
+        return output_fault();
     }
 
     /* 在触碰任何 CCR 前完成整帧校验：mask 外位、无效通道非零值、脉宽包络
@@ -217,7 +240,7 @@ board_motor_pwm_result_t board_motor_pwm_write(
     for (uint8_t index = 0U; index < BOARD_MOTOR_PWM_COUNT; ++index) {
         if ((valid_mask & (uint8_t)(1U << index)) == 0U) {
             if (pulse_us[index] != 0U) {
-                return BOARD_MOTOR_PWM_FAULT;
+                return output_fault();
             }
             continue;
         }
@@ -225,12 +248,15 @@ board_motor_pwm_result_t board_motor_pwm_write(
         if (pulse_us[index] < DIMA_ACTUATOR_PWM_MIN_PULSE_US ||
             pulse_us[index] > DIMA_ACTUATOR_PWM_MAX_PULSE_US ||
             pulse_us[index] > period) {
-            return BOARD_MOTOR_PWM_FAULT;
+            return output_fault();
         }
     }
 
-    /* 临时禁止 update 事件，连续写完 TIM8/TIM5 的六个比较值后再恢复；这依赖
-     * 通道预装载与同步帧边界，防止软件更新事件在半帧写入期间锁存新值。 */
+    /* 短临界区防止两次 UDIS 操作和六路写入之间被抢占；DMB 不能替代互斥。
+     * 计数器不停止、不强制 UG，避免拉长正在输出的高脉冲。这里提交并读回
+     * 的仍是预装载值，实际边沿随自然更新事件生效，不冒充示波器测量。 */
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     htim8.Instance->CR1 |= TIM_CR1_UDIS;
     htim5.Instance->CR1 |= TIM_CR1_UDIS;
     __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_2,
@@ -254,7 +280,13 @@ board_motor_pwm_result_t board_motor_pwm_write(
     __DMB();
     htim5.Instance->CR1 &= ~TIM_CR1_UDIS;
     htim8.Instance->CR1 &= ~TIM_CR1_UDIS;
-    return BOARD_MOTOR_PWM_APPLIED;
+    const bool readback = TIM8->CCR2 == pulse_us[BOARD_MOTOR_PWM_S1] &&
+        TIM8->CCR3 == pulse_us[BOARD_MOTOR_PWM_S2] && TIM5->CCR1 == pulse_us[BOARD_MOTOR_PWM_S3] &&
+        TIM5->CCR2 == pulse_us[BOARD_MOTOR_PWM_S4] && TIM5->CCR3 == pulse_us[BOARD_MOTOR_PWM_S5] &&
+        TIM5->CCR4 == pulse_us[BOARD_MOTOR_PWM_S6];
+    __DSB();
+    __set_PRIMASK(primask);
+    return readback && timer_configuration_valid() ? BOARD_MOTOR_PWM_APPLIED : output_fault();
 }
 
 bool board_motor_pwm_started(void)

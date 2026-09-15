@@ -15,6 +15,8 @@ from architecture.common import (
 
 def scan_timer_contract(violations: list[Violation]) -> None:
     """同时核对生成 C 源与 .ioc 权威配置，避免重新生成后悄然丢失安全波形合同。"""
+    # S1/S2 仅启用 N 输出，RM0433 38.3.15 规定此时不自动互补；高有效才使
+    # CCR 等于高电平脉宽，并让零比较值保持低电平，不能沿用双输出的反相配置。
     timer_source = ROOT / "Core/Src/tim.c"
     require_literals(
         timer_source,
@@ -27,8 +29,8 @@ def scan_timer_contract(violations: list[Violation]) -> None:
              "TIM5 must remain connected to TIM8 TRGO"),
             ("sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;", "R129",
              "TIM8 must publish its update event as TRGO"),
-            ("sConfigOC.OCNPolarity = TIM_OCNPOLARITY_LOW;", "R138",
-             "TIM8 complementary outputs must map zero compare to low"),
+            ("sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;", "R138",
+             "TIM8 N-only outputs must be active high and map zero compare to low"),
         ),
         violations,
     )
@@ -49,9 +51,9 @@ def scan_timer_contract(violations: list[Violation]) -> None:
              "CubeMX TIM5 reset-slave contract is missing"),
             ("VP_TIM5_VS_ClockSourceITR.Mode=TriggerSource_ITR3", "R157",
              "CubeMX TIM5 ITR3 virtual connection is missing"),
-            ("TIM8.OCNPolarity_2=TIM_OCNPOLARITY_LOW", "R158",
+            ("TIM8.OCNPolarity_2=TIM_OCNPOLARITY_HIGH", "R158",
              "CubeMX TIM8 CH2N polarity is not safe at zero compare"),
-            ("TIM8.OCNPolarity_3=TIM_OCNPOLARITY_LOW", "R159",
+            ("TIM8.OCNPolarity_3=TIM_OCNPOLARITY_HIGH", "R159",
              "CubeMX TIM8 CH3N polarity is not safe at zero compare"),
             ("TIM8.TIM_MasterOutputTrigger=TIM_TRGO_UPDATE", "R160",
              "CubeMX TIM8 update TRGO contract is missing"),

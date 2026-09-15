@@ -59,7 +59,7 @@ PX4 来源文件继续保留原始版权头。当前许可证状态仍为 `PENDI
 | S5 | PA2 | TIM5_CH3 |
 | S6 | PA3 | TIM5_CH4 |
 
-TIM8 与 TIM5 的目标配置均为 240 MHz 输入、prescaler 239、1 MHz 计数、ARR 19999 和 50 Hz 周期。TIM8 Update 作为 TRGO，TIM5 使用 ITR3 Reset slave，使两组计数器共享帧起点。S1/S2 使用互补输出，极性由 TIM8 N 通道配置决定。
+TIM8 与 TIM5 的目标配置均为 240 MHz 输入、prescaler 239、1 MHz 计数、ARR 19999 和 50 Hz 周期。TIM8 Update 作为 TRGO，TIM5 使用 ITR3 Reset slave，使两组计数器共享帧起点。S1/S2 仅启用 TIM8 CH2N/CH3N，不启用对应主输出。依据 RM0433 38.3.15，此时 `OCxN = OCxREF XOR CCxNP`，不会自动互补，必须使用 `TIM_OCNPOLARITY_HIGH`（CC2NP/CC3NP=0），才能让高电平脉宽等于 CCR、零比较值保持低电平。板级运行时同时核对 N 极性位和主输出使能位，防止切入双输出互补模式后波形翻转。1500 us 中立脉宽对应 3.3 V 信号的直流平均值约为 `3.3 × 1500 / 20000 = 0.2475 V`；误用低有效会反相为约 3.0525 V。该公式用于解释万用表读数，实际频率、脉宽及启停波形仍须板测确认。
 
 每路公开 `PWM_Sn_FUNC/MIN/CENT/MAX/REV`：
 
