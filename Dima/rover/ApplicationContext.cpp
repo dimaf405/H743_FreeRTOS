@@ -98,8 +98,7 @@ ApplicationContext::ApplicationContext(
       log_service_(log_service_instance(services.log_files)),
       parameter_service_(flashfs_, services.atomic_files,
                          services.armed_flash,
-                         services.synchronization, services.critical,
-                         maintenance_),
+                         services.synchronization, services.critical),
       // Mission 仅通过公共 FileStorage 的 Mission 域保存到 SD；无卡使用 RAM。
       // 这里只提供同步与 arming interlock，不向任务模块注入 Flash 存储后端。
       mission_service_(services.synchronization,

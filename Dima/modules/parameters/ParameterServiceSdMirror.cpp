@@ -11,28 +11,10 @@ namespace dima::modules::parameters {
 
 void ParameterService::service_sd_mirror() noexcept
 {
-    // storage_mutex 串行化 autosave 与后台镜像。镜像每轮只推进一个异步阶段；
-    // 有 autosave、无卡、武装或其他持久化事务时保持 pending，不抢占主保存。
-    dima::platform::MutexGuard lock{storage_mutex_};
-    if (!lock) {
-        return;
-    }
-
-    if (persistence_kind_ == PersistenceKind::SdMirror) {
-        const int result = advance_persistence();
-        if (result == 0) {
-            PX4_INFO("param: SD mirror synchronized generation=%lu",
-                     static_cast<unsigned long>(storage_generation_));
-        } else if (result != -EAGAIN && result != -EPERM) {
-            PX4_WARN("param: SD mirror retry failed: %d", result);
-        }
-        return;
-    }
-    if (persistence_kind_ != PersistenceKind::None ||
-        !sd_mirror_required_ || !sd_available_ || autosave_.pending()) {
-        return;
-    }
-    if (!flash_write_allowed()) {
+    // 镜像和主保存共享 storage_mutex；主保存待执行时优先让出队列。
+    dima::platform::MutexGuard lock{storage_mutex_, dima::platform::Timeout::no_wait()};
+    if (!lock || !sd_mirror_required_ || !sd_available_ || !flashfs_ready_ ||
+        storage_generation_ == 0U || autosave_.pending() || armed_flash_.armed()) {
         return;
     }
 
@@ -47,8 +29,11 @@ void ParameterService::service_sd_mirror() noexcept
         return;
     }
     last_sd_mirror_attempt_us_ = now;
-    const int result = begin_sd_mirror();
-    if (result != 0 && result != -EAGAIN && result != -EBUSY) {
+    const int result = save_sd_mirror();
+    if (result == 0) {
+        PX4_INFO("param: SD mirror synchronized generation=%lu",
+                 static_cast<unsigned long>(storage_generation_));
+    } else if (result != -EAGAIN && result != -EBUSY && result != -EPERM) {
         PX4_WARN("param: unable to start SD mirror: %d", result);
     }
 }

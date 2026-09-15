@@ -29,8 +29,4 @@ int decode_mutable(const std::uint8_t *payload, std::size_t payload_size,
                    param_storage_visitor_t visitor,
                    void *visitor_context) noexcept;
 
-bool payload_matches(const std::uint8_t *persisted,
-                     const std::uint8_t *comparison,
-                     std::size_t comparison_size) noexcept;
-
 } // namespace dima::modules::parameters::snapshot_codec

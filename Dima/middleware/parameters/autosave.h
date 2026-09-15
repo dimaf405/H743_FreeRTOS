@@ -45,13 +45,10 @@
 class ParamAutosave : public px4::ScheduledWorkItem
 {
 public:
-    /* request 只合并待保存标记，由独立 storage WorkQueue 执行实际持久化。armed
-     * 时 writeAllowed=false；慢卡/坏卡不得阻塞 MAVLink、日志或控制链。 */
-    using CancelSaveFn = void (*)(void *context) noexcept;
-
+    /* request 合并待保存标记，独立低优先级 storage WorkQueue 连续保存整份快照；
+     * armed 时延期，MAVLink 回显和实时控制不等待介质写入。 */
     explicit ParamAutosave(
-        dima::platform::ArmedFlashCoordinator &armed_flash,
-        CancelSaveFn cancel_save, void *cancel_context) noexcept;
+        dima::platform::ArmedFlashCoordinator &armed_flash) noexcept;
     void request() noexcept;
     void enable() noexcept;
     bool resume_after_storage_available() noexcept;
@@ -73,8 +70,6 @@ private:
     bool writeAllowed() const noexcept;
 
     dima::platform::ArmedFlashCoordinator &_armed_flash;
-    CancelSaveFn _cancel_save;
-    void *_cancel_context;
     hrt_abstime _last_attempt_timestamp{0};
     hrt_abstime _last_success_timestamp{0};
     px4::atomic_bool _scheduled{false};

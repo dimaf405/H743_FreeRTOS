@@ -216,23 +216,4 @@ int decode_mutable(const std::uint8_t *payload, std::size_t payload_size,
         payload, payload_size, load_mutable_parameter, &filtered);
 }
 
-bool payload_matches(const std::uint8_t *persisted,
-                     const std::uint8_t *comparison,
-                     std::size_t comparison_size) noexcept
-{
-    SnapshotHeader persisted_header{};
-    SnapshotHeader comparison_header{};
-    std::memcpy(&persisted_header, persisted, sizeof(persisted_header));
-    std::memcpy(&comparison_header, comparison, sizeof(comparison_header));
-    // generation 不参与等价判断：先比较 size+CRC，再 memcmp payload 防 CRC 碰撞；
-    // 用于确认持久化期间是否又有参数变化。
-    return persisted_header.payload_size == comparison_header.payload_size &&
-           persisted_header.payload_crc == comparison_header.payload_crc &&
-           comparison_size ==
-               sizeof(SnapshotHeader) + persisted_header.payload_size &&
-           std::memcmp(persisted + sizeof(SnapshotHeader),
-                       comparison + sizeof(SnapshotHeader),
-                       persisted_header.payload_size) == 0;
-}
-
 } // namespace dima::modules::parameters::snapshot_codec

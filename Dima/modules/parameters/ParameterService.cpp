@@ -15,28 +15,13 @@ ParameterService::ParameterService(
     dima::platform::AtomicFileStore &atomic_files,
     dima::platform::ArmedFlashCoordinator &armed_flash,
     dima::platform::Synchronization &synchronization,
-    dima::platform::CriticalSection &critical,
-    dima::middleware::maintenance::
-        RuntimeMaintenanceCoordinator &maintenance) noexcept
+    dima::platform::CriticalSection &critical) noexcept
     : ScheduledWorkItem("param", px4::wq_configurations::storage),
       flashfs_(flashfs), atomic_files_(atomic_files),
       armed_flash_(armed_flash),
       synchronization_(synchronization), critical_(critical),
-      maintenance_(maintenance),
-      autosave_(armed_flash, &ParameterService::cancel_async_save, this)
+      autosave_(armed_flash)
 {
-}
-
-void ParameterService::cancel_async_save(void *context) noexcept
-{
-    if (context == nullptr) {
-        return;
-    }
-    auto &self = *static_cast<ParameterService *>(context);
-    dima::platform::MutexGuard lock{self.storage_mutex_};
-    if (lock) {
-        self.cancel_persistence();
-    }
 }
 
 void ParameterService::lock_params(void *context) noexcept
@@ -213,18 +198,13 @@ bool ParameterService::start() noexcept
 
 void ParameterService::stop() noexcept
 {
-    // 先撤销 notify 和 autosave，再排空 WorkQueue，最后在 storage_mutex 下取消
-    // 介质事务；防止回调在 payload_ 清理后继续推进。
+    // 先撤销通知，再排空 autosave 和服务队列；连续保存返回后缓冲已无后端借用。
     param_register_notify_callback(nullptr, nullptr);
     autosave_.stop();
     state_ = dima::middleware::lifecycle::ModuleState::Stopped;
     ScheduleCancelAndDrain();
-    {
-        dima::platform::MutexGuard lock{storage_mutex_};
-        if (lock) {
-            cancel_persistence();
-        }
-    }
+    // 显式保存也可能来自其他非实时任务；等该调用返回后再允许 shutdown 释放锁与缓冲。
+    dima::platform::MutexGuard storage_lock{storage_mutex_};
     dima::platform::CriticalGuard guard{critical_};
     pending_update_ = {};
     update_pending_ = false;
@@ -250,16 +230,7 @@ void ParameterService::reset_runtime_state() noexcept
     sd_available_ = false;
     flash_resync_required_ = false;
     sd_mirror_required_ = false;
-    generation_committed_ = false;
     storage_generation_ = 0U;
-    persistence_generation_ = 0U;
-    maintenance_progress_ = 0U;
-    persistence_size_ = 0U;
-    flash_result_ = 0;
-    sd_result_ = 0;
-    maintenance_ticket_ = 0U;
-    persistence_kind_ = PersistenceKind::None;
-    persistence_phase_ = PersistencePhase::Idle;
     last_sd_poll_us_ = 0U;
     last_sd_mirror_attempt_us_ = 0U;
     sd_mirror_ready_after_us_ = 0U;

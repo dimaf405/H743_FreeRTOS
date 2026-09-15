@@ -16,7 +16,6 @@ namespace {
 constexpr uint32_t kDebounceUs = 300000U;
 constexpr hrt_abstime kRateLimitUs = 2000000ULL;
 constexpr uint32_t kWriteBlockedRetryUs = 1000000U;
-constexpr uint32_t kAsyncProgressRetryUs = 10000U;
 constexpr uint32_t kStorageFullEventId = 0x50415201U;
 
 void reportStorageFull() noexcept
@@ -29,16 +28,16 @@ void reportStorageFull() noexcept
 } // namespace
 
 ParamAutosave::ParamAutosave(
-    dima::platform::ArmedFlashCoordinator &armed_flash,
-    CancelSaveFn cancel_save, void *cancel_context) noexcept
+    dima::platform::ArmedFlashCoordinator &armed_flash) noexcept
     : ScheduledWorkItem("param-autosave", px4::wq_configurations::storage),
-      _armed_flash(armed_flash), _cancel_save(cancel_save),
-      _cancel_context(cancel_context)
+      _armed_flash(armed_flash)
 {
 }
 
 void ParamAutosave::request() noexcept
 {
+    // 沿用 PX4：首次改参合并 300 ms，两笔保存的开始时刻至少间隔 2 s。
+    // 只合并一次请求，连续 PARAM_SET 不逐项触发 Flash 写入。
     px4::AtomicTransaction transaction;
     if (_scheduled.load() ||
         _disable_reason != DisableReason::None) {
@@ -131,12 +130,13 @@ void ParamAutosave::Run()
         _last_attempt_timestamp = hrt_absolute_time();
     }
 
+    // 对齐 PX4 的单次后台保存：只在开始前清 scheduled，保存期间的新改参仍可
+    // 请求下一笔；没有按 Flash 字或校验步骤重新调度造成的固定 10 ms 空等。
     const int result = param_save_default(false);
     bool retry = false;
     bool exhausted = false;
     bool storage_full = false;
     bool snapshot_stale = false;
-    bool cancel_save = false;
     {
         px4::AtomicTransaction transaction;
         if (result == 0) {
@@ -146,19 +146,11 @@ void ParamAutosave::Run()
             _disable_reason = DisableReason::StorageFull;
             _retry_count = 0;
             storage_full = true;
-        } else if (result == -EAGAIN || result == -EBUSY) {
-            _retry_count = 0;
-            _scheduled.store(true);
-            if (!ScheduleDelayed(kAsyncProgressRetryUs)) {
-                _scheduled.store(false);
-                cancel_save = true;
-            }
         } else if (result == -EPERM) {
             _retry_count = 0;
             _scheduled.store(true);
             if (!ScheduleDelayed(kWriteBlockedRetryUs)) {
                 _scheduled.store(false);
-                cancel_save = true;
             }
         } else if (result == -ESTALE) {
             _retry_count = 0;
@@ -173,9 +165,6 @@ void ParamAutosave::Run()
         }
     }
 
-    if (cancel_save && _cancel_save != nullptr) {
-        _cancel_save(_cancel_context);
-    }
     if (storage_full) {
         reportStorageFull();
         PX4_ERR("parameter storage full (%i), autosave suspended", result);

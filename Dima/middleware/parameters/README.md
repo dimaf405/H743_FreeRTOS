@@ -53,7 +53,7 @@ CAN 磁力计已删除 `MAG1_CAN_NODE`；来源节点号由首个合法磁场广
 
 锁定的上游 YAML schema 只允许显式 `Developer/System`，不能因 QGC JSON 支持任意字符串就加入 `Advanced/Calibration` 并绕过校验。类别是标准 Metadata 展示字段，不改变权限、持久化、参数名或数值；QGC 仅特意将 Standard 置首，不会按类别名称自动隐藏、自动中文化或禁止修改。完整目录仍以生成 JSON 为准，决策和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
 
-单枚举或 `min=max` 的参数现由生成器统一标记为标准 `readOnly`；默认值必须等于唯一合法值，矛盾时生成失败。单 bitmask 仍有关闭/开启两种状态，不按单枚举处理。当前 299 项中有 10 项只读，QGC 5.1.3 参数页勾选 **Hide read-only（隐藏只读参数）** 后列表为 289 项，普通浏览与搜索都过滤只读项。该 QGC 开关默认关闭，固件不能替地面站设置它，也不宣称重开页面后仍保持。
+单枚举或 `min=max` 的参数现由生成器统一标记为标准 `readOnly`；默认值必须等于唯一合法值，矛盾时生成失败。单 bitmask 仍有关闭/开启两种状态，不按单枚举处理。实际目录数量以本次生成 JSON 为准。QGC 5.1.3 参数页勾选 **Hide read-only（隐藏只读参数）** 后，普通浏览与搜索会过滤只读项。该 QGC 开关默认关闭，固件不能替地面站设置它，也不宣称重开页面后仍保持。
 
 完整协议目录保留只读 Fact，确保 Radio、Airframe、安全状态等页面仍能读取产品合同。运行时固定约束和持久化加载过滤也使用同一单值识别规则，因此没有 min/max、只有一个枚举值的 `EKF2_HGT_REF` 同样拒绝非 GPS 值；不把只读展示误当作固件端写入校验。
 
@@ -63,17 +63,18 @@ CAN 磁力计已删除 `MAG1_CAN_NODE`；来源节点号由首个合法磁场广
 - `Param<T, ID>` 保留生成枚举和编译期类型检查，运行期 bind/update 在 `param.cpp` 按 float/INT32/bool 共享实体。bind 成功后才标记 used 并提交缓存；update 不标记 used，未绑定时不读取 Core，失败清零并撤销绑定。bool 仍读取完整 INT32 后转换，不改变计数、原子候选、通知和重启生效语义，也不维护第二份参数表。
 - Parameter Core 的运行期状态、事务及 get/set/reset 位于 `param.cpp`；持久化后端注册、save/load/status 位于 `param_storage.cpp`，公开兼容接口统一由 `param.h` 提供。
 - TinyBSON 和 flashparams 使用调用者提供的固定或启动期 Buffer；编码/解码热路径不动态分配，不包含 fd、POSIX 或文件系统路径。
-- ParameterService 与 Autosave 固定运行于独立低优先级 `wq:storage`；Autosave 在首次变化后至少等待 300 ms，连续保存间隔至少 2 s，并按 10 ms 小步推进。ENOSPC 进入可恢复暂停态，SD 从 unavailable 转为 available 后恢复受控保存。
+- 运行期保存对齐 PX4 v1.17.0 `autosave.cpp` / `parameters.cpp`：`param_set` 立即更新 RAM，MAVLink 立即回显；Autosave 在独立低优先级 `wq:storage` 合并首次变化后的 300 ms 请求，两笔保存开始时刻至少相隔 2 s。一次调用编码并连续完成 Flash 主副本与可用 SD 备份，不再按 10 ms 分步推进。存储忙立即返回，失败限频重试最多 3 次；ENOSPC 暂停，SD 恢复后可重试。
 - FlashFS 是持续可用的主存储，SD 是带 generation 的镜像和恢复源；同 generation 还比较 payload CRC，差异时按既有 Flash 优先规则重建 SD。
 - 无 card-detect GPIO 时每 3 s 低频探测一次；重新挂载后等待 500 ms 再开始首个镜像写事务。介质级错误立即撤销 FileStorage/FatFs 的可用状态，下一次写入必须先完成重新初始化和挂载；失败不改变已经提交的 Flash 主副本。
-- FlashFS 位于 `0x081E0000～0x08200000` 的单个 128 KiB 扇区，使用追加记录、最终 commit 字、32-byte program、回读与 cache 一致性。空间不足返回 ENOSPC，不自动擦除仍含有效快照的扇区。
+- FlashFS 位于 `0x081E0000～0x08200000` 的单个 128 KiB 扇区，保持追加记录与最终 commit 字。按 PX4 `flashfs32.c::write_flash_entry` 连续写入 payload，末尾不足 32 B 时补 `0xff`；底层逐 Flash 字处理 cache/ECC 并回读核对，删除上层重复回读阶段，启动/加载 CRC 保留。空间不足返回 ENOSPC；只有 SD 已提交完整同代快照且扇区没有其他 token 的有效记录，才允许擦除重建。
+- 每笔保存只编码一次；Parameter Core 用写入计数覆盖编码到提交的窗口，有新变化就保留 unsaved 并安排下一笔，删除保存后再次编码、CRC 与逐字节对比。参数 RAM 锁不覆盖 Flash/SD I/O，保存期间仍可读取和设置参数。
 - CRC/格式有效的旧快照若含当前目录已不存在的退役名称，只跳过对应条目；已知参数类型不符或快照格式无效时仍整份拒绝。当前固件不提供旧键别名或参数目录迁移表。
 
 ## Application Runtime 生命周期
 
 - `param_shutdown()` 停止 Autosave，注销 notify/storage/lock callback，并清除 ready、used、unsaved、动态 Layer、值 cache 和运行期同步对象；下一次 init 从未绑定状态开始。
 - `ParameterService::shutdown()` 在释放自身 Mutex 前关闭 Parameter Core。FlashFS 无需显式关闭，FileStorage 的 SD 挂载和存储互斥量在进程生命周期内保持。
-- Armed/Flash coordinator 独立于 Application Runtime。运行期维护必须在 Disarmed 且输出 neutral/hard-safe 时由 BootHealth 批准，并持有 arming interlock；存储层没有 IWDG capability，也不得自行续命。
+- Armed/Flash coordinator 独立于 Application Runtime。参数保存只保留一次原子的 Disarmed/Arm 互锁和存储 mutex，取消 BootHealth 批准、喂狗确认、阶段许可和进度续租。停止服务先排空后台保存再释放缓冲；存储层不持有 IWDG capability、不自行喂狗。GPS/磁力计重配置继续使用它们已有的运行期维护票据。
 
 ## 验证边界
 
