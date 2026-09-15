@@ -1,8 +1,10 @@
+#define MODULE_NAME "auto_cal"
 #include "AutoCalibrationMode.hpp"
 
 #include "magnetometer/VehicleMagnetometer.hpp"
 #include "control/RoverDifferential.hpp"
 #include "api/Time.hpp"
+#include "logging/logging.hpp"
 
 #include <cmath>
 
@@ -68,11 +70,21 @@ bool AutoCalibrationMode::transaction_frontend_confirmed(std::uint64_t now) cons
             transaction_.expected_float(dima::params::RO_MAX_THR_SPEED),
             transaction_.expected_float(dima::params::RO_YAW_RATE_CORR));
     }
+    const float coefficient[3]{transaction_.expected_float(dima::params::CAL_MAG_MOT_KX),
+        transaction_.expected_float(dima::params::CAL_MAG_MOT_KY),
+        transaction_.expected_float(dima::params::CAL_MAG_MOT_KZ)};
+    // 磁基础校正与其补偿失效/回滚同代确认；不能只匹配 offset 就释放保存锁。
+    const bool compensation_applied = mag_frontend_.throttle_compensation_matches(transaction_.generation(),
+        transaction_.expected_int(dima::params::CAL_MAG_MOT_ID),
+        transaction_.expected_int(dima::params::CAL_MAG_MOT_GEN), coefficient) &&
+        fresh(mag_sub_.get().timestamp_sample, now, 300000ULL) &&
+        mag_sub_.get().timestamp_sample > transaction_.applied_at();
+    if (transaction_stage_ == Status::STATE_COMMIT_MAG_MOT) return compensation_applied;
     const float expected[6]{transaction_.expected_float(dima::params::CAL_MAG0_XOFF),
         transaction_.expected_float(dima::params::CAL_MAG0_YOFF),
         transaction_.expected_float(dima::params::CAL_MAG0_ZOFF),
         config_.mag_scale[0], config_.mag_scale[1], config_.mag_scale[2]};
-    return mag_frontend_.calibration_parameter_update_applied(transaction_.generation()) &&
+    return compensation_applied &&
         mag_frontend_.mag_calibration_matches(transaction_.generation(), transaction_.expected_int(dima::params::CAL_MAG0_ID), expected) &&
         fresh(mag_sub_.get().timestamp_sample, now, 300000ULL) &&
         mag_sub_.get().timestamp_sample > transaction_.applied_at();
@@ -90,6 +102,19 @@ void AutoCalibrationMode::poll_transaction(std::uint64_t now) noexcept
     if (valid) { if (stable_since_ == 0U) stable_since_ = now; }
     else stable_since_ = 0U;
     transaction_.poll(applied, stable_since_ != 0U && now - stable_since_ >= 2000000ULL, now);
+    // Done 与 Failed（已确认恢复旧值并保存）都结束一代事务。先同步自有
+    // 写入计数，再选择下一状态；否则磁 bootstrap 回滚会被误判成外部改参。
+    if (transaction_.phase() == CalibrationParameters::Phase::Done ||
+        transaction_.phase() == CalibrationParameters::Phase::Failed)
+        expected_set_count_ = transaction_.set_count_snapshot();
+    if (status_.state == Status::STATE_COMMIT_MAG_MOT &&
+        transaction_.phase() == CalibrationParameters::Phase::Failed) {
+        // 补偿组已确认回滚，基础磁校准仍有效；记录未完成并继续其他整定。
+        status_.unavailable_stages |= Status::STAGE_MAG_MOT;
+        PX4_WARN("[autocal] mag throttle commit rolled back; compensation incomplete");
+        start_tuning(now);
+        return;
+    }
     if (status_.state == Status::STATE_APPLY_MAG_BOOTSTRAP && transaction_.phase() == CalibrationParameters::Phase::Provisional) {
         expected_set_count_ = transaction_.set_count_snapshot();
         bootstrap_applied_ = true;
@@ -106,7 +131,6 @@ void AutoCalibrationMode::poll_transaction(std::uint64_t now) noexcept
         return;
     }
     if (transaction_.phase() != CalibrationParameters::Phase::Done) return;
-    expected_set_count_ = transaction_.set_count_snapshot();
     if (status_.state == Status::STATE_COMMIT_RTK) {
         status_.completed_stages |= Status::STAGE_RTK;
         status_.progress = 55U;
@@ -119,10 +143,16 @@ void AutoCalibrationMode::poll_transaction(std::uint64_t now) noexcept
     } else if (status_.state == Status::STATE_RESTORE_MAG) {
         bootstrap_applied_ = false;
         start_tuning(now);
+    } else if (status_.state == Status::STATE_COMMIT_MAG_MOT) {
+        status_.completed_stages |= Status::STAGE_MAG_MOT;
+        status_.unavailable_stages &= ~Status::STAGE_MAG_MOT;
+        PX4_INFO("[autocal] mag throttle compensation saved and applied");
+        start_tuning(now);
     } else {
         bootstrap_applied_ = false;
         status_.completed_stages |= Status::STAGE_MAG;
-        start_tuning(now);
+        // 基础磁校准保存完成后才启动独立补偿事务；不可观测明确保留未完成位。
+        if (!commit_mag_throttle(now)) start_tuning(now);
     }
 }
 

@@ -31,6 +31,7 @@ bool AutoCalibrationMode::start()
     if (transaction_.active() || !ScheduleEnable() || !status_pub_.advertise() ||
         !request_pub_.advertise() || !motion_pub_.advertise()) return false;
     status_ = {};
+    status_.mag_interference_pct = -1.0F;
     selected_ = false;
     previously_armed_ = false;
     last_run_ = 0U;
@@ -75,6 +76,7 @@ void AutoCalibrationMode::update_inputs() noexcept
     latest(raw_mag_sub_); latest(mag_sub_); latest(motors_sub_); latest(level_sub_);
     latest(control_feedback_sub_); latest(position_sub_); latest(odometry_sub_);
     latest(bias_sub_); latest(flags_sub_); latest(yaw_aid_sub_); latest(mag_aid_sub_);
+    motor_history_.update();
     const auto sample = raw_mag_sub_.get().timestamp_sample;
     if (sample > last_alignment_mag_sample_) {
         last_alignment_mag_sample_ = sample;
@@ -358,6 +360,11 @@ void AutoCalibrationMode::begin(std::uint64_t now) noexcept
     last_epoch_ = last_mag_sample_ = last_bias_sample_ = mag_stable_since_ = 0U;
     last_fit_velocity_epoch_ = 0U;
     gps_device_id_ = imu_device_id_ = mag_device_id_ = 0U;
+    mag_mot_fit_[0] = mag_mot_fit_[1] = {};
+    motor_history_.reset();
+    status_.mag_interference_pct = -1.0F;
+    last_mag_mot_sample_ = 0U;
+    mag_mot_reported_ = endpoint_reported_ = false;
     speed_fit_ = {};
     for (unsigned i = 0U; i < 2U; ++i) {
         heading_mean_[i] = {}; yaw_fit_[i].reset(); bias_fit_[i].reset(); bootstrap_fit_[i].reset(); coverage_[i] = 0U;
@@ -390,8 +397,12 @@ void AutoCalibrationMode::terminate(std::uint8_t reason, bool cancelled, std::ui
 
 void AutoCalibrationMode::finish(std::uint64_t now) noexcept
 {
+    if (status_.magnetometer_present && (status_.completed_stages & Status::STAGE_MAG_MOT) == 0U)
+        status_.unavailable_stages |= Status::STAGE_MAG_MOT;
+    if (!status_.magnetometer_present) status_.skipped_stages |= Status::STAGE_MAG | Status::STAGE_MAG_MOT;
     const std::uint32_t required = Status::STAGE_LEVEL | Status::STAGE_RTK | Status::STAGE_SPEED | Status::STAGE_YAW |
-        Status::STAGE_INNER_GAINS | Status::STAGE_HEADING_GAIN | Status::STAGE_PATH_GAIN;
+        Status::STAGE_INNER_GAINS | Status::STAGE_HEADING_GAIN | Status::STAGE_PATH_GAIN |
+        (status_.magnetometer_present ? Status::STAGE_MAG | Status::STAGE_MAG_MOT : 0U);
     const bool complete = status_.unavailable_stages == 0U && (status_.completed_stages & required) == required &&
         (!status_.magnetometer_present || (status_.completed_stages & Status::STAGE_MAG) != 0U);
     status_.result = cancel_requested_ ? Status::RESULT_CANCELLED : complete && status_.failure_reason == 0U

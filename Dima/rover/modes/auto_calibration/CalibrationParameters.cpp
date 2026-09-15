@@ -1,5 +1,6 @@
 #include "CalibrationParameters.hpp"
 #include "api/Time.hpp"
+#include <parameters/parameter_contract.hpp>
 
 #include <cerrno>
 #include <cmath>
@@ -44,6 +45,22 @@ bool CalibrationParameters::add(dima::params parameter, param_value_u value,
     candidate.next = value;
     if (param_get(handle, &candidate.old) != 0) return false;
     entries_[count_++] = candidate;
+    if (dima::generated::parameters::invalidates_observations(parameter)) {
+        // 源校正改变会原子失效观测 ID；连同 K/GEN 捕获最初快照，避免磁
+        // bootstrap/refine/回滚丢失原代。列表与容量来自正式生成合同。
+        for (const auto observation : dima::generated::parameters::kFirmwareObservationParameters) {
+            bool present = false;
+            for (std::size_t i = 0U; i < count_; ++i)
+                present = present || entries_[i].handle == param_handle(observation);
+            if (present) continue;
+            param_value_u next{};
+            const auto observation_handle = param_handle(observation);
+            if (param_get(observation_handle, &next) != 0) return false;
+            for (const auto &edge : dima::generated::parameters::kParameterInvalidations)
+                if (edge.target == observation) next.i = 0;
+            if (!add(observation, next, param_type(observation_handle))) return false;
+        }
+    }
     return true;
 }
 
@@ -78,10 +95,16 @@ bool CalibrationParameters::matches(bool original) const noexcept
 bool CalibrationParameters::write(bool original) noexcept
 {
     bool success = true;
-    for (std::size_t i = 0U; i < count_; ++i) {
-        const auto &entry = entries_[i];
-        const auto value = original ? entry.old : entry.next;
-        success = (param_set_no_notification(entry.handle, &value) == 0) && success;
+    // 先写源校正，后写观测组；否则回滚恢复的 ID 会被随后旧校正写入再失效。
+    for (unsigned pass = 0U; pass < 2U; ++pass) {
+        for (std::size_t i = 0U; i < count_; ++i) {
+            const auto &entry = entries_[i];
+            const bool observation = dima::generated::parameters::firmware_observation(
+                static_cast<dima::params>(entry.handle));
+            if (observation != (pass == 1U)) continue;
+            const auto value = original ? entry.old : entry.next;
+            success = (param_set_no_notification(entry.handle, &value) == 0) && success;
+        }
     }
     return success;
 }
@@ -125,16 +148,23 @@ bool CalibrationParameters::apply(std::uint64_t now, std::uint32_t expected_set_
 bool CalibrationParameters::refine(std::uint64_t now, std::uint32_t expected_set_count,
                                     const float (&offsets)[3]) noexcept
 {
-    // 本产品磁事务固定为 ID+三个 float offset；更新 provisional 候选时保留
-    // 最初 old snapshot，避免最终失败只能回到 bootstrap 而回不到原磁参数。
-    if (phase_ != Phase::Provisional || count_ != 4U || entries_[0].type != PARAM_TYPE_INT32) return false;
+    // 磁事务包含 ID/offset 及生成依赖的观测快照；按参数身份查找 offset，
+    // 不依赖扩展前的四槽布局，最初 old snapshot 始终不变。
+    if (phase_ != Phase::Provisional) return false;
     for (unsigned i = 0U; i < 3U; ++i)
-        if (entries_[i + 1U].type != PARAM_TYPE_FLOAT || !std::isfinite(offsets[i])) return false;
+        if (!std::isfinite(offsets[i])) return false;
     if (!armed_.begin_maintenance()) return false;
     held_ = true;
     px4::AtomicTransaction atomic;
     if (param_set_count() != expected_set_count || !matches(false)) { phase_ = Phase::Fault; return false; }
-    for (unsigned i = 0U; i < 3U; ++i) entries_[i + 1U].next.f = offsets[i];
+    unsigned found = 0U;
+    for (std::size_t i = 0U; i < count_; ++i) {
+        auto &entry = entries_[i];
+        if (entry.handle == param_handle(dima::params::CAL_MAG0_XOFF)) { entry.next.f = offsets[0]; ++found; }
+        if (entry.handle == param_handle(dima::params::CAL_MAG0_YOFF)) { entry.next.f = offsets[1]; ++found; }
+        if (entry.handle == param_handle(dima::params::CAL_MAG0_ZOFF)) { entry.next.f = offsets[2]; ++found; }
+    }
+    if (found != 3U) { phase_ = Phase::Fault; return false; }
     provisional_ = false;
     return apply_candidate(now, provisional_);
 }

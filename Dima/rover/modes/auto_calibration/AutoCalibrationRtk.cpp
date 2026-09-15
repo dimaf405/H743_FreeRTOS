@@ -45,6 +45,8 @@ void AutoCalibrationMode::run_straight(std::uint64_t now, bool returning) noexce
     // 请求每个 20 ms 周期最多增加 0.003（0.15/s）；起步不依赖尚未辨识的
     // maximum_speed，实际车速/转速仍由独立包络限制。
     longitudinal_ += std::clamp(desired - longitudinal_, -0.003F, 0.003F);
+    // 高输出直线段同步采集磁-油门回归样本（内部自带门槛与去重）。
+    sample_mag_throttle(now);
     steering_ = std::clamp(0.5F * math::wrap_pi(leg_heading_ - rtk.array_heading_rad), -0.10F, 0.10F);
     const auto &motors = motors_sub_.get();
     const float applied = 0.5F * (motors.control[0] + motors.control[1]);
@@ -207,7 +209,8 @@ void AutoCalibrationMode::step(std::uint64_t now) noexcept
         if (now - state_started_ > 45000000ULL) { terminate(Status::FAILURE_TIMEOUT, false, now); break; }
         if (level.request_timestamp != level_request_time_) break;
         if (!level.active && level.result == sensor_calibration_status_s::RESULT_SUCCESS) {
-            if (level.parameter_start_count != expected_set_count_ || level.parameter_owned_changes > 2U ||
+            // 两项板级校正最多附带一次磁补偿 ID 失效，仍严格核对自有写入计数。
+            if (level.parameter_start_count != expected_set_count_ || level.parameter_owned_changes > 3U ||
                 level.parameter_set_count != level.parameter_start_count + level.parameter_owned_changes) {
                 terminate(Status::FAILURE_PARAMETER, false, now); break;
             }
@@ -348,7 +351,8 @@ void AutoCalibrationMode::step(std::uint64_t now) noexcept
     case Status::STATE_TURN_CW: run_turn(now, 1); break;
     case Status::STATE_TURN_CCW: run_turn(now, -1); break;
     case Status::STATE_COMMIT_RTK: case Status::STATE_COMMIT_DYNAMICS:
-    case Status::STATE_COMMIT_MAG: case Status::STATE_APPLY_MAG_BOOTSTRAP: case Status::STATE_RESTORE_MAG:
+    case Status::STATE_COMMIT_MAG: case Status::STATE_COMMIT_MAG_MOT:
+    case Status::STATE_APPLY_MAG_BOOTSTRAP: case Status::STATE_RESTORE_MAG:
         poll_transaction(now); break;
     default: terminate(Status::FAILURE_PREFLIGHT, false, now); break;
     }

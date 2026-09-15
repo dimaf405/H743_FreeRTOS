@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CalibrationParameters.hpp"
+#include "magnetometer/MagMotorOutputHistory.hpp"
 #include "rover/CalibrationMath.hpp"
 #include "rover/CalibrationFence.hpp"
 #include "rover/CalibrationIdentification.hpp"
@@ -96,6 +97,8 @@ private:
     bool read_tuning_config() noexcept;
     void start_tuning(std::uint64_t now) noexcept;
     bool begin_imu_bias(std::uint64_t now) noexcept;
+    void sample_mag_throttle(std::uint64_t now) noexcept;
+    bool commit_mag_throttle(std::uint64_t now) noexcept;
     bool step_imu_bias(std::uint64_t now) noexcept;
     bool imu_bias_confirmed(std::uint64_t now) const noexcept;
     bool imu_bias_residual_valid(std::uint64_t now) const noexcept;
@@ -182,6 +185,7 @@ private:
     dima::rover::control::RoverDifferential &drive_;
     AutoMode &navigation_;
     CalibrationParameters transaction_;
+    dima::modules::sensors::MagMotorOutputHistory motor_history_{};
     uORB::SubscriptionData<vehicle_status_s> vehicle_status_sub_{ORB_ID(vehicle_status)};
     uORB::SubscriptionData<vehicle_control_mode_s> control_sub_{ORB_ID(vehicle_control_mode)};
     uORB::SubscriptionData<actuator_armed_s> armed_sub_{ORB_ID(actuator_armed)};
@@ -312,6 +316,18 @@ private:
     std::uint64_t stable_since_{}, mag_stable_since_{}, level_request_time_{}, arm_started_{};
     std::uint32_t sequence_{}, session_id_{};
     std::uint32_t expected_set_count_{};
+    /* 磁-油门补偿学习：高输出直线段对磁矢量做逐轴线性回归（u=实际纵向
+     * 输出），会话结束在磁校准确认应用后经只读观测参数提交。 */
+    struct MagThrottleFit {
+        // 按航段在线中心化，去/返程各自截距；double 累加避免差分消去精度。
+        double mean_u{}, variance_u{}, mean_b[3]{}, covariance[3]{}, variance_b[3]{};
+        float minimum_u{1.0F}, maximum_u{}, roll{}, pitch{};
+        std::uint32_t count{};
+    };
+    MagThrottleFit mag_mot_fit_[2]{};
+    std::uint64_t last_mag_mot_sample_{};
+    bool mag_mot_reported_{false};
+    bool endpoint_reported_{false};
     std::uint8_t transaction_stage_{};
     bool selected_{}, pending_termination_{}, cancel_requested_{}, bootstrap_applied_{}, mag_ready_{};
     bool config_valid_{};

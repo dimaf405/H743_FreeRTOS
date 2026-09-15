@@ -1,6 +1,7 @@
 #define MODULE_NAME "auto_cal"
 #include "AutoCalibrationMode.hpp"
 
+#include "magnetometer/VehicleMagnetometer.hpp"
 #include "sensors/SensorRotation.hpp"
 #include "world_magnetic_model/geo_mag_declination.h"
 #include "matrix/math.hpp"
@@ -146,6 +147,121 @@ float AutoCalibrationMode::mag_residual(std::uint64_t now) const noexcept
     // 前端样本与每个新姿态比较时间差并反复清空稳定计时。
     const matrix::Vector3f measured(mag.magnetometer_ga);
     return measured.isAllFinite() ? (measured - expected).norm() : std::numeric_limits<float>::infinity();
+}
+
+void AutoCalibrationMode::sample_mag_throttle(std::uint64_t now) noexcept
+{
+    // 只学未补偿的原始传感器值，避免旧 K 反馈进入下一代。去/返程单独截距，
+    // 掉头引起的环境磁场方向变化不应成为油门斜率。
+    const auto &raw = raw_mag_sub_.get();
+    if (!status_.magnetometer_present || mag_device_id_ == 0U || raw.device_id != mag_device_id_ ||
+        !fresh(raw.timestamp_sample, now, 200000ULL) || raw.timestamp_sample > raw.timestamp ||
+        raw.timestamp_sample <= last_mag_mot_sample_ || matched_mag_sample_ != raw.timestamp_sample ||
+        ground_speed() < 0.1F || std::fabs(yaw_rate()) > 0.05F ||
+        std::fabs(dima::lib::rover::calibration::wrap_pi(
+            leg_heading_ - rtk_sub_.get().array_heading_rad)) > 3.0F * kRadians) return;
+    const matrix::Vector3f field(raw.x, raw.y, raw.z);
+    const matrix::Quatf attitude(attitude_sub_.get().q);
+    if (!field.isAllFinite() || field.norm() > 2.0F || !attitude.isAllFinite() ||
+        std::fabs(attitude.norm() - 1.0F) > 0.01F) return;
+    const matrix::Eulerf tilt(attitude);
+    if (std::fabs(tilt.phi()) > 15.0F * kRadians || std::fabs(tilt.theta()) > 15.0F * kRadians) return;
+    float u{};
+    if (!motor_history_.forward_output(raw.timestamp_sample, u) || u < 0.3F * config_.motor_maximum) return;
+    auto &fit = mag_mot_fit_[status_.state == Status::STATE_STRAIGHT_BACK ? 1U : 0U];
+    if (fit.count == 0U) { fit.roll = tilt.phi(); fit.pitch = tilt.theta(); }
+    if (std::fabs(tilt.phi() - fit.roll) > 2.0F * kRadians ||
+        std::fabs(tilt.theta() - fit.pitch) > 2.0F * kRadians || fit.count == UINT32_MAX) return;
+    last_mag_mot_sample_ = raw.timestamp_sample;
+    ++fit.count;
+    const double delta_u = u - fit.mean_u;
+    fit.mean_u += delta_u / fit.count;
+    fit.variance_u += delta_u * (u - fit.mean_u);
+    fit.minimum_u = std::min(fit.minimum_u, u);
+    fit.maximum_u = std::max(fit.maximum_u, u);
+    for (unsigned axis = 0U; axis < 3U; ++axis) {
+        const double delta_b = field(axis) - fit.mean_b[axis];
+        fit.mean_b[axis] += delta_b / fit.count;
+        fit.covariance[axis] += delta_u * (field(axis) - fit.mean_b[axis]);
+        fit.variance_b[axis] += delta_b * (field(axis) - fit.mean_b[axis]);
+    }
+}
+
+bool AutoCalibrationMode::commit_mag_throttle(std::uint64_t now) noexcept
+{
+    if (mag_mot_reported_) return false;
+    mag_mot_reported_ = true;
+    status_.unavailable_stages |= Status::STAGE_MAG_MOT;
+    const auto &out = mag_mot_fit_[0];
+    const auto &back = mag_mot_fit_[1];
+    const double n = static_cast<double>(out.count) + back.count;
+    const double variance_u = out.variance_u + back.variance_u;
+    const double sum_uu = variance_u + out.count * out.mean_u * out.mean_u +
+        back.count * back.mean_u * back.mean_u;
+    const float span = std::max(out.maximum_u - out.minimum_u, back.maximum_u - back.minimum_u);
+    bool usable = mag_device_id_ != 0U && mag_device_id_ <= static_cast<std::uint32_t>(INT32_MAX) &&
+        out.count >= 30U && back.count >= 30U && n >= 100.0 &&
+        span >= 0.15F * config_.motor_maximum && variance_u > 1.0e-4 * sum_uu;
+    float sensor_slope[3]{};
+    double residual_squared = 0.0;
+    for (unsigned axis = 0U; axis < 3U && usable; ++axis) {
+        // 共用斜率 K=Σ段 cov(u,B)/Σ段 var(u)，各段截距独立；静态偏置变化
+        // 只改变截距。残差先用最终 scale 换到校正后的 gauss 域再判 0.08 G。
+        const double covariance = out.covariance[axis] + back.covariance[axis];
+        const double k = covariance / variance_u;
+        usable = std::isfinite(k) && std::fabs(k) <= 1.0 &&
+            std::isfinite(config_.mag_scale[axis]) && config_.mag_scale[axis] >= 0.1F && config_.mag_scale[axis] <= 3.0F;
+        sensor_slope[axis] = static_cast<float>(k) * config_.mag_scale[axis];
+        residual_squared += std::max(0.0, out.variance_b[axis] + back.variance_b[axis] -
+            covariance * covariance / variance_u) * config_.mag_scale[axis] * config_.mag_scale[axis];
+    }
+    float rotation[9]{};
+    const dima::lib::sensors::Vector3 fine{config_.board_offset[0], config_.board_offset[1], config_.board_offset[2]};
+    usable = usable && residual_squared <= 0.08 * 0.08 * n &&
+        dima::lib::sensors::make_board_rotation_matrix(config_.mag_rotation, fine, rotation);
+    float coefficient[3]{};
+    for (unsigned axis = 0U; axis < 3U; ++axis)
+        coefficient[axis] = rotation[axis * 3U] * sensor_slope[0] +
+            rotation[axis * 3U + 1U] * sensor_slope[1] + rotation[axis * 3U + 2U] * sensor_slope[2];
+    const float reference = get_mag_strength_gauss(gps_sub_.get().latitude_deg, gps_sub_.get().longitude_deg);
+    usable = usable && std::isfinite(reference) && reference >= 0.1F && reference <= 0.8F;
+    if (!usable) {
+        PX4_INFO("[autocal] mag throttle interference unobservable; compensation incomplete");
+        return false;
+    }
+    // 干扰率是完整矢量模长相对当地 WMM 场强，允许超过 100%，未知用 -1。
+    status_.mag_interference_pct = 100.0F * std::hypot(std::hypot(coefficient[0], coefficient[1]),
+        coefficient[2]) * config_.motor_maximum / reference;
+    PX4_INFO("[autocal] mag throttle %.0f%% interference; awaiting parameter commit",
+        static_cast<double>(status_.mag_interference_pct));
+    if (status_.mag_interference_pct > 30.0F)
+        PX4_WARN("[autocal] magnetic interference above 30%%; check hardware placement");
+    px4::AtomicTransaction atomic;
+    std::int32_t generation{};
+    if (param_get(param_handle(dima::params::CAL_MAG_MOT_GEN), &generation) != 0 ||
+        generation < 0 || generation == INT32_MAX) {
+        PX4_WARN("[autocal] mag throttle generation unavailable/exhausted; compensation incomplete");
+        return false;
+    }
+    transaction_stage_ = Status::STATE_COMMIT_MAG_MOT;
+    // 停车/Disarmed、前端代次确认、显式保存和回滚沿用同一有限事务，不允许
+    // 五次裸写成功就宣称持久化完成。GEN 最后发布，整组通知在锁退出时合并。
+    const bool prepared = transaction_.prepare() &&
+        transaction_.add_float(dima::params::CAL_MAG_MOT_KX, coefficient[0]) &&
+        transaction_.add_float(dima::params::CAL_MAG_MOT_KY, coefficient[1]) &&
+        transaction_.add_float(dima::params::CAL_MAG_MOT_KZ, coefficient[2]) &&
+        transaction_.add_int(dima::params::CAL_MAG_MOT_ID, static_cast<std::int32_t>(mag_device_id_)) &&
+        transaction_.add_int(dima::params::CAL_MAG_MOT_GEN, generation + 1);
+    if (prepared && transaction_.apply(now, expected_set_count_)) {
+        transition(Status::STATE_COMMIT_MAG_MOT, now);
+        return true;
+    }
+    if (transaction_.active()) {
+        transition(Status::STATE_COMMIT_MAG_MOT, now);
+        return true; // 进入回滚/故障确认，不覆盖仍持有互锁的事务。
+    }
+    PX4_WARN("[autocal] mag throttle transaction unavailable; compensation incomplete");
+    return false;
 }
 
 void AutoCalibrationMode::finish_movement(std::uint64_t now) noexcept
