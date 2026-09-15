@@ -31,13 +31,27 @@ void AutoCalibrationMode::run_straight(std::uint64_t now, bool returning) noexce
     math::displacement(gps_sub_.get().latitude_deg, gps_sub_.get().longitude_deg, leg_lat_, leg_lon_, north, east);
     const float distance = std::hypot(north, east);
     if (now - state_started_ > 90000000ULL) { terminate(Status::FAILURE_TIMEOUT, false, now); return; }
-    // 后端 Ready 不等于实体电机已接通。保留最长 Arm ramp 后仍无位置响应，
-    // 提前结束，不能在卡死/未接电机时持续等待整个九十秒航段。
-    if (now - state_started_ > 8000000ULL && ground_speed() < 0.08F) {
-        terminate(Status::FAILURE_MOTION_UNAVAILABLE, false, now); return;
-    }
+    // 只有“请求到顶且连续无运动”才计满 8 s；起步爬升及短暂的正常停车
+    // 不消耗这个窗口。输出失效/传感器故障由独立安全链处理，不能误报动力弱。
+    const bool moving = ground_speed() >= 0.08F;
+    if (!moving && longitudinal_ >= 0.995F * config_.motor_maximum) {
+        if (drive_envelope_since_ == 0U) drive_envelope_since_ = now;
+        if (now - drive_envelope_since_ >= 8000000ULL) {
+            PX4_WARN("[autocal] drive envelope exhausted without motion; check MOT_THR_MIN/mechanics/battery");
+            terminate(Status::FAILURE_DRIVE_ENVELOPE, false, now);
+            return;
+        }
+    } else drive_envelope_since_ = 0U;
     const unsigned level = std::min(2U, static_cast<unsigned>(std::fmax(0.0F, 3.0F * distance / leg_distance_)));
-    const float unrestricted = config_.throttle * (0.5F + 0.25F * level);
+    // 阶梯基准=入场冻结的 MOT_THR_MAX 包络（手动对等），按里程三档爬升；
+    // 预测速度守卫决定是否继续限流，健康车在低档即触发限速。
+    const float distance_target = config_.motor_maximum * (0.5F + 0.25F * level);
+    // 不动也能按时间继续请求到顶；记住已确认能起步的本航段下界，避免一动
+    // 就退回半包络而反复失速。真正的速度守卫仍可降低该请求。
+    if (moving && steady_since_ == 0U)
+        straight_start_floor_ = std::max(straight_start_floor_, longitudinal_);
+    const float unrestricted = moving ? std::max(distance_target, straight_start_floor_)
+        : std::min(config_.motor_maximum, std::max(distance_target, longitudinal_ + 0.003F));
     const float predicted_speed = ground_speed() + 0.5F * std::hypot(filtered_acceleration_[0], filtered_acceleration_[1]);
     const bool speed_limited = predicted_speed > 0.65F * fence_.speed_limit_m_s && longitudinal_ > 0.0F;
     const float desired = speed_limited ? std::min(unrestricted,
@@ -75,7 +89,8 @@ void AutoCalibrationMode::run_straight(std::uint64_t now, bool returning) noexce
             // v=k*u 的 u 属于控制器前馈输入；仅当整形后实际输入与它一致且
             // 已稳定时采样。非线性整形/换向/Arm ramp 数据不冒充线性辨识结果。
             if (settled && steady_since_ != 0U && now - steady_since_ >= 1000000ULL)
-                speed_fit_.add(longitudinal_, speed, level);
+                // FF 使用差速器标准 [0,1] 输入；请求在入口按冻结包络换基。
+                speed_fit_.add(longitudinal_ / config_.motor_maximum, speed, level);
         }
     }
     if (distance < leg_distance_) return;
@@ -125,7 +140,8 @@ void AutoCalibrationMode::run_turn(std::uint64_t now, int direction) noexcept
     // ceiling/slew/实际速度和加速度硬门禁仍独立生效。
     const float previous = steering_;
     steering_ = std::clamp(steering_ + std::clamp(0.06F * (direction * 0.3F - yaw_rate()) * 0.02F,
-        -0.003F, 0.003F), -config_.steering, config_.steering);
+        // 转向与油门同为手动对等：无静态输出上限，运动由 yaw-rate 目标与守卫约束。
+        -0.003F, 0.003F), -1.0F, 1.0F);
     const auto &motors = motors_sub_.get();
     const float applied = 0.5F * (motors.control[1] - motors.control[0]);
     // 真实电机差分和车体转速须同向；不设固定 0.08 的电机输入下限，
@@ -302,7 +318,7 @@ void AutoCalibrationMode::step(std::uint64_t now) noexcept
         }
         const float target_rate = std::clamp(0.5F * error, -0.3F, 0.3F);
         steering_ = std::clamp(steering_ + std::clamp(0.06F * (target_rate - yaw_rate()) * 0.02F,
-            -0.003F, 0.003F), -config_.steering, config_.steering);
+            -0.003F, 0.003F), -1.0F, 1.0F);
         break;
     }
     case Status::STATE_STOP_DISARM_FIRST:
