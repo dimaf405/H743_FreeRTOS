@@ -8,27 +8,14 @@
 namespace dima::modules::motor {
 namespace {
 
+using PwmField = dima::generated::parameters::PwmOutputField;
+// 字段索引来自同一生成合同；这里仅声明消费语义，不维护参数名或通道清单。
 enum ParameterField : std::size_t {
-    Function = 0U,
-    Minimum,
-    Center,
-    Maximum,
-    Reversed,
-};
-
-constexpr const char *kParameterNames[6][5] = {
-    {"PWM_S1_FUNC", "PWM_S1_MIN", "PWM_S1_CENT", "PWM_S1_MAX",
-     "PWM_S1_REV"},
-    {"PWM_S2_FUNC", "PWM_S2_MIN", "PWM_S2_CENT", "PWM_S2_MAX",
-     "PWM_S2_REV"},
-    {"PWM_S3_FUNC", "PWM_S3_MIN", "PWM_S3_CENT", "PWM_S3_MAX",
-     "PWM_S3_REV"},
-    {"PWM_S4_FUNC", "PWM_S4_MIN", "PWM_S4_CENT", "PWM_S4_MAX",
-     "PWM_S4_REV"},
-    {"PWM_S5_FUNC", "PWM_S5_MIN", "PWM_S5_CENT", "PWM_S5_MAX",
-     "PWM_S5_REV"},
-    {"PWM_S6_FUNC", "PWM_S6_MIN", "PWM_S6_CENT", "PWM_S6_MAX",
-     "PWM_S6_REV"},
+    Function = static_cast<std::size_t>(PwmField::Func),
+    Minimum = static_cast<std::size_t>(PwmField::Min),
+    Center = static_cast<std::size_t>(PwmField::Cent),
+    Maximum = static_cast<std::size_t>(PwmField::Max),
+    Reversed = static_cast<std::size_t>(PwmField::Rev),
 };
 
 constexpr std::uint32_t kEventParameterInvalid = 0x524D4F01U;
@@ -91,7 +78,7 @@ bool MotorOutput::bind_parameters() noexcept
     for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
         for (std::size_t field = 0U; field < kFieldsPerChannel; ++field) {
             const param_t handle =
-                param_find_no_notification(kParameterNames[channel][field]);
+                static_cast<param_t>(dima::generated::parameters::kPwmOutputParameters[channel][field]);
             if (handle == PARAM_INVALID) {
                 invalidate_parameter_bindings();
                 return false;
@@ -220,7 +207,9 @@ bool MotorOutput::apply_parameter_snapshot() noexcept
                                    static_cast<std::uint32_t>(
                                        raw[channel][Maximum]));
         }
-        if (raw[channel][Center] < effective_minimum) {
+        // 可逆电机必须 MIN < CENT < MAX；中位等于任一端点会让该方向的
+        // 整个半轴都映射成同一脉宽，形成缺失象限。此类通道不得算作有效映射。
+        if (raw[channel][Center] <= effective_minimum) {
             report_parameter_issue(ParameterIssue::CenterBelowMinimum,
                                    channel_number,
                                    static_cast<std::uint32_t>(
@@ -230,7 +219,7 @@ bool MotorOutput::apply_parameter_snapshot() noexcept
             candidate.channels[channel] = ChannelConfig{};
             continue;
         }
-        if (raw[channel][Center] > effective_maximum) {
+        if (raw[channel][Center] >= effective_maximum) {
             report_parameter_issue(ParameterIssue::CenterAboveMaximum,
                                    channel_number,
                                    static_cast<std::uint32_t>(

@@ -5,6 +5,8 @@ parameters:
     PWM_S1_FUNC:
       description:
         short: PWM S1 输出功能
+        long: |-
+          按面向车头的车辆左右侧分配逻辑电机。侧别与电机安装方向独立；正命令必须使该侧车轮驱动车辆前进。
       type: enum
       values:
         0: Disabled
@@ -25,6 +27,8 @@ parameters:
       category: System
       description:
         short: PWM S1 中位脉宽
+        long: |-
+          零命令和普通未解锁状态输出此脉宽；必须满足 MIN < CENT < MAX，并与电调真实停止中位一致。
       type: int32
       default: 1500
       unit: us
@@ -44,6 +48,8 @@ parameters:
     PWM_S1_REV:
       description:
         short: PWM S1 输出方向反转
+        long: |-
+          只反转本输出通道的前后方向，中位不变。左右侧 FUNC 正确后，用本项匹配电机安装方向；不要用左右互换代替方向校准。
       type: enum
       values:
         0: Normal
@@ -54,6 +60,8 @@ parameters:
     PWM_S2_FUNC:
       description:
         short: PWM S2 输出功能
+        long: |-
+          按面向车头的车辆左右侧分配逻辑电机。侧别与电机安装方向独立；正命令必须使该侧车轮驱动车辆前进。
       type: enum
       values:
         0: Disabled
@@ -74,6 +82,8 @@ parameters:
       category: System
       description:
         short: PWM S2 中位脉宽
+        long: |-
+          零命令和普通未解锁状态输出此脉宽；必须满足 MIN < CENT < MAX，并与电调真实停止中位一致。
       type: int32
       default: 1500
       unit: us
@@ -93,6 +103,8 @@ parameters:
     PWM_S2_REV:
       description:
         short: PWM S2 输出方向反转
+        long: |-
+          只反转本输出通道的前后方向，中位不变。左右侧 FUNC 正确后，用本项匹配电机安装方向；不要用左右互换代替方向校准。
       type: enum
       values:
         0: Normal
@@ -103,6 +115,8 @@ parameters:
     PWM_S3_FUNC:
       description:
         short: PWM S3 输出功能
+        long: |-
+          按面向车头的车辆左右侧分配逻辑电机。侧别与电机安装方向独立；正命令必须使该侧车轮驱动车辆前进。
       type: enum
       values:
         0: Disabled
@@ -123,6 +137,8 @@ parameters:
       category: System
       description:
         short: PWM S3 中位脉宽
+        long: |-
+          零命令和普通未解锁状态输出此脉宽；必须满足 MIN < CENT < MAX，并与电调真实停止中位一致。
       type: int32
       default: 1500
       unit: us
@@ -142,6 +158,8 @@ parameters:
     PWM_S3_REV:
       description:
         short: PWM S3 输出方向反转
+        long: |-
+          只反转本输出通道的前后方向，中位不变。左右侧 FUNC 正确后，用本项匹配电机安装方向；不要用左右互换代替方向校准。
       type: enum
       values:
         0: Normal
@@ -152,6 +170,8 @@ parameters:
     PWM_S4_FUNC:
       description:
         short: PWM S4 输出功能
+        long: |-
+          按面向车头的车辆左右侧分配逻辑电机。侧别与电机安装方向独立；正命令必须使该侧车轮驱动车辆前进。
       type: enum
       values:
         0: Disabled
@@ -172,6 +192,8 @@ parameters:
       category: System
       description:
         short: PWM S4 中位脉宽
+        long: |-
+          零命令和普通未解锁状态输出此脉宽；必须满足 MIN < CENT < MAX，并与电调真实停止中位一致。
       type: int32
       default: 1500
       unit: us
@@ -191,6 +213,8 @@ parameters:
     PWM_S4_REV:
       description:
         short: PWM S4 输出方向反转
+        long: |-
+          只反转本输出通道的前后方向，中位不变。左右侧 FUNC 正确后，用本项匹配电机安装方向；不要用左右互换代替方向校准。
       type: enum
       values:
         0: Normal
@@ -201,6 +225,8 @@ parameters:
     PWM_S5_FUNC:
       description:
         short: PWM S5 输出功能
+        long: |-
+          按面向车头的车辆左右侧分配逻辑电机。侧别与电机安装方向独立；正命令必须使该侧车轮驱动车辆前进。
       type: enum
       values:
         0: Disabled
@@ -221,6 +247,8 @@ parameters:
       category: System
       description:
         short: PWM S5 中位脉宽
+        long: |-
+          零命令和普通未解锁状态输出此脉宽；必须满足 MIN < CENT < MAX，并与电调真实停止中位一致。
       type: int32
       default: 1500
       unit: us
@@ -240,6 +268,8 @@ parameters:
     PWM_S5_REV:
       description:
         short: PWM S5 输出方向反转
+        long: |-
+          只反转本输出通道的前后方向，中位不变。左右侧 FUNC 正确后，用本项匹配电机安装方向；不要用左右互换代替方向校准。
       type: enum
       values:
         0: Normal
@@ -250,6 +280,8 @@ parameters:
     PWM_S6_FUNC:
       description:
         short: PWM S6 输出功能
+        long: |-
+          按面向车头的车辆左右侧分配逻辑电机。侧别与电机安装方向独立；正命令必须使该侧车轮驱动车辆前进。
       type: enum
       values:
         0: Disabled
@@ -270,6 +302,8 @@ parameters:
       category: System
       description:
         short: PWM S6 中位脉宽
+        long: |-
+          零命令和普通未解锁状态输出此脉宽；必须满足 MIN < CENT < MAX，并与电调真实停止中位一致。
       type: int32
       default: 1500
       unit: us
@@ -289,6 +323,8 @@ parameters:
     PWM_S6_REV:
       description:
         short: PWM S6 输出方向反转
+        long: |-
+          只反转本输出通道的前后方向，中位不变。左右侧 FUNC 正确后，用本项匹配电机安装方向；不要用左右互换代替方向校准。
       type: enum
       values:
         0: Normal
@@ -315,7 +351,8 @@ parameters:
       description:
         short: 手动模式倒车转向反转
         long: |-
-          倒车时保持所请求的车头转向符合直观操作习惯。
+          1：倒车时反转转向输入，模拟方向盘式倒车；0：倒车仍保持正转向对应车头顺时针。
+          仅影响 Manual，不改变单侧 PWM 输出方向，也不应用于自动导航或校准。
       type: int32
       default: 1
       min: 0
@@ -326,7 +363,8 @@ parameters:
         short: 输出饱和时转向与油门的优先级
         long: |-
           0 表示优先保留纵向命令；0.5 表示两轴按相同比例缩放；
-          1 表示优先保留转向命令。
+          1 表示优先保留转向命令。Manual 入口先按 APM 对两轴同比缩放，
+          此优先级在后续非对称推力域饱和时继续生效；允许急转时内侧电机反转。
       type: float
       default: 0.5
       min: 0.0
@@ -340,7 +378,8 @@ parameters:
       description:
         short: 最小非零电机输出
         long: |-
-          仅在电机命令非零时应用静摩擦补偿。此参数不是遥控输入死区。
+          仅在电机命令非零时应用静摩擦补偿，随后执行 EXPO 曲线；精确零命令不加补偿。
+          使用归一化数值，0.15 表示 15%，不能填 15。此参数不是遥控输入死区。
       type: float
       default: 0.0
       min: 0.0
@@ -361,7 +400,8 @@ parameters:
       description:
         short: 纵向命令变化率
         long: |-
-          设为 0 时禁用变化率限制。
+          单位为归一化输出每秒，1 等于 APM 的 100%/s。设为 0 时禁用。
+          Manual 按 APM 对升降油门及前后换向连续限速；导航和校准停车保留立即清除纵向历史的安全边界。
       type: float
       default: 1.0
       unit: 1/s
@@ -373,7 +413,9 @@ parameters:
       description:
         short: 单侧电机换向延迟
         long: |-
-          左右两侧独立处理：接受反向命令之前，先保持一段时间的零输出。
+          左右两侧独立计时：接受反向命令之前，先保持一段时间的零输出。
+          默认 0.2 秒，因此原地左右互换存在 200 ms 中立等待；同向差速转弯不触发该等待。
+          各轮只根据自身最后非零命令计时，不把单侧等待扩展为双轮共同等待。
       type: float
       default: 0.2
       unit: s

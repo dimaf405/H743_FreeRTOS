@@ -8,6 +8,7 @@
 #include "vehicle_status.hpp"
 #include "lifecycle/module_base.hpp"
 #include "parameters/param.h"
+#include "parameters/parameter_contract.hpp"
 #include "api/ActuatorPwm.hpp"
 #include "uORB/Publication.hpp"
 #include "uORB/SubscriptionData.hpp"
@@ -43,13 +44,11 @@ private:
     static constexpr std::uint64_t kSafetyTopicTimeoutUs = 750000ULL;
     static constexpr std::size_t kChannelCount =
         dima::platform::kActuatorPwmChannelCount;
-    static constexpr std::size_t kFieldsPerChannel = 5U;
+    static constexpr std::size_t kFieldsPerChannel =
+        dima::generated::parameters::kPwmOutputFieldCount;
+    static_assert(kChannelCount == dima::generated::parameters::kPwmOutputChannelCount);
 
-    enum class ChannelFunction : std::int32_t {
-        Disabled = 0,
-        MotorRight = 101,
-        MotorLeft = 102,
-    };
+    using ChannelFunction = dima::generated::parameters::PwmOutputFunction;
 
     struct ChannelConfig {
         ChannelFunction function;

@@ -384,6 +384,47 @@ def flight_mode_slot_contract(
     return parameters, allowed_values
 
 
+def pwm_output_contract(catalogue: list[dict[str, Any]]) -> list[str]:
+    """PWM 通道、字段及功能枚举从官方 JSON 派生，避免消费者手写六路名称表。"""
+    channels: dict[int, dict[str, dict[str, Any]]] = {}
+    for parameter in catalogue:
+        if parameter.get("group") != "PWM Outputs":
+            continue
+        match = re.fullmatch(r"PWM_S([1-9][0-9]*)_([A-Z][A-Z0-9_]*)", parameter["name"])
+        if not match or parameter["type"] != "Int32":
+            raise RuntimeError("invalid PWM output parameter schema")
+        channels.setdefault(int(match[1]), {})[match[2]] = parameter
+    order = sorted(channels)
+    if not order or order != list(range(1, order[-1] + 1)):
+        raise RuntimeError("PWM output channels must be contiguous from S1")
+    fields = sorted(channels[order[0]])
+    functions = channels[order[0]].get("FUNC", {}).get("values", [])
+    if not functions:
+        raise RuntimeError("PWM output function enum is missing")
+    for channel in order:
+        if sorted(channels[channel]) != fields or channels[channel]["FUNC"].get("values") != functions:
+            raise RuntimeError("PWM output channels have inconsistent fields or functions")
+    names = [snake_to_pascal(v["description"].replace(" ", "_")) for v in functions]
+    if len(set(names)) != len(names) or any(not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", n) for n in names):
+        raise RuntimeError("PWM output function names must be unique C++ identifiers")
+    return [
+        "// 只消费正式参数生成结果：通道数量、索引及功能值不得在 MotorOutput 复制。",
+        "enum class PwmOutputField : std::size_t {",
+        *[f"    {snake_to_pascal(field)}," for field in fields],
+        "    Count,",
+        "};",
+        f"inline constexpr std::size_t kPwmOutputFieldCount = {len(fields)}U;",
+        "inline constexpr dima::params kPwmOutputParameters[][kPwmOutputFieldCount]{",
+        *["    {" + ", ".join(f"dima::params::{channels[c][f]['name']}" for f in fields) + "}," for c in order],
+        "};",
+        f"inline constexpr std::size_t kPwmOutputChannelCount = {len(order)}U;",
+        "enum class PwmOutputFunction : std::int32_t {",
+        *[f"    {name} = {int(value['value'])}," for name, value in zip(names, functions)],
+        "};",
+        "",
+    ]
+
+
 def render_parameter_contract(
     catalogue: list[dict[str, Any]], xml_names: list[str]
 ) -> str:
@@ -493,6 +534,7 @@ def render_parameter_contract(
         "    return false;",
         "}",
         "",
+        *pwm_output_contract(catalogue),
         "struct RcCalibrationParameters {",
         *calibration_members,
         "};",
