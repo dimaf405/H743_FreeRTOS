@@ -75,6 +75,13 @@ void ArmedFlashCoordinator::end_maintenance() noexcept
     maintenance_busy_ = false;
 }
 
+bool ArmedFlashCoordinator::arming_blocked() const noexcept
+{
+    // 只读就绪投影；真正解锁仍须 try_arm 原子仲裁，不能用本查询代替取得锁。
+    CriticalGuard guard{critical_};
+    return flash_busy_ || maintenance_busy_;
+}
+
 bool ArmedFlashCoordinator::armed() const noexcept
 {
     CriticalGuard guard{critical_};

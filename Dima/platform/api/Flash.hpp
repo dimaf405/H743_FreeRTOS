@@ -52,6 +52,7 @@ public:
     bool begin_maintenance() noexcept;
     void end_maintenance() noexcept;
     bool armed() const noexcept;
+    bool arming_blocked() const noexcept;
 
     ArmedFlashCoordinator(const ArmedFlashCoordinator &) = delete;
     ArmedFlashCoordinator &operator=(const ArmedFlashCoordinator &) = delete;
