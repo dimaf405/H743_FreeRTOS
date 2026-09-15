@@ -203,19 +203,6 @@ parameters:
       unit: m
       increment: 0.5
       decimal: 1
-    RO_CAL_VMAX:
-      description:
-        short: 自动校准备用速度上限
-        long: |-
-          进入校准时若 RO_SPEED_LIM 为 0 或旧值 -1，则将此值冻结为地速上限。
-          巡航速度未配置时会请求逐步增加的满输出探测，速度仍受限制。
-          停车距离必须覆盖该速度及允许的驱动输出。
-      type: float
-      default: 1.5
-      min: 0.1
-      max: 100
-      unit: m/s
-      decimal: 2
     RO_CAL_STOP_D:
       description:
         short: 经过实测确认的校准停车距离
@@ -230,33 +217,6 @@ parameters:
       max: 100
       unit: m
       increment: 0.1
-      decimal: 2
-    RO_CAL_THR_MAX:
-      category: Developer
-      description:
-        short: 自动校准油门上限
-        long: |-
-          自动校准使用的最大归一化纵向请求。巡航速度未配置时，
-          经独立条件门控的满输出探测改用 MOT_THR_MAX，其他阶段仍遵守此上限。
-          运行期安全逻辑还会施加不可绕过的硬上限及实测地速限制。
-      type: float
-      default: 0.30
-      min: 0.10
-      max: 0.40
-      increment: 0.01
-      decimal: 2
-    RO_CAL_TURN_MAX:
-      category: Developer
-      description:
-        short: 自动校准转向上限
-        long: |-
-          校准转弯和闭环增益验证使用的归一化转向请求最大绝对值。
-          每次会话期间保持冻结。
-      type: float
-      default: 0.25
-      min: 0.10
-      max: 0.35
-      increment: 0.01
       decimal: 2
 - group: Rover Velocity Control
   definitions:
@@ -297,12 +257,12 @@ parameters:
       description:
         short: 导航巡航速度
         long: |-
-          导航使用的巡航速度。0 表示未配置；进入校准时，旧值 -1 也按未配置处理。
-          自动校准将进入时的正值冻结为速度上限，否则使用 RO_CAL_VMAX。
+          导航与自动校准共用的巡航速度。进入自动校准时冻结当时的正值为本会话
+          速度上限；0 或历史值 -1 视为未配置，将拒绝自动校准运动（无安全上限可冻结）。
       type: float
-      default: 0.0
+      default: 1.0
       unit: m/s
-      min: -1
+      min: 0
       max: 100
       increment: 0.01
       decimal: 2

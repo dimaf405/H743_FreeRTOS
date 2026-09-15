@@ -68,8 +68,10 @@ private:
     // 剩余工作空间缩短，不能将它当作安全半径或绕过各阶段/会话时间预算。
     static constexpr float kPreferredStraightDistanceM = 12.0F;
     struct Config {
-        float throttle{}, steering{}, track{}, radius{}, stop_distance{};
-        float entry_cruise{}, fallback_speed{}, motor_maximum{};
+        /* 输出包络=入场冻结的 MOT_THR_MAX（手动对等）：纵向与转向均无静态
+         * 输出上限，运动由速度守卫、yaw-rate 守卫、加速度、围栏与 slew 约束。 */
+        float track{}, radius{}, stop_distance{};
+        float entry_cruise{}, motor_maximum{};
         float board_offset[3]{};
         std::int32_t mag_rotation{}, mag_id{}, gps_control{};
         float mag_offset[3]{}, mag_scale[3]{};

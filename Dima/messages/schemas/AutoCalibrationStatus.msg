@@ -40,12 +40,9 @@ uint8 STATE_SAVE_GAINS = 41
 uint8 STATE_RESTORE_GAINS = 42
 uint8 STATE_WAIT_ARM_PROFILE = 43
 uint8 STATE_PROFILE_FORWARD = 44
-uint8 STATE_PROFILE_REVERSE = 45
-uint8 STATE_PROFILE_FULL = 46
 uint8 STATE_STOP_PROFILE = 47
 uint8 STATE_COMMIT_IMU = 48
 uint8 STATE_WAIT_IMU_RELOCK = 49
-uint8 STATE_VALIDATE_REVERSE = 50
 uint8 STATE_PROFILE_RATE_CW = 51
 uint8 STATE_PROFILE_RATE_CCW = 52
 uint8 STATE_APPLY_RUNTIME = 53
@@ -151,8 +148,6 @@ bool motion_allowed
 bool ready_for_entry
 bool awaiting_arm
 bool session_authorized # 协调器观察到首次 Arm 后的诊断镜像；实际授权只属于 Commander。
-bool full_output_requested
-bool full_output_reached
 bool magnetometer_present
 bool mag_bootstrap_active
 bool closed_loop
@@ -174,7 +169,6 @@ float32 session_speed_limit_m_s
 float32 session_motor_limit
 float32 entry_cruise_speed_m_s
 float32 observed_forward_speed_m_s
-float32 observed_reverse_speed_m_s
 float32 observed_output_max
 # 100*norm(K_body)*冻结包络/WMM 场强；-1=未知，可以超过 100%。
 float32 mag_interference_pct
