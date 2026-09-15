@@ -328,6 +328,9 @@ private:
     static bool deliver_ack(void *, std::uint8_t, std::uint32_t,
                             const vehicle_command_ack_s &) noexcept;
     void service_uart_scan(std::uint64_t now) noexcept;
+    void report_drive_diagnostics() noexcept;
+    std::uint64_t last_drive_diagnostic_us_{0U};
+    std::uint32_t drive_diagnostic_sequence_{0U};
     MavlinkSharedState shared_{};
     UsbMavlinkTransport usb_transport_;
     SerialMavlinkTransport uart_transport_;

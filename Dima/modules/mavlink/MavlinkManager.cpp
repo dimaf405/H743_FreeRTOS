@@ -35,6 +35,8 @@ bool MavlinkService::start() noexcept
     shared_.reset();
     retry_uart_after_us_ = 0U;
     sensor_summary_sent_ = false;
+    last_drive_diagnostic_us_ = 0U;
+    drive_diagnostic_sequence_ = 0U;
     if (!ScheduleEnable() || !usb_.start()) {
         stop();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
@@ -179,6 +181,7 @@ void MavlinkService::Run()
           assignments_.telemetry_baudrate() == 0U && !scan_locked_)) {
         uart_.Run();
     }
+    report_drive_diagnostics();
 }
 
 } // namespace dima::modules::mavlink
