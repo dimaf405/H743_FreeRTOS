@@ -60,11 +60,16 @@ void MavlinkEndpoint::flush_tx() noexcept
     } else if (transport_.tx_free_bytes() < length) {
         return;
     }
+    // 基线必须在提交前读取：USB 同步返回前已经完成，UART 短帧也可能立即产生 TC。
+    const auto completion_baseline = transport_.tx_completion_generation();
     if (transport_.write(data, length, usb ? usb_timeout_remaining() : 0U) != static_cast<int>(length)) return;
     for (std::size_t i = 0U; i < count; ++i) {
         const auto &frame = tx_queue_[tx_head_];
         if (frame.kind != TxClass::Stream) transaction_bytes_ += frame.length;
-        if (frame.reboot_ack) wait_reboot_completion_ = true;
+        if (frame.reboot_ack) {
+            reboot_tx_completion_baseline_ = completion_baseline;
+            wait_reboot_completion_ = true;
+        }
         tx_head_ = (tx_head_ + 1U) % kTxQueueCapacity;
         --tx_count_;
     }

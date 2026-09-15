@@ -111,6 +111,7 @@ private:
     void send_command_ack(const mavlink_command_ack_t &ack,
                           bool reboot_ack) noexcept;
     void maybe_perform_reboot(std::uint64_t now) noexcept;
+    void cancel_reboot(const char *reason) noexcept;
     bool refresh_protocol_parameters() noexcept;
     void update_rc_input() noexcept;
     void update_sensor_topics() noexcept;
@@ -245,6 +246,10 @@ private:
     float rate_multiplier_{1.0F};
     param_t rate_handle_{PARAM_INVALID};
     bool wait_reboot_completion_{false};
+    bool reboot_ack_completed_{false};
+    bool reboot_save_requested_{false};
+    std::uint32_t reboot_tx_completion_baseline_{0U};
+    std::uint32_t reboot_tx_error_baseline_{0U};
 
     std::uint16_t statustext_id_{0U};
     std::uint16_t cpu_load_permille_{0U};
@@ -301,6 +306,7 @@ private:
     // 0=无请求，1=普通复位，3=MCUboot Recovery；仅来自 Commander 已批准 ACK。
     int reboot_mode_pending_{0};
     std::uint64_t reboot_deadline_us_{0U};
+    std::uint64_t reboot_save_deadline_us_{0U};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
 };

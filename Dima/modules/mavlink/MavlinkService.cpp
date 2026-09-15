@@ -19,6 +19,24 @@ namespace {
 
 namespace metadata = dima::generated::parameter_metadata;
 
+constexpr std::uint64_t kRebootSaveTimeoutUs = 10000000ULL;
+constexpr std::uint64_t kRebootSafetyTimeoutUs = 750000ULL;
+
+bool parameters_saved_for_reboot() noexcept
+{
+    // 调用者持有参数事务锁；只读取生成目录与 RAM 脏标记，绝不在 MAVLink
+    // 工作队列调用存储后端。volatile 值无需落盘，校准暂存期则必须等待结束。
+    if (!param_is_ready() || param_storage_paused()) return false;
+    for (unsigned index = 0U; index < param_count(); ++index) {
+        const param_t parameter = param_for_index(index);
+        if (parameter == PARAM_INVALID ||
+            (!param_is_volatile(parameter) && param_value_unsaved(parameter))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static_assert(metadata::kGeneralFileSize <= UINT32_MAX);
 static_assert(metadata::kParameterFileSize <= UINT32_MAX);
 static_assert(metadata::kActuatorFileSize <= UINT32_MAX);
@@ -91,6 +109,10 @@ void MavlinkEndpoint::reset_runtime_state() noexcept
     mission_.reset();
     reboot_mode_pending_ = 0;
     reboot_deadline_us_ = 0U;
+    reboot_save_deadline_us_ = 0U;
+    reboot_ack_completed_ = false;
+    reboot_save_requested_ = false;
+    reboot_tx_completion_baseline_ = reboot_tx_error_baseline_ = 0U;
     wait_reboot_completion_ = false;
     latest_input_rc_ = {};
     reset_sensor_streams();
@@ -101,6 +123,14 @@ void MavlinkEndpoint::reset_runtime_state() noexcept
 
 void MavlinkEndpoint::reset_link() noexcept
 {
+    // 连接代次失效时旧 ACK 的完成证据也失效，不能在重新连线后执行旧重启请求。
+    if (reboot_mode_pending_ != 0) {
+        reboot_mode_pending_ = 0;
+        reboot_deadline_us_ = reboot_save_deadline_us_ = 0U;
+        reboot_ack_completed_ = reboot_save_requested_ = false;
+        shared_.cancel_reboot();
+        PX4_WARN("Link reset; reboot cancelled");
+    }
     // 连接代次同时保护 Commander ACK 路由；只撤销本链路的 Mission token/日志租约。
     // storage 复位异步执行，LP worker 不等待文件关闭，也不触碰另一条链路的 channel。
     shared_.reset_link(channel_, epoch_++);
@@ -157,6 +187,15 @@ void MavlinkEndpoint::Run(bool quiescing)
     maybe_perform_reboot(hrt_absolute_time());
     if (quiescing || reboot_mode_pending_ != 0 || shared_.reboot_pending() || !ready) {
         mission_.update(hrt_absolute_time(), false);
+        // 保存等待可能跨越多次心跳周期；继续报告连接与取消原因，但不再接收
+        // 新的参数/命令。ACK 的发送完成证据独立锁存，不被后续心跳覆盖。
+        if (ready && (reboot_mode_pending_ == 0 || reboot_ack_completed_)) {
+            mavlink_message_t heartbeat{};
+            if (background_space() && heartbeat_pacer_.tick(hrt_absolute_time(), heartbeat)) {
+                if (!send_message(heartbeat)) heartbeat_pacer_.reset();
+            }
+            if (background_space()) stream_statustext();
+        }
         return;
     }
 
@@ -612,8 +651,12 @@ bool MavlinkEndpoint::queue_command_ack(const vehicle_command_ack_s &ack, std::u
         ack.result == vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED &&
         (ack.result_param2 == 1U || (channel_ == MAVLINK_COMM_0 && ack.result_param2 == 3U));
     if (reboot) {
+        const auto now = hrt_absolute_time();
         reboot_mode_pending_ = static_cast<int>(ack.result_param2);
-        reboot_deadline_us_ = hrt_absolute_time() + drain_timeout_us();
+        reboot_deadline_us_ = now + drain_timeout_us();
+        reboot_save_deadline_us_ = now + kRebootSaveTimeoutUs;
+        reboot_tx_error_baseline_ = transport_.tx_error_generation();
+        wait_reboot_completion_ = reboot_ack_completed_ = reboot_save_requested_ = false;
         shared_.mark_reboot_pending();
     }
     send_command_ack(reply, reboot);
@@ -634,16 +677,65 @@ void MavlinkEndpoint::send_command_ack(const mavlink_command_ack_t &ack, bool re
 void MavlinkEndpoint::maybe_perform_reboot(std::uint64_t now) noexcept
 {
     if (reboot_mode_pending_ == 0) return;
-    // 提交成功只代表 DMA/CDC 拥有缓冲；最后一个停止位/USB 完成才允许正常复位。
-    if (wait_reboot_completion_ && tx_drained()) perform_reboot();
-    if (now >= reboot_deadline_us_) {
-        // 无物理完成证据时取消本次复位，不能在低波特率截断 ACK。
-        PX4_ERR("Reboot ACK completion timeout; reboot cancelled");
-        reboot_mode_pending_ = 0;
-        wait_reboot_completion_ = false;
-        shared_.cancel_reboot();
-        reset_link();
+    if (!transport_.ready()) {
+        cancel_reboot("Reboot link unavailable");
+        return;
     }
+    // 发送失败代数包含恢复/stop 中的主动中止；接收噪声计数不参与此判据。
+    // 即使 abort 已把 HAL 状态恢复为空闲，也不能把截断的 ACK 当成已送达。
+    if (transport_.tx_error_generation() != reboot_tx_error_baseline_) {
+        cancel_reboot("Reboot TX failed");
+        return;
+    }
+    // Commander 批准后可能等待数秒保存；持续复查新鲜的 Disarmed 状态，
+    // 不能在等待期间被 RC 解锁后沿用旧批准复位。
+    (void)vehicle_status_subscription_.update();
+    const auto &status = vehicle_status_subscription_.get();
+    const auto safety_now = hrt_absolute_time();
+    if (status.timestamp == 0U || safety_now < status.timestamp ||
+        safety_now - status.timestamp > kRebootSafetyTimeoutUs ||
+        status.arming_state != vehicle_status_s::ARMING_STATE_DISARMED) {
+        cancel_reboot("Reboot requires fresh disarmed state");
+        return;
+    }
+    if (!reboot_ack_completed_) {
+        if (now >= reboot_deadline_us_) {
+            cancel_reboot("Reboot ACK completion timeout");
+            return;
+        }
+        // 正常完成代数必须跨过 ACK 提交前基线，且整个队列已排空。后续存储
+        // 等待独立计时，不能把原有 ACK 超时直接延长到存储超时。
+        reboot_ack_completed_ = wait_reboot_completion_ && tx_drained() &&
+            transport_.tx_completion_generation() != reboot_tx_completion_baseline_;
+    }
+
+    bool saved = false;
+    {
+        px4::AtomicTransaction transaction;
+        saved = parameters_saved_for_reboot();
+        // 最终检查到复位之间保持参数锁，防止另一个任务在“已保存”检查后
+        // 写入新值。存储 worker 完成当前快照且无更新后才会清除脏标记。
+        if (saved && reboot_ack_completed_) perform_reboot();
+        if (!saved && !reboot_save_requested_) {
+            reboot_save_requested_ = true;
+            // 仅唤醒既有 autosave；Flash/SD 与保存失败重试仍由 storage 执行。
+            param_notify_changes();
+        }
+    }
+    if (!saved && now >= reboot_save_deadline_us_) {
+        cancel_reboot("Parameter save incomplete or failed");
+    }
+}
+
+void MavlinkEndpoint::cancel_reboot(const char *reason) noexcept
+{
+    // 所有失败路径撤销本次请求并恢复两条链路服务，绝不以复位代替保存/发送失败。
+    reboot_mode_pending_ = 0;
+    reboot_deadline_us_ = reboot_save_deadline_us_ = 0U;
+    wait_reboot_completion_ = reboot_ack_completed_ = reboot_save_requested_ = false;
+    shared_.cancel_reboot();
+    reset_link();
+    PX4_ERR("%s; reboot cancelled", reason);
 }
 
 /* ── STATUSTEXT stream (ported from streams/STATUSTEXT.hpp) ──────── */
