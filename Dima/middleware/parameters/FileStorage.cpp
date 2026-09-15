@@ -321,8 +321,8 @@ int file_storage_continue_save(platform::AtomicFileDomain domain) noexcept
         return -EBUSY;
     }
 
-    /* 每次调用只推进一个可阻塞边界并以 -EAGAIN 请求再次调度，避免一次 Run 内
-     * 完成整文件 I/O 而饿死看门狗、MAVLink 和控制服务。 */
+    /* 每次调用推进一个文件阶段；-EAGAIN 表示已推进。Mission 可跨轮调度，
+     * Parameter 在低优先级保存任务内连续调用，底层 I/O 保持超时和任务抢占。 */
     int result = 0;
     switch (ctx.save_phase) {
     case SavePhase::BeginTemporaryWrite:

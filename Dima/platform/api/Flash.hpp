@@ -36,6 +36,8 @@ public:
     virtual std::size_t program_size() const noexcept = 0;
     virtual bool read(std::size_t offset, void *destination,
                       std::size_t length) noexcept = 0;
+    // 支持连续多个 program_size 单元；返回 true 表示编程和写后回读均成功。
+    // 上层仍保留介质记录 CRC 和最后提交标记，不再重复执行同一次写后的回读。
     virtual bool program(std::size_t offset, const void *source,
                          std::size_t length) noexcept = 0;
     virtual bool erase() noexcept = 0;

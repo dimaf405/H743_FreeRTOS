@@ -46,7 +46,8 @@ public:
     /* 初始化：扫描 Flash 恢复状态 */
     bool initialize() noexcept;
 
-    /* 运行期写入是分步事务；每次 continue 最多编程或回读一个 Flash 字。 */
+    /* 写入分为头部、连续 payload 和最终 commit；-EAGAIN 表示已推进，可立即续写。
+     * 调用者须在事务完成前保持 data 稳定，-EBUSY 则应让出资源后重试。 */
     int begin_write_entry(flash_file_token_t token,
                           const void *data, std::size_t size) noexcept;
     /* Refuse to erase if any valid record belongs to another token. */
@@ -95,7 +96,6 @@ private:
         Idle,
         ProgramHeader,
         ProgramPayload,
-        VerifyPayload,
         Commit,
         Erase,
     };
@@ -135,8 +135,6 @@ private:
     std::size_t operation_size_{0U};
     std::size_t operation_total_size_{0U};
     std::size_t operation_entry_offset_{0U};
-    std::size_t operation_offset_{0U};
-    std::uint32_t operation_crc_{UINT32_MAX};
     Operation operation_{Operation::Idle};
 
     /* 编程用对齐缓冲区 */

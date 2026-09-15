@@ -381,8 +381,6 @@ int FlashFS::begin_write_entry(flash_file_token_t token,
     operation_size_ = size;
     operation_total_size_ = total_size;
     operation_entry_offset_ = write_offset_;
-    operation_offset_ = 0U;
-    operation_crc_ = UINT32_MAX;
     operation_ = Operation::ProgramHeader;
     return 0;
 }
@@ -467,28 +465,6 @@ int FlashFS::continue_operation() noexcept
         return -EINVAL;
     }
 
-    if (operation_ == Operation::VerifyPayload) {
-        std::uint8_t data[kFlashWordBytes]{};
-        const std::size_t chunk =
-            std::min(kFlashWordBytes, operation_size_ - operation_offset_);
-        if (!partition_.read(operation_entry_offset_ + kHeaderFlashBytes +
-                                 operation_offset_,
-                             data, chunk)) {
-            ++status_.write_failures;
-            return fail_operation(-EIO);
-        }
-        operation_crc_ = crc32_update(operation_crc_, data, chunk);
-        operation_offset_ += chunk;
-        if (operation_offset_ == operation_size_) {
-            if ((operation_crc_ ^ UINT32_MAX) != operation_header_.crc) {
-                ++status_.write_failures;
-                return fail_operation(-EIO);
-            }
-            operation_ = Operation::Commit;
-        }
-        return -EAGAIN;
-    }
-
     platform::FlashTransaction transaction{
         transactions_, platform::Timeout::from_ms(50U)};
     if (!transaction) {
@@ -513,28 +489,31 @@ int FlashFS::continue_operation() noexcept
             ++status_.write_failures;
             return fail_operation(-EIO);
         }
-        operation_offset_ = 0U;
         operation_ = Operation::ProgramPayload;
         return -EAGAIN;
     }
 
     if (operation_ == Operation::ProgramPayload) {
-        std::memset(flashword_, 0xFF, sizeof(flashword_));
-        const std::size_t chunk =
-            std::min(kFlashWordBytes, operation_size_ - operation_offset_);
-        std::memcpy(flashword_, operation_data_ + operation_offset_, chunk);
-        if (!partition_.program(operation_entry_offset_ + kHeaderFlashBytes +
-                                    operation_offset_,
-                                flashword_, kFlashWordBytes)) {
+        // 对齐 PX4 flashfs32::write_flash_entry：连续写完整 payload，只有末尾
+        // 不足 32 B 的字填充 0xff。FlashPartition 已逐字回读核对，不再额外
+        // 按 32 B 重扫一遍；任一编程失败都不写 commit，旧记录继续可恢复。
+        const std::size_t whole_bytes = operation_size_ / kFlashWordBytes * kFlashWordBytes;
+        const std::size_t payload_offset = operation_entry_offset_ + kHeaderFlashBytes;
+        if (whole_bytes != 0U &&
+            !partition_.program(payload_offset, operation_data_, whole_bytes)) {
             ++status_.write_failures;
             return fail_operation(-EIO);
         }
-        operation_offset_ += kFlashWordBytes;
-        if (operation_offset_ >= align_flashword(operation_size_)) {
-            operation_crc_ = payload_crc_seed(operation_header_);
-            operation_offset_ = 0U;
-            operation_ = Operation::VerifyPayload;
+        const std::size_t remaining = operation_size_ - whole_bytes;
+        if (remaining != 0U) {
+            std::memset(flashword_, 0xFF, sizeof(flashword_));
+            std::memcpy(flashword_, operation_data_ + whole_bytes, remaining);
+            if (!partition_.program(payload_offset + whole_bytes, flashword_, kFlashWordBytes)) {
+                ++status_.write_failures;
+                return fail_operation(-EIO);
+            }
         }
+        operation_ = Operation::Commit;
         return -EAGAIN;
     }
 
@@ -588,8 +567,6 @@ void FlashFS::reset_operation() noexcept
     operation_size_ = 0U;
     operation_total_size_ = 0U;
     operation_entry_offset_ = 0U;
-    operation_offset_ = 0U;
-    operation_crc_ = UINT32_MAX;
     operation_ = Operation::Idle;
 }
 
