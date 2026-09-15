@@ -11,12 +11,13 @@ struct CircleFence {
 
 struct CalibrationSessionLimits {
     float speed_m_s{}, motor_output{};
-    bool full_output_probe{}, valid{};
+    bool valid{};
 };
 
 // 只解释入场快照，不读实时参数；参数整定不能回头修改本次运动授权的边界。
+// 巡航速度是唯一会话速度上限：正值冻结为上限，0/-1（未配置）判无效并拒绝运动。
 CalibrationSessionLimits session_limits(float entry_cruise_m_s,
-    float fallback_m_s, float motor_maximum) noexcept;
+    float motor_maximum) noexcept;
 
 struct CircleFenceResult {
     float distance_m{}, margin_m{}, working_radius_m{};

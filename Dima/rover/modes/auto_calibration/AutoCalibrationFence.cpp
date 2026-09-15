@@ -11,11 +11,12 @@ namespace dima::rover::modes {
 
 bool AutoCalibrationMode::motion_configuration_valid() const noexcept
 {
-    return config_valid_ && std::isfinite(config_.throttle) && config_.throttle >= 0.10F && config_.throttle <= 0.40F &&
-        std::isfinite(config_.steering) && config_.steering >= 0.10F && config_.steering <= 0.35F &&
-        std::isfinite(config_.track) && config_.track > 0.0F && config_.track <= 5.0F &&
+    // 包络=入场冻结的 MOT_THR_MAX（0.05–1.0，与 session_limits 同域校验）；
+    // 纵/转向均无静态输出上限，其余申报项维持原有范围。
+    return config_valid_ && std::isfinite(config_.track) && config_.track > 0.0F && config_.track <= 5.0F &&
         std::isfinite(config_.radius) && config_.radius >= 1.0F && config_.radius <= 100.0F &&
         std::isfinite(config_.stop_distance) && config_.stop_distance > 0.0F && config_.stop_distance <= 100.0F &&
+        std::isfinite(config_.motor_maximum) && config_.motor_maximum >= 0.05F && config_.motor_maximum <= 1.0F &&
         std::isfinite(fence_.speed_limit_m_s) && fence_.speed_limit_m_s > 0.0F &&
         std::isfinite(status_.session_motor_limit) && status_.session_motor_limit >= 0.05F && status_.session_motor_limit <= 1.0F &&
         config_.gps_control >= 0 && config_.gps_control <= 15;
@@ -25,12 +26,11 @@ void AutoCalibrationMode::capture_fence(std::uint64_t now) noexcept
 {
     const auto &gps = gps_sub_.get();
     const auto limits = dima::lib::rover::calibration::session_limits(
-        config_.entry_cruise, config_.fallback_speed, config_.motor_maximum);
+        config_.entry_cruise, config_.motor_maximum);
     fence_ = {gps.latitude_deg, gps.longitude_deg, gps.eph, config_.radius, config_.stop_distance, limits.speed_m_s};
     status_.session_speed_limit_m_s = limits.speed_m_s;
     status_.session_motor_limit = limits.motor_output;
     status_.entry_cruise_speed_m_s = config_.entry_cruise;
-    status_.full_output_requested = limits.valid && limits.full_output_probe;
     status_.fence_radius_m = config_.radius;
     status_.fence_stop_distance_m = config_.stop_distance;
     status_.fence_center_valid = fresh(gps.timestamp_sample, now, 300000ULL) && gps.device_id != 0U &&
@@ -78,6 +78,24 @@ bool AutoCalibrationMode::prepare_straight(std::uint64_t now) noexcept
     return result.can_stop && std::isfinite(leg_distance_) && leg_distance_ >= 5.0F;
 }
 
+bool AutoCalibrationMode::prepare_profile_turn(std::uint64_t now) const noexcept
+{
+    // 原地转向不需要五米直线。GNSS 定位点绕旋转中心最多移动两倍杆臂，
+    // 以配置 GPS/IMU 杆臂长度之和保守约束整个转动；全球圆心及停车余量不变。
+    const auto fence = fence_result(now);
+    float gx{}, gy{}, gz{}, ix{}, iy{}, iz{};
+    px4::AtomicTransaction atomic;
+    if (!fence.can_stop ||
+        param_get(param_handle(dima::params::EKF2_GPS_POS_X), &gx) != 0 ||
+        param_get(param_handle(dima::params::EKF2_GPS_POS_Y), &gy) != 0 ||
+        param_get(param_handle(dima::params::EKF2_GPS_POS_Z), &gz) != 0 ||
+        param_get(param_handle(dima::params::EKF2_IMU_POS_X), &ix) != 0 ||
+        param_get(param_handle(dima::params::EKF2_IMU_POS_Y), &iy) != 0 ||
+        param_get(param_handle(dima::params::EKF2_IMU_POS_Z), &iz) != 0) return false;
+    const float lever = std::hypot(std::hypot(gx, gy), gz) + std::hypot(std::hypot(ix, iy), iz);
+    return std::isfinite(lever) && fence.working_radius_m - fence.distance_m > 0.5F + 2.0F * lever;
+}
+
 void AutoCalibrationMode::report_status(std::uint64_t now) noexcept
 {
     if (status_.session_id == 0U || (last_report_ != 0U && now >= last_report_ && now - last_report_ < 5000000ULL)) return;
@@ -85,20 +103,27 @@ void AutoCalibrationMode::report_status(std::uint64_t now) noexcept
     using namespace dima::generated::uorb_labels;
     // 周期快照走非实时 RAW 路径，不受普通日志级别过滤。USB/QGC 重连不依赖
     // 过期的一次性提示；不使用 [cal] 假装 Sensors 拥有整个组合会话。
-    PX4_INFO_RAW("[autocal] %s; %u%%; saved=0x%lx unavailable=0x%lx\n",
-        auto_calibration_status_state_name(status_.state), static_cast<unsigned>(status_.progress),
-        static_cast<unsigned long>(status_.completed_stages), static_cast<unsigned long>(status_.unavailable_stages));
+    PX4_INFO_RAW("[autocal] session=%lu state=%s progress=%u%%\n",
+        static_cast<unsigned long>(status_.session_id), auto_calibration_status_state_name(status_.state),
+        static_cast<unsigned>(status_.progress));
+    PX4_INFO_RAW("[autocal] stages saved=0x%lx unavailable=0x%lx skipped=0x%lx\n",
+        static_cast<unsigned long>(status_.completed_stages), static_cast<unsigned long>(status_.unavailable_stages),
+        static_cast<unsigned long>(status_.skipped_stages));
     PX4_INFO_RAW("[autocal] fence %s %.2f/%.2fm margin %.2fm stop bound %.2fm\n",
         auto_calibration_status_fence_name(status_.fence_state), static_cast<double>(status_.fence_distance_m),
         static_cast<double>(status_.fence_radius_m), static_cast<double>(status_.fence_margin_m),
         static_cast<double>(status_.fence_stop_distance_m));
-    PX4_INFO_RAW("[autocal] speed cap %.2fm/s motor cap %.2f; full probe %s\n",
-        static_cast<double>(status_.session_speed_limit_m_s), static_cast<double>(status_.session_motor_limit),
-        status_.full_output_requested ? "requested (not RPM)" : "off");
-    if (status_.full_output_requested && (!status_.active || status_.gains_provisional))
-        PX4_INFO_RAW(status_.full_output_reached
-            ? "[autocal] allowed command endpoint reached; RPM not measured\n"
-            : "[autocal] output coverage partial; RPM not measured\n");
+    PX4_INFO_RAW("[autocal] speed cap %.2fm/s motor cap %.2f\n",
+        static_cast<double>(status_.session_speed_limit_m_s), static_cast<double>(status_.session_motor_limit));
+    if (status_.active && !pending_termination_ && status_.excitation_phase != Status::EXCITATION_NONE)
+        PX4_INFO_RAW("[autocal] excitation=%s level=%u target=%.3f samples=%lu remaining=%.1fs\n",
+            auto_calibration_status_excitation_name(status_.excitation_phase), static_cast<unsigned>(status_.excitation_level),
+            static_cast<double>(status_.excitation_target), static_cast<unsigned long>(status_.excitation_samples),
+            static_cast<double>(status_.excitation_remaining_s));
+    // 周期快照可补齐重连后缺失的一次性证据；不重复发 endpoint reached 事件。
+    PX4_INFO_RAW("[autocal] evidence endpoint=%u mag_pct=%.1f mag_comp=%u mag_present=%u\n",
+        endpoint_reported_ ? 1U : 0U, static_cast<double>(status_.mag_interference_pct),
+        (status_.completed_stages & Status::STAGE_MAG_MOT) != 0U ? 1U : 0U, status_.magnetometer_present ? 1U : 0U);
     if (status_.awaiting_arm) {
         PX4_INFO_RAW(status_.session_authorized
             ? "[autocal] automatic continuation; Manual/Disarm cancels\n"
@@ -111,7 +136,8 @@ void AutoCalibrationMode::report_status(std::uint64_t now) noexcept
         PX4_INFO_RAW("[autocal] validated RAM=0x%lx; awaiting related checks\n",
             static_cast<unsigned long>(status_.provisional_validated_stages));
     if (!status_.active || pending_termination_ || status_.result != Status::RESULT_RUNNING) {
-        PX4_INFO_RAW("[autocal] %s: %s\n", auto_calibration_status_result_name(status_.result),
+        PX4_INFO_RAW("[autocal] session=%lu %s: %s\n", static_cast<unsigned long>(status_.session_id),
+            auto_calibration_status_result_name(status_.result),
             auto_calibration_status_failure_name(status_.failure_reason));
         if (status_.active) px4_log_raw(_PX4_LOG_LEVEL_WARN, "[autocal] Arm inhibited; stop/rollback pending\n");
         if (transaction_.phase() == CalibrationParameters::Phase::Fault)

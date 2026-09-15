@@ -179,9 +179,8 @@ bool RoverDifferential::bind_parameters() noexcept
                        thrust_asymmetry_.bind() && arm_ramp_.bind() &&
                        maximum_speed_.bind() && calibration_radius_.bind() &&
                        calibration_stop_distance_.bind() &&
-                       calibration_throttle_ceiling_.bind() &&
-                       calibration_steering_ceiling_.bind() && calibration_cruise_.bind() &&
-                       calibration_fallback_.bind() && speed_p_.bind() &&
+                       calibration_cruise_.bind() &&
+                       speed_p_.bind() &&
                        speed_i_.bind() && acceleration_limit_.bind() &&
                        deceleration_limit_.bind() && speed_threshold_.bind() &&
                        yaw_rate_p_.bind() && yaw_rate_i_.bind() &&
@@ -212,10 +211,7 @@ void RoverDifferential::invalidate_parameter_bindings() noexcept
     maximum_speed_.invalidate();
     calibration_radius_.invalidate();
     calibration_stop_distance_.invalidate();
-    calibration_throttle_ceiling_.invalidate();
-    calibration_steering_ceiling_.invalidate();
     calibration_cruise_.invalidate();
-    calibration_fallback_.invalidate();
     speed_p_.invalidate();
     speed_i_.invalidate();
     acceleration_limit_.invalidate();
@@ -242,9 +238,8 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
         !thrust_asymmetry_.bound() || !arm_ramp_.bound() ||
         !maximum_speed_.bound() || !calibration_radius_.bound() ||
         !calibration_stop_distance_.bound() ||
-        !calibration_throttle_ceiling_.bound() ||
-        !calibration_steering_ceiling_.bound() || !calibration_cruise_.bound() ||
-        !calibration_fallback_.bound() || !speed_p_.bound() || !speed_i_.bound() ||
+        !calibration_cruise_.bound() ||
+        !speed_p_.bound() || !speed_i_.bound() ||
         !acceleration_limit_.bound() || !deceleration_limit_.bound() ||
         !speed_threshold_.bound() || !yaw_rate_p_.bound() ||
         !yaw_rate_i_.bound() || !yaw_rate_limit_.bound() ||
@@ -291,12 +286,7 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
                            &candidate.calibration_radius_m) == 0 &&
                  param_get(calibration_stop_distance_.handle(),
                            &candidate.calibration_stop_distance_m) == 0 &&
-                 param_get(calibration_throttle_ceiling_.handle(),
-                           &candidate.calibration_throttle_ceiling) == 0 &&
-                 param_get(calibration_steering_ceiling_.handle(),
-                           &candidate.calibration_steering_ceiling) == 0 &&
                  param_get(calibration_cruise_.handle(), &candidate.calibration_entry_cruise) == 0 &&
-                 param_get(calibration_fallback_.handle(), &candidate.calibration_fallback_speed) == 0 &&
                  param_get(speed_p_.handle(),
                            &candidate.speed.proportional_gain) == 0 &&
                  param_get(speed_i_.handle(),
@@ -372,10 +362,7 @@ bool RoverDifferential::apply_parameter_snapshot() noexcept
     maximum_speed_.set(candidate.speed.speed_at_full_throttle_m_s);
     calibration_radius_.set(candidate.calibration_radius_m);
     calibration_stop_distance_.set(candidate.calibration_stop_distance_m);
-    calibration_throttle_ceiling_.set(candidate.calibration_throttle_ceiling);
-    calibration_steering_ceiling_.set(candidate.calibration_steering_ceiling);
     calibration_cruise_.set(candidate.calibration_entry_cruise);
-    calibration_fallback_.set(candidate.calibration_fallback_speed);
     speed_p_.set(candidate.speed.proportional_gain);
     speed_i_.set(candidate.speed.integral_gain);
     acceleration_limit_.set(candidate.speed.acceleration_limit_m_s2);
@@ -583,7 +570,7 @@ bool RoverDifferential::request_valid(
             request.sequence != status.sequence ||
             request.timestamp != status.timestamp) return false;
         if (status.closed_loop) {
-            // 闭环校准沿用现有 SI one-of；只有明确倒车验收阶段允许负速度，
+            // 闭环校准沿用现有 SI one-of；校准全程无倒退，速度必须非负，
             // 两个归一化字段必须为 NaN，不能把 Mission 请求混进本会话。
             if (!navigation_parameters_valid_ ||
                 request.mode != rover_motion_request_s::MODE_SPEED_YAW_RATE ||
@@ -591,31 +578,25 @@ bool RoverDifferential::request_valid(
                 !std::isnan(request.normalized_steering) ||
                 !finite(request.speed_m_s) || !finite(parameters_.calibration_entry_cruise) || parameters_.calibration_entry_cruise <= 0.0F ||
                 std::fabs(request.speed_m_s) > parameters_.calibration_entry_cruise ||
-                (request.speed_m_s < 0.0F && !calibration_reverse()) ||
-                std::fabs(request.speed_m_s) > std::min(calibration_reverse() ? std::min(0.3F, calibration_fence_.speed_limit_m_s)
-                    : calibration_fence_.speed_limit_m_s,
+                request.speed_m_s < 0.0F ||
+                std::fabs(request.speed_m_s) > std::min(calibration_fence_.speed_limit_m_s,
                     parameters_.speed.speed_at_full_throttle_m_s) ||
                 !finite(request.yaw_rate_rad_s) ||
                 std::fabs(request.yaw_rate_rad_s) > std::min(0.6F,
                     parameters_.yaw_rate.yaw_rate_limit_rad_s)) return false;
         } else {
             // 原开环校准只允许 normalized axes；未知 stop distance、fence 或
-            // 传感器任一否定证据已经由 calibration_input_valid 拒绝。
+            // 传感器任一否定证据已经由 calibration_input_valid 拒绝。输出包络
+            // =会话冻结的 MOT_THR_MAX（手动对等）：纵向非负且不超过包络，
+            // 转向无静态上限（normalized 已约束 [-1,1]）。
             if (request.mode != rover_motion_request_s::MODE_NORMALIZED_AXES ||
                 !normalized(request.normalized_longitudinal) ||
-                (request.normalized_longitudinal < 0.0F && !calibration_reverse()) ||
-                std::fabs(request.normalized_longitudinal) > (calibration_full_output() ? 1.0F : std::min(
-                    calibration_session_throttle_ceiling_, 0.40F)) ||
+                request.normalized_longitudinal < 0.0F ||
+                request.normalized_longitudinal > calibration_session_motor_limit_ ||
                 !normalized(request.normalized_steering) ||
-                std::fabs(request.normalized_steering) > std::min(
-                    calibration_session_steering_ceiling_, 0.35F) ||
                 !std::isnan(request.speed_m_s) ||
                 !std::isnan(request.yaw_rate_rad_s)) return false;
         }
-        if (calibration_full_output() && (!navigation_estimator_valid(now_us) ||
-            !calibration_rtk_sub_.get().baseline_consistent ||
-            request.normalized_longitudinal < std::fabs(request.normalized_steering) ||
-            std::fabs(request.normalized_steering) > 0.05F)) return false;
     } else {
         // Manual one-of：只允许归一化双轴，物理量字段必须为 NaN，避免不同
         // 消费者对同一帧选择不同语义。
@@ -764,7 +745,7 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         }
         if (calibration_closed_loop &&
             (std::hypot(vehicle_local_position_.vx, vehicle_local_position_.vy) >
-                (calibration_reverse() ? std::min(0.3F, calibration_fence_.speed_limit_m_s) : calibration_fence_.speed_limit_m_s) ||
+                calibration_fence_.speed_limit_m_s ||
              std::fabs(feedback.yaw_rate_rad_s) > 0.6F)) {
             // 原始 RTK/IMU 与实际 PI 消费的 EKF 反馈都必须落在同一物理包络；
             // 两套来源不一致时不能继续用其中较小的一套放行动力。
@@ -784,10 +765,9 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         // 转向优先：先由 YawRate PI（含差速运动学 FF）算 steering，再把速度
         // PI 的可用归一化范围限制为 1-|steering|。这样左右轮和在进入下游
         // DifferentialDrive 前已可行，避免二次饱和破坏航向内环。校准闭环
-        // 复用同一对象；校准闭环轴输出同时服从本会话冻结的用户 ceiling 和
-        // 0.35/0.40 固定硬边界，不能让反馈项绕过 RO_CAL_* 的操作者授权。
-        const float steering_limit = calibration_closed_loop
-            ? std::min(calibration_session_steering_ceiling_, 0.35F) : 1.0F;
+        // 复用同一对象；校准与普通导航同规则（手动对等）：转向无静态上限，
+        // 纵向受会话冻结的 MOT_THR_MAX 包络约束。
+        const float steering_limit = 1.0F;
         const auto yaw_rate = yaw_rate_controller_.update(
             request->yaw_rate_rad_s,
             feedback.yaw_rate_rad_s, steering_limit, dt_s);
@@ -800,7 +780,7 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         feedback.saturated = std::fabs(steering) >=
             steering_limit - 1.0e-5F;
         const float longitudinal_limit = calibration_closed_loop
-            ? std::min(calibration_session_throttle_ceiling_, 0.40F)
+            ? calibration_session_motor_limit_
             : std::fmax(0.0F, 1.0F - std::fabs(steering));
         const auto speed = speed_controller_.update(
             request->speed_m_s, feedback.speed_m_s,
@@ -814,8 +794,8 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         feedback.saturated = feedback.saturated ||
             std::fabs(longitudinal) >= longitudinal_limit - 1.0e-5F;
         if (calibration_closed_loop) {
-            const float bounded = std::clamp(longitudinal, calibration_reverse() ? -longitudinal_limit : 0.0F,
-                                             longitudinal_limit);
+            // 校准全程无倒退：闭环输出非负并夹在冻结包络内。
+            const float bounded = std::clamp(longitudinal, 0.0F, longitudinal_limit);
             feedback.saturated = feedback.saturated || bounded != longitudinal;
             longitudinal = bounded;
         }
@@ -832,18 +812,17 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         // Manual 保持原来的归一化双轴与倒车转向修正；切离 AUTO 时立即清空
         // 两只 PI，下一次 Mission Start 不得继承旧积分或 slew 状态。
         reset_navigation_control();
+        if (calibration_source) {
+            // 校准开环请求在 [0,E] 包络坐标中；差速器整形的输入仍是 [0,1]。
+            // 在这里换基一次，否则 E<1 时会重复乘 MOT_THR_MAX，顶档只能到
+            // E²。反馈 longitudinal 保持差速器/FF/PI 的标准输入坐标。
+            longitudinal /= calibration_session_motor_limit_;
+        }
     }
 
     const dima::lib::rover::DifferentialDriveOutput output = drive_.update(
         longitudinal, steering, request->source == rover_motion_request_s::SOURCE_MANUAL, true, now_us, dt_s);
     if (!output.valid || !normalized(output.right) || !normalized(output.left)) {
-        drive_.reset();
-        reset_navigation_control();
-        return publish_invalid(now_us, sample_time_us);
-    }
-    if (calibration_source && calibration_full_output() && (output.right < 0.0F || output.left < 0.0F)) {
-        // longitudinal 与 steering 的内部限制器不同步，输入两轮同向不证明
-        // 整形后的两轮仍同向。满输出许可绝不覆盖任何负轮端命令。
         drive_.reset();
         reset_navigation_control();
         return publish_invalid(now_us, sample_time_us);
@@ -864,13 +843,12 @@ bool RoverDifferential::publish_output(std::uint64_t now_us,
         control = kUnavailable;
     }
     if (request->source == rover_motion_request_s::SOURCE_CALIBRATION) {
-        // 常规阶段仍为 0.40；仅已在入口授权的独立前进满输出阶段使用冻结
-        // MOT_THR_MAX。所有阶段都保留最终 0.15/s，不能用改整形绕过安全边界。
+        // 所有校准阶段共享入场冻结的 MOT_THR_MAX；最终轮端仍限制为
+        // ±包络并保留 0.15/s，不允许通过修改整形绕过会话安全边界。
         if (!finite(dt_s) || dt_s <= 0.0F || dt_s > 0.05F) return publish_invalid(now_us, sample_time_us);
         const float step = 0.15F * dt_s;
         const float motor_limit = calibration_motor_limit();
-        // 授权上限下降时历史 slew 不能继续携带超限输出；正常 FULL 阶段应先
-        // 完整停车再切出，这里仍独立 fail-closed，覆盖错序/陈旧状态等异常。
+        // 历史 slew 超出冻结包络表示会话/配置不一致，立即失效输出。
         if (std::fabs(calibration_right_) > motor_limit + 1.0e-6F ||
             std::fabs(calibration_left_) > motor_limit + 1.0e-6F)
             return publish_invalid(now_us, sample_time_us);
@@ -962,10 +940,7 @@ void RoverDifferential::reset_runtime_state() noexcept
     calibration_fence_center_timestamp_ = 0U;
     calibration_fence_session_id_ = 0U;
     calibration_fence_device_id_ = 0U;
-    calibration_session_throttle_ceiling_ = 0.0F;
-    calibration_session_steering_ceiling_ = 0.0F;
-    calibration_session_motor_limit_ = calibration_entry_cruise_ = calibration_fallback_speed_ = 0.0F;
-    calibration_full_probe_enabled_ = false;
+    calibration_session_motor_limit_ = calibration_entry_cruise_ = 0.0F;
     have_manual_request_ = false;
     have_navigation_request_ = false;
     have_local_position_ = false;
@@ -1052,14 +1027,11 @@ bool RoverDifferential::valid_parameter_snapshot(
 bool RoverDifferential::valid_calibration_ceiling_snapshot(
     const ParameterSnapshot &snapshot) noexcept
 {
-    // RO_CAL_* 只约束自动校准，非法值必须关闭 Calibration，但不能连带关闭
-    // Manual。固定硬上限仍在最终电机层独立执行，不能由参数放宽。
-    return finite(snapshot.calibration_throttle_ceiling) &&
-        snapshot.calibration_throttle_ceiling >= 0.10F &&
-        snapshot.calibration_throttle_ceiling <= 0.40F &&
-        finite(snapshot.calibration_steering_ceiling) &&
-        snapshot.calibration_steering_ceiling >= 0.10F &&
-        snapshot.calibration_steering_ceiling <= 0.35F;
+    // 输出包络=入场冻结的 MOT_THR_MAX（手动对等，0.05–1.0 与 session_limits
+    // 同域）：非法值关闭 Calibration 但不连带关闭 Manual；无纵/转向静态上限。
+    return finite(snapshot.drive.throttle_max) &&
+        snapshot.drive.throttle_max >= 0.05F &&
+        snapshot.drive.throttle_max <= 1.0F;
 }
 
 bool RoverDifferential::valid_navigation_parameter_snapshot(

@@ -92,6 +92,7 @@ private:
     void update_fence(std::uint64_t now) noexcept;
     dima::lib::rover::calibration::CircleFenceResult fence_result(std::uint64_t now) const noexcept;
     bool prepare_straight(std::uint64_t now) noexcept;
+    bool prepare_profile_turn(std::uint64_t now) const noexcept;
     void report_status(std::uint64_t now) noexcept;
     void service_motion_authorization(std::uint64_t now) noexcept;
     bool read_tuning_config() noexcept;

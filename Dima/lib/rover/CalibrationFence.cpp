@@ -6,17 +6,16 @@
 
 namespace dima::lib::rover::calibration {
 
-CalibrationSessionLimits session_limits(float cruise, float fallback, float motor) noexcept
+CalibrationSessionLimits session_limits(float cruise, float motor) noexcept
 {
     CalibrationSessionLimits limits{};
-    // 只有精确 0/历史 -1 表示未配置；NaN 或任意小负数不能意外授权满输出。
+    // 巡航速度直接承担会话速度上限（默认 1 m/s）；只有精确 0/历史 -1 表示
+    // 未配置，此时没有任何可冻结的安全上限，判无效并拒绝自动校准运动。
     const bool unset = cruise == 0.0F || cruise == -1.0F;
-    if (!std::isfinite(cruise) || (!unset && (cruise <= 0.0F || cruise > 100.0F)) ||
-        !std::isfinite(fallback) || fallback < 0.1F || fallback > 100.0F ||
+    if (unset || !std::isfinite(cruise) || cruise <= 0.0F || cruise > 100.0F ||
         !std::isfinite(motor) || motor < 0.05F || motor > 1.0F) return limits;
-    limits.speed_m_s = unset ? fallback : cruise;
+    limits.speed_m_s = cruise;
     limits.motor_output = motor;
-    limits.full_output_probe = unset;
     limits.valid = true;
     return limits;
 }

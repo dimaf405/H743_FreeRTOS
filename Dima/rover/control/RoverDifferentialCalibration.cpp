@@ -63,18 +63,10 @@ void RoverDifferential::refresh_calibration_fence(
         calibration_fence_session_id_ = status.session_id;
         calibration_fence_center_timestamp_ = status.fence_center_timestamp;
         calibration_fence_device_id_ = status.fence_device_id;
-        // ceiling 与圆心在同一个新 session 中只锁存一次；后续阶段 Disarm
-        // 只允许应用同值参数代，不能扩大已经由操作者授权的归一化轴范围。
-        calibration_session_throttle_ceiling_ =
-            parameters_.calibration_throttle_ceiling;
-        calibration_session_steering_ceiling_ =
-            parameters_.calibration_steering_ceiling;
         const auto limits = dima::lib::rover::calibration::session_limits(parameters_.calibration_entry_cruise,
-            parameters_.calibration_fallback_speed, parameters_.drive.throttle_max);
+            parameters_.drive.throttle_max);
         calibration_entry_cruise_ = parameters_.calibration_entry_cruise;
-        calibration_fallback_speed_ = parameters_.calibration_fallback_speed;
         calibration_session_motor_limit_ = limits.motor_output;
-        calibration_full_probe_enabled_ = limits.full_output_probe;
         calibration_fence_ = {status.fence_latitude_deg,
                               status.fence_longitude_deg,
                               status.fence_origin_error_m,
@@ -89,7 +81,6 @@ void RoverDifferential::refresh_calibration_fence(
             status.session_speed_limit_m_s == limits.speed_m_s &&
             status.session_motor_limit == limits.motor_output &&
             status.entry_cruise_speed_m_s == calibration_entry_cruise_ &&
-            status.full_output_requested == limits.full_output_probe &&
             fresh(status.timestamp, now_us, 100000ULL) &&
             calibration_fence_center_timestamp_ != 0U &&
             calibration_fence_center_timestamp_ <= status.timestamp &&
@@ -122,35 +113,15 @@ bool RoverDifferential::calibration_fence_status_unchanged() const noexcept
         status.session_speed_limit_m_s == calibration_fence_.speed_limit_m_s &&
         status.session_motor_limit == calibration_session_motor_limit_ &&
         status.entry_cruise_speed_m_s == calibration_entry_cruise_ &&
-        status.full_output_requested == calibration_full_probe_enabled_ &&
         parameters_.drive.throttle_max == calibration_session_motor_limit_ &&
-        parameters_.calibration_fallback_speed == calibration_fallback_speed_ &&
         parameters_.calibration_radius_m == calibration_fence_.radius_m &&
         parameters_.calibration_stop_distance_m ==
-            calibration_fence_.stop_distance_m &&
-        parameters_.calibration_throttle_ceiling ==
-            calibration_session_throttle_ceiling_ &&
-        parameters_.calibration_steering_ceiling ==
-            calibration_session_steering_ceiling_;
-}
-
-bool RoverDifferential::calibration_full_output() const noexcept
-{
-    const auto &status = calibration_sub_.get();
-    return calibration_full_probe_enabled_ && status.full_output_requested && !status.closed_loop &&
-        status.state == auto_calibration_status_s::STATE_PROFILE_FULL &&
-        (status.completed_stages & auto_calibration_status_s::STAGE_RTK) != 0U;
-}
-
-bool RoverDifferential::calibration_reverse() const noexcept
-{
-    return calibration_sub_.get().state == auto_calibration_status_s::STATE_PROFILE_REVERSE ||
-        calibration_sub_.get().state == auto_calibration_status_s::STATE_VALIDATE_REVERSE;
+            calibration_fence_.stop_distance_m;
 }
 
 float RoverDifferential::calibration_motor_limit() const noexcept
 {
-    return calibration_full_output() ? calibration_session_motor_limit_ : std::min(0.40F, calibration_session_motor_limit_);
+    return calibration_session_motor_limit_;
 }
 
 bool RoverDifferential::calibration_fence_allows_output(
@@ -194,7 +165,7 @@ bool RoverDifferential::calibration_input_valid(
         std::isfinite(rtk.velocity_north_m_s) &&
         std::isfinite(rtk.velocity_east_m_s) &&
         std::hypot(rtk.velocity_north_m_s, rtk.velocity_east_m_s) <=
-            (calibration_reverse() ? std::min(0.3F, calibration_fence_.speed_limit_m_s) : calibration_fence_.speed_limit_m_s) &&
+            calibration_fence_.speed_limit_m_s &&
         fresh(imu.timestamp, now_us, 100000ULL) &&
         fresh(imu.timestamp_sample, now_us, 100000ULL) &&
         imu.timestamp_sample <= imu.timestamp &&

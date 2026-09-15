@@ -190,8 +190,9 @@ bool MotorOutput::motor_command_valid(std::uint64_t now_us) const noexcept
         !normalized(actuator_motors_.control[1])) {
         return false;
     }
-    if (modes::auto_calibration(safety_.vehicle_status.nav_state) &&
-        (std::fabs(actuator_motors_.control[0]) > 0.40F || std::fabs(actuator_motors_.control[1]) > 0.40F)) return false;
+    /* 校准输出权限与手动模式对等（包络=入场冻结的 MOT_THR_MAX，由
+     * RoverDifferential 请求校验与闭环限幅统一约束），看门狗不再对校准帧
+     * 施加专属幅值上限；此处只保留与普通帧一致的归一化/新鲜度合同。 */
     std::uint64_t timeout_us = static_cast<std::uint64_t>(
         parameters_.command_timeout_s * 1000000.0F);
     if (modes::auto_calibration(safety_.vehicle_status.nav_state) && timeout_us > 100000ULL) timeout_us = 100000ULL;

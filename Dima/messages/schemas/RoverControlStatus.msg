@@ -27,7 +27,7 @@ float32 speed_raw_m_s
 float32 forward_raw_m_s
 float32 lateral_raw_m_s
 float32 yaw_rate_rad_s
-float32 longitudinal
+float32 longitudinal # 差速器/FF/PI 标准输入坐标；校准开环请求已除以冻结 E。
 float32 steering
 float32 applied_longitudinal
 float32 applied_steering

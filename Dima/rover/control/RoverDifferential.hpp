@@ -55,10 +55,7 @@ private:
         float command_timeout_s;
         float calibration_radius_m;
         float calibration_stop_distance_m;
-        float calibration_throttle_ceiling;
-        float calibration_steering_ceiling;
         float calibration_entry_cruise;
-        float calibration_fallback_speed;
         dima::lib::rover::DifferentialDriveConfig drive;
         dima::lib::rover::SpeedControlConfig speed;
         dima::lib::rover::YawRateControlConfig yaw_rate;
@@ -110,8 +107,6 @@ private:
                        bool navigation_source) const noexcept;
     bool navigation_estimator_valid(std::uint64_t now_us) const noexcept;
     bool calibration_input_valid(std::uint64_t now_us) const noexcept;
-    bool calibration_full_output() const noexcept;
-    bool calibration_reverse() const noexcept;
     float calibration_motor_limit() const noexcept;
     void refresh_calibration_fence(std::uint64_t now_us) noexcept;
     bool calibration_fence_status_unchanged() const noexcept;
@@ -183,10 +178,7 @@ private:
     dima::ParamFloat<dima::params::RO_MAX_THR_SPEED> maximum_speed_{};
     dima::ParamFloat<dima::params::RO_CAL_RADIUS> calibration_radius_{};
     dima::ParamFloat<dima::params::RO_CAL_STOP_D> calibration_stop_distance_{};
-    dima::ParamFloat<dima::params::RO_CAL_THR_MAX> calibration_throttle_ceiling_{};
-    dima::ParamFloat<dima::params::RO_CAL_TURN_MAX> calibration_steering_ceiling_{};
     dima::ParamFloat<dima::params::RO_SPEED_LIM> calibration_cruise_{};
-    dima::ParamFloat<dima::params::RO_CAL_VMAX> calibration_fallback_{};
     dima::ParamFloat<dima::params::RO_SPEED_P> speed_p_{};
     dima::ParamFloat<dima::params::RO_SPEED_I> speed_i_{};
     dima::ParamFloat<dima::params::RO_ACCEL_LIM> acceleration_limit_{};
@@ -234,12 +226,8 @@ private:
     std::uint64_t calibration_fence_center_timestamp_{0U};
     std::uint32_t calibration_fence_session_id_{0U};
     std::uint32_t calibration_fence_device_id_{0U};
-    float calibration_session_throttle_ceiling_{0.0F};
-    float calibration_session_steering_ceiling_{0.0F};
     float calibration_session_motor_limit_{};
     float calibration_entry_cruise_{};
-    float calibration_fallback_speed_{};
-    bool calibration_full_probe_enabled_{};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
     bool have_manual_request_{false};
