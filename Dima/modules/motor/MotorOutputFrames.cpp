@@ -127,17 +127,14 @@ bool MotorOutput::normalized(float value) noexcept
 std::uint16_t MotorOutput::map_normalized(const ChannelConfig &channel,
                                           float value) noexcept
 {
-    const float center = static_cast<float>(channel.center_us);
-    const float pulse = value >= 0.0F
-                            ? center + value *
-                                           static_cast<float>(
-                                               channel.maximum_us -
-                                               channel.center_us)
-                            : center + value *
-                                           static_cast<float>(
-                                               channel.center_us -
-                                               channel.minimum_us);
-    return static_cast<std::uint16_t>(pulse + 0.5F);
+    // 对照 APM SRV_Channel::pwm_from_angle：先对偏离中位的幅值截断，
+    // 再按符号加/减。小于 1 us 的命令保持 CENT，正负量化对称；不能对
+    // 最终脉宽四舍五入，让边界附近的小命令被额外推离停止中位。
+    const float span = value >= 0.0F ? channel.maximum_us - channel.center_us
+                                    : channel.center_us - channel.minimum_us;
+    const auto delta = static_cast<std::uint16_t>(std::fabs(value) * span);
+    return value >= 0.0F ? static_cast<std::uint16_t>(channel.center_us + delta)
+                        : static_cast<std::uint16_t>(channel.center_us - delta);
 }
 
 } // namespace dima::modules::motor
