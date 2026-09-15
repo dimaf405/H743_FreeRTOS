@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Rover 自动校准状态机的唯一状态/结果/故障枚举权威源。
-# ENUM_LABELS STATE RESULT FAILURE FENCE GAIN
+# ENUM_LABELS STATE RESULT FAILURE FENCE GAIN EXCITATION
 uint8 ORB_QUEUE_LENGTH = 8
 
 uint32 MESSAGE_VERSION = 0
@@ -50,6 +50,7 @@ uint8 STATE_PROFILE_RATE_CW = 51
 uint8 STATE_PROFILE_RATE_CCW = 52
 uint8 STATE_APPLY_RUNTIME = 53
 uint8 STATE_VALIDATE_DRIVING = 54
+uint8 STATE_COMMIT_MAG_MOT = 55
 
 uint8 RESULT_NONE = 0
 uint8 RESULT_RUNNING = 1
@@ -86,6 +87,7 @@ uint8 FAILURE_MOTION_UNAVAILABLE = 24
 uint8 FAILURE_PATH_UNOBSERVABLE = 25
 uint8 FAILURE_PROFILE_UNOBSERVABLE = 26
 uint8 FAILURE_IMU_BIAS_UNOBSERVABLE = 27
+uint8 FAILURE_DRIVE_ENVELOPE = 28
 
 uint8 FENCE_UNAVAILABLE = 0
 uint8 FENCE_SAFE = 1
@@ -100,6 +102,14 @@ uint8 GAIN_HEADING = 2
 uint8 GAIN_PATH = 3
 uint8 GAIN_NAVIGATION = 4
 
+# 响应采集子状态；换档由请求到位/连续稳态/有效样本驱动，不按固定时刻跳档。
+uint8 EXCITATION_NONE = 0
+uint8 EXCITATION_PROBE = 1
+uint8 EXCITATION_RAMP = 2
+uint8 EXCITATION_SETTLE = 3
+uint8 EXCITATION_COLLECT = 4
+uint8 EXCITATION_BRAKE = 5
+
 uint32 STAGE_LEVEL = 1
 uint32 STAGE_RTK = 2
 uint32 STAGE_SPEED = 4
@@ -113,6 +123,7 @@ uint32 STAGE_IMU_BIAS = 512
 uint32 STAGE_MOTOR_PROFILE = 1024
 uint32 STAGE_RUNTIME = 2048
 uint32 STAGE_NAV_STRATEGY = 4096
+uint32 STAGE_MAG_MOT = 8192 # 磁偏置与电机干扰补偿分别报告，后者保存确认后才完成。
 uint32 NAV_FIELD_LOOKAHEAD = 1
 uint32 NAV_FIELD_JERK = 2
 uint32 NAV_FIELD_SPEED_REDUCTION = 4
@@ -124,7 +135,13 @@ uint32 session_id
 uint32 sequence
 uint32 completed_stages
 uint32 unavailable_stages
+uint32 skipped_stages # 能力范围外或无对应设备，未尝试且不声称已完成；与 unavailable 区分。
 uint32 provisional_validated_stages
+uint8 excitation_phase
+uint8 excitation_level # 0..5 为六档平台，6 为非零下降平台。
+uint32 excitation_samples
+float32 excitation_target # 请求绝对值：前进 [0,E]，转向 [0,1]。
+float32 excitation_remaining_s # 本次运动硬截止剩余秒数；NONE 时为 0。
 uint8 state
 uint8 result
 uint8 failure_reason
@@ -159,6 +176,8 @@ float32 entry_cruise_speed_m_s
 float32 observed_forward_speed_m_s
 float32 observed_reverse_speed_m_s
 float32 observed_output_max
+# 100*norm(K_body)*冻结包络/WMM 场强；-1=未知，可以超过 100%。
+float32 mag_interference_pct
 float32 level_roll_offset_deg
 float32 level_pitch_offset_deg
 float32 rtk_baseline_m
