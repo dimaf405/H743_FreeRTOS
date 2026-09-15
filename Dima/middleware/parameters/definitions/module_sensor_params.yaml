@@ -366,3 +366,67 @@ parameters:
       category: Developer
       type: boolean
       default: 1
+- group: Firmware Observations
+  definitions:
+    CAL_MAG_MOT_KX:
+      description:
+        short: 磁-油门补偿 X 轴系数（只读）
+        long: |-
+          自动校准在高输出直线段学习的油门-磁场干扰系数（高斯/单位输出）。
+          只读观测参数：由固件在校准提交时写入，VehicleMagnetometer 在
+          磁样本变换时仅按前进工况的同时刻实际纵向输出补偿。
+          零系数可以是有效结果；ID=0 表示失效，GEN>0 表示曾成功学习。
+      category: System
+      type: float
+      default: 0.0
+      min: 0
+      max: 0
+      decimal: 5
+    CAL_MAG_MOT_KY:
+      description:
+        short: 磁-油门补偿 Y 轴系数（只读）
+        long: |-
+          同 CAL_MAG_MOT_KX，Y 轴系数。只读观测参数，由固件写入。
+      category: System
+      type: float
+      default: 0.0
+      min: 0
+      max: 0
+      decimal: 5
+    CAL_MAG_MOT_KZ:
+      description:
+        short: 磁-油门补偿 Z 轴系数（只读）
+        long: |-
+          同 CAL_MAG_MOT_KX，Z 轴系数。只读观测参数，由固件写入。
+      category: System
+      type: float
+      default: 0.0
+      min: 0
+      max: 0
+      decimal: 5
+    CAL_MAG_MOT_ID:
+      description:
+        short: 磁-油门补偿学习时设备 ID（只读）
+        long: |-
+          学习系数时使用的磁力计 device_id。仅当当前活动磁力计一致时补偿
+          生效；设备更换或重新校准后系数失效，需重跑自动校准刷新。
+      category: System
+      type: int32
+      default: 0
+      min: 0
+      max: 0
+      decimal: 0
+    CAL_MAG_MOT_GEN:
+      description:
+        short: 磁-油门补偿学习代际（只读）
+        long: |-
+          系数学习会话的单调代际号，每次自动校准提交递增，用于人工核对
+          系数新旧。任何新的磁力计校准（QGC 六面或自动校准）都会使当前
+          系数失效，直到下一次自动校准重新学习。
+      category: System
+      type: int32
+      default: 0
+      min: 0
+      max: 0
+      decimal: 0
+      increment: 1

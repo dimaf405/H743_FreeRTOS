@@ -29,10 +29,10 @@ static_assert(sizeof(SnapshotHeader) == 20U);
 constexpr std::uint32_t kSnapshotMagic = 0x5041524DU;
 constexpr std::uint32_t kSnapshotFormat = 1U;
 
-bool is_fixed_parameter(const char *name) noexcept
+bool is_product_constant(const char *name) noexcept
 {
     // 固定参数集合只来自生成的 kFixedParameterConstraints；codec 不维护手写名称
-    // 列表。加载用户层时跳过固定项，防止持久化快照覆盖产品强制合同。
+    // 列表。只跳过不可变产品常量，固件拥有的只读观测值必须恢复。
     if (name == nullptr) {
         return false;
     }
@@ -43,7 +43,8 @@ bool is_fixed_parameter(const char *name) noexcept
     for (const auto &constraint :
          dima::generated::parameters::kFixedParameterConstraints) {
         if (param_handle(constraint.parameter) == handle) {
-            return true;
+            // 固件观测值虽在 QGC 只读，仍必须恢复真实学习值；产品常量才跳过。
+            return !constraint.firmware_owned;
         }
     }
     return false;
@@ -79,7 +80,7 @@ int load_mutable_parameter(const char *name, param_type_t type,
         return 0;
     }
     auto &filtered = *static_cast<FilteredLoadContext *>(context);
-    if (is_fixed_parameter(name)) {
+    if (is_product_constant(name)) {
         return 0;
     }
     if (is_flight_mode_slot_parameter(name)) {

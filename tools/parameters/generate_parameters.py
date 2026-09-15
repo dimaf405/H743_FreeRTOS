@@ -437,6 +437,21 @@ def render_parameter_contract(
         )
 
     fixed = [parameter for parameter in catalogue if fixed_parameter(parameter)]
+    # 固件观测值仍由 min=max 生成 QGC readOnly，但不是不可恢复的产品常量。
+    # 组成员只取权威 YAML 经上游生成的 JSON，禁止维护五项名称白名单。
+    observations = [p for p in catalogue if p.get("group") == "Firmware Observations"]
+    if not observations or any(not fixed_parameter(p) or p["default"] != 0 for p in observations):
+        raise RuntimeError("firmware observations must be fixed zero-default parameters")
+    observation_names = {p["name"] for p in observations}
+    mag_observations = [p for p in observations if p["name"].startswith("CAL_MAG_MOT_")]
+    targets = [p for p in mag_observations if p["name"].endswith("_ID") and p["type"] == "Int32"]
+    if len(targets) != 1 or len(mag_observations) != len(observations):
+        raise RuntimeError("magnetometer observation identity contract is ambiguous")
+    # 校正依赖按正式字段族识别，生成失效边，不在参数核心/传感器维护副本。
+    corrections = [p for p in catalogue if re.fullmatch(
+        r"CAL_MAG0_(?:ID|ROT|[XYZ](?:OFF|SCALE))|SENS_BOARD_[XYZ]_OFF", p["name"])]
+    invalidation_rows = [f"    {{dima::params::{p['name']}, dima::params::{targets[0]['name']}}},"
+                         for p in corrections]
     if not fixed:
         raise RuntimeError("Dima fixed-parameter policy resolved to an empty set")
     calibration, mapping = rc_contract(catalogue)
@@ -463,13 +478,15 @@ def render_parameter_contract(
     for parameter in fixed:
         if parameter["type"] == "Int32":
             fixed_rows.append(
-                "    {dima::params::%s, FixedParameterType::Int32, %d, 0.0F},"
-                % (parameter["name"], int(parameter["default"]))
+                "    {dima::params::%s, FixedParameterType::Int32, %d, 0.0F, %s},"
+                % (parameter["name"], int(parameter["default"]),
+                   "true" if parameter["name"] in observation_names else "false")
             )
         else:
             fixed_rows.append(
-                "    {dima::params::%s, FixedParameterType::Float, 0, %s},"
-                % (parameter["name"], float_literal(parameter["default"]))
+                "    {dima::params::%s, FixedParameterType::Float, 0, %s, %s},"
+                % (parameter["name"], float_literal(parameter["default"]),
+                   "true" if parameter["name"] in observation_names else "false")
             )
 
     lines = [
@@ -499,6 +516,7 @@ def render_parameter_contract(
         "    FixedParameterType type;",
         "    std::int32_t int32_value;",
         "    float float_value;",
+        "    bool firmware_owned;",
         "};",
         "",
         "// 单枚举或 min=max 的产品约束从官方 JSON 派生，消费者不得另列名称。",
@@ -507,6 +525,26 @@ def render_parameter_contract(
         "};",
         "inline constexpr std::size_t kFixedParameterConstraintCount =",
         "    sizeof(kFixedParameterConstraints) / sizeof(kFixedParameterConstraints[0]);",
+        "// 固件只读观测组支持原子快照，数量与成员来自权威分组。",
+        "inline constexpr dima::params kFirmwareObservationParameters[]{",
+        *[f"    dima::params::{p['name']}," for p in observations],
+        "};",
+        "inline constexpr std::size_t kFirmwareObservationCount =",
+        "    sizeof(kFirmwareObservationParameters) / sizeof(kFirmwareObservationParameters[0]);",
+        "inline constexpr bool firmware_observation(dima::params parameter) noexcept {",
+        "    for (const auto value : kFirmwareObservationParameters)",
+        "        if (value == parameter) return true;",
+        "    return false;",
+        "}",
+        "struct ParameterInvalidation { dima::params source; dima::params target; };",
+        "inline constexpr ParameterInvalidation kParameterInvalidations[]{",
+        *invalidation_rows,
+        "};",
+        "inline constexpr bool invalidates_observations(dima::params parameter) noexcept {",
+        "    for (const auto &edge : kParameterInvalidations)",
+        "        if (edge.source == parameter) return true;",
+        "    return false;",
+        "}",
         "",
         "struct FlightModeSlotParameter {",
         "    dima::params parameter;",

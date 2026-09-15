@@ -9,6 +9,7 @@
 #include "ConstLayer.h"
 #include "param_internal.hpp"
 #include "api/Execution.hpp"
+#include <parameters/parameter_contract.hpp>
 
 /* parameter_update_s 由锁定 PX4 uORB 生成器从 ParameterUpdate.msg 生成；
  * 参数核心只消费该权威结构，不在 C ABI 头中重复定义布局。 */
@@ -115,6 +116,25 @@ void request_notification() noexcept
     g_notification_pending = true;
 }
 
+static void invalidate_dependents(param_t changed) noexcept
+{
+    // 在同一参数锁/保存快照边界内清除生成依赖的有效 ID；因此任何改参入口
+    // （包括直接 PARAM_SET/reset）都不会保存“新校正 + 旧有效补偿”。清零只
+    // 删除稀疏项，不分配内存；回滚事务最后恢复其捕获的完整观测组。
+    for (const auto &edge : dima::generated::parameters::kParameterInvalidations) {
+        if (param_handle(edge.source) != changed) continue;
+        const auto target = param_handle(edge.target);
+        const bool changed_default = g_runtime_defaults->contains(target);
+        const bool changed_user = g_user_config->contains(target);
+        if (!changed_default && !changed_user) continue;
+        g_user_config->reset(target);
+        g_runtime_defaults->reset(target);
+        if (changed_default) ++g_default_generation;
+        g_unsaved.set(target);
+        ++g_set_count;
+    }
+}
+
 static int set_internal(param_t param, const void *value, bool notify,
                         bool mark_unsaved) noexcept
 {
@@ -140,6 +160,7 @@ static int set_internal(param_t param, const void *value, bool notify,
 
     g_unsaved.set(param, mark_unsaved);
     ++g_set_count;
+    invalidate_dependents(param);
     if (notify) {
         request_notification();
     }
@@ -503,6 +524,7 @@ int param_set_default_value(param_t param, const void *value)
                             : g_runtime_defaults->store(param, next);
     if (!stored) { return -ENOMEM; }
     ++g_default_generation;
+    if (!g_user_config->contains(param)) invalidate_dependents(param);
     if (g_active[param]) { request_notification(); }
     return 0;
 }
@@ -530,6 +552,7 @@ int param_reset(param_t param)
     g_user_config->reset(param);
     g_unsaved.set(param);
     ++g_set_count;
+    invalidate_dependents(param);
     request_notification();
     return 0;
 }
@@ -543,6 +566,7 @@ int param_reset_no_notification(param_t param)
         g_user_config->reset(param);
         g_unsaved.set(param);
         ++g_set_count;
+        invalidate_dependents(param);
     }
     return 0;
 }

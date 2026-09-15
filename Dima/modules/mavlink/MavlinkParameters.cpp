@@ -453,6 +453,8 @@ bool MavlinkParameters::write_value_allowed(param_t param,
     }
     if (const FixedParameterConstraint *const fixed =
             fixed_parameter_constraint(param)) {
+        // 固件观测值的零默认值不代表 GCS 可以清零；所有外部写入都拒绝。
+        if (fixed->firmware_owned) return false;
         if (fixed->type == dima::generated::parameters::
                 FixedParameterType::Int32) {
             std::int32_t value = 0;
