@@ -192,7 +192,8 @@ void DroneCanMag2::process_reconfiguration(std::uint64_t now) noexcept
             return;
         }
         maintenance_interlock_acquired_ = true;
-        maintenance_ticket_ = maintenance_.request(now);
+        maintenance_ticket_ = maintenance_.request(now,
+                dima::middleware::maintenance::RuntimeMaintenanceCoordinator::Owner::MagnetometerConfiguration);
         if (maintenance_ticket_ == 0U) {
             armed_.end_maintenance();
             maintenance_interlock_acquired_ = false;

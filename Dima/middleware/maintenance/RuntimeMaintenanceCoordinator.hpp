@@ -29,10 +29,25 @@ public:
         InvalidProgress,
     };
 
+    // 内部维护归属，不是参数或消息目录；仅供只读诊断，不参与授权。
+    enum class Owner : std::uint8_t {
+        Unspecified, ParameterSave, ParameterMirror, GpsConfiguration,
+        MagnetometerConfiguration,
+    };
+    struct Snapshot {
+        bool busy{false};
+        const char *owner{"none"};
+        const char *stage{"idle"};
+        std::uint32_t age_ms{0U};
+        FailureReason failure{FailureReason::None};
+    };
+
     explicit RuntimeMaintenanceCoordinator(
         dima::platform::CriticalSection &critical) noexcept;
 
-    Ticket request(dima::platform::TimeUs now_us) noexcept;
+    Ticket request(dima::platform::TimeUs now_us,
+                   Owner owner = Owner::Unspecified) noexcept;
+    Snapshot snapshot(dima::platform::TimeUs now_us) const noexcept;
     bool boot_health_update(dima::platform::TimeUs now_us,
                             bool runtime_healthy,
                             bool maintenance_safe) noexcept;
@@ -47,7 +62,7 @@ public:
 
 private:
     /* 维护票据状态机：Idle --request--> Requested --健康/安全--> Approved
-     * --permit--> Active --complete/cancel/超时--> Idle/Cancelled。
+     * --watchdog_fed--> Active --complete/cancel/超时--> Idle/Cancelled。
      * 15 s 是整笔硬截止，Active 每 750 ms 必须报告不同 progress，防止 Flash/SD
      * 长操作在看门狗仍被喂养时无界卡住。 */
     enum class State : std::uint8_t {
@@ -66,6 +81,8 @@ private:
     void reset_locked() noexcept;
 
     dima::platform::CriticalSection &critical_;
+    Owner owner_{Owner::Unspecified};
+    dima::platform::TimeUs requested_us_{0U};
     Ticket ticket_{0U};
     Ticket next_ticket_{0U};
     std::uint32_t progress_{0U};

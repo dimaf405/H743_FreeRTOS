@@ -12,7 +12,7 @@ RuntimeMaintenanceCoordinator::RuntimeMaintenanceCoordinator(
 
 RuntimeMaintenanceCoordinator::Ticket
 RuntimeMaintenanceCoordinator::request(
-    dima::platform::TimeUs now_us) noexcept
+    dima::platform::TimeUs now_us, Owner owner) noexcept
 {
     dima::platform::CriticalGuard guard{critical_};
     if (state_ != State::Idle) {
@@ -23,6 +23,8 @@ RuntimeMaintenanceCoordinator::request(
     if (next_ticket_ == 0U) {
         ++next_ticket_;
     }
+    owner_ = owner;
+    requested_us_ = now_us;
     ticket_ = next_ticket_;
     progress_ = 0U;
     last_progress_us_ = 0U;
@@ -162,6 +164,34 @@ bool RuntimeMaintenanceCoordinator::in_progress() const noexcept
     return state_ != State::Idle;
 }
 
+RuntimeMaintenanceCoordinator::Snapshot
+RuntimeMaintenanceCoordinator::snapshot(dima::platform::TimeUs now_us) const noexcept
+{
+    // 同一短临界区复制归属、阶段和年龄，避免把前后两笔事务拼成一条诊断。
+    dima::platform::CriticalGuard guard{critical_};
+    Snapshot result{};
+    result.busy = state_ != State::Idle;
+    result.failure = failure_reason_;
+    if (!result.busy) return result;
+    const auto age_ms = now_us >= requested_us_ ? (now_us - requested_us_) / 1000ULL : 0ULL;
+    result.age_ms = age_ms > UINT32_MAX ? UINT32_MAX : static_cast<std::uint32_t>(age_ms);
+    switch (owner_) {
+    case Owner::ParameterSave: result.owner = "param-save"; break;
+    case Owner::ParameterMirror: result.owner = "param-mirror"; break;
+    case Owner::GpsConfiguration: result.owner = "gps-config"; break;
+    case Owner::MagnetometerConfiguration: result.owner = "mag-config"; break;
+    default: result.owner = "unspecified"; break;
+    }
+    switch (state_) {
+    case State::Requested: result.stage = "wait-health"; break;
+    case State::Approved: result.stage = "wait-watchdog"; break;
+    case State::Active: result.stage = "active"; break;
+    case State::Cancelled: result.stage = "cancelled"; break;
+    case State::Idle: break;
+    }
+    return result;
+}
+
 bool RuntimeMaintenanceCoordinator::deadline_expired(
     dima::platform::TimeUs now_us) const noexcept
 {
@@ -179,6 +209,8 @@ void RuntimeMaintenanceCoordinator::cancel_locked(FailureReason reason) noexcept
 
 void RuntimeMaintenanceCoordinator::reset_locked() noexcept
 {
+    owner_ = Owner::Unspecified;
+    requested_us_ = 0U;
     ticket_ = 0U;
     progress_ = 0U;
     deadline_us_ = 0U;

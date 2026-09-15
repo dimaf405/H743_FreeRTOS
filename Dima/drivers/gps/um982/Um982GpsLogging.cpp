@@ -651,7 +651,8 @@ void Um982Gps::run_configuration_apply(std::uint64_t now_us) noexcept
                 return;
             }
             maintenance_interlock_acquired_ = true;
-            maintenance_ticket_ = maintenance_.request(now_us);
+            maintenance_ticket_ = maintenance_.request(now_us,
+                dima::middleware::maintenance::RuntimeMaintenanceCoordinator::Owner::GpsConfiguration);
             if (maintenance_ticket_ == 0U) {
                 armed_.end_maintenance();
                 maintenance_interlock_acquired_ = false;
