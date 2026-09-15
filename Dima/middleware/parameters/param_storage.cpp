@@ -102,10 +102,11 @@ int param_save_default(bool)
     const int result = backend->save(enumerate_changed, nullptr, backend_context);
     if (result == 0) {
         px4::AtomicTransaction transaction;
-        if (g_set_count == set_count_snapshot) {
-            g_unsaved.reset();
-        }
         ++g_export_count;
+        // 后端一次调用完成整笔保存。写入计数覆盖编码到提交的窗口，发生新改参
+        // 就保留 unsaved 并请求下一笔；无需再编码、CRC 和比较另一份参数快照。
+        if (g_set_count != set_count_snapshot) return -ESTALE;
+        g_unsaved.reset();
     }
     return result;
 }
