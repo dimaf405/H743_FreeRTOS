@@ -29,16 +29,25 @@ bool MavlinkService::start() noexcept
 {
     if (state_ == dima::middleware::lifecycle::ModuleState::Running) return true;
     shared_.reset();
-    quiesce_requested_.store(false);
-    uart_quiesced_.store(false);
-    quiesce_failed_.store(false);
-    quiesce_deadline_us_ = retry_uart_after_us_ = 0U;
+    retry_uart_after_us_ = 0U;
     if (!ScheduleEnable() || !usb_.start()) {
         stop();
         state_ = dima::middleware::lifecycle::ModuleState::Error;
         return false;
     }
-    // UART 配置或资源启动失败仅禁用该链路；USB 始终保留配置入口。
+    /* 串口映射为重启生效合同（对齐 ArduPilot/PX4）：端口选择在启动时已由
+     * SerialConfig 提交，本服务只负责打开；UART 打开或资源失败仅禁用该
+     * 链路，USB 始终保留配置入口，不存在运行期热重配。 */
+    if (assignments_.telemetry_port() != 0) {
+        if (assignments_.telemetry_baudrate() > 0U) {
+            if (!uart_transport_.open(assignments_.telemetry_port(),
+                                      assignments_.telemetry_baudrate(),
+                                      {&MavlinkService::notify_from_isr, this})) {
+                PX4_ERR("UART MAVLink transport unavailable; USB remains active");
+            }
+        }
+        // BAUD=Auto：波特率由下方扫描状态机逐档探测。
+    }
     if (!uart_.start()) PX4_ERR("UART MAVLink protocol unavailable; USB remains active");
     state_ = dima::middleware::lifecycle::ModuleState::Running;
     if (!ScheduleOnInterval(10000U, 10000U)) { stop(); return false; }
@@ -74,36 +83,6 @@ void MavlinkService::notify_from_isr(void *context) noexcept
     (void)static_cast<MavlinkService *>(context)->ScheduleNowFromISR();
 }
 
-bool MavlinkService::prepare_serial_reconfigure() noexcept
-{
-    quiesce_requested_.store(true, std::memory_order_release);
-    ScheduleNow();
-    return uart_quiesced_.load(std::memory_order_acquire);
-}
-
-bool MavlinkService::serial_reconfigure_failed() const noexcept
-{
-    return quiesce_failed_.load(std::memory_order_acquire);
-}
-
-bool MavlinkService::apply_serial_configuration() noexcept
-{
-    // 仅 appMain 持有维护许可且 LP 已停止访问 UART 时调用。新驱动失败可在
-    // GPS/RC 尚未恢复前回滚串口快照，避免提交 owner 后才发现 DMA 无法启动。
-    if (!uart_quiesced_.load(std::memory_order_acquire)) return false;
-    if (!uart_transport_.close()) return false;
-    // 重配置后旧扫描证据全部作废：显式 BAUD 直接打开，Auto 交给扫描状态机。
-    scan_index_ = 0U;
-    scan_locked_ = false;
-    retry_uart_after_us_ = 0U;
-    if (assignments_.telemetry_port() == 0) return true;
-    if (!assignments_.telemetry_configuration_valid()) return false;
-    if (assignments_.telemetry_baudrate() == 0U) return true;
-    return uart_transport_.open(
-        assignments_.telemetry_port(), assignments_.telemetry_baudrate(),
-        {&MavlinkService::notify_from_isr, this});
-}
-
 void MavlinkService::service_uart_scan(std::uint64_t now) noexcept
 {
     /* Auto 扫描状态机：SERIALx_BAUD=0 时逐档尝试候选速率，每档窗口内收到
@@ -112,7 +91,7 @@ void MavlinkService::service_uart_scan(std::uint64_t now) noexcept
      * 窗口无帧则关闭换下一档，循环进行，不产生错误风暴。 */
     if (scan_locked_) return;
     if (!uart_transport_.ready()) {
-        // 候选未打开（首轮、换档后或 quiesce 关闭后）：打开并重置窗口基线。
+        // 候选未打开（首轮或换档后）：打开并重置窗口基线。
         if (now < retry_uart_after_us_) return;
         retry_uart_after_us_ = now + 1000000ULL;
         const std::uint32_t baud = kScanBaudRates[scan_index_];
@@ -141,42 +120,13 @@ void MavlinkService::service_uart_scan(std::uint64_t now) noexcept
     }
 }
 
-void MavlinkService::resume_serial() noexcept
-{
-    quiesce_requested_.store(false, std::memory_order_release);
-    ScheduleNow();
-}
-
 void MavlinkService::Run()
 {
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) return;
     const auto now = hrt_absolute_time();
     shared_.service_acks(now, &MavlinkService::deliver_ack, this);
     usb_.Run();
-    if (quiesce_requested_.load(std::memory_order_acquire)) {
-        if (uart_quiesced_.load(std::memory_order_acquire) || quiesce_failed_.load()) return;
-        if (quiesce_deadline_us_ == 0U) {
-            quiesce_deadline_us_ = now + uart_.drain_timeout_us();
-            quiesce_error_generation_ = uart_.error_generation_;
-        }
-        uart_.Run(true);
-        if (quiesce_error_generation_ != uart_transport_.error_generation()) {
-            // 故障恢复清空队列不等于旧回应送达，本轮维护必须失败。
-            quiesce_failed_.store(true, std::memory_order_release);
-        } else if (uart_.tx_drained()) {
-            uart_.reset_link();
-            if (uart_transport_.close()) uart_quiesced_.store(true, std::memory_order_release);
-            else quiesce_failed_.store(true, std::memory_order_release);
-        } else if (now >= quiesce_deadline_us_) {
-            // 未排空时拒绝本轮变更，appMain 取消请求并恢复旧链路；不强制截断回应。
-            quiesce_failed_.store(true, std::memory_order_release);
-            PX4_WARN("UART MAVLink drain timeout; keeping active configuration");
-        }
-        return;
     }
-    uart_quiesced_.store(false, std::memory_order_release);
-    quiesce_failed_.store(false, std::memory_order_release);
-    quiesce_deadline_us_ = 0U;
     if (uart_.state() == dima::middleware::lifecycle::ModuleState::Running &&
         assignments_.telemetry_port() != 0) {
         if (assignments_.telemetry_baudrate() == 0U) {

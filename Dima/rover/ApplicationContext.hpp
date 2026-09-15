@@ -73,7 +73,6 @@ private:
     bool start_control_chain() noexcept;
     bool stop_control_chain() noexcept;
     bool stop_motor_output() noexcept;
-    bool apply_serial_configuration() noexcept;
 
     // 成员装配遵循构造依赖：底层协调器与 FlashFS 先于消费者；ModuleManager
     // 只登记静态实例，独立存储的 LogService 仍由本组合根统一控制启停。
@@ -136,20 +135,6 @@ private:
     bool auto_mode_started_{false};
     bool auto_calibration_started_{false};
     bool rover_differential_started_{false};
-    enum class SerialReconfigurePhase : std::uint8_t {
-        // 参数签名变化后：Idle -> WaitForApproval -> Apply -> Idle。应用前停止 GPS/
-        // RC 串口消费者，且只在未武装、无其他 maintenance 事务时执行。
-        Idle,
-        DrainTelemetry,
-        WaitForApproval,
-        Apply,
-    };
-    SerialReconfigurePhase serial_reconfigure_phase_{
-        SerialReconfigurePhase::Idle};
-    dima::middleware::maintenance::RuntimeMaintenanceCoordinator::Ticket
-        serial_maintenance_ticket_{0U};
-    std::uint64_t active_serial_signature_{0U};
-    std::uint64_t serial_retry_after_us_{0U};
 };
 
 ApplicationContext &application_context() noexcept;

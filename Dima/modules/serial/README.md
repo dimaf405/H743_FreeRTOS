@@ -9,4 +9,4 @@
 - baud 选项直接来自 YAML 生成的 QGC Metadata，运行时代码不维护第二份数值表；Function 只接受 Disabled/SBUS/GPS/MAVLink。配置无效时必须 fail-closed 停用冲突的数据链，同时保留 USB/QGC 恢复链。
 - 关闭 Runtime 时必须清除参数绑定，不得把旧 Runtime 的参数缓存带入下一次启动。
 
-MAVLink 默认不开启，参数写入顺序不限。BAUD 显式为非零值时数传直接以该速率运行；BAUD=Auto 时帧格式仍为 8N1，波特率由 MAVLink 服务按常见速率逐档自动探测（窗口内收到完整 MAVLink 帧即锁定），GPS 的 Auto 探测由 UM982 驱动承担。数传线路由独立异步端点应用，启动失败只关闭该链路。运行中串口变更先排空 UART 回应再申请未解锁维护许可；新驱动失败恢复旧快照。详细时序见 [双链路合同](../../../docs/MAVLINK_UART_ZH.md)。
+MAVLink 默认不开启，参数写入顺序不限，写入即通过参数原子事务迁移 owner 并提示 reboot required；端口接管在下次启动执行（`SERIALx_BAUD/FUNCTION` 均为 reboot_required 参数，QGC 会自动弹重启提示）。BAUD 显式为非零值时数传直接以该速率运行；BAUD=Auto 时帧格式仍为 8N1，波特率由 MAVLink 服务按常见速率逐档自动探测（窗口内收到完整 MAVLink 帧即锁定），GPS 的 Auto 探测由 UM982 驱动承担。数传线路由独立异步端点应用，启动失败只关闭该链路。本模块只做启动时配置，不提供运行期热重配。详细合同见 [双链路合同](../../../docs/MAVLINK_UART_ZH.md)。

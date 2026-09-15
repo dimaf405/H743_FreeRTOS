@@ -435,7 +435,6 @@ bool ApplicationContext::start() noexcept
     if (!auto_calibration_started_) PX4_WARN("Auto calibration unavailable");
 
     runtime_state_ = RuntimeState::Running;
-    active_serial_signature_ = serial_config_.applied_configuration_signature();
     PX4_INFO("Application Runtime running");
     // 用已捕获的 MCU 复位证据区分看门狗/异常与 Runtime 重启；只报告，不据此
     // 放宽维护期限或安全检查。硬件标志的解释留在 Board capability 内。
@@ -449,124 +448,13 @@ bool ApplicationContext::start() noexcept
     return true;
 }
 
-bool ApplicationContext::apply_serial_configuration() noexcept
-{
-    // 串口映射是共享资源事务：先停 UM982 和完整 RC 链，再调用 SerialConfig
-    // 重配，之后无论配置成功与否都尝试恢复消费者，避免遗留无人拥有的 UART。
-    bool stopped = true;
-    if (um982_gps_started_) {
-        const bool result = module_manager_.stop(um982_gps_);
-        um982_gps_started_ = !result;
-        stopped = result && stopped;
-    }
-    stopped = stop_rc_chain() && stopped;
-    if (!stopped) {
-        if (!start_rc_chain()) {
-            PX4_WARN("RC chain recovery failed after serial stop failure");
-        }
-        if (!um982_gps_started_) {
-            um982_gps_started_ = module_manager_.start(um982_gps_);
-        }
-        return false;
-    }
-
-    bool configured = serial_config_.reconfigure();
-    if (configured && !mavlink_service_.apply_serial_configuration()) {
-        configured = false;
-        if (!serial_config_.rollback_configuration() || !mavlink_service_.apply_serial_configuration()) {
-            PX4_ERR("UART MAVLink configuration rollback failed; USB remains active");
-        }
-    }
-    if (!start_rc_chain()) {
-        PX4_WARN("RC chain unavailable after serial reconfiguration");
-    }
-    um982_gps_started_ = module_manager_.start(um982_gps_);
-    if (!um982_gps_started_) {
-        PX4_WARN("UM982 unavailable after serial reconfiguration");
-    }
-    if (!configured) {
-        PX4_ERR("runtime serial reconfiguration rejected; restored active ports");
-        return false;
-    }
-    active_serial_signature_ = serial_config_.applied_configuration_signature();
-    return active_serial_signature_ != 0U;
-}
 
 void ApplicationContext::service() noexcept
 {
-    if (!owner_call(false) || runtime_state_ != RuntimeState::Running ||
-        !serial_config_started_) {
-        return;
-    }
-    const std::uint64_t now_us = services_.clock.now_us();
-    // signature 是生成串口配置的内容签名；0/未变、已武装、退避期或已有维护
-    // 事务均不触发重配。候选还必须先通过 SerialConfig 的完整冲突校验。
-    const std::uint64_t signature = serial_config_.configuration_signature();
-    if (serial_reconfigure_phase_ == SerialReconfigurePhase::Idle) {
-        if (signature == 0U || signature == active_serial_signature_ ||
-            commander_.armed() || now_us < serial_retry_after_us_ ||
-            maintenance_.in_progress()) {
-            return;
-        }
-        if (!serial_config_.pending_configuration_valid()) {
-            serial_retry_after_us_ = now_us + 1000000ULL;
-            return;
-        }
-        serial_reconfigure_phase_ = SerialReconfigurePhase::DrainTelemetry;
-    }
-
-    if (serial_reconfigure_phase_ == SerialReconfigurePhase::DrainTelemetry) {
-        // 低波特率排空可能超过维护许可期限；先异步排空参数回应，再申请票据。
-        // appMain 持续返回主循环喂狗，USB 和实时控制队列继续工作。
-        if (commander_.armed() || mavlink_service_.serial_reconfigure_failed()) {
-            mavlink_service_.resume_serial();
-            serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
-            serial_retry_after_us_ = now_us + 1000000ULL;
-            return;
-        }
-        if (!mavlink_service_.prepare_serial_reconfigure()) return;
-        serial_maintenance_ticket_ = maintenance_.request(now_us);
-        if (serial_maintenance_ticket_ == 0U) return;
-        serial_reconfigure_phase_ =
-            SerialReconfigurePhase::WaitForApproval;
-        return;
-    }
-
-    // maintenance permit 采用非阻塞轮询；Denied/应用失败均取消票据并退避 1 s。
-    if (serial_reconfigure_phase_ ==
-        SerialReconfigurePhase::WaitForApproval) {
-        const auto permit = maintenance_.permit(serial_maintenance_ticket_,
-                                                now_us);
-        if (permit == dima::middleware::maintenance::
-                          RuntimeMaintenanceCoordinator::Permit::Waiting) {
-            return;
-        }
-        if (permit == dima::middleware::maintenance::
-                          RuntimeMaintenanceCoordinator::Permit::Denied) {
-            maintenance_.cancel(serial_maintenance_ticket_);
-            mavlink_service_.resume_serial();
-            serial_maintenance_ticket_ = 0U;
-            serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
-            serial_retry_after_us_ = now_us + 1000000ULL;
-            return;
-        }
-        serial_reconfigure_phase_ = SerialReconfigurePhase::Apply;
-    }
-
-    if (serial_reconfigure_phase_ == SerialReconfigurePhase::Apply) {
-        const bool progress = maintenance_.report_progress(
-            serial_maintenance_ticket_, 1U, now_us);
-        const bool applied = progress && apply_serial_configuration();
-        if (applied) {
-            maintenance_.complete(serial_maintenance_ticket_);
-        } else {
-            maintenance_.cancel(serial_maintenance_ticket_);
-            serial_retry_after_us_ = services_.clock.now_us() + 1000000ULL;
-        }
-        mavlink_service_.resume_serial();
-        serial_maintenance_ticket_ = 0U;
-        serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
-    }
+    /* 串口映射为重启生效合同（对齐 ArduPilot/PX4）：SERIALx_BAUD/FUNCTION
+     * 写入时只做参数层原子迁移，端口接管在下次启动由 SerialConfig 执行；
+     * 运行期不再有串口维护事务、排空或热重配状态机。本入口保留给 appMain
+     * 主循环未来的非实时轮询需求。 */
 }
 
 bool ApplicationContext::start_rc_chain() noexcept
@@ -678,11 +566,6 @@ bool ApplicationContext::stop_started_modules() noexcept
         const bool result = module_manager_.stop(auto_calibration_);
         auto_calibration_started_ = !result;
         stopped = result && stopped;
-    }
-    if (serial_maintenance_ticket_ != 0U) {
-        maintenance_.cancel(serial_maintenance_ticket_);
-        serial_maintenance_ticket_ = 0U;
-        serial_reconfigure_phase_ = SerialReconfigurePhase::Idle;
     }
     if (sensor_calibration_started_) {
         const bool result = module_manager_.stop(sensor_calibration_);

@@ -112,8 +112,6 @@ bool SerialConfig::read_configuration(
             continue;
         }
 
-        configuration.requested_baudrate[index] = baud_value;
-        configuration.function[index] = function_value;
         const std::int32_t port = static_cast<std::int32_t>(index + 1U);
         configuration.baudrate[index] =
             static_cast<std::uint32_t>(baud_value);
@@ -125,9 +123,9 @@ bool SerialConfig::read_configuration(
             ++gps_owner_count;
             configuration.gps_port = port;
         } else if (function_value == dima::lib::serial::kSerialFunctionMavlink) {
-            // 数传线路由独立端点应用 8N1 线格式，失败不能中断启动时的
-            // USB/GPS/SBUS。BAUD=0 (Auto) 是合法候选：波特率由 MAVLink 服务
-            // 自动探测；显式值直接使用。通用路径不得触碰 owner 端口的线路。
+            // 数传线路由独立端点应用 8N1 线格式。BAUD=0 (Auto) 合法：波特率
+            // 由 MAVLink 服务自动探测；显式值直接使用。通用路径不触碰 owner
+            // 端口的线路。
             configuration.baudrate[index] = 0U;
             ++telemetry_owner_count;
             configuration.telemetry_port = port;
@@ -135,8 +133,8 @@ bool SerialConfig::read_configuration(
         }
     }
 
-    // 数传错误只撤销其端口选择；启动时保留 USB/GPS/SBUS。热重配入口会拒绝
-    // 同一无效候选，不把已运行的有效配置替换掉。
+    // 数传错误只撤销其端口选择；启动时保留 USB/GPS/SBUS。串口映射为重启
+    // 生效合同，候选校验只在启动时执行一次。
     configuration.telemetry_valid = configuration.telemetry_valid && telemetry_owner_count <= 1U;
     if (!configuration.telemetry_valid) {
         configuration.telemetry_port = 0;
@@ -185,17 +183,11 @@ bool SerialConfig::apply_baudrates(const std::uint32_t *baudrates) noexcept
 void SerialConfig::commit_configuration(
     const Configuration &configuration) noexcept
 {
-    previous_configuration_ = active_configuration_;
-    active_configuration_ = configuration;
     telemetry_port_ = configuration.telemetry_port;
     telemetry_baudrate_ = configuration.telemetry_baudrate;
-    telemetry_valid_ = configuration.telemetry_valid;
     rc_input_port_ = configuration.rc_input_port;
     gps_port_ = configuration.gps_port;
     gps_target_baudrate_ = configuration.gps_target_baudrate;
-    for (std::size_t index = 0U; index < kPortCount; ++index) {
-        applied_baudrates_[index] = configuration.baudrate[index];
-    }
 }
 
 bool SerialConfig::start() noexcept
@@ -245,92 +237,17 @@ bool SerialConfig::start() noexcept
     return true;
 }
 
-bool SerialConfig::reconfigure() noexcept
-{
-    if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
-        return false;
-    }
-    Configuration configuration{};
-    if (!read_configuration(configuration) || !configuration.telemetry_valid) {
-        PX4_ERR("pending serial configuration invalid; retaining active ports");
-        return false;
-    }
-    /* 运行期重配只在 RC 链与 GPS 已停止、且持有维护许可时被调用。SBUS 停止后
-     * timestamped 端点仍保留“正常 UART”接管快照（normal_configuration_valid_），
-     * 不释放会使所有 configure_line 被端点所有权门禁拒绝，导致应用与回滚同时
-     * 失败并陷入重试循环。SBUS 重启时 SbusRc::start() 会重新 configure 并重建
-     * 快照，因此此处释放不改变端点合同。 */
-    if (!backend_.reset_configuration()) {
-        PX4_ERR("serial endpoint snapshot release failed; retaining active ports");
-        return false;
-    }
-    if (!apply_baudrates(configuration.baudrate)) {
-        // 新配置任一端口应用失败时回滚全部旧波特率；所有权字段只有成功后才提交。
-        const bool restored = apply_baudrates(applied_baudrates_);
-        if (!restored) {
-            PX4_ERR("serial baud rollback failed");
-        }
-        return false;
-    }
-    commit_configuration(configuration);
-    PX4_INFO("reconfigured physical serial ports rc_port=%ld gps_port=%ld gps_baud=%lu GPS=NMEA/UM982",
-             static_cast<long>(rc_input_port_),
-             static_cast<long>(gps_port_),
-             static_cast<unsigned long>(gps_target_baudrate_));
-    return true;
-}
 
-bool SerialConfig::rollback_configuration() noexcept
-{
-    const Configuration previous = previous_configuration_;
-    if (!apply_baudrates(previous.baudrate)) return false;
-    {
-        // 恢复硬件后，以原子事务恢复参数核心中的旧串口快照。只回滚仍等于本次
-        // 失败候选的配置；USB 在维护期间提交的更新不能被旧事务覆盖。
-        px4::AtomicTransaction transaction;
-        Configuration pending{};
-        if (read_configuration(pending)) {
-            bool unchanged = true;
-            for (std::size_t index = 0U; index < kPortCount; ++index) {
-                unchanged = unchanged && pending.function[index] == active_configuration_.function[index] &&
-                    pending.requested_baudrate[index] == active_configuration_.requested_baudrate[index];
-            }
-            if (unchanged) {
-                for (std::size_t index = 0U; index < kPortCount; ++index) {
-                    const auto &binding = serial_parameters_[index];
-                    if (binding.baud == PARAM_INVALID) continue;
-                    if (param_set_no_notification(binding.baud, &previous.requested_baudrate[index]) != 0 ||
-                        param_set_no_notification(binding.function, &previous.function[index]) != 0) return false;
-                }
-                param_notify_changes();
-            }
-        }
-    }
-    commit_configuration(previous);
-    return true;
-}
 
-bool SerialConfig::pending_configuration_valid() const noexcept
-{
-    if (state_ != dima::middleware::lifecycle::ModuleState::Running) {
-        return false;
-    }
-    Configuration configuration{};
-    return read_configuration(configuration) && configuration.telemetry_valid;
-}
 
 void SerialConfig::stop() noexcept
 {
     invalidate_parameters();
     telemetry_port_ = 0;
     telemetry_baudrate_ = 0U;
-    telemetry_valid_ = true;
     rc_input_port_ = 0;
     gps_port_ = 0;
     gps_target_baudrate_ = 0U;
-    for (std::uint32_t &baudrate : applied_baudrates_) {
-        baudrate = 0U;
-    }
     state_ = backend_.reset_configuration()
                  ? dima::middleware::lifecycle::ModuleState::Stopped
                  : dima::middleware::lifecycle::ModuleState::Error;
@@ -351,10 +268,6 @@ std::uint32_t SerialConfig::telemetry_baudrate() const noexcept
     return telemetry_port() != 0 ? telemetry_baudrate_ : 0U;
 }
 
-bool SerialConfig::telemetry_configuration_valid() const noexcept
-{
-    return telemetry_valid_;
-}
 
 std::int32_t SerialConfig::rc_input_port() const noexcept
 {
@@ -377,36 +290,7 @@ std::uint32_t SerialConfig::gps_target_baudrate() const noexcept
                : 0U;
 }
 
-std::uint64_t SerialConfig::configuration_signature() const noexcept
-{
-    if (state_ != dima::middleware::lifecycle::ModuleState::Running) return 0U;
-    Configuration pending{};
-    return read_configuration(pending) ? signature(pending) : 0U;
-}
 
-std::uint64_t SerialConfig::applied_configuration_signature() const noexcept
-{
-    // 应用期间 USB 仍能写下一代候选；只记录已生效快照，不能误吞后来的参数更新。
-    return signature(active_configuration_);
-}
 
-std::uint64_t SerialConfig::signature(const Configuration &configuration) const noexcept
-{
-    // FNV-1a：hash = (hash XOR byte) * 1099511628211，仅用于配置代际比较。
-    std::uint64_t hash = 14695981039346656037ULL;
-    const auto append = [&hash](std::int32_t value) noexcept {
-        const auto bits = static_cast<std::uint32_t>(value);
-        for (unsigned shift = 0U; shift < 32U; shift += 8U) {
-            hash ^= static_cast<std::uint8_t>(bits >> shift);
-            hash *= 1099511628211ULL;
-        }
-    };
-    for (std::size_t index = 0U; index < kPortCount; ++index) {
-        if (serial_parameters_[index].baud == PARAM_INVALID) continue;
-        append(configuration.requested_baudrate[index]);
-        append(configuration.function[index]);
-    }
-    return hash;
-}
 
 } // namespace dima::modules::serial

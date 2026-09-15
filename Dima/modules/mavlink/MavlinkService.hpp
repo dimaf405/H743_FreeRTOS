@@ -67,7 +67,7 @@ public:
     bool start() noexcept;
     void stop() noexcept;
     dima::middleware::lifecycle::ModuleState state() const noexcept;
-    void Run(bool quiescing = false);
+    void Run();
     void reset_link() noexcept;
     bool tx_drained() noexcept;
     bool queue_command_ack(const vehicle_command_ack_s &ack, std::uint32_t epoch) noexcept;
@@ -324,10 +324,6 @@ public:
     bool start() noexcept override;
     void stop() noexcept override;
     dima::middleware::lifecycle::ModuleState state() const noexcept override;
-    bool prepare_serial_reconfigure() noexcept;
-    void resume_serial() noexcept;
-    bool serial_reconfigure_failed() const noexcept;
-    bool apply_serial_configuration() noexcept;
 private:
     void Run() override;
     static void notify_from_isr(void *context) noexcept;
@@ -340,11 +336,6 @@ private:
     MavlinkEndpoint usb_;
     MavlinkEndpoint uart_;
     const dima::lib::serial::SerialPortAssignments &assignments_;
-    std::atomic<bool> quiesce_requested_{false};
-    std::atomic<bool> uart_quiesced_{false};
-    std::atomic<bool> quiesce_failed_{false};
-    std::uint64_t quiesce_deadline_us_{0U};
-    std::uint32_t quiesce_error_generation_{0U};
     std::uint64_t retry_uart_after_us_{0U};
     /* Auto 波特率扫描状态：SERIALx_BAUD=0 时逐档尝试常见速率，窗口内收到
      * 足量完整 MAVLink 帧即锁定；锁定结果只保留在本 Runtime 的线配置中。 */

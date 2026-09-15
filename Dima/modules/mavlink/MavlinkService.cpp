@@ -170,7 +170,7 @@ void MavlinkEndpoint::discard_rx() noexcept
     rx_message_pending_ = false;
 }
 
-void MavlinkEndpoint::Run(bool quiescing)
+void MavlinkEndpoint::Run()
 {
     if (state_ != dima::middleware::lifecycle::ModuleState::Running) return;
     usb_deadline_us_ = hrt_absolute_time() + kTxTimeoutMs * 1000ULL;
@@ -185,7 +185,7 @@ void MavlinkEndpoint::Run(bool quiescing)
     transport_was_ready_ = ready;
     flush_tx();
     maybe_perform_reboot(hrt_absolute_time());
-    if (quiescing || reboot_mode_pending_ != 0 || shared_.reboot_pending() || !ready) {
+    if (reboot_mode_pending_ != 0 || shared_.reboot_pending() || !ready) {
         mission_.update(hrt_absolute_time(), false);
         // 保存等待可能跨越多次心跳周期；继续报告连接与取消原因，但不再接收
         // 新的参数/命令。ACK 的发送完成证据独立锁存，不被后续心跳覆盖。

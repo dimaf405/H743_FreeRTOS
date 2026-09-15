@@ -349,6 +349,10 @@ bool MavlinkParameters::set_serial_function(
 
             if (target_changed || owner_count > 0U) {
                 param_notify_changes();
+                // 串口映射为重启生效合同（对齐 ArduPilot/PX4 的 reboot
+                // required 语义）：写入成功只保证参数层一致，端口接管在
+                // 下次启动执行；提示与 QGC 的 reboot_required 元数据互补。
+                PX4_INFO("serial mapping updated; reboot required to apply");
             }
         }
     }

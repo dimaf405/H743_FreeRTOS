@@ -12,6 +12,7 @@ parameters:
             0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 921600
+        reboot_required: true
         values: &serial_baud_values
           0: Auto
           2400: 2400 8N1
@@ -37,6 +38,7 @@ parameters:
             每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
+        reboot_required: true
         values: &serial_function_values
           0: Disabled
           1: SBUS
@@ -52,6 +54,7 @@ parameters:
             0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_baud_values
       SERIAL2_FUNCTION:
         description:
@@ -61,6 +64,7 @@ parameters:
             每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_function_values
 
       SERIAL3_BAUD:
@@ -72,6 +76,7 @@ parameters:
             0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_baud_values
       SERIAL3_FUNCTION:
         description:
@@ -81,6 +86,7 @@ parameters:
             每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_function_values
 
       SERIAL4_BAUD:
@@ -92,6 +98,7 @@ parameters:
             0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 115200
+        reboot_required: true
         values: *serial_baud_values
       SERIAL4_FUNCTION:
         description:
@@ -101,6 +108,7 @@ parameters:
             每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_function_values
 
       SERIAL6_BAUD:
@@ -111,6 +119,7 @@ parameters:
             此值是 SBUS 驱动释放端口后恢复使用的普通 8N1 波特率。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_baud_values
       SERIAL6_FUNCTION:
         description:
@@ -120,6 +129,7 @@ parameters:
             本产品默认将 USART6 分配给 SBUS。
         type: enum
         default: 1
+        reboot_required: true
         values: *serial_function_values
 
       SERIAL7_BAUD:
@@ -131,6 +141,7 @@ parameters:
             0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 57600
+        reboot_required: true
         values: *serial_baud_values
       SERIAL7_FUNCTION:
         description:
@@ -140,6 +151,7 @@ parameters:
             每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_function_values
 
       SERIAL8_BAUD:
@@ -151,6 +163,7 @@ parameters:
             0=Auto 表示由端口设备的驱动自动探测波特率（SBUS 端口固定 100000 8E2，不参与 Auto）。
         type: enum
         default: 115200
+        reboot_required: true
         values: *serial_baud_values
       SERIAL8_FUNCTION:
         description:
@@ -160,4 +173,5 @@ parameters:
             每种功能最多只能占用一个端口；MAVLink 波特率为 Auto 时自动探测，帧格式固定 8N1。
         type: enum
         default: 0
+        reboot_required: true
         values: *serial_function_values
