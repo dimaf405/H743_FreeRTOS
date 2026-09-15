@@ -7,10 +7,15 @@
 - Rover Manual 与 AUTO 分别位于 `rover/modes/ManualMode.*`、`AutoMode.*`；两者都只能发布 one-of `rover_motion_request`，不得直接进入本目录内部对象。控制层先计算 steering，再把 Navigation longitudinal 限制到 `1-|steering|`，且自动控制固定 `manual_source=false`。
 - 安全 PWM 输出位于 `modules/motor/`，本目录不得直接访问 `ActuatorPwm` 或板级 TIM/GPIO。
 - `SOURCE_CALIBRATION` 保持独立来源：开环使用 normalized axes，增益验证使用已有 speed/yaw-rate 模式及本层真实 PI。Commander、控制器、PWM 和 watchdog 共用精确开/闭环安全投影，闭环只打开 Velocity/Rates，不伪装成 Mission。
-- `RoverDifferentialCalibration` 在完整 Disarmed 快照中独立锁存固定圆、入场巡航/兜底速度和驱动上限，以新鲜同设备 GNSS 复核停车余量；会话快照改变后永久失效，不能单凭协调器标志恢复。普通每轮上限 `min(0.40,MOT_THR_MAX)`；只有入场未配置巡航的指定前进探测段允许到冻结驱动上限，整形后负轮端立即失效，许可下降时不携带历史超限输出。0.15/s 末端 slew、TTL、实际速度/加速度门禁始终保留。
+- `RoverDifferentialCalibration` 在完整 Disarmed 快照中独立锁存固定圆、入场正 RO_SPEED_LIM 与 MOT_THR_MAX 包络 E，以新鲜同设备 GNSS 复核停车余量；会话快照改变后永久失效。所有校准阶段纵向请求/闭环输出 [0,E]、转向 [-1,1]、最终每轮 [-E,E]；保留 0.15/s 末端 slew、TTL、速度/加速度门禁。
 - `rover_control_status` 是本层产生的内部 uORB 反馈，包含请求/session/参数代次、真实 PI 设定/反馈/积分及最终执行器均值/差分。消费者应用确认与“闭环配置可运行”分开，允许旧零增益回滚到导航未就绪状态。
-- 校准只在指定阶段允许负纵向/负速度，倒车受 `min(0.3,V_session)` 和普通输出限制；闭环还受当前 provisional 巡航范围限制。反馈补充未零区化前向/侧向/带符号地速及真实混控、整形、MOT slew、Arm ramp、换向等待、末端安全限制原因，正常整形不冒充安全介入，受限样本不授权辨识。
+- 校准纵向请求/速度一律非负，FWD→CW→CCW；原地转向仍允许左右轮反向且保留换向等待。反馈中的未零区化速度和混控/整形/slew/Arm ramp/安全限制原因继续服务辨识；后端是否真正应用及应用时间由 actuator_output_status 单独提供。
+
 
 ## 头文件实现边界
 
 RoverControlValidation.cpp 持有参数有效性判断，头文件只声明共享接口；控制层和执行器层各自的安全锁存继续独立。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。
+
+校准开环的纵向请求使用 [0,E] 包络坐标，差速器入口除以 E 转成原有 [0,1] 整形输入，避免 E<1 时重复缩放为 E²；速度 FF、响应剖面及辨识的整形前反馈仍使用差速器标准坐标。闭环 PI 保持标准坐标，纵向输出受 [0,E] 限制；两条路径的最终轮端均受同一冻结包络和末端 slew 约束。
+
+Manual 电机行为按 APM 参考基线核对：先对操作者两轴同比缩放，后续在 [-1/ASYM,1] 中限制转向可行范围，仍允许急转内轮反转。APM 的“MIN 后 EXPO”顺序及左右独立换向等待保持一致；本地没有同向弧线限制、前后切换强制清零或双轮共同换向等待。导航零纵向停车、0.15/s 校准末端 slew、Arm ramp 和冻结包络继续有效。细节及 QGC 诊断见 modules/motor/README.md。
