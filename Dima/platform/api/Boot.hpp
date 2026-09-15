@@ -46,10 +46,22 @@ enum class FailureKind : std::uint32_t {
     ErrorHandler = 6U,
 };
 
+// 已捕获的启动证据；valid=false 表示平台不提供，不能将缺失解释成冷启动。
+struct StartupResetInfo {
+    bool valid{false};
+    bool independent_watchdog{false};
+    bool window_watchdog{false};
+    std::uint32_t boot_count{0U};
+    std::uint32_t reset_flags{0U};
+    std::uint32_t previous_failure{0U};
+    std::uint32_t previous_pc{0U};
+};
+
 class StartupDiagnostics {
 public:
     virtual ~StartupDiagnostics() = default;
     virtual void set_stage(StartupStage stage) noexcept = 0;
+    virtual StartupResetInfo reset_info() const noexcept;
     [[noreturn]] virtual void panic(FailureKind failure,
                                     std::uint32_t detail,
                                     std::uint32_t auxiliary) noexcept = 0;

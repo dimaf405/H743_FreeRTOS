@@ -1,6 +1,7 @@
 #include "platform_composition.h"
 
 #include "boot_diagnostics.h"
+#include "stm32h743xx.h"
 #include "api/Boot.hpp"
 #include "api/Flash.hpp"
 #include "api/Services.hpp"
@@ -18,6 +19,24 @@ public:
     void set_stage(dima::platform::StartupStage stage) noexcept override
     {
         dima_boot_stage_set(static_cast<std::uint32_t>(stage));
+    }
+
+    dima::platform::StartupResetInfo reset_info() const noexcept override
+    {
+        dima::platform::StartupResetInfo result{};
+        // 只读取 early_init 保存的启动字段。RCC 现场标志已清除，且 MCUboot
+        // 桥接可能发生软件复位，不能用此时 RCC 值替代原始复位原因。
+        if (dima_boot_diagnostics.magic != DIMA_BOOT_DIAGNOSTICS_MAGIC ||
+            dima_boot_diagnostics.version != DIMA_BOOT_DIAGNOSTICS_VERSION ||
+            dima_boot_diagnostics.size != sizeof(dima_boot_diagnostics_t)) return result;
+        result.valid = true;
+        result.boot_count = dima_boot_diagnostics.boot_count;
+        result.reset_flags = dima_boot_diagnostics.reset_flags;
+        result.previous_failure = dima_boot_diagnostics.previous_failure_kind;
+        result.previous_pc = dima_boot_diagnostics.previous_pc;
+        result.independent_watchdog = (result.reset_flags & RCC_RSR_IWDG1RSTF) != 0U;
+        result.window_watchdog = (result.reset_flags & RCC_RSR_WWDG1RSTF) != 0U;
+        return result;
     }
 
     [[noreturn]] void panic(dima::platform::FailureKind failure,

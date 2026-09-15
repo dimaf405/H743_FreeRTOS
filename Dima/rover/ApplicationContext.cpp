@@ -438,6 +438,15 @@ bool ApplicationContext::start() noexcept
     runtime_state_ = RuntimeState::Running;
     active_serial_signature_ = serial_config_.applied_configuration_signature();
     PX4_INFO("Application Runtime running");
+    // 用已捕获的 MCU 复位证据区分看门狗/异常与 Runtime 重启；只报告，不据此
+    // 放宽维护期限或安全检查。硬件标志的解释留在 Board capability 内。
+    const auto reset = services_.diagnostics.reset_info();
+    if (reset.valid) {
+        PX4_INFO_RAW("Boot reset count=%lu flags=0x%08lx iwdg=%u wwdg=%u fault=%lu pc=0x%08lx",
+            static_cast<unsigned long>(reset.boot_count), static_cast<unsigned long>(reset.reset_flags),
+            static_cast<unsigned>(reset.independent_watchdog), static_cast<unsigned>(reset.window_watchdog),
+            static_cast<unsigned long>(reset.previous_failure), static_cast<unsigned long>(reset.previous_pc));
+    }
     return true;
 }
 

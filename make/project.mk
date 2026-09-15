@@ -678,6 +678,7 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/middleware/parameters/atomic_transaction.cpp \
 	Dima/middleware/rover/RoverModeContract.cpp \
 	Dima/modules/sensors/imu/VehicleImuAlgorithms.cpp \
+	Dima/platform/common/Boot.cpp \
 	Dima/platform/common/PlatformTypes.cpp \
 	Dima/platform/common/Time.cpp \
 	Dima/platform/common/Execution.cpp \
