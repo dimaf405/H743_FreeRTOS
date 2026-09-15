@@ -177,10 +177,16 @@ void MavlinkEndpoint::Run()
     transport_.service();
     const bool ready = transport_.ready();
     const auto errors = transport_.error_generation();
-    if ((!ready && transport_was_ready_) || errors != error_generation_) {
+    if (!ready && transport_was_ready_) {
+        // 真实端口关闭（停止/换档/quiesce）才是链路事件：撤销半帧并全量复位
+        // 协议会话，等价于 PX4 实例失去端口。
         discard_rx();
         reset_link();
     }
+    /* 字节级错误（丢字节/framing/溢出）只作为统计计数保留，与 PX4 一致：
+     * 错帧由 parser 校验失败自行丢弃并按帧头重同步，固件层不得再 discard
+     * 接收缓冲——那会把同批有效字节一并丢弃，线路噪声下会吞掉 QGC 的
+     * 参数请求并造成会话反复掉线；完整通过 CRC 的帧不可能跨越丢字节拼成。 */
     error_generation_ = errors;
     transport_was_ready_ = ready;
     flush_tx();
@@ -213,9 +219,10 @@ void MavlinkEndpoint::Run()
         mavlink_message_t heartbeat{};
         heartbeat_pacer_.pack_now(now, heartbeat);
         if (send_message(heartbeat) && send_autopilot_version()) {
+            // UART 配置成功只表示端点可用，不表示无线端/GCS 已连接。传感器
+            // 摘要是非错误 Info，由服务层在本 Runtime 首次链路就绪时输出一次，
+            // 不随链路重建重复；健康变化走边沿消息，持续健康走 SYS_STATUS。
             was_link_ready_ = true;
-            // UART 配置成功只表示端点可用，不表示无线端/GCS 已连接。
-            report_sensor_link_summary();
         } else {
             heartbeat_pacer_.reset();
         }
@@ -267,14 +274,8 @@ void MavlinkEndpoint::drain_rx() noexcept
             if (rx_size_ == 0U) return;
         }
         ++processed;
-        if (mavlink_parse_char(channel_, rx_buffer_[rx_position_++],
-                &parse_message_, &parse_status_) != 0) {
-            rx_message_pending_ = true;
-            // 任意完整合法帧（含被静默忽略的 GCS 心跳）都是波特率匹配的证据。
-            ++parsed_frames_;
-        } else {
-            rx_message_pending_ = false;
-        }
+        rx_message_pending_ = mavlink_parse_char(channel_, rx_buffer_[rx_position_++],
+            &parse_message_, &parse_status_) != 0;
     }
 }
 

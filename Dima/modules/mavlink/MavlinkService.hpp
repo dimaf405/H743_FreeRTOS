@@ -234,8 +234,6 @@ private:
     std::uint16_t rx_position_{0U};
     std::uint16_t rx_size_{0U};
     bool rx_message_pending_{false};
-    // 完整通过 CRC/签名校验的接收帧计数；Auto 波特率扫描用它作为锁定证据。
-    std::uint32_t parsed_frames_{0U};
     std::uint32_t epoch_{1U};
     std::uint32_t error_generation_{0U};
     std::uint64_t usb_deadline_us_{0U};
@@ -338,11 +336,16 @@ private:
     const dima::lib::serial::SerialPortAssignments &assignments_;
     std::uint64_t retry_uart_after_us_{0U};
     /* Auto 波特率扫描状态：SERIALx_BAUD=0 时逐档尝试常见速率，窗口内收到
-     * 足量完整 MAVLink 帧即锁定；锁定结果只保留在本 Runtime 的线配置中。 */
+     * 足量完整 MAVLink 帧即锁定；锁定结果只保留在本 Runtime 的线配置中。
+     * 计数与基线只由 MavlinkService 的本地 parser 维护，端点不参与扫描。 */
     std::uint8_t scan_index_{0U};
     std::uint64_t scan_window_started_us_{0U};
+    std::uint32_t scan_frames_{0U};
     std::uint32_t scan_frames_baseline_{0U};
     bool scan_locked_{false};
+    /* 传感器摘要一次性合同：非错误 Info 只在本 Runtime 首次链路就绪时由
+     * 对应端点输出一次；健康变化走边沿消息，持续健康走 SYS_STATUS 流。 */
+    bool sensor_summary_sent_{false};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
 };
