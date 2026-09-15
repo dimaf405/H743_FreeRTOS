@@ -15,6 +15,11 @@ uint8 STATE_CONTROL_INHIBITED = 6 # 收到新鲜的显式失效控制帧，且 P
 
 uint64 timestamp
 uint64 timestamp_sample
+# 后端成功应用波形/停波的时间，不是控制或估计器采样时间。
+uint64 timestamp_output
+# 已应用的逻辑右/左轮归一化输出（已撤销 PWM REV 映射）；未确认时为 NaN。
+float32 applied_right
+float32 applied_left
 uint32 sequence
 uint16[6] pwm_us
 uint8 active_output_mask

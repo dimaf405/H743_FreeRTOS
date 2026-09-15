@@ -1,6 +1,9 @@
 #include "MotorOutput.hpp"
+#include "api/Time.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace dima::modules::motor {
 
@@ -64,6 +67,24 @@ dima::platform::ActuatorPwmResult MotorOutput::apply_frame(
     const dima::platform::ActuatorPwmResult result = pwm_->write(frame);
     if (result == dima::platform::ActuatorPwmResult::Applied) {
         applied_frame_ = frame;
+        // 以 PWM 后端成功为证据，从已应用脉宽反解逻辑归一化输出，撤销各通道
+        // REV。多路映射到同一侧时取均值；量化误差保留，不伪装成电流/RPM。
+        float right = 0.0F, left = 0.0F;
+        unsigned right_count = 0U, left_count = 0U;
+        for (std::size_t channel = 0U; channel < kChannelCount; ++channel) {
+            if ((frame.enabled_mask & (1U << channel)) == 0U) continue;
+            const auto &config = parameters_.channels[channel];
+            const float delta = static_cast<float>(frame.pulse_us[channel]) - config.center_us;
+            const float span = delta >= 0.0F ? config.maximum_us - config.center_us
+                                            : config.center_us - config.minimum_us;
+            const float command = span > 0.0F ? std::clamp(delta / span, -1.0F, 1.0F) : 0.0F;
+            const float logical = config.reversed ? -command : command;
+            if (config.function == ChannelFunction::MotorRight) { right += logical; ++right_count; }
+            if (config.function == ChannelFunction::MotorLeft) { left += logical; ++left_count; }
+        }
+        applied_right_ = right_count != 0U ? right / right_count : 0.0F;
+        applied_left_ = left_count != 0U ? left / left_count : 0.0F;
+        applied_output_timestamp_ = hrt_absolute_time();
         backend_ready_ = true;
         safe_off_ = false;
     }
@@ -78,6 +99,8 @@ dima::platform::ActuatorPwmResult MotorOutput::force_safe_off() noexcept
         return dima::platform::ActuatorPwmResult::Fault;
     }
     if (safe_off_ && !pwm_->started()) {
+        applied_right_ = applied_left_ = 0.0F;
+        applied_output_timestamp_ = hrt_absolute_time();
         return dima::platform::ActuatorPwmResult::Applied;
     }
 
@@ -85,6 +108,10 @@ dima::platform::ActuatorPwmResult MotorOutput::force_safe_off() noexcept
     applied_frame_ = dima::platform::ActuatorPwmFrame{};
     backend_ready_ = result == dima::platform::ActuatorPwmResult::Applied;
     safe_off_ = backend_ready_;
+    if (safe_off_) {
+        applied_right_ = applied_left_ = 0.0F;
+        applied_output_timestamp_ = hrt_absolute_time();
+    }
     return result;
 }
 
@@ -93,8 +120,14 @@ bool MotorOutput::publish_status(std::uint64_t now_us,
                                  bool command_valid) noexcept
 {
     actuator_output_status_s status{};
-    status.timestamp = now_us;
+    status.timestamp = std::max(now_us, hrt_absolute_time());
     status.timestamp_sample = actuator_motors_.timestamp_sample;
+    const bool output_confirmed = backend_ready_ &&
+        (output_state == actuator_output_status_s::STATE_ACTIVE ||
+         output_state == actuator_output_status_s::STATE_DISARMED_NEUTRAL || safe_off_);
+    status.timestamp_output = output_confirmed ? applied_output_timestamp_ : 0U;
+    status.applied_right = output_confirmed ? applied_right_ : std::numeric_limits<float>::quiet_NaN();
+    status.applied_left = output_confirmed ? applied_left_ : std::numeric_limits<float>::quiet_NaN();
     ++status_sequence_;
     if (status_sequence_ == 0U) {
         ++status_sequence_;

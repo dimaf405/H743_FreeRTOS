@@ -136,6 +136,8 @@ private:
     vehicle_status_s observed_vehicle_status_{};
     SafetySnapshot safety_{};
     dima::platform::ActuatorPwmFrame applied_frame_{};
+    std::uint64_t applied_output_timestamp_{};
+    float applied_right_{}, applied_left_{};
     std::uint32_t status_sequence_{0U};
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};
