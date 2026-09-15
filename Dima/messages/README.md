@@ -17,3 +17,7 @@
 - `actuator_output_status` 记录六路 PWM 的 configured/right/left mask、应用脉宽以及 `HARD_SAFE_OFF / DISARMED_NEUTRAL / ACTIVE / RETRY / FAULT` 状态；Commander 只通过该内部 uORB 契约做输出就绪 pre-arm 与故障恢复，不直接依赖 MotorOutput 类，也不新增 MAVLink 线协议。
 - `estimator_gps_status` 固定采用 PX4 v1.17.0 字段合同，并由唯一 EKF2 实例发布完整 GnssChecks 结果；UM982 只发布 `sensor_gps`/`vehicle_gps_position`，不得再维护同 Topic 的简化发布者。
 - `vehicle_imu_status` 固定采用 PX4 v1.17.0 字段合同，承载单 IMU 的 identity、rate/error/clipping、振动、coning、均值/方差和温度；它不声称实现 `SensorsStatusImu` 多实例一致性投票。
+
+- 磁补偿扩展：actuator_output_status 的 timestamp_output/applied_right/applied_left 表示 PWM 后端已应用时间与逻辑归一化轮端，非控制采样时间、非测得电流/RPM；未知输出为 NaN。auto_calibration_status 增加 COMMIT_MAG_MOT/STAGE_MAG_MOT 和 mag_interference_pct（-1 未知、允许超过 100%）。全部从 .msg 正式生成，QGC 通过标准 STATUSTEXT 和只读参数观察。
+
+- 自动校准状态机修订：auto_calibration_status 的 skipped_stages 表达范围外/无设备跳过，独立于 unavailable_stages；EXCITATION_* 与子状态/档位/有效样本/目标/剩余运动预算字段均由正式 .msg 生成。主 STATE_* 编号保持稳定；QGC 仍消费标准 STATUSTEXT 和参数，不新增私有 MAVLink 线协议。
