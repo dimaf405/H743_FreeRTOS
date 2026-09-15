@@ -103,6 +103,7 @@ bool SensorCalibration::commit_level(float roll_deg, float pitch_deg) noexcept
     px4::AtomicTransaction transaction;
     if (!level_parameters_unchanged()) return false;
     clear_parameter_snapshot();
+    if (!capture_observations(parameter_snapshot_)) return false;
     parameter_snapshot_.type = Type::Level;
     parameter_snapshot_.id = level_board_rotation_;
     parameter_snapshot_.value_count = 2U;
@@ -118,9 +119,10 @@ bool SensorCalibration::commit_level(float roll_deg, float pitch_deg) noexcept
         param_set_no_notification(param_handle(dima::params::SENS_BOARD_Y_OFF), &pitch_deg) != 0) {
         return false;
     }
-    // 持锁记录仅由本 routine 两次写入造成的实际变化数；相同值不递增计数。
+    // 持锁记录本 routine 的两项校正及其观测失效造成的变化数；相同值不递增。
     // 协调器据此确认完整历史，不能把外部并发写入吞进 Level 的新基线。
     level_owned_changes_ = static_cast<std::uint8_t>(param_set_count() - level_start_set_count_);
+    if (!capture_observations(parameter_expectation_)) return false;
     notify_parameter_changes();
     return true;
 }

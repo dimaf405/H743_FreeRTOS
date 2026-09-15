@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  ****************************************************************************/
 #pragma once
+#include <parameters/parameter_contract.hpp>
 
 #include "calibration/SensorCalibrationAlgorithms.hpp"
 
@@ -133,6 +134,8 @@ private:
         Type type{Type::None};
         std::int32_t id{0};
         float values[6]{};
+        param_value_u observations[dima::generated::parameters::kFirmwareObservationCount]{};
+        bool observations_valid{false};
         std::uint8_t value_count{0U};
         bool valid{false};
     };
@@ -189,6 +192,9 @@ private:
     void finish_rollback() noexcept;
     void latch_rollback_failure() noexcept;
     void clear_parameter_snapshot() noexcept;
+    bool capture_observations(ParameterSnapshot &snapshot) noexcept;
+    bool restore_observations(const ParameterSnapshot &snapshot) noexcept;
+    bool observations_applied() const noexcept;
     void clear_parameter_expectation() noexcept;
     bool restore_parameters() noexcept;
     void notify_parameter_changes() noexcept;

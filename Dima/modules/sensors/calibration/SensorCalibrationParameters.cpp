@@ -43,6 +43,46 @@ void SensorCalibration::clear_parameter_snapshot() noexcept
     parameter_snapshot_ = ParameterSnapshot{};
 }
 
+bool SensorCalibration::capture_observations(ParameterSnapshot &snapshot) noexcept
+{
+    // 只捕获正式生成的观测组；校正及观测有效性一起回滚，不另建参数名单。
+    px4::AtomicTransaction atomic;
+    for (std::size_t i = 0U; i < dima::generated::parameters::kFirmwareObservationCount; ++i)
+        if (param_get(param_handle(dima::generated::parameters::kFirmwareObservationParameters[i]),
+                      &snapshot.observations[i]) != 0) return false;
+    snapshot.observations_valid = true;
+    return true;
+}
+
+bool SensorCalibration::restore_observations(const ParameterSnapshot &snapshot) noexcept
+{
+    if (!snapshot.observations_valid) return true;
+    bool restored = true;
+    for (std::size_t i = 0U; i < dima::generated::parameters::kFirmwareObservationCount; ++i)
+        restored = (param_set_no_notification(
+            param_handle(dima::generated::parameters::kFirmwareObservationParameters[i]),
+            &snapshot.observations[i]) == 0) && restored;
+    return restored;
+}
+
+bool SensorCalibration::observations_applied() const noexcept
+{
+    if (!parameter_expectation_.observations_valid) return true;
+    if (apply_type_ == Type::Level && !level_mag_present_) return true;
+    const auto value = [this](dima::params parameter) {
+        for (std::size_t i = 0U; i < dima::generated::parameters::kFirmwareObservationCount; ++i)
+            if (dima::generated::parameters::kFirmwareObservationParameters[i] == parameter)
+                return parameter_expectation_.observations[i];
+        return param_value_u{};
+    };
+    const float coefficient[3]{value(dima::params::CAL_MAG_MOT_KX).f,
+        value(dima::params::CAL_MAG_MOT_KY).f, value(dima::params::CAL_MAG_MOT_KZ).f};
+    // 校正和观测的失效/回滚必须同代到达前端，不能只确认三个偏置。
+    return required_parameter_update_valid_ &&
+        vehicle_magnetometer_frontend_.throttle_compensation_matches(required_parameter_update_instance_,
+            value(dima::params::CAL_MAG_MOT_ID).i, value(dima::params::CAL_MAG_MOT_GEN).i, coefficient);
+}
+
 void SensorCalibration::clear_parameter_expectation() noexcept
 {
     parameter_expectation_ = ParameterSnapshot{};
@@ -131,6 +171,8 @@ bool SensorCalibration::restore_parameters() noexcept
             restored = false;
         }
     }
+    // 必须最后恢复观测组；前面的旧校正写入会触发同一原子失效规则。
+    restored = restore_observations(parameter_snapshot_) && restored;
     if (restored) {
         notify_parameter_changes();
         clear_parameter_snapshot();
@@ -205,12 +247,11 @@ bool SensorCalibration::frontend_parameters_applied(std::uint64_t now) noexcept
             vehicle_magnetometer_frontend_.mag_calibration_matches(
                 required_parameter_update_instance_, parameter_expectation_.id,
                 parameter_expectation_.values) &&
-            (rollback || vehicle_magnetometer_.calibration_count !=
-                 previous_mag_calibration_count_ ||
-             (previous_mag_calibration_count_ == UINT8_MAX &&
-              vehicle_magnetometer_.timestamp >= commit_time_us_));
+            (rollback || vehicle_magnetometer_.calibration_count != previous_mag_calibration_count_ ||
+             vehicle_magnetometer_.timestamp_sample >= commit_time_us_);
     }
-    return applied;
+    // 数值恰好相同的新校准也可由确认代次之后的磁样本证明应用，不依赖计数变化。
+    return applied && observations_applied();
 }
 
 void SensorCalibration::process_wait_for_apply(std::uint64_t now) noexcept
@@ -382,6 +423,7 @@ bool SensorCalibration::commit_offset_scale(
     px4::AtomicTransaction transaction;
     if (!level_parameters_unchanged()) return false;
     if (param_get(id, &old_id) != 0) return false;
+    if (type == Type::Mag && !capture_observations(parameter_snapshot_)) return false;
     for (std::size_t index = 0U; index < 6U; ++index) {
         if (param_get(values[index], &old[index]) != 0) return false;
     }
@@ -393,6 +435,12 @@ bool SensorCalibration::commit_offset_scale(
     }
     parameter_snapshot_.valid = true;
     bool written = set_int(id, device_id);
+    if (type == Type::Mag) {
+        // 完成一次新的磁校准，即便偏置数值恰好相同，也必须重新学习补偿。
+        const std::int32_t invalid_id = 0;
+        written = (param_set_no_notification(param_handle(dima::params::CAL_MAG_MOT_ID),
+                                             &invalid_id) == 0) && written;
+    }
     for (std::size_t index = 0U; index < 6U; ++index) {
         written = written && set_float(values[index], next[index]);
     }
@@ -401,6 +449,7 @@ bool SensorCalibration::commit_offset_scale(
         for (std::size_t index = 0U; index < 6U; ++index) {
             (void)param_set_no_notification(values[index], &old[index]);
         }
+        (void)restore_observations(parameter_snapshot_);
         return false;
     }
     parameter_expectation_.type = type;
@@ -411,6 +460,7 @@ bool SensorCalibration::commit_offset_scale(
             static_cast<float>(next[index]);
     }
     parameter_expectation_.valid = true;
+    if (type == Type::Mag && !capture_observations(parameter_expectation_)) return false;
     notify_parameter_changes();
     return true;
 }
