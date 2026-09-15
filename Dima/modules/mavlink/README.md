@@ -67,6 +67,18 @@
 
 ## TX 与连接边界
 
+普通重启与 USB Recovery 都要求来源链路 ACK 正常发送完成，并且当前所有非
+volatile 参数已保存。MAVLink 只在参数事务锁内检查生成目录的 RAM 脏标记并请求
+既有 autosave；Flash/SD 仍在 `wq:storage`，不跨队列直接执行保存或读取后端状态。
+参数保存最多等待 10 s，暂停保存、存储失败或持续更新导致无法完成时取消重启；
+最终检查到复位之间保持参数锁，防止未保存的新写入穿过检查窗口。等待期间保持
+心跳和状态文本，冻结两条链路的新参数/命令，并持续复查新鲜 Disarmed 状态。
+
+ACK 使用原有按线路速率推导的独立期限。UART TC / USB 完整成功返回分别推进
+传输完成代数；UART 发送失败、中止和带在途数据的 stop 推进发送失败代数。
+只有 ACK 提交前后完成代数变化、无发送失败且队列排空才锁存 ACK 完成，
+`tx_idle` 本身不构成送达证明。连接代次改变或任一条件失败都取消本次请求。
+
 参数精简后仍提供完整、单一的生成目录，不用虚拟参数或过滤名单伪装数量减少。QGC 直接依赖的固定 Fact 保留在 `System / Compatibility`；校准值、高级项和常用项用上游支持的 category/group 分类。单枚举或 `min=max` 自动经上游 `--readonly-config` 生成标准 `readOnly: true`，并原样传入 Component Metadata，不能仅删除 Metadata 条目或跳过 PARAM_VALUE 索引。目录数量及只读属性以正式生成 Metadata 为准；QGC 5.1.3 勾选 **Hide read-only（隐藏只读参数）** 后普通列表与搜索均隐藏这些项，仍保留其他页面读取 Fact 的能力。该开关默认关闭，需要在地面站选择，固件不能强制隐藏。升级后需让 QGC 获取新的完整参数目录及 Metadata CRC。锁定源码依赖和验收见 `docs/PARAMETER_SIMPLIFICATION_ZH.md`。
 
 优先级为 ACK、Heartbeat/Version、RC、Metadata FTP、传感器、Onboard Log、参数、STATUSTEXT。物理 USB ready 下降沿会丢弃旧 RX 半帧，重置 parser/channel/FTP/参数/日志传输会话，并恢复 PX4 USB 周期流默认节拍；`ETIMEDOUT/EIO/EPIPE` 保留 FTP 回复等待 QGC 同 sequence 重传。
@@ -84,3 +96,14 @@ MavlinkBridge 的非模板 channel getter 由独立 C ABI 实现提供，Mavlink
 ## 传感器缓存所有权
 
 13 路传感器/估计器订阅使用普通 `uORB::Subscription`，直接通过已有 `copy()` 更新 `latest_*`，每路只保存一份消息载荷。没有新代次或读取失败时保留最近值；有队列的 Topic 仍按原 `orb_copy` 逐代消费，不切换成 latest 读取。Runtime start/stop 继续清缓存，USB 物理断开只重置发送节拍；代次检查和完整样本复制仍由 uORB 保护。RC、参数更新和模式订阅维持各自原有缓存合同。
+
+## Manual 电机诊断
+
+`MavlinkDriveDiagnostics.cpp` 在低优先级通信队列每秒读取最新既有 uORB 快照，仅 Manual Armed 时发布四条同 n 的 RAW STATUSTEXT。`mavlink_log.text` 的真实容量为 127 B（含 NUL），此前长行会在进入 MAVLink 分片前被截断；现在拆分短记录，不扩大消息，也不改变实时控制路径。
+
+- `[drive in]`：RC 校准后的 T/Y、差速器 req、输入/控制有效位 v 和软件杆位 dir。F/FR/R/BR/B/BL/L/FL/N 分别表示前/右前/右/右后/后/左后/左/左前/中立；NA 表示未知。dir 只由输入计算，不表示实测车体运动。
+- `[drive out]`：实际 actuator_motors 的 cmdR/L、后端确认的 ackR/L 和 S1..S6 左右映射掩码。
+- `[drive pwm]`：六路命令脉宽、输出状态、mix/slew/hold/ramp 四项限制和已应用参数代次 cfg。
+- `[drive src]`：由运行期 RC 功能映射选择的两个原始通道值（SBUS 标准换算后的 us）、raw_match、RC/控制/输出时龄 ages、同 RC 样本证据 same 及估计器状态 est。
+
+`raw_match=1` 表示原始通道值与规范化输入对应同一 RC 样本；`same=1` 只证明输入、控制命令和后端输出引用同一新鲜 RC 样本，不能代替逐控制周期或引脚波形证明。Manual 无定位仍显示真实电机命令，未知时间使用 UINT32_MAX。记录不改变参数/输出，双链路共享一次发布；应使用同 n 的四条记录分析，不能拼接不同 n 的结果。
