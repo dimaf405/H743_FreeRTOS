@@ -79,17 +79,34 @@ void BootHealthService::Run()
         return;
     }
 
+    // 先复制消息，再取统一判定时间。MotorOutput 优先级高于本队列，可能在
+    // 复制期间发布新状态；用复制前的 now 会把合法新帧误判为“未来”，进而
+    // 撤销维护、停止健康代次并触发 IWDG。仍严格拒绝真正晚于判定时刻的帧。
+    const bool armed_updated = actuator_armed_subscription_.update();
+    const bool control_updated = vehicle_control_mode_subscription_.update();
+    const bool status_updated = vehicle_status_subscription_.update();
+    const bool output_updated = actuator_output_status_subscription_.update();
     const std::uint64_t now_us = clock_.now_us();
-    const std::uint64_t now_ms = clock_.now_ms();
+    const std::uint64_t now_ms = now_us / 1000ULL;
+    // 输出 sequence 的观察不可因下面让出调度而丢失；跨轮保留已消费的活性证据。
+    const bool output_healthy = update_output_health(now_us, output_updated);
+    if (disarmed_snapshot_in_flight(now_us)) {
+        // Commander 在更低优先级逐项发布，同拍尚未到齐时让它先完成，再于
+        // 1 ms 后核对；本轮不发健康票据、不批准维护、不累计镜像确认。不能
+        // 在本高优先级任务中忙等，否则发布者无法完成剩余两项。
+        reset_stable_window(now_ms);
+        if (!ScheduleOnInterval(kCheckIntervalMs * 1000U, kSnapshotRetryUs))
+            state_ = dima::middleware::lifecycle::ModuleState::Error;
+        return;
+    }
 
     // watchdog 健康与 MCUboot 确认分层：前者允许 Armed/Active，只要输出与
     // 安全状态一致；后者必须 Disarmed 且输出处于确认安全态。
-    const bool safety_healthy = update_safety_health(now_us);
-    const bool output_healthy = update_output_health(now_us);
+    const bool safety_healthy = update_safety_health(now_us, armed_updated || control_updated || status_updated);
     const bool runtime_healthy =
         param_is_ready() && safety_healthy && output_healthy;
     const bool maintenance_safe =
-        runtime_healthy && confirmation_state_safe() &&
+        runtime_healthy && maintenance_state_safe() &&
         output_status_confirmation_safe();
     // 维护协调器在此统一仲裁 Flash/参数/驱动重配置；返回 false 时本轮既不推进
     // generation，也不累计镜像确认窗口。
@@ -149,15 +166,26 @@ void BootHealthService::Run()
     }
 }
 
-bool BootHealthService::update_safety_health(std::uint64_t now_us) noexcept
+bool BootHealthService::disarmed_snapshot_in_flight(std::uint64_t now_us) const noexcept
 {
-    const bool armed_updated = actuator_armed_subscription_.update();
-    const bool control_updated = vehicle_control_mode_subscription_.update();
-    const bool status_updated = vehicle_status_subscription_.update();
-    // Commander 用同一 timestamp 连续发布三 Topic。只更新其中一项表示读到了
-    // 撕裂批次，不能把新旧状态拼成一份安全证明。
-    const bool any_updated = armed_updated || control_updated || status_updated;
-    const bool all_updated = armed_updated && control_updated && status_updated;
+    const auto &armed = actuator_armed_subscription_.get();
+    const auto &control = vehicle_control_mode_subscription_.get();
+    const auto &status = vehicle_status_subscription_.get();
+    const auto fresh = [now_us](std::uint64_t timestamp) {
+        return timestamp != 0U && timestamp <= now_us && now_us - timestamp <= kSafetyTopicTimeoutUs;
+    };
+    // 仅给新鲜且全部明确 Disarmed 的分批快照短重读窗口。任何 Armed、Kill、
+    // 失控、失鲜或未来时间都进入原有否定路径，不借重读掩盖真实安全事件。
+    return !armed.armed && !control.flag_armed && !armed.kill && !armed.termination && !armed.lockdown &&
+        !control.flag_control_termination_enabled && !status.failsafe &&
+        status.failure_detector_status == vehicle_status_s::FAILURE_NONE &&
+        status.arming_state == vehicle_status_s::ARMING_STATE_DISARMED &&
+        fresh(armed.timestamp) && fresh(control.timestamp) && fresh(status.timestamp) &&
+        (armed.timestamp != control.timestamp || armed.timestamp != status.timestamp);
+}
+
+bool BootHealthService::update_safety_health(std::uint64_t now_us, bool any_updated) noexcept
+{
 
     if (!safety_topics_consistent(now_us)) {
         safety_snapshot_observed_ = false;
@@ -167,9 +195,10 @@ bool BootHealthService::update_safety_health(std::uint64_t now_us) noexcept
     const std::uint64_t timestamp =
         actuator_armed_subscription_.get().timestamp;
     if (any_updated) {
-        if (!all_updated ||
-            (last_safety_timestamp_us_ != 0U &&
-             timestamp <= last_safety_timestamp_us_)) {
+        // 三个缓存已同 timestamp 且逐字段一致，可能分两次读取才凑齐；不要求
+        // 三个 update() 必须在同一轮返回 true，但仍要求完整代次严格前进。
+        if (last_safety_timestamp_us_ != 0U &&
+             timestamp <= last_safety_timestamp_us_) {
             safety_snapshot_observed_ = false;
             return false;
         }
@@ -252,9 +281,9 @@ bool BootHealthService::safety_topics_consistent(
            status.can_set_nav_states_mask == manual_mask;
 }
 
-bool BootHealthService::update_output_health(std::uint64_t now_us) noexcept
+bool BootHealthService::update_output_health(std::uint64_t now_us, bool updated) noexcept
 {
-    if (actuator_output_status_subscription_.update()) {
+    if (updated) {
         const actuator_output_status_s &status =
             actuator_output_status_subscription_.get();
         // sequence 按 uint32 模空间前进：delta==0 是重复，delta>=2^31 视为倒退；
@@ -416,18 +445,26 @@ bool BootHealthService::output_status_confirmation_safe() const noexcept
                 actuator_output_status_s::STATE_DISARMED_NEUTRAL);
 }
 
-bool BootHealthService::confirmation_state_safe() const noexcept
+bool BootHealthService::maintenance_state_safe() const noexcept
 {
     const actuator_armed_s &armed = actuator_armed_subscription_.get();
     const vehicle_status_s &status = vehicle_status_subscription_.get();
-    // MCUboot 确认比 watchdog 运行健康更严格：必须人工安全态、无故障/失控，
-    // 避免在 Armed 或 failsafe 期间把可能回滚的 test image 永久确认。
+    // 普通维护和校准阶段保存都要求 Disarmed/无故障/安全输出。校准使用
+    // External1，不能借用仅允许 Manual 的镜像确认条件而永远等不到维护许可。
     return !armed.armed && !armed.kill && !armed.termination &&
            !armed.lockdown &&
            status.arming_state == vehicle_status_s::ARMING_STATE_DISARMED &&
-           status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL &&
+           (status.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
+            dima::middleware::rover::mode_contract::auto_calibration(status.nav_state)) &&
            status.failure_detector_status == vehicle_status_s::FAILURE_NONE &&
            !status.failsafe;
+}
+
+bool BootHealthService::confirmation_state_safe() const noexcept
+{
+    // MCUboot 镜像确认仍只允许健康 Manual 安全态；允许校准维护不扩大确认权限。
+    return maintenance_state_safe() &&
+        vehicle_status_subscription_.get().nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL;
 }
 
 void BootHealthService::reset_stable_window(std::uint64_t now_ms) noexcept

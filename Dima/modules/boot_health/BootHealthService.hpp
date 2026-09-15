@@ -39,6 +39,7 @@ protected:
 
 private:
     static constexpr std::uint32_t kCheckIntervalMs = 100U;
+    static constexpr std::uint32_t kSnapshotRetryUs = 1000U;
     // 镜像确认要求 5 s 连续健康；Topic 鲜度门限均短于应用 IWDG 期限。
     static constexpr std::uint64_t kStableWindowMs = 5000ULL;
     static constexpr std::uint64_t kSafetyTopicTimeoutUs = 750000ULL;
@@ -70,8 +71,9 @@ private:
     bool stable_window_active_{false};
     bool confirmation_attempted_{false};
 
-    bool update_safety_health(std::uint64_t now_us) noexcept;
-    bool update_output_health(std::uint64_t now_us) noexcept;
+    bool update_safety_health(std::uint64_t now_us, bool any_updated) noexcept;
+    bool update_output_health(std::uint64_t now_us, bool updated) noexcept;
+    bool disarmed_snapshot_in_flight(std::uint64_t now_us) const noexcept;
     bool safety_topics_consistent(std::uint64_t now_us) const noexcept;
     bool output_status_runtime_healthy(std::uint64_t now_us) const noexcept;
     bool output_status_confirmation_safe() const noexcept;
@@ -82,6 +84,7 @@ private:
     bool output_frame_valid(
         const actuator_output_status_s &output) const noexcept;
     bool confirmation_state_safe() const noexcept;
+    bool maintenance_state_safe() const noexcept;
     void reset_stable_window(std::uint64_t now_ms) noexcept;
 };
 
