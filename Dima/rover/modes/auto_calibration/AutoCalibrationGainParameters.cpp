@@ -74,19 +74,14 @@ void AutoCalibrationMode::poll_gain_transaction(std::uint64_t now) noexcept
 void AutoCalibrationMode::after_gain_saved(std::uint64_t now) noexcept
 {
     if (!read_tuning_config()) { fail_tuning(Status::FAILURE_PARAMETER, now); return; }
-    status_.completed_stages |= status_.provisional_validated_stages;
+    // 导航组可能仅通过转驱而缺少 jerk/减速证据；保存后仍应报告该组部分
+    // 未完成，不能同时把同一组置入 completed 与 unavailable。
+    status_.completed_stages |= status_.provisional_validated_stages & ~status_.unavailable_stages;
     status_.provisional_validated_stages = 0U;
     if (runtime_fully_observed_) status_.completed_stages |= Status::STAGE_RUNTIME;
     else status_.unavailable_stages |= Status::STAGE_RUNTIME;
-    // 整形与 slew 分别有可观性门禁，不能仅凭其中一个 changed 位宣称整组
-    // 电机标定完成。选回原值但经过公平实跑比较也算验证，不要求为改而改。
-    if (motor_profile_verified_ && motor_slew_verified_) {
-        status_.completed_stages |= Status::STAGE_MOTOR_PROFILE;
-        status_.unavailable_stages &= ~Status::STAGE_MOTOR_PROFILE;
-    } else status_.unavailable_stages |= Status::STAGE_MOTOR_PROFILE;
-    PX4_INFO_RAW("[autocal] MIN/EXPO/ASYM %s; MOT_SLEW_RATE %s\n",
-        motor_profile_verified_ ? (motor_candidate_changed_ ? "validated/saved" : "validated/retained") : "unobservable/retained",
-        motor_slew_verified_ ? (motor_slew_changed_ ? "validated/saved" : "validated/retained") : "unobservable/retained");
+    // 能力范围外的电机整形/SLEW 不进入本次事务，也不冒充已完成。
+    status_.skipped_stages |= Status::STAGE_MOTOR_PROFILE;
     if (status_.failure_reason == Status::FAILURE_DYNAMICS_UNOBSERVABLE ||
         status_.failure_reason == Status::FAILURE_MECHANICAL_ASYMMETRY) status_.failure_reason = Status::FAILURE_NONE;
     runtime_cohort_ = false;
