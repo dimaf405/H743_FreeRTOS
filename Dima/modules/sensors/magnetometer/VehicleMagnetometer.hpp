@@ -14,7 +14,9 @@
 #include "parameters/param.h"
 #include "api/Flash.hpp"
 #include "sensor_mag.hpp"
+#include "MagMotorOutputHistory.hpp"
 #include "uORB/Publication.hpp"
+#include "uORB/SubscriptionData.hpp"
 #include "uORB/uORB.hpp"
 #include "vehicle_magnetometer.hpp"
 #include "work_queue/WorkQueue.hpp"
@@ -54,6 +56,9 @@ public:
         std::int32_t configured_device_id,
         const float (&values)[6]) const noexcept;
     bool board_adjustment_matches(std::uint32_t required_instance, const float (&fine_degrees)[3]) const noexcept;
+    // 前端只消费并确认补偿事务；参数写入/保存/回滚由原有校准事务负责。
+    bool throttle_compensation_matches(std::uint32_t instance, std::int32_t device_id,
+        std::int32_t generation, const float (&coefficient)[3]) const noexcept;
 
 private:
     // sensor_mag 回调主触发，50 ms 备份调度处理参数；每轮最多四个样本，避免
@@ -75,6 +80,8 @@ private:
     struct Configuration {
         float publication_rate_hz{15.0F};
         Calibration calibration{};
+        float throttle_coefficient[3]{};
+        std::int32_t throttle_device_id{}, throttle_generation{};
     };
 
     void Run() override;
@@ -90,6 +97,8 @@ private:
     void clear_pending_configuration() noexcept;
     void configure_device(std::uint32_t device_id) noexcept;
     bool process_sample(const sensor_mag_s &sample) noexcept;
+    void apply_throttle_compensation(float (&gauss)[3],
+        std::uint64_t sample_timestamp) noexcept;
     void reset_accumulator(bool reset_last_publication) noexcept;
     void fail_module(const char *reason) noexcept;
 
@@ -108,6 +117,7 @@ private:
         ORB_ID(sensor_mag), *this};
     uORB::SubscriptionCallbackWorkItem parameter_update_subscription_{
         ORB_ID(parameter_update), *this};
+    MagMotorOutputHistory motor_history_{};
     uORB::Publication<vehicle_magnetometer_s>
         vehicle_magnetometer_publication_{ORB_ID(vehicle_magnetometer)};
 
@@ -123,6 +133,11 @@ private:
     dima::ParamFloat<dima::params::CAL_MAG0_XSCALE> x_scale_{};
     dima::ParamFloat<dima::params::CAL_MAG0_YSCALE> y_scale_{};
     dima::ParamFloat<dima::params::CAL_MAG0_ZSCALE> z_scale_{};
+    dima::ParamFloat<dima::params::CAL_MAG_MOT_KX> mot_x_{};
+    dima::ParamFloat<dima::params::CAL_MAG_MOT_KY> mot_y_{};
+    dima::ParamFloat<dima::params::CAL_MAG_MOT_KZ> mot_z_{};
+    dima::ParamInt<dima::params::CAL_MAG_MOT_ID> mot_id_{};
+    dima::ParamInt<dima::params::CAL_MAG_MOT_GEN> mot_generation_{};
 
     dima::middleware::lifecycle::ModuleState state_{
         dima::middleware::lifecycle::ModuleState::Stopped};

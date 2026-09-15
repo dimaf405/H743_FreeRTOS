@@ -706,6 +706,8 @@ DIMA_COMMON_CXX_SOURCES := \
 	Dima/modules/sensors/imu/VehicleImu.cpp \
 	Dima/lib/sensors/calibration/SensorCalibrationAlgorithms.cpp \
 	Dima/modules/sensors/magnetometer/VehicleMagnetometer.cpp \
+	Dima/modules/sensors/magnetometer/VehicleMagnetometerCompensation.cpp \
+	Dima/modules/sensors/magnetometer/MagMotorOutputHistory.cpp \
 	$(sort $(wildcard Dima/modules/sensors/calibration/*.cpp)) \
 	$(DIMA_LOGGING_MODULE_CXX_SOURCES) \
 	Dima/adapters/mavlink/MavlinkChannelState.cpp \

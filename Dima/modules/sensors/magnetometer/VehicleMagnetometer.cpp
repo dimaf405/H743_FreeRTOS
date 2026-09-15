@@ -47,6 +47,7 @@ bool VehicleMagnetometer::start()
     }
 
     stats_ = Stats{};
+    motor_history_.reset();
     active_device_id_ = 0U;
     calibration_count_ = 0U;
     clear_pending_configuration();
@@ -106,6 +107,7 @@ void VehicleMagnetometer::stop()
     ScheduleCancelAndDrain();
     invalidate_parameters();
     active_configuration_ = Configuration{};
+    motor_history_.reset();
     active_correction_ = Calibration{};
     active_device_id_ = 0U;
     calibration_count_ = 0U;
@@ -184,7 +186,9 @@ bool VehicleMagnetometer::bind_parameters() noexcept
            board_pitch_offset_.bind() && board_yaw_offset_.bind() && calibration_id_.bind() &&
            calibration_rotation_.bind() && x_offset_.bind() &&
            y_offset_.bind() && z_offset_.bind() && x_scale_.bind() &&
-           y_scale_.bind() && z_scale_.bind();
+           y_scale_.bind() && z_scale_.bind() && mot_x_.bind() &&
+           mot_y_.bind() && mot_z_.bind() && mot_id_.bind() &&
+           mot_generation_.bind();
 }
 
 void VehicleMagnetometer::invalidate_parameters() noexcept
@@ -201,6 +205,11 @@ void VehicleMagnetometer::invalidate_parameters() noexcept
     x_scale_.invalidate();
     y_scale_.invalidate();
     z_scale_.invalidate();
+    mot_x_.invalidate();
+    mot_y_.invalidate();
+    mot_z_.invalidate();
+    mot_id_.invalidate();
+    mot_generation_.invalidate();
 }
 
 bool VehicleMagnetometer::refresh_parameter_cache() noexcept
@@ -218,6 +227,11 @@ bool VehicleMagnetometer::refresh_parameter_cache() noexcept
     refreshed = x_scale_.update() && refreshed;
     refreshed = y_scale_.update() && refreshed;
     refreshed = z_scale_.update() && refreshed;
+    refreshed = mot_x_.update() && refreshed;
+    refreshed = mot_y_.update() && refreshed;
+    refreshed = mot_z_.update() && refreshed;
+    refreshed = mot_id_.update() && refreshed;
+    refreshed = mot_generation_.update() && refreshed;
     return refreshed;
 }
 
@@ -238,6 +252,11 @@ bool VehicleMagnetometer::read_configuration(
     candidate.calibration.scale[0] = x_scale_.get();
     candidate.calibration.scale[1] = y_scale_.get();
     candidate.calibration.scale[2] = z_scale_.get();
+    candidate.throttle_device_id = mot_id_.get();
+    candidate.throttle_generation = mot_generation_.get();
+    candidate.throttle_coefficient[0] = mot_x_.get();
+    candidate.throttle_coefficient[1] = mot_y_.get();
+    candidate.throttle_coefficient[2] = mot_z_.get();
 
     // SENS_MAG_RATE 只允许 1..200 Hz；CAL_MAG0_* 的完整有效性要结合实际
     // device_id 在 correction_for_device/configure_device 中判断。
@@ -295,6 +314,10 @@ bool VehicleMagnetometer::same_correction(
 bool VehicleMagnetometer::same_configuration(
     const Configuration &left, const Configuration &right) noexcept
 {
+    if (left.throttle_device_id != right.throttle_device_id ||
+        left.throttle_generation != right.throttle_generation) return false;
+    for (unsigned i = 0U; i < 3U; ++i)
+        if (left.throttle_coefficient[i] != right.throttle_coefficient[i]) return false;
     return left.publication_rate_hz == right.publication_rate_hz &&
            same_correction(left.calibration, right.calibration);
 }
@@ -366,6 +389,8 @@ void VehicleMagnetometer::apply_configuration(
     const Configuration &configuration) noexcept
 {
     px4::AtomicTransaction transaction;
+    // 同一磁窗口不能混合两代补偿；提交/回滚都在 Disarmed 应用完整配置。
+    if (!same_configuration(configuration, active_configuration_)) reset_accumulator(true);
     active_configuration_ = configuration;
     // 输出间隔=floor(1e6/rate_hz) us；设备硬件采样率不受此参数影响。
     publication_interval_us_ = static_cast<std::uint32_t>(
@@ -401,6 +426,8 @@ void VehicleMagnetometer::configure_device(std::uint32_t device_id) noexcept
     const bool correction_changed = device_changed ||
         !same_correction(next, active_correction_);
     if (!correction_changed) return;
+    // 有效性由原子参数事务中的 ID 失效持久化；不再用仅存 RAM 的失效锁存，
+    // 因此重启、参数回滚和首次设备发现都消费同一套已保存契约。
 
     active_device_id_ = device_id;
     active_correction_ = next;
@@ -480,6 +507,8 @@ bool VehicleMagnetometer::process_sample(
         ++stats_.invalid_samples;
         return false;
     }
+    float compensated[3]{rotated.x, rotated.y, rotated.z};
+    apply_throttle_compensation(compensated, sample.timestamp_sample);
 
     // 时间不递增、样本计数饱和或 timestamp 求和将溢出时丢弃当前累计窗口，
     // 但保留上次发布时间，避免时钟异常制造高频输出。
@@ -491,9 +520,9 @@ bool VehicleMagnetometer::process_sample(
         reset_accumulator(false);
     }
     last_sample_timestamp_us_ = sample.timestamp_sample;
-    sum_ga_[0] += rotated.x;
-    sum_ga_[1] += rotated.y;
-    sum_ga_[2] += rotated.z;
+    sum_ga_[0] += compensated[0];
+    sum_ga_[1] += compensated[1];
+    sum_ga_[2] += compensated[2];
     timestamp_sample_sum_us_ += sample.timestamp_sample;
     ++sample_count_;
     ++stats_.raw_updates;
@@ -543,6 +572,7 @@ void VehicleMagnetometer::Run()
         process_parameter_update(parameter_update.instance);
     }
     service_pending_configuration();
+    motor_history_.update();
 
     // 参数先 staged/apply，再处理最多四个原始样本，确保新 generation 不会在
     // 同一批次中部分使用旧校正、部分使用新校正。
