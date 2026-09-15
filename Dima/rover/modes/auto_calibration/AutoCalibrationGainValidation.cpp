@@ -15,9 +15,10 @@ void AutoCalibrationMode::start_validation(std::uint64_t now) noexcept
     physical_speed_ = physical_rate_ = 0.0F;
     validation_passed_ = false;
     if (status_.gain_group == Status::GAIN_INNER) {
-        if ((exercise_ < 3U || exercise_ >= 9U) && !prepare_straight(now)) { fail_tuning(Status::FAILURE_FENCE_SPACE, now); return; }
-        transition(exercise_ < 3U ? Status::STATE_VALIDATE_SPEED : exercise_ < 9U ? Status::STATE_VALIDATE_RATE
-            : Status::STATE_VALIDATE_REVERSE, now);
+        if (exercise_ >= 9U) { fail_tuning(Status::FAILURE_GAIN_VALIDATION, now); return; }
+        // 无倒退：速度组 0-2、偏航率组 3-8，不再有倒退验证组。
+        if (exercise_ < 3U && !prepare_straight(now)) { fail_tuning(Status::FAILURE_FENCE_SPACE, now); return; }
+        transition(exercise_ < 3U ? Status::STATE_VALIDATE_SPEED : Status::STATE_VALIDATE_RATE, now);
     } else if (status_.gain_group == Status::GAIN_HEADING) {
         if (!tuning_heading_.configure({status_.heading_p, tuning_config_.rate_limit})) {
             fail_tuning(Status::FAILURE_GAIN_VALIDATION, now); return;
@@ -63,18 +64,20 @@ void AutoCalibrationMode::end_validation_motion(std::uint64_t now) noexcept
 
 void AutoCalibrationMode::validate_inner(std::uint64_t now, bool rate) noexcept
 {
+    // 计数只允许前进 0..2、CW 3..5、CCW 6..8；错序直接失败，避免无界复跑。
+    if ((rate && (exercise_ < 3U || exercise_ >= 9U)) || (!rate && exercise_ >= 3U)) {
+        fail_tuning(Status::FAILURE_GAIN_VALIDATION, now); return;
+    }
     const auto &feedback = control_feedback_sub_.get();
     if (now - state_started_ > 75000000ULL || !transaction_.generation_valid() ||
         (tuning_feedback(now) && feedback.parameter_update_instance != transaction_.generation())) {
         fail_tuning(Status::FAILURE_GAIN_VALIDATION, now); return;
     }
-    const bool reverse = status_.state == Status::STATE_VALIDATE_REVERSE;
-    const unsigned phase = rate ? (exercise_ - 3U) % 3U : reverse ? exercise_ - 9U : exercise_;
+    const unsigned phase = rate ? (exercise_ - 3U) % 3U : exercise_;
     const bool falling = phase == 2U;
-    const float direction = reverse || (rate && exercise_ >= 6U) ? -1.0F : 1.0F;
+    const float direction = rate && exercise_ >= 6U ? -1.0F : 1.0F;
     const float fraction = phase == 1U ? 1.0F : 0.5F;
-    const float range = rate ? tuning_config_.rate_limit : reverse
-        ? std::min({0.24F, tuning_config_.speed_limit, 0.8F * status_.observed_reverse_speed_m_s}) : tuning_config_.speed_limit;
+    const float range = rate ? tuning_config_.rate_limit : tuning_config_.speed_limit;
     const float target = fraction * range * direction;
     if (!exercise_running_) {
         if (!falling) physical_speed_ = physical_rate_ = 0.0F;
@@ -151,8 +154,8 @@ void AutoCalibrationMode::validate_inner(std::uint64_t now, bool rate) noexcept
     if (phase != 1U) physical_speed_ = physical_rate_ = 0.0F;
     exercise_running_ = false;
     ++exercise_;
-    if ((!rate && !reverse && exercise_ == 3U) || (rate && exercise_ == 9U) || (reverse && exercise_ == 12U)) {
-        validation_passed_ = reverse;
+    if ((!rate && exercise_ == 3U) || (rate && exercise_ == 9U)) {
+        validation_passed_ = true;
         end_validation_motion(now);
     }
 }

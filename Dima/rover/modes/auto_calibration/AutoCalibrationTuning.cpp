@@ -82,11 +82,16 @@ void AutoCalibrationMode::begin_identification(std::uint64_t now) noexcept
         std::isfinite(c.acceleration) && c.acceleration > 0.0F && std::isfinite(c.deceleration) && c.deceleration > 0.0F &&
         std::isfinite(c.rate_acceleration) && c.rate_acceleration > 0.0F && std::isfinite(c.rate_deceleration) && c.rate_deceleration > 0.0F;
     // 待验证运行值来自本会话响应候选，不是入场冻结上限。前馈不能吃完
-    // 普通阶段的输出余量；满输出探测的端点不能冒充 PI 调节余量。
+    // PI 的调节余量；输出包络是安全边界，命令端点不能冒充 PI 调节余量。
     const float speed_ff = c.speed_limit / status_.maximum_speed_m_s;
     const float rate_ff = c.rate_limit * config_.track * status_.yaw_rate_correction / (2.0F * status_.maximum_speed_m_s);
-    if (!limits_valid || !std::isfinite(speed_ff) || !std::isfinite(rate_ff) ||
-        speed_ff >= std::min(0.35F, config_.throttle) || rate_ff >= std::min(0.30F, config_.steering) ||
+    const bool ff_feasible = std::isfinite(speed_ff) && std::isfinite(rate_ff) &&
+        speed_ff < std::min(0.35F, config_.motor_maximum) &&
+        rate_ff < std::min(0.30F, config_.motor_maximum);
+    if (!ff_feasible)
+        PX4_WARN("[autocal] PI formula infeasible: FF headroom speed=%.3f rate=%.3f envelope=%.3f; no fallback",
+            static_cast<double>(speed_ff), static_cast<double>(rate_ff), static_cast<double>(config_.motor_maximum));
+    if (!limits_valid || !ff_feasible ||
         !prepare_straight(now) || now - session_started_ > 450000000ULL) {
         fail_tuning(Status::FAILURE_MOTION_UNAVAILABLE, now);
         return;
@@ -112,7 +117,7 @@ void AutoCalibrationMode::begin_identification(std::uint64_t now) noexcept
 bool AutoCalibrationMode::reset_identification() noexcept
 {
     math::IdentificationConfig configuration{};
-    configuration.maximum_absolute_input = 0.40F;
+    configuration.maximum_absolute_input = config_.motor_maximum;
     configuration.maximum_absolute_output = fence_.speed_limit_m_s;
     configuration.maximum_normalized_rms_residual = 0.20F;
     configuration.sample_period_tolerance_s = 0.04F;
@@ -179,7 +184,7 @@ bool AutoCalibrationMode::take_tuning_sample(std::uint64_t now, bool rate) noexc
 void AutoCalibrationMode::fail_tuning(std::uint8_t reason, std::uint64_t now) noexcept
 {
     const auto missing = (Status::STAGE_INNER_GAINS | Status::STAGE_HEADING_GAIN | Status::STAGE_PATH_GAIN |
-        Status::STAGE_MOTOR_PROFILE | Status::STAGE_RUNTIME | Status::STAGE_NAV_STRATEGY) & ~status_.completed_stages;
+        Status::STAGE_RUNTIME | Status::STAGE_NAV_STRATEGY) & ~status_.completed_stages;
     status_.unavailable_stages |= missing;
     if (status_.failure_reason == Status::FAILURE_NONE) status_.failure_reason = reason;
     // 所有失败都先撤销正向许可；Disarmed 的回滚/保存交接窗口也不能继承
@@ -233,7 +238,6 @@ bool AutoCalibrationMode::step_tuning(std::uint64_t now) noexcept
     case Status::STATE_APPLY_GAINS: case Status::STATE_SAVE_GAINS: case Status::STATE_RESTORE_GAINS:
         poll_gain_transaction(now); break;
     case Status::STATE_VALIDATE_SPEED: validate_inner(now, false); break;
-    case Status::STATE_VALIDATE_REVERSE: validate_inner(now, false); break;
     case Status::STATE_VALIDATE_RATE: validate_inner(now, true); break;
     case Status::STATE_VALIDATE_HEADING: validate_heading(now); break;
     case Status::STATE_VALIDATE_DRIVING: validate_driving(now); break;
@@ -242,7 +246,9 @@ bool AutoCalibrationMode::step_tuning(std::uint64_t now) noexcept
         physical_speed_ = physical_rate_ = 0.0F;
         if (now - state_started_ > 15000000ULL) { terminate(Status::FAILURE_TIMEOUT, false, now); break; }
         if (armed_.armed()) { if (stopped()) request(auto_calibration_request_s::REQUEST_STAGE_DISARM, now); break; }
-        if (status_.gain_group == Status::GAIN_INNER && (exercise_ == 3U || exercise_ == 9U)) {
+        // 第 3 段后才需要重新 Arm 进入角速度组；第 9 段已完成两轴验证，
+        // 必须进入 Heading，不能带着越界计数再次启动 CCW 验证。
+        if (status_.gain_group == Status::GAIN_INNER && exercise_ == 3U) {
             transition(Status::STATE_WAIT_ARM_VALIDATION, now);
         } else if (status_.gain_group == Status::GAIN_PATH) {
             // 多候选选择在参数文件处理，始终保留同组最初快照。
