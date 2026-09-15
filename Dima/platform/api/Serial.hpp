@@ -55,6 +55,8 @@ struct AsyncSerialPortStats {
     std::uint32_t receive_error_flags{0U};
     std::uint32_t recoveries{0U};
     std::uint32_t recovery_failures{0U};
+    // 仅完整线路发送完成才递增；中止、DMA 搬运完成与重新打开端点不计成功。
+    std::uint32_t transmit_completions{0U};
 };
 
 enum SerialInputError : std::uint32_t {

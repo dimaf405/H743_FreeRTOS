@@ -20,7 +20,10 @@ std::size_t UsbMavlinkTransport::read(std::uint8_t *data, std::size_t size) noex
 int UsbMavlinkTransport::write(const std::uint8_t *data, std::size_t size,
                               std::uint32_t timeout_ms) noexcept
 {
-    return console_.write(data, size, timeout_ms);
+    const int result = console_.write(data, size, timeout_ms);
+    // Console 的完整成功返回已经等待 CDC 物理完成；超时/断开不能增加代数。
+    if (size != 0U && result == static_cast<int>(size)) ++tx_completions_;
+    return result;
 }
 bool UsbMavlinkTransport::tx_idle() noexcept { return console_.tx_idle(); }
 std::size_t UsbMavlinkTransport::tx_free_bytes() noexcept
@@ -29,6 +32,11 @@ std::size_t UsbMavlinkTransport::tx_free_bytes() noexcept
 }
 std::uint32_t UsbMavlinkTransport::baudrate() const noexcept { return 0U; }
 std::uint32_t UsbMavlinkTransport::error_generation() const noexcept { return 0U; }
+std::uint32_t UsbMavlinkTransport::tx_completion_generation() const noexcept
+{
+    return tx_completions_;
+}
+std::uint32_t UsbMavlinkTransport::tx_error_generation() const noexcept { return 0U; }
 
 SerialMavlinkTransport::SerialMavlinkTransport(dima::platform::AsyncSerialPort &port) noexcept
     : port_(port)
@@ -95,6 +103,17 @@ std::uint32_t SerialMavlinkTransport::error_generation() const noexcept
     // 统计是累计值；任何 UART/DMA 故障或 RX 丢字节都撤销当前协议半帧。
     const auto stats = port_.stats();
     return stats.receive_errors + stats.transmit_errors + stats.dropped_bytes;
+}
+
+std::uint32_t SerialMavlinkTransport::tx_completion_generation() const noexcept
+{
+    return port_.stats().transmit_completions;
+}
+
+std::uint32_t SerialMavlinkTransport::tx_error_generation() const noexcept
+{
+    // 接收噪声本身不否定已经送达的回应；只有真实发送失败/中止才撤销排空证明。
+    return port_.stats().transmit_errors;
 }
 
 } // namespace dima::modules::mavlink

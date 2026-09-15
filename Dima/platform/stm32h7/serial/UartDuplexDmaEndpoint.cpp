@@ -41,6 +41,7 @@ struct UartDuplexDmaState {
     std::uint32_t receive_errors;
     std::uint32_t receive_error_flags;
     std::uint32_t transmit_errors;
+    std::uint32_t transmit_completions;
     std::uint32_t line_changes;
     std::uint32_t recoveries;
     std::uint32_t recovery_failures;
@@ -123,6 +124,7 @@ public:
           receive_errors_(state.receive_errors),
           receive_error_flags_(state.receive_error_flags),
           transmit_errors_(state.transmit_errors),
+          transmit_completions_(state.transmit_completions),
           line_changes_(state.line_changes),
           recoveries_(state.recoveries),
           recovery_failures_(state.recovery_failures),
@@ -215,6 +217,10 @@ public:
         const IRQn_Type uart_irq = irq_for(uart_);
         HAL_NVIC_DisableIRQ(uart_irq);
         HAL_NVIC_ClearPendingIRQ(uart_irq);
+        // 停止端点会截断在途发送，必须保留失败代数；重新打开不能冒充正常完成。
+        if (__atomic_exchange_n(&tx_pending_, false, __ATOMIC_ACQ_REL)) {
+            (void)__atomic_add_fetch(&transmit_errors_, 1U, __ATOMIC_RELAXED);
+        }
         deinitialize_dma();
         (void)HAL_UART_Abort(uart_);
         uart_->hdmarx = nullptr;
@@ -294,7 +300,10 @@ public:
 
     void on_tx_complete_from_isr() noexcept
     {
-        // HAL 的 TX 完成回调发生于 UART TC，而非 DMA TC；通知只唤醒 owner。
+        // HAL 的 TX 完成回调发生于 UART TC，而非 DMA TC。先发布成功代数，再
+        // 释放在途缓冲；abort/重复回调不能贡献一份虚假的线路完成证据。
+        if (!__atomic_load_n(&tx_pending_, __ATOMIC_ACQUIRE)) return;
+        (void)__atomic_add_fetch(&transmit_completions_, 1U, __ATOMIC_RELEASE);
         __atomic_store_n(&tx_pending_, false, __ATOMIC_RELEASE);
         if (notification_.function != nullptr) {
             notification_.function(notification_.context);
@@ -393,6 +402,7 @@ public:
             __atomic_load_n(&receive_error_flags_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&recoveries_, __ATOMIC_ACQUIRE),
             __atomic_load_n(&recovery_failures_, __ATOMIC_ACQUIRE),
+            __atomic_load_n(&transmit_completions_, __ATOMIC_ACQUIRE),
         };
     }
 
@@ -675,6 +685,7 @@ private:
     std::uint32_t &receive_errors_;
     std::uint32_t &receive_error_flags_;
     std::uint32_t &transmit_errors_;
+    std::uint32_t &transmit_completions_;
     std::uint32_t &line_changes_;
     std::uint32_t &recoveries_;
     std::uint32_t &recovery_failures_;
