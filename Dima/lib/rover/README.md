@@ -4,7 +4,7 @@
 - **证据边界：** 四个控制器、任务执行和 AUTO 安全投影已经进入正式固件闭包并通过 Windows 目标构建；这只是 `SOURCE / STATIC / WINDOWS BUILD VERIFIED`，不能替代 QGC 任务事务、SD 掉电恢复、目标板闭环或实车轨迹证明。
 - **边界：** 本目录只含可脱离平台运行的算法和数据契约，不包含 HAL、FreeRTOS、uORB、Parameter、Flash 或动态模块生命周期代码。
 - **失效语义：** 控制器遇到非有限输入、非法 `dt` 或未配置参数时复位 slew/积分并返回无效；PI 采用条件积分反饱和，零设定清空对应 PI/slew，原地转向必须先确认速度设定为零且实测速度低于 `RO_SPEED_TH`。
-- **反向可行域：** `MOT_THR_ASYM>1` 时先在 `[-1/asymmetry, 1]` 电机域内完成 `RD_STR_THR_MIX` 饱和优先级，再作反向推力补偿、expo、最小/最大输出、换向等待和 Arm ramp，禁止先裁到 `[-1,1]` 后让两侧倒车同时饱和。
+- **反向可行域：** `MOT_THR_ASYM>1` 时先在 `[-1/asymmetry, 1]` 电机域内完成 `RD_STR_THR_MIX` 饱和优先级，再作反向推力补偿、非零 MIN、EXPO、包络限制、Arm ramp 和逐轮换向等待，禁止先裁到 `[-1,1]` 后让两侧倒车同时饱和。
 - **来源：** 优先保持上游 Rover 控制类型、单位和算法执行顺序；平台、消息和生命周期差异由 `Dima/rover` 运行层适配。
 - **共享路径计算：** `SegmentGuidance` 组合既有 Pure Pursuit、HeadingController、DrivingStateMachine 和速度规划，供 Mission 与校准 RAM 路径共用；本库不拥有 Mission 存储或模式状态。
 - **校准数学：** `CalibrationFence` 使用固定全球圆心、WGS84 局部尺度和误差/延迟/停车余量计算有效工作圆；`CalibrationIdentification` 复用锁定 PX4 v1.17 的 `ArxRls` 六模型延迟库，只对通过门禁的一阶模型设计 Rover 并联 PI，不复制飞行器 Autotune 的激励或验收参数。源路径、许可证与薄适配见 `docs/DIMA_SOURCE_MANIFEST.md` 第 17 节。
@@ -17,3 +17,5 @@
 ## 头文件实现边界
 
 纯控制和校准类型的普通访问器与验证实体位于对应源文件；ArxRls 等通用模板保留可见定义，算法字段、求值顺序和六模型状态不变。 统一审查与验收见 docs/HEADER_IMPLEMENTATION_SPLIT_ZH.md。
+
+Manual 电机行为以仓库既定 APM `3f2e4763accb` 为参考：入口 `|T|+|S|` 同比缩放，低纵向请求的转向范围按非对称域约束，非零 MIN 先于 EXPO，左右换向分别计时。允许急转内轮反转，不实施同向弧线限制。既有 `1e-6` 零阈值防止舍入残差触发 MIN，E 域 EXPO 映射保留本地冻结轮端包络。APM 百分比参数在此仍以既有归一化单位表达，不改变存储参数单位。

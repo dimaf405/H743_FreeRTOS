@@ -81,6 +81,13 @@ void DifferentialDrive::prioritize_axes(float &longitudinal, float &steering,
     const float lower = clamp(lower_motor_limit, -1.0F, -0.1F);
     longitudinal = clamp(longitudinal, lower, 1.0F);
     steering = clamp(steering, -1.0F, 1.0F);
+    // APM 非对称推力域为 [lower,1]，最宽转向截面位于两端中点。
+    // 输入纵向低于该截面时，不允许靠额外增加前进量来换取更大转向范围。
+    // 缺少这一步会在 ASYM>1、低油门急转时引入未请求的前进分量。
+    const float midpoint = 0.5F * (1.0F + lower);
+    const float steering_range = longitudinal < midpoint
+        ? std::fmax(longitudinal, 0.0F) - lower : 1.0F - midpoint;
+    steering = clamp(steering, -steering_range, steering_range);
     const float steering_magnitude = std::fabs(steering);
     const float upper_output = longitudinal + steering_magnitude;
     const float lower_output = longitudinal - steering_magnitude;
@@ -150,12 +157,14 @@ float DifferentialDrive::shape_motor(float command) const noexcept
         bounded = clamp(bounded * config_.thrust_asymmetry, -1.0F, 0.0F);
     }
 
-    const float shaped = expo_curve(std::fabs(bounded), config_.throttle_expo);
-    const float magnitude = config_.throttle_min +
-                            shaped * (config_.throttle_max -
-                                      config_.throttle_min);
-    return signed_unit(bounded) * clamp(magnitude, config_.throttle_min,
-                                        config_.throttle_max);
+    // APM 顺序为：负向补偿 -> 非零 MIN -> EXPO -> PWM。零命令在上方
+    // 直接退出，MIN 不能令零输入自行起转。E 是本项目必须保留的轮端包络：
+    // q=MIN/E+(1-MIN/E)*|u|，output=sign(u)*E*expo(q)。E=1 时与 APM
+    // 百分比换算后的公式一致；E<1 时仍保证顶端为 E，不扩大校准安全包络。
+    const float minimum_ratio = config_.throttle_min / config_.throttle_max;
+    const float compensated = minimum_ratio + (1.0F - minimum_ratio) * std::fabs(bounded);
+    const float magnitude = config_.throttle_max * expo_curve(compensated, config_.throttle_expo);
+    return signed_unit(bounded) * clamp(magnitude, 0.0F, config_.throttle_max);
 }
 
 float DifferentialDrive::apply_reversal_delay(
@@ -205,10 +214,20 @@ DifferentialDriveOutput DifferentialDrive::update(
         return {};
     }
 
-    const float target = clamp(longitudinal, -1.0F, 1.0F);
+    float target = clamp(longitudinal, -1.0F, 1.0F);
+    float requested_steering = clamp(steering, -1.0F, 1.0F);
+    bool manual_input_limited = false;
+    if (manual_source) {
+        // APM Manual 在电机混控前按 |T|+|S| 同比缩放，保持操作者两轴比例。
+        // 不限制内轮方向；S>T 的前进急转仍允许内侧电机倒转。
+        const float scale = std::fmax(1.0F, std::fabs(target) + std::fabs(requested_steering));
+        manual_input_limited = scale > 1.0F;
+        target /= scale;
+        requested_steering /= scale;
+    }
     if (!manual_source && std::fabs(target) <= kZeroThreshold) {
-        // Navigation 的零命令来自停车确认、SpotTurning 或 Hold，是安全状态而非
-        // 普通调速阶跃；必须立即清掉上一周期 slew，禁止残余纵向量混入原地转向。
+        // Navigation/Calibration 零纵向是停车或原地转向的安全边界，立即
+        // 清除旧 slew；Manual 按 APM 保留配置的 slew，设为 0 时直接跟随。
         limited_longitudinal_ = 0.0F;
     } else if (config_.throttle_slew_rate > 0.0F) {
         const float maximum_change = config_.throttle_slew_rate * dt_s;
@@ -220,7 +239,7 @@ DifferentialDriveOutput DifferentialDrive::update(
 
     const bool motor_slew_active = std::fabs(limited_longitudinal_ - target) > kZeroThreshold;
     const float before_projection = limited_longitudinal_;
-    float adjusted_steering = clamp(steering, -1.0F, 1.0F);
+    float adjusted_steering = requested_steering;
     if (manual_source && config_.reverse_steering_in_manual &&
         limited_longitudinal_ < 0.0F) {
         adjusted_steering = -adjusted_steering;
@@ -247,11 +266,14 @@ DifferentialDriveOutput DifferentialDrive::update(
     prioritize_axes(mixed_longitudinal, adjusted_steering,
                      axis_priority, lower_motor_limit);
 
+    // 车体 FRD/NED：纵向正值为前进，转向正值为顺时针（车头右转）。
+    // 因此右轮 = longitudinal - steering，左轮 = longitudinal + steering；
+    // 电机安装方向只在 PWM_Sx_REV 处理，左右侧映射不能代替单侧方向校准。
     float right = shape_motor(mixed_longitudinal - adjusted_steering);
     float left = shape_motor(mixed_longitudinal + adjusted_steering);
     // 各原因单独观测：正常曲线不是饱和，不能用一个 input_limited 把待辨识
     // 的 MIN/EXPO/ASYM 响应全部丢掉，也不能把安全 slew 冒充电机能力。
-    const bool mixing_limited = std::fabs(mixed_longitudinal - before_projection) > kZeroThreshold ||
+    const bool mixing_limited = manual_input_limited || std::fabs(mixed_longitudinal - before_projection) > kZeroThreshold ||
         std::fabs(adjusted_steering - before_mix_steering) > kZeroThreshold;
     const bool shaping_active = std::fabs(right - (mixed_longitudinal - adjusted_steering)) > kZeroThreshold ||
         std::fabs(left - (mixed_longitudinal + adjusted_steering)) > kZeroThreshold;
@@ -266,6 +288,8 @@ DifferentialDriveOutput DifferentialDrive::update(
     left *= arm_scale;
 
     const float before_delay_right = right, before_delay_left = left;
+    // 按 APM 左右独立执行换向等待，不因某一路等待而强制另一侧一起中立。
+    // delay=0 时不产生软件换向等待；零命令不更新最后一次非零输出时间。
     right = apply_reversal_delay(right, right_reversal_, now_us);
     left = apply_reversal_delay(left, left_reversal_, now_us);
     return DifferentialDriveOutput{right, left, true, motor_slew_active, mixing_limited,

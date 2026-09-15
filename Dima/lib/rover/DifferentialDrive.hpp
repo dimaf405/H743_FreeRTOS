@@ -31,8 +31,9 @@ struct DifferentialDriveOutput {
  * 固定存储的差速混控与电机保护核。
  *
  * manual_source=true 使用人工 steering/throttle 优先级和倒车转向修正；
- * Navigation 已在四环中完成物理量闭环及转向优先，零 longitudinal 必须立即
- * 清除下游 slew 状态，非零命令仍保留电机斜率、Arm ramp 与换向延时保护。
+ * Manual 先按 APM 的 |T|+|S| 同比缩放，再经过 slew 和逐轮换向等待。
+ * Navigation 已在四环完成转向优先，零 longitudinal 立即清除旧 slew。
+ * 最终轮端仍受本项目 MOT_THR_MAX 包络与 Arm ramp 约束。
  */
 class DifferentialDrive {
 public:
