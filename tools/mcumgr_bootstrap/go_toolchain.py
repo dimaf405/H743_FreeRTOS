@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -125,6 +126,10 @@ def download_go_archive(archive: GoArchive, destination: pathlib.Path) -> None:
             )
             with urllib.request.urlopen(request, timeout=60) as response:
                 with destination.open("wb") as output:
+                    # 慢镜像（实测单连接 ~190 KiB/s，87 MiB 约 8 分钟）没有进度
+                    # 输出时与死锁不可区分；每 4 MiB 报一次已下载量与速率。
+                    next_mark = 4 * 1024 * 1024
+                    started = time.monotonic()
                     while True:
                         chunk = response.read(1024 * 1024)
                         if not chunk:
@@ -132,6 +137,15 @@ def download_go_archive(archive: GoArchive, destination: pathlib.Path) -> None:
                         output.write(chunk)
                         digest.update(chunk)
                         downloaded += len(chunk)
+                        if downloaded >= next_mark:
+                            rate = downloaded / max(time.monotonic() - started, 0.001)
+                            print(
+                                f"  {downloaded // (1024 * 1024)}/"
+                                f"{archive.size // (1024 * 1024)} MiB "
+                                f"({rate / (1024 * 1024):.2f} MiB/s)",
+                                flush=True,
+                            )
+                            next_mark += 4 * 1024 * 1024
         except (OSError, urllib.error.URLError) as error:
             destination.unlink(missing_ok=True)
             errors.append(f"{url}: {error}")

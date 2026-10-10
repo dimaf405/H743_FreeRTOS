@@ -5,6 +5,7 @@
 #include "magnetometer/VehicleMagnetometer.hpp"
 #include "api/Time.hpp"
 #include "logging/logging.hpp"
+#include "parameters/param.h"
 #include "rover/RoverModeContract.hpp"
 #include "rover/RoverControl.hpp"
 #include "sensors/SensorRotation.hpp"
@@ -236,6 +237,16 @@ void AutoCalibrationMode::enter_substate(PhaseSubstate substate, std::uint64_t n
 void AutoCalibrationMode::reset_session_dynamics() noexcept
 {
     // 每次入场清空运动、动力学和 RTK 拟合，不继承上一轮证据。
+    // 杆臂测量同为会话证据：新会话重新测，不沿用旧值。
+    // turn_productive_at_ 是停滞窗锚点（绝对时间戳）：同开机连续会话若继承
+    // 上一场残留值，新会话 TURN 入口的 75s 窗口已过期，+1 方向被整段跳过
+    // （2026-09-30 实车：16:18 后不开机连续重试全部单向旋转）。
+    // turn_started_/first_circle_at_ 由换向块自愈；turn_direction/
+    // turn_integral_ 由 TURN 授权分支复位——此处只补缺失的锚点。
+    measured_lever_m_ = 0.0F;
+    measured_lever_valid_ = false;
+    reset_rotation_lever_window();
+    turn_productive_at_ = 0U;
     longitudinal_ = steering_ = 0.0F;
     // 已确认能行驶的输入供本轮跨阶段返程复用，不能在进入Return时清掉快照。
     straight_start_floor_ = return_open_loop_input_ = 0.0F;
@@ -422,6 +433,7 @@ void AutoCalibrationMode::step_wait_arm(std::uint64_t now) noexcept
         last_turn_heading_ = rtk_sub_.get().array_heading_rad;
         mag_stable_since_ = last_bias_sample_ = last_mag_sample_ = 0U;
         for (unsigned i = 0U; i < 2U; ++i) { bias_fit_[i].reset(); bootstrap_fit_[i].reset(); coverage_[i] = 0U; }
+        reset_rotation_lever_window();
         session_.turn_direction = 1;
     } else if (profile) {
         profile_started_ = profile_braking_ = false;
@@ -778,6 +790,19 @@ void AutoCalibrationMode::step_preflight(std::uint64_t now) noexcept
         // 静态准备复用Evaluate；Level请求发出后仍进入Running等待该次结果。
         // 入场后允许提前 Arm；Level 只等待物理停波证明，不改变 Armed 状态。
         if (now - session_.substate_started > 30000000ULL) { terminate(Status::FAILURE_PREFLIGHT, false, now); break; }
+        // 存储预检（2026-09-30 实车教训）：会话成果只在 FINALIZE 落盘一次，
+        // 分区在 SD 拔出期间写满后回收链锁存挂起时，整场结果都会丢失。
+        // 无可用存储直接拒绝开跑，不烧一场实验再发现存不进去。
+        {
+            param_storage_status_s storage{};
+            if (param_storage_get_status(&storage) != 0 || !storage.autosave_enabled) {
+                PX4_WARN("[autocal] storage unavailable: insert SD card and power-cycle, then retry");
+                terminate(Status::FAILURE_STORAGE, false, now);
+                break;
+            }
+            if (storage.free_bytes == 0U && storage.enospc_failures != 0U)
+                PX4_WARN("[autocal] parameter partition full: SD card must stay inserted for the recovery save");
+        }
         if (!maintenance_ready()) break;
         if (!imu_quality(now) || level_sub_.get().active) break;
         if (!level_snapshot_valid_) { terminate(Status::FAILURE_PARAMETER, false, now); break; }

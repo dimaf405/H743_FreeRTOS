@@ -55,6 +55,10 @@ void AutoCalibrationMode::step_finalize(std::uint64_t now) noexcept
             status_.failure_reason = Status::FAILURE_PARAMETER;
         else if (!transaction_.session_save(expected_set_count_, !rollback)) {
             if (transaction_.phase() != CalibrationParameters::Phase::Fault) return;
+            // 显性报错（2026-09-30 实车教训）：此前落盘失败只在状态枚举里
+            // 体现，操作者看不到"成果没存上"。分区满时 SD 卡必须在场，收尾
+            // 的直存才会走 镜像→擦除→重建 自愈。
+            PX4_WARN("[autocal] final save FAILED: results not persisted (partition full or SD missing)");
             status_.failure_reason = Status::FAILURE_STORAGE;
         }
     }
@@ -128,7 +132,7 @@ void AutoCalibrationMode::terminate(std::uint8_t reason, bool cancelled, std::ui
     if (status_.excitation_phase != Status::EXCITATION_NONE) status_.excitation_phase = Status::EXCITATION_BRAKE;
     status_.excitation_target = status_.excitation_remaining_s = 0.0F;
     request_pending_ = auto_calibration_request_s::REQUEST_EXIT;
-    px4_log_raw(_PX4_LOG_LEVEL_WARN, "[autocal] stopping: %s\n",
+    px4_log_raw(_PX4_LOG_LEVEL_WARN, "[autocal] session ending: %s\n",
         dima::generated::uorb_labels::auto_calibration_status_failure_name(reason));
     report_motion_failure();
     // 决策与持久化统一推迟到 FINALIZE：Run() 的终止收尾先取消活动事务/

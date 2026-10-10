@@ -119,7 +119,7 @@ void AutoCalibrationMode::report_status(std::uint64_t now) noexcept
     if (pending_termination_ || status_.result != Status::RESULT_RUNNING) {
         // 失败收尾优先重报首因，不让十余条运行快照挤掉关键文本；保持原5秒
         // 周期，不把等待停波/保存期间的 RUNNING 描述成仍在执行实验。
-        px4_log_raw(_PX4_LOG_LEVEL_WARN, "[autocal] session=%lu stopping: %s; Arm inhibited\n",
+        px4_log_raw(_PX4_LOG_LEVEL_WARN, "[autocal] session=%lu ended: %s; Arm inhibited\n",
             static_cast<unsigned long>(status_.session_id), auto_calibration_status_failure_name(status_.failure_reason));
         report_motion_failure();
         if (transaction_.phase() == CalibrationParameters::Phase::Fault)

@@ -260,6 +260,13 @@ void AutoCalibrationMode::on_transaction_finished(std::uint64_t now) noexcept
         const bool deceleration = (session_.transaction_stages & Status::STAGE_DECELERATION) != 0U;
         session_.kind = TransactionKind::None;
         if (transaction_.phase() != CalibrationParameters::Phase::Done) {
+            // frontend confirmation 的确认者按 kind 路由（Rtk=接收机回读、
+            // Dynamics=驱动控制器回显）。失败时打出事务相位与代次有效性，
+            // 与 RoverDifferential 的应用门限频打印配合定位具体卡点。
+            PX4_WARN("[autocal] %s transaction unconfirmed: phase=%d generation_valid=%u",
+                rtk ? "rtk" : "dynamics",
+                static_cast<int>(transaction_.phase()),
+                transaction_.generation_valid() ? 1U : 0U);
             terminate(Status::FAILURE_FRONTEND_CONFIRMATION, false, now);
         } else if (rtk) {
             status_.provisional_validated_stages |= Status::STAGE_RTK;

@@ -188,5 +188,19 @@ def main() -> int:
         initial_identity,
         initial_binding,
     )
-    stage("COMPLETE", "upload, swap, and application restart passed")
+    # TEST 标记的镜像是可回滚的：应用不自我确认（固件无 boot_write_img_confirmed），
+    # 上传链此前也从不确认——新镜像只活一次启动，下一次上电 MCUboot 静默回滚到
+    # 旧的已确认镜像（2026-10-08 实车：用户已刷新固件但板上始终运行旧版）。
+    # 应用身份闭环已验证新镜像健康，此处立即确认，使其成为永久镜像。
+    run_mcumgr(
+        runtime.executable,
+        port,
+        "image",
+        "confirm",
+        digest,
+        baud=arguments.baud,
+        mtu=arguments.mtu,
+    )
+    stage("CONFIRM", "new image confirmed; rollback to the previous image disabled")
+    stage("COMPLETE", "upload, swap, application restart, and confirm passed")
     return 0

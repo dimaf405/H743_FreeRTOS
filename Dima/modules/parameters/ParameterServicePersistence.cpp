@@ -185,7 +185,15 @@ int ParameterService::storage_save(param_storage_enumerator_t enumerate,
     // 由 Parameter Core 的写入计数判断，不再重新编码整份快照进行逐字节比较。
     const int result = self.flashfs_ready_ ? flash_result : sd_result;
     // 进入介质操作之后不再返回会话的“未开始”信号，防止部分写入被当成可重复尝试。
-    return enumerate_context != nullptr && result == -EAGAIN ? -EIO : result;
+    if (enumerate_context != nullptr && result == -EAGAIN) return -EIO;
+    // 满区且 SD 镜像未提交（多为卡不在车）时分区没有 commit 字，加载侧忽略
+    // 残余字节：会话保存按“未写入、待恢复后重试”（EAGAIN）归还——RAM 候选
+    // 与 unsaved 保留，SD 轮询重检到卡后，下一次重试自动走 镜像→擦除→重建
+    // 并成功落盘（2026-09-30 实车：此前 ENOSPC 直落会话收尾，校准整场成果
+    // 被销毁）。后台 autosave（无 enumerate_context）仍按 ENOSPC 锁存
+    // StorageFull，语义不变。
+    if (enumerate_context != nullptr && result == -ENOSPC && sd_result != 0) return -EAGAIN;
+    return result;
 }
 
 int ParameterService::storage_load(param_storage_visitor_t visitor,

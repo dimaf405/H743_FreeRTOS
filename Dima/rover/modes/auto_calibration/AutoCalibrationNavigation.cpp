@@ -111,9 +111,12 @@ bool AutoCalibrationMode::start_path_validation(std::uint64_t now) noexcept
     nav_.original[1] = nav_.accepted[1] = tuning_config_.jerk;
     nav_.original[2] = nav_.accepted[2] = tuning_config_.speed_reduction;
     nav_.maximum_speed = std::min(status_.observed_forward_speed_m_s, fence_.speed_limit_m_s);
-    nav_.nominal_speed = std::min(0.5F * status_.observed_forward_speed_m_s, fence_.speed_limit_m_s);
-    // 半速是官方推荐工况，不是车辆最低能力门。低速车的半速落入现有
-    // 控制死区时改用本轮最低可运行实测平台；不改死区或伪造测量值。
+    // 试验速度=巡航速度 min(实测前进能力, RO_SPEED_LIM 巡航上限)（2026-09-30 用户
+    // 确认）。lookahead/jerk 候选只需恒定速度做公平比较，速度能力由减速比项的
+    // [low_speed, maximum_speed] 探测覆盖；原半速是上游推荐工况，对停车距离
+    // ~0.1m 的弱动力车无物理必要，且 jerk 差异的可观测性随速度放大(≈v·a/jerk)。
+    // 低速车巡航速度落入现有控制死区时仍回退最低实测平台，不改死区。
+    nav_.nominal_speed = nav_.maximum_speed;
     nav_.low_speed = nav_.maximum_speed;
     for (unsigned i = 0U; i < math::MotorResponseProfile::kLevels; ++i) {
         const auto *p = response_speed_.plateau(0U, i);
@@ -136,12 +139,9 @@ bool AutoCalibrationMode::start_path_validation(std::uint64_t now) noexcept
             const float remaining = distance - v * v / (2.0F * a);
             return remaining > 0.0F ? 2.0F * a * v / remaining : NAN;
         };
-        float seed = seed_at(nav_.nominal_speed);
-        if (!std::isfinite(seed) || seed <= 0.0F || seed > 100.0F) {
-            // 场地不足时使用本轮较低的真实平台重算，不另造速度折扣或扩大围栏。
-            nav_.nominal_speed = nav_.low_speed;
-            seed = seed_at(nav_.nominal_speed);
-        }
+        // 场地装不下巡航速度的试验几何时明确失败：静默降速采到的增益
+        // 不代表实际工况（2026-09-30 用户确认删除该回退）。
+        const float seed = seed_at(nav_.nominal_speed);
         if (!std::isfinite(seed) || seed <= 0.0F || seed > 100.0F)
             return fail_flag(Status::FAILURE_FENCE_SPACE);
         nav_.accepted[1] = seed;
@@ -166,9 +166,25 @@ bool AutoCalibrationMode::start_navigation_item(std::uint64_t now) noexcept
         const float effective_length = nav_.side - 2.0F * std::min(tuning_config_.acceptance, config_.path_error);
         nav_.upper = std::min(100.0F, std::min(tuning_config_.pursuit.lookahead_max_m, effective_length) / nav_.trial_speed);
     } else if (nav_.item == Status::NAV_TUNE_JERK) {
-        // 搜索到既有原值/种子以下；0.01仅是求解分辨率，不把距离种子当物理下限。
-        nav_.lower = std::min(0.01F, nav_.accepted[1]);
-        nav_.upper = 100.0F; // 与权威RO_JERK_LIM现有合法上限一致。
+        // jerk=a/T 的行为区间用实测动力学锚定：T∈[0.1,20]s 覆盖“近瞬时”到
+        // “平缓”的加速度过渡（约2.3个数量级）。固定[0.01,100]跨4个数量级，
+        // 黄金分割按0.01分辨率要跑满~21次方形路径——2026-09-30 全链仿真：
+        // PATH 阶段 146min 中 jerk 项独占 78min，区间与车辆物理无关联是主因。
+        const float measured_accel = std::isfinite(tuning_config_.acceleration) ? tuning_config_.acceleration : 0.0F;
+        const float measured_decel = std::isfinite(tuning_config_.deceleration) ? tuning_config_.deceleration : 0.0F;
+        const float accel_ref = std::max(measured_accel, measured_decel);
+        if (accel_ref > 0.0F) {
+            nav_.lower = std::max(0.01F, 0.05F * accel_ref);
+            nav_.upper = std::min(100.0F, 10.0F * accel_ref);
+        } else {
+            nav_.lower = std::min(0.01F, nav_.accepted[1]);
+            nav_.upper = 100.0F; // 与权威RO_JERK_LIM现有合法上限一致。
+        }
+        // 既有原值/停车公式种子必须可被搜索：显式配置不被锚定边界吞掉。
+        if (std::isfinite(nav_.accepted[1]) && nav_.accepted[1] > 0.0F) {
+            nav_.lower = std::min(nav_.lower, nav_.accepted[1]);
+            nav_.upper = std::max(nav_.upper, std::min(100.0F, nav_.accepted[1]));
+        }
     } else {
         if (tuning_config_.driving.turn_to_drive_yaw_error_rad <= 0.0F ||
             tuning_config_.driving.turn_to_drive_yaw_error_rad > tuning_config_.driving.drive_to_turn_yaw_error_rad)
@@ -177,7 +193,11 @@ bool AutoCalibrationMode::start_navigation_item(std::uint64_t now) noexcept
         nav_.upper = nav_.maximum_speed;
         nav_.candidate = nav_.nominal_speed;
     }
-    nav_.search_ready = nav_.search.reset(nav_.lower, nav_.upper, 0.01F, nav_.speed_probe);
+    // 分辨率=相对值：搜索区间收缩到初始区间的 10% 即止（2026-09-30 用户确认
+    // 本义——"放宽为相对值"）。绝对步长在宽区间上把黄金分割推满 ~20 次试验；
+    // 10% 相对精度对路径行为差异已充分且与车辆/区间宽度无关，速度二分同理。
+    const float resolution = 0.10F * (nav_.upper - nav_.lower);
+    nav_.search_ready = nav_.search.reset(nav_.lower, nav_.upper, resolution, nav_.speed_probe);
     if (nav_.item == Status::NAV_TUNE_LOOKAHEAD && (!std::isfinite(nav_.candidate) || nav_.candidate < 0.1F || nav_.candidate > 100.0F)) {
         nav_.candidate = 1.0F; nav_.pass = NavigationPass::Reference;
     }

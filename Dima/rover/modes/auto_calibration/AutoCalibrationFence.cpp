@@ -63,16 +63,10 @@ dima::lib::rover::calibration::CircleFenceResult AutoCalibrationMode::fence_resu
     const float age = 1.0e-6F * static_cast<float>(now - gps.timestamp_sample);
     const bool probe = status_.braking_model_generation == 0U || status_.braking_full_output ||
         session_.substate == PhaseSubstate::Braking;
-    const bool rotating = status_.state == Status::STATE_TURN ||
-        session_.substate == PhaseSubstate::TurnAround ||
-        (session_.substate == PhaseSubstate::Return && return_motion_ == ReturnMotion::Align) ||
-        (status_.state == Status::STATE_PROFILE && profile_motion_ != 0U);
-    // 全输出试验只受原有几何边界约束，不把未知制动能力写成某个假设值。
-    // 获得模型后按实测减速度估算停车距离，不以旧制动初速限制本次速度。
-    // 转动时不把天线杆臂地速当平移速度。
-    reference.speed_limit_m_s = rotating ? fence_.speed_limit_m_s
-        : std::max(fence_.speed_limit_m_s, ground_speed());
-    const float stop = braking_distance(reference.speed_limit_m_s);
+    // 停车项按实际车速的实测制动模型计算（2026-09-30 用户确认）：围栏是
+    // "从当前速度能否在边界前停住"的逐拍连续判定，不用冻结限速预扣余量。
+    // 旋转时 GNSS 天线速度本身已含杆臂摆动，无需按姿态分支取限速。
+    const float stop = braking_distance(ground_speed());
     auto result = probe
         ? dima::lib::rover::calibration::evaluate_braking_probe(reference, config_.straight_distance,
             gps.latitude_deg, gps.longitude_deg, gps.eph, age)
@@ -127,7 +121,11 @@ bool AutoCalibrationMode::prepare_straight(std::uint64_t now) noexcept
 
 float AutoCalibrationMode::sensor_lever_arm() const noexcept
 {
-    // 路径布置与原地旋转共用六项杆臂读取；调用者按各自几何使用同一长度定义。
+    // 2026-09-30 用户确认：优先用本会话原地旋转实测的天线杆臂（旋转圆半径，
+    // 两方向取大）。参数和（GPS+IMU 偏置模长之和）是保守上界代理——实测
+    // 0.30m vs 参数和 0.82m，高估 2.7 倍直接吃掉方形尺寸。未测得（静止
+    // 会话/旋转未满整圈）时回退参数和，语义不变。
+    if (measured_lever_valid_) return measured_lever_m_;
     float gx{}, gy{}, gz{}, ix{}, iy{}, iz{};
     px4::AtomicTransaction atomic;
     if (param_get(param_handle(dima::params::EKF2_GPS_POS_X), &gx) != 0 ||

@@ -18,7 +18,15 @@ bool AutoCalibrationMode::prepare_path(std::uint64_t now) noexcept
     if (nav_.side == 0.0F) {
         const float lever = sensor_lever_arm();
         // 沿用原场地/杆臂留距；正方形外接圆决定边长，不扩大围栏。
-        const float radius = fence.working_radius_m - lever - 0.5F;
+        // 停车项按试验速度折算（2026-09-30 用户确认）：本函数在车辆静止时
+        // 首次计算，live fence 的停车项≈0，而试验以巡航速度运行时安全带随
+        // 速度增大约 v²/2a+v·delay；按静止余量布置会把角落的结构余量
+        // （杆臂+0.5）吃掉近半。显式按将要行驶的速度取实测制动模型的
+        // 停车距离，静止/运动失配消除，满速角落余量恢复为杆臂+0.5。
+        const float position_margin = fence_.origin_error_m + gps_sub_.get().eph;
+        const float trial_stop = braking_distance(nav_.nominal_speed);
+        const float radius = fence_.radius_m - position_margin -
+            (std::isfinite(trial_stop) ? trial_stop : 0.0F) - lever - 0.5F;
         nav_.side = std::min(config_.straight_distance, std::sqrt(2.0F) * radius);
         if (!std::isfinite(nav_.side) || nav_.side <= 2.0F * std::min(tuning_config_.acceptance, config_.path_error)) return false;
         const auto &p = position_sub_.get();

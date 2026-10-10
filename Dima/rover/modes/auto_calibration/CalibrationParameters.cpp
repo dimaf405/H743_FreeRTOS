@@ -175,9 +175,13 @@ bool CalibrationParameters::session_save(std::uint32_t &expected_set_count, bool
         phase_ = Phase::Fault;
         return false;
     }
-    // 全会话唯一一次保存。失败只恢复 RAM 并锁住存储/运动，不重复保存或冒充成功。
+    // 全会话唯一一次保存。失败不冒充成功。EAGAIN 由参数模块定义为"本次
+    // 未写入、待恢复后重试"——含满区（ENOSPC）且 SD 镜像门未过的场景：
+    // RAM 候选与 unsaved 由参数模块保留，ParameterService 在解锁且 SD 可
+    // 用时自主执行 镜像→擦除→重建 恢复，随后本次保存重试即成功。其余
+    // 错误才恢复 RAM 并锁 Fault。
     const int result = param_storage_save(this);
-    if (result == -EAGAIN) return false; // 未开始写入；由 FINALIZE 继续等待资源交接。
+    if (result == -EAGAIN) return false; // 未写入（含满区待恢复）；FINALIZE 继续等待。
     if (result != 0) {
         (void)session_rollback(expected_set_count);
         phase_ = Phase::Fault;

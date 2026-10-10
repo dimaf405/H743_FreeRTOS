@@ -262,6 +262,8 @@ private:
     bool navigation_parameters_valid_{false};
     bool yaw_rate_parameters_valid_{false};
     bool parameter_update_pending_{false};
+    // apply_pending_parameters 应用门被挡时的限频诊断时间戳（5s 一次）。
+    std::uint64_t last_apply_gate_log_us_{0};
     bool safety_inhibit_observed_{true};
     bool calibration_fence_latched_{false};
     bool calibration_fence_valid_{false};

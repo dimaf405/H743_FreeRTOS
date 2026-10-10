@@ -211,6 +211,8 @@ private:
     dima::lib::rover::calibration::CircleFenceResult fence_result(std::uint64_t now) const noexcept;
     bool prepare_straight(std::uint64_t now) noexcept;
     float sensor_lever_arm() const noexcept;
+    void reset_rotation_lever_window() noexcept;
+    void finalize_rotation_lever(int direction) noexcept;
     StepResult baseline_collect(std::uint64_t now) noexcept;
     StepResult straight_leg(std::uint64_t now) noexcept;
     StepResult observe_straight(std::uint64_t now, bool full_output_trial) noexcept;
@@ -458,6 +460,13 @@ private:
     bool profile_homing_returned_{};
     float outbound_axis_rad_{};
     bool outbound_axis_valid_{};
+    // 天线杆臂自动测量（2026-09-30）：原地旋转圆半径；参数和只作未测得回退。
+    float measured_lever_m_{};
+    bool measured_lever_valid_{};
+    double rotation_lever_n_sum_{}, rotation_lever_e_sum_{};
+    double rotation_lever_nn_{}, rotation_lever_ee_{};
+    unsigned rotation_lever_count_{};
+    double rotation_lever_lat_{}, rotation_lever_lon_{};
     // 磁源不可用确认计时：瞬时融合抖动不清稳定窗，持续 250ms 才重置。
     std::uint64_t mag_source_bad_since_{};
     // 免受 GNSS 速度解急停振铃（±0.35m/s 持续~1s）阻塞停稳门。

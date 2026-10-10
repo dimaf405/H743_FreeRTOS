@@ -146,13 +146,19 @@ void AutoCalibrationMode::collect_mag(std::uint64_t now, unsigned direction) noe
     const auto &bias = bias_sub_.get();
     const auto &aid = mag_aid_sub_.get();
     // source_ok已统一确认配置ID与本轮设备身份，此处只检查对应设备的新鲜EKF偏置。
+    // 不要求 bias.mag_bias_stable（2026-09-30 用户确认）：Ekf2Bias 的 stable 判据
+    // 含 max<100×min 的各向同性比，为飞行器三轴姿态激励设计；地面车 yaw-only
+    // 旋转的垂直轴 bias 物理不可观测（实测 Z 方差 8.5e-4 vs X/Y 1.1e-6，比值
+    // 770:1），stable 永不置真，磁校准被结构性堵死。改用逐轴绝对方差上限
+    // （与 Ekf2Bias kMaximumVariance 同值）+ 模式自有质量门（10s 稳定窗、
+    // 修正幅值、finish_mag 样本方差与双向一致性）把关。
     bool valid = flags.cs_mag && !flags.cs_mag_hdg && !flags.cs_mag_3d && !flags.cs_mag_fault && !flags.cs_mag_field_disturbed &&
         fresh(aid.timestamp, now, 1500000ULL) && fresh(aid.time_last_fuse, now, 500000ULL) && aid.fused && !aid.innovation_rejected &&
         bias.mag_device_id == raw.device_id && fresh(bias.timestamp, now, 1500000ULL) &&
-        bias.timestamp_sample > arm_started_ && bias.mag_bias_valid && bias.mag_bias_stable;
+        bias.timestamp_sample > arm_started_ && bias.mag_bias_valid;
     for (unsigned axis = 0U; axis < 3U; ++axis) {
         valid = valid && std::isfinite(bias.mag_bias[axis]) && std::isfinite(bias.mag_bias_variance[axis]) &&
-            bias.mag_bias_variance[axis] >= 0.0F; // 收敛交EKF valid/stable，模式不拒绝更小的有效方差。
+            bias.mag_bias_variance[axis] >= 0.0F && bias.mag_bias_variance[axis] < 1.0e-3F;
     }
     if (!valid) { mag_stable_since_ = 0U; return; }
     if (mag_stable_since_ == 0U) mag_stable_since_ = now;

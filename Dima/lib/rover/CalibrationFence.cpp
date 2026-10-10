@@ -54,13 +54,11 @@ CircleFenceResult evaluate_position(const CircleFence &fence, double latitude,
     result.east_m = static_cast<float>(east);
     result.position_valid = std::isfinite(result.distance_m);
     result.inside = result.position_valid && result.distance_m < fence.radius_m;
-    // 保守使用入场冻结的速度上限，而非某拍较小速度。300 ms 留给接收机
-    // 解算/串行链路，100 ms 请求 TTL + 两个 10 ms 控制/输出周期另计；样本
-    // 当前年龄再加入。停车距离另由调用方提供本轮实测值，不用平均减速度
-    // 再计算一个假定匀减速距离；定位与请求延迟边界仍与物理测量分开。
-    // 直接计入接收机报告的定位误差，不另乘3倍构造模式侧置信边界。
-    result.margin_m = 0.5F + fence.origin_error_m + error +
-        fence.speed_limit_m_s * (0.30F + 0.10F + 0.01F + 0.01F + age);
+    // margin=定位误差本身；停车距离由调用方按实际速度的实测制动模型附加
+    // （2026-09-30 用户确认：删除 0.5 固定容差与 speed_limit×0.44s 链路预留带——
+    //  在 1.0 m/s 限速下两者合计约 0.96m，属过保护；围栏语义回到"当前速度的
+    //  实测停车模型能否在边界前停住"的连续判定，样本年龄只做新鲜度门）。
+    result.margin_m = fence.origin_error_m + error;
     return result;
 }
 

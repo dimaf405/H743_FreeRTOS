@@ -179,6 +179,13 @@ StepResult AutoCalibrationMode::speed_model_leg(std::uint64_t now) noexcept
         rtk.velocity_east_m_s, rtk.array_heading_rad - rtk.configured_yaw_offset_rad, 0.0F);
     if (!measured.valid) return abort_step(Status::FAILURE_SENSOR_STALE);
     const float speed = measured.speed_m_s;
+    // 入口停稳门（2026-09-30 实车）：前一对准旋转残余的天线杆臂摆速不是
+    // 平移响应；未衰减完就把它记为输出原点，一阶拟合会在"输入不变、输出
+    // 回落"段选非正增益，candidate<=0 整场弃测。原地等摆速落到停止边界，
+    // 10 秒仍不止说明该工作点无法建立静息基准，不再带污染采样。
+    if (!exercise_running_ && speed >= kStoppedSpeedMps)
+        return now - arm_started_ <= 10000000ULL ? StepResult::Busy
+            : abort_step(Status::FAILURE_DYNAMICS_UNOBSERVABLE);
     math::IdentificationConfig configuration{};
     configuration.sample_period_tolerance_s = 0.04F;
     if (!exercise_running_) {
@@ -449,6 +456,19 @@ StepResult AutoCalibrationMode::turn_spin(std::uint64_t now) noexcept
         // input_held_rate 样本，不以固定转速或角加速度要求阻断观察。
         // collect_mag 自身检查融合质量并在失败时清稳定窗，调用点不重复检查。
         collect_mag(now, side);
+        // 天线杆臂自动测量（2026-09-30 用户确认）：原地旋转时天线绕旋转中心
+        // 画圆，圆半径=天线到旋转中心的实际杆臂。流式累积位置二阶矩，方向
+        // 完成（≥2π）时结算；参数和只是保守代理（实测 0.30m vs 参数和 0.82m）。
+        if (turn_started_) {
+            float north{}, east{};
+            math::displacement(gps_sub_.get().latitude_deg, gps_sub_.get().longitude_deg,
+                rotation_lever_lat_, rotation_lever_lon_, north, east);
+            rotation_lever_n_sum_ += north;
+            rotation_lever_e_sum_ += east;
+            rotation_lever_nn_ += north * north;
+            rotation_lever_ee_ += east * east;
+            ++rotation_lever_count_;
+        }
         if (direction * turn_integral_ < 2.0F * kPi) return StepResult::Busy;
         if (first_circle_at_ == 0U) first_circle_at_ = now;
         // 一圈只是覆盖下限，不是学习时间充分的证明。允许继续有界转动，让每个
@@ -462,6 +482,7 @@ StepResult AutoCalibrationMode::turn_spin(std::uint64_t now) noexcept
     // 本方向已完成或时间用尽，都先撤销请求；另一方向启动仍须确认真实停车。
     steering_ = 0.0F;
     stop_turn_rate_request();
+    finalize_rotation_lever(direction);
     if (direction > 0) {
         // CW 完成：切换 CCW。方向局部量复位等价旧 TURN_CCW 阶段入场复位，
         // 起转前重新等待真实停车。
@@ -475,6 +496,41 @@ StepResult AutoCalibrationMode::turn_spin(std::uint64_t now) noexcept
         return StepResult::Busy;
     }
     return StepResult::Advance;
+}
+
+void AutoCalibrationMode::reset_rotation_lever_window() noexcept
+{
+    rotation_lever_n_sum_ = rotation_lever_e_sum_ = 0.0;
+    rotation_lever_nn_ = rotation_lever_ee_ = 0.0;
+    rotation_lever_count_ = 0U;
+    const auto &gps = gps_sub_.get();
+    rotation_lever_lat_ = gps.latitude_deg;
+    rotation_lever_lon_ = gps.longitude_deg;
+}
+
+void AutoCalibrationMode::finalize_rotation_lever(int direction) noexcept
+{
+    // 方向结算：完整一圈（integral≥2π；停滞/超时出口不满一圈不结算）且样本充足时，
+    // var(N)+var(E) = r² + 2σ²（圆均匀采样+各向同性噪声），噪声修正可忽略
+    // （σ≈eph≈0.014）。两方向取大（保守侧），供 PATH/PROFILE 几何使用。
+    if (direction * turn_integral_ < 2.0F * kPi || rotation_lever_count_ < 600U) {
+        reset_rotation_lever_window();
+        return;
+    }
+    const double n = static_cast<double>(rotation_lever_count_);
+    const double var_sum = (rotation_lever_nn_ / n - (rotation_lever_n_sum_ / n) * (rotation_lever_n_sum_ / n)) +
+        (rotation_lever_ee_ / n - (rotation_lever_e_sum_ / n) * (rotation_lever_e_sum_ / n));
+    const double radius = std::sqrt(std::max(var_sum, 0.0));
+    if (std::isfinite(radius) && radius > 0.05F && radius < 5.0F) {
+        measured_lever_m_ = measured_lever_valid_ ? std::max(measured_lever_m_, static_cast<float>(radius))
+                                                 : static_cast<float>(radius);
+        measured_lever_valid_ = true;
+        PX4_INFO("[autocal] measured antenna lever %.2fm (dir %+d, n=%lu)",
+            static_cast<double>(measured_lever_m_), direction,
+            static_cast<unsigned long>(rotation_lever_count_));
+    }
+    reset_rotation_lever_window();
+    (void)direction;
 }
 
 bool AutoCalibrationMode::finish_rtk() noexcept

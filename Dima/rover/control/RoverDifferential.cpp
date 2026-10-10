@@ -1,3 +1,6 @@
+#define MODULE_NAME "rover_diff"
+#include "logging/logging.hpp"
+
 #include "api/Flash.hpp"
 #include "api/Services.hpp"
 #include "RoverDifferential.hpp"
@@ -395,6 +398,17 @@ bool RoverDifferential::apply_pending_parameters(
     if (!parameter_update_pending_ || !(fresh_disarmed_snapshot(now_us) ||
         (active_snapshot_fresh(now_us) && safety_.vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1 &&
          dima::platform::services().armed_flash.calibration_output_stopped()))) {
+        // 校准事务的 Done 确认依赖本函数真正应用候选；应用门被挡时上层只能
+        // 看到 frontend confirmation 超时（2026-09-30 实车全天复现）。限频
+        // 打印具体子条件，区分"门没开"与"数值回显不匹配"两类根因。
+        if (parameter_update_pending_ && now_us - last_apply_gate_log_us_ >= 5000000ULL) {
+            last_apply_gate_log_us_ = now_us;
+            PX4_WARN("drive params pending: disarmed_fresh=%u active_fresh=%u ext1=%u calib_stopped=%u",
+                fresh_disarmed_snapshot(now_us) ? 1U : 0U,
+                active_snapshot_fresh(now_us) ? 1U : 0U,
+                safety_.vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_EXTERNAL1 ? 1U : 0U,
+                dima::platform::services().armed_flash.calibration_output_stopped() ? 1U : 0U);
+        }
         return false;
     }
 

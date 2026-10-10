@@ -170,6 +170,14 @@ StepResult AutoCalibrationMode::return_step(std::uint64_t now) noexcept
     if (full_trial) {
         const float dt = std::min(0.1F, control_interval_s(now));
         longitudinal_ += std::clamp(desired - longitudinal_, -0.15F * dt, 0.15F * dt);
+    } else if (desired < config_.motor_maximum) {
+        // PROFILE 初探返场的地板输入只承担弱动力起步确认；行驶建立后升档到
+        // 满输出。恒定地板速度（本车0.12m/s）走不完15m腿，90s返程截止内必然
+        // TIMEOUT（2026-09-30 实车：爬行80s后离起点7m处超时）。停车时机仍由
+        // 上面的剩余距离/制动模型判定，升档不改变到达语义。
+        const float dt = std::min(0.1F, control_interval_s(now));
+        const float target = speed >= kStoppedSpeedMps ? config_.motor_maximum : desired;
+        longitudinal_ += std::clamp(target - longitudinal_, -0.15F * dt, 0.15F * dt);
     } else longitudinal_ = desired;
     if (!calibration_leg) return StepResult::Busy;
     return observe_straight(now, full_trial);
